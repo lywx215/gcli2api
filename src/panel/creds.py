@@ -1148,17 +1148,16 @@ async def get_credential_errors(
 async def get_credential_quota(
     filename: str,
     token: str = Depends(verify_panel_token),
-    mode: str = "antigravity"
+    mode: str = "geminicli"
 ):
     """
-    获取指定凭证的额度信息（仅支持 antigravity 模式）
+    获取指定凭证的额度信息（支持 geminicli 和 antigravity 模式）
     """
     try:
         mode = validate_mode(mode)
         # 验证文件名
         if not filename.endswith(".json"):
             raise HTTPException(status_code=400, detail="无效的文件名")
-
 
         storage_adapter = await get_storage_adapter()
 
@@ -1168,8 +1167,6 @@ async def get_credential_quota(
             raise HTTPException(status_code=404, detail="凭证不存在")
 
         # 使用 Credentials 对象自动处理 token 刷新
-        from src.google_oauth_api import Credentials
-
         creds = Credentials.from_dict(credential_data)
 
         # 自动刷新 token（如果需要）
@@ -1187,8 +1184,16 @@ async def get_credential_quota(
         if not access_token:
             raise HTTPException(status_code=400, detail="凭证中没有访问令牌")
 
-        # 获取额度信息
-        quota_info = await fetch_quota_info(access_token)
+        if mode == "antigravity":
+            # Antigravity 模式：使用原有的 fetch_quota_info
+            quota_info = await fetch_quota_info(access_token)
+        else:
+            # GeminiCLI 模式：调用 retrieveUserQuota API
+            project_id = credential_data.get("project_id", "")
+            if not project_id:
+                raise HTTPException(status_code=400, detail="凭证中没有项目ID")
+
+            quota_info = await _fetch_geminicli_quota(access_token, project_id)
 
         if quota_info.get("success"):
             return JSONResponse(content={
@@ -1211,6 +1216,89 @@ async def get_credential_quota(
     except Exception as e:
         log.error(f"获取凭证额度失败 {filename}: {e}")
         raise HTTPException(status_code=500, detail=f"获取额度失败: {str(e)}")
+
+
+async def _fetch_geminicli_quota(access_token: str, project_id: str) -> dict:
+    """
+    通过 Google retrieveUserQuota API 获取 GeminiCLI 额度信息
+
+    Args:
+        access_token: OAuth 访问令牌
+        project_id: Google Cloud 项目 ID
+
+    Returns:
+        与 Antigravity fetch_quota_info 相同格式的字典
+    """
+    from src.httpx_client import post_async
+    from datetime import datetime, timedelta
+
+    try:
+        response = await post_async(
+            url="https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
+            json={"project": project_id},
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            timeout=30.0
+        )
+
+        if response.status_code != 200:
+            error_text = response.text if hasattr(response, 'text') else ""
+            log.error(f"[GEMINICLI QUOTA] Failed ({response.status_code}): {error_text[:500]}")
+            return {
+                "success": False,
+                "error": f"API返回错误: {response.status_code}"
+            }
+
+        data = response.json()
+        buckets = data.get("buckets", [])
+
+        if not buckets:
+            return {"success": True, "models": {}}
+
+        quota_info = {}
+        seen_models = set()
+
+        for bucket in buckets:
+            model_id = bucket.get("modelId", "")
+            if not model_id:
+                continue
+
+            # 去掉 _vertex 后缀，避免重复
+            clean_model_id = model_id.removesuffix("_vertex")
+
+            # 每个模型只取一次（优先保留非 _vertex 版本的数据）
+            if clean_model_id in seen_models:
+                continue
+            seen_models.add(clean_model_id)
+
+            remaining_fraction = bucket.get("remainingFraction", 0)
+            reset_time_raw = bucket.get("resetTime", "")
+
+            # 转换为北京时间
+            reset_time_beijing = "N/A"
+            if reset_time_raw:
+                try:
+                    utc_date = datetime.fromisoformat(reset_time_raw.replace("Z", "+00:00"))
+                    beijing_date = utc_date + timedelta(hours=8)
+                    reset_time_beijing = beijing_date.strftime("%m-%d %H:%M")
+                except Exception as e:
+                    log.warning(f"[GEMINICLI QUOTA] Failed to parse reset time: {e}")
+
+            quota_info[clean_model_id] = {
+                "remaining": remaining_fraction,
+                "resetTime": reset_time_beijing,
+                "resetTimeRaw": reset_time_raw,
+            }
+
+        return {"success": True, "models": quota_info}
+
+    except Exception as e:
+        import traceback
+        log.error(f"[GEMINICLI QUOTA] Failed to fetch quota: {e}")
+        log.error(f"[GEMINICLI QUOTA] Traceback: {traceback.format_exc()}")
+        return {"success": False, "error": str(e)}
 
 
 @router.post("/configure-preview/{filename}")
@@ -1395,6 +1483,7 @@ async def configure_preview_channel(
 async def test_credential(
     filename: str,
     mode: str = "geminicli",
+    model: str = None,
     _token: str = Depends(verify_panel_token)
 ):
     """
@@ -1403,6 +1492,7 @@ async def test_credential(
     Args:
         filename: 凭证文件名
         mode: 凭证模式（geminicli 或 antigravity）
+        model: 可选，指定要测试的模型名称。不指定时使用默认模型。
 
     Returns:
         返回状态码：
@@ -1447,10 +1537,10 @@ async def test_credential(
         if not project_id:
             raise HTTPException(status_code=400, detail="凭证中没有项目ID")
 
-        # 根据模式选择 API 端点和请求头
-        # 对于 geminicli 模式，使用两次测试：gemini-2.5-flash 和 gemini-3-flash-preview
-        # 对于 antigravity 模式，只使用 gemini-2.5-flash
-        test_model = "gemini-2.5-flash"
+        # 使用指定的模型或默认模型
+        test_model = model if model else "gemini-2.5-flash"
+        # 如果指定了具体模型，则跳过后续的 preview 模型测试
+        skip_preview_test = model is not None
 
         if mode == "antigravity":
             api_base_url = await get_antigravity_api_url()
@@ -1491,8 +1581,8 @@ async def test_credential(
                     "error_messages": {}
                 }, mode=mode)
 
-                # 如果是 geminicli 模式且第一次测试成功，继续测试 gemini-3-flash-preview
-                if mode == "geminicli":
+                # 如果是 geminicli 模式且第一次测试成功，继续测试 gemini-3-flash-preview（仅在未指定具体模型时）
+                if mode == "geminicli" and not skip_preview_test:
                     preview_model = "gemini-3-flash-preview"
                     log.info(f"开始测试 preview 模型: {filename} (model={preview_model})")
 

@@ -553,7 +553,7 @@ function linkifyText(text) {
     // 匹配 http://, https:// 和 www. 开头的链接，排除常见的标点符号
     const urlPattern = /(https?:\/\/[^\s"'<>()[\]{}]+)|(www\.[^\s"'<>()[\]{}]+)/gi;
 
-    return text.replace(urlPattern, function(url) {
+    return text.replace(urlPattern, function (url) {
         let href = url;
         // 如果是 www. 开头，添加 https://
         if (url.startsWith('www.')) {
@@ -588,14 +588,14 @@ function showMessageModal(title, message, type = 'info') {
     document.body.appendChild(modal);
 
     // 点击遮罩层关闭
-    modal.addEventListener('click', function(e) {
+    modal.addEventListener('click', function (e) {
         if (e.target === modal) {
             modal.remove();
         }
     });
 
     // ESC 键关闭
-    const escHandler = function(e) {
+    const escHandler = function (e) {
         if (e.key === 'Escape') {
             modal.remove();
             document.removeEventListener('keydown', escHandler);
@@ -718,15 +718,15 @@ function createCredCard(credInfo, manager) {
         <button class="cred-btn view" onclick="toggle${managerType === 'antigravity' ? 'Antigravity' : ''}CredDetails('${pathId}')">查看内容</button>
         <button class="cred-btn download" onclick="download${managerType === 'antigravity' ? 'Antigravity' : ''}Cred('${filename}')">下载</button>
         <button class="cred-btn email" onclick="fetch${managerType === 'antigravity' ? 'Antigravity' : ''}UserEmail('${filename}')">查看账号邮箱</button>
-        ${managerType === 'antigravity' ? `<button class="cred-btn" onclick="toggleAntigravityQuotaDetails('${pathId}')" title="查看该凭证的额度信息">查看额度</button>` : ''}
+        <button class="cred-btn" style="background-color: #17a2b8;" onclick="toggleQuotaDetails('${pathId}', '${managerType}')" title="查看该凭证的额度信息">查看额度</button>
         ${managerType === 'antigravity' ? (credInfo.enable_credit
             ? `<button class="cred-btn" data-filename="${filename}" data-action="disable_credit" title="关闭该凭证的Credit模式">关闭 Credit</button>`
             : `<button class="cred-btn" data-filename="${filename}" data-action="enable_credit" title="开启该凭证的Credit模式">开启 Credit</button>`
         ) : ''}
-        ${managerType !== 'antigravity' ? `<button class="cred-btn" onclick="configurePreviewChannel('${filename}')" title="配置Preview通道，启用实验性功能">设置预览</button>` : ''}
-        <button class="cred-btn" onclick="verify${managerType === 'antigravity' ? 'Antigravity' : ''}ProjectId('${filename}')" title="重新获取Project ID，可恢复403错误">检验</button>
-        <button class="cred-btn" onclick="test${managerType === 'antigravity' ? 'Antigravity' : ''}Credential('${filename}')" title="测试凭证是否可用">消息测试</button>
-        <button class="cred-btn" onclick="toggle${managerType === 'antigravity' ? 'Antigravity' : ''}ErrorDetails('${pathId}')" title="查看该凭证的详细报错信息">查看报错</button>
+        ${managerType !== 'antigravity' ? `<button class="cred-btn" style="background-color: #00bcd4;" onclick="configurePreviewChannel('${filename}')" title="配置Preview通道，启用实验性功能">设置预览</button>` : ''}
+        <button class="cred-btn" style="background-color: #ff9800;" onclick="verify${managerType === 'antigravity' ? 'Antigravity' : ''}ProjectId('${filename}')" title="重新获取Project ID，可恢复403错误">检验</button>
+        <button class="cred-btn" style="background-color: #9c27b0;" onclick="test${managerType === 'antigravity' ? 'Antigravity' : ''}Credential('${filename}')" title="测试凭证是否可用">消息测试</button>
+        <button class="cred-btn" style="background-color: #e91e63;" onclick="toggle${managerType === 'antigravity' ? 'Antigravity' : ''}ErrorDetails('${pathId}')" title="查看该凭证的详细报错信息">查看报错</button>
         <button class="cred-btn delete" data-filename="${filename}" data-action="delete">删除</button>
     `;
 
@@ -755,13 +755,11 @@ function createCredCard(credInfo, manager) {
         <div class="cred-details" id="errors-${pathId}">
             <div class="cred-content" data-filename="${filename}" data-loaded="false" style="background-color: #fff3cd; border-color: #ffc107;">点击"查看报错"按钮加载报错信息...</div>
         </div>
-        ${managerType === 'antigravity' ? `
         <div class="cred-quota-details" id="quota-${pathId}" style="display: none;">
             <div class="cred-quota-content" data-filename="${filename}" data-loaded="false">
                 点击"查看额度"按钮加载额度信息...
             </div>
         </div>
-        ` : ''}
     `;
 
     // 添加事件监听
@@ -1815,7 +1813,7 @@ async function configurePreviewChannel(filename) {
     }
 }
 
-async function toggleAntigravityQuotaDetails(pathId) {
+async function toggleQuotaDetails(pathId, managerType) {
     const quotaDetails = document.getElementById('quota-' + pathId);
     if (!quotaDetails) return;
 
@@ -1831,13 +1829,14 @@ async function toggleAntigravityQuotaDetails(pathId) {
 
         const contentDiv = quotaDetails.querySelector('.cred-quota-content');
         const filename = contentDiv.getAttribute('data-filename');
+        const modeParam = managerType === 'antigravity' ? 'antigravity' : 'geminicli';
 
         // 每次展开都重新加载数据
         if (filename) {
             contentDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #666;">📊 正在加载额度信息...</div>';
 
             try {
-                const response = await fetch(`./creds/quota/${encodeURIComponent(filename)}?mode=antigravity`, {
+                const response = await fetch(`./creds/quota/${encodeURIComponent(filename)}?mode=${modeParam}`, {
                     method: 'GET',
                     headers: getAuthHeaders()
                 });
@@ -1894,8 +1893,11 @@ async function toggleAntigravityQuotaDetails(pathId) {
                                     <div style="width: 100%; height: 8px; background-color: #e9ecef; border-radius: 4px; overflow: hidden; margin-bottom: 4px;">
                                         <div style="width: ${usedPercentage}%; height: 100%; background-color: ${percentageColor}; transition: width 0.3s ease;"></div>
                                     </div>
-                                    <div style="font-size: 10px; color: #666; text-align: right;">
-                                        ${resetTime !== 'N/A' ? '🔄 ' + resetTime : ''}
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <button onclick="testModelQuota(this, '${filename}', '${modelName}', '${modeParam}')" style="font-size: 10px; padding: 1px 8px; border: 1px solid #9c27b0; background: white; color: #9c27b0; border-radius: 3px; cursor: pointer;" onmouseover="this.style.background='#9c27b0';this.style.color='white'" onmouseout="this.style.background='white';this.style.color='#9c27b0'">测试</button>
+                                        <div style="font-size: 10px; color: #666;">
+                                            ${resetTime !== 'N/A' ? '🔄 ' + resetTime : ''}
+                                        </div>
                                     </div>
                                 </div>
                             `;
@@ -1929,6 +1931,64 @@ async function toggleAntigravityQuotaDetails(pathId) {
                 showStatus(`❌ 获取额度信息失败: ${error.message}`, 'error');
             }
         }
+    }
+}
+
+// 保留旧函数名的兼容性
+async function toggleAntigravityQuotaDetails(pathId) {
+    await toggleQuotaDetails(pathId, 'antigravity');
+}
+
+// 额度卡片中的单模型测试
+async function testModelQuota(btn, filename, modelName, mode) {
+    const originalText = btn.textContent;
+    btn.textContent = '⏳';
+    btn.disabled = true;
+    btn.style.cursor = 'wait';
+
+    try {
+        const response = await fetch(
+            `./creds/test/${encodeURIComponent(filename)}?mode=${mode}&model=${encodeURIComponent(modelName)}`,
+            { method: 'POST', headers: getAuthHeaders() }
+        );
+        const data = await response.json();
+
+        if (response.ok || response.status === 429) {
+            btn.textContent = '✅';
+            btn.style.borderColor = '#28a745';
+            btn.style.color = '#28a745';
+            const msg = response.status === 429
+                ? `${modelName}: 限流中但凭证有效 (429)`
+                : `${modelName}: 测试成功 ✅`;
+            showStatus(msg, response.status === 429 ? 'info' : 'success');
+        } else {
+            btn.textContent = '❌';
+            btn.style.borderColor = '#dc3545';
+            btn.style.color = '#dc3545';
+            const errorDetail = data.error || data.detail || data.message || '';
+            showStatus(`${modelName}: 测试失败 (HTTP ${response.status})`, 'error');
+            if (errorDetail) {
+                showMessageModal(
+                    `${modelName} 测试失败 (HTTP ${response.status})`,
+                    errorDetail,
+                    'error'
+                );
+            }
+        }
+    } catch (error) {
+        btn.textContent = '❌';
+        btn.style.borderColor = '#dc3545';
+        btn.style.color = '#dc3545';
+        showStatus(`${modelName}: 网络错误 - ${error.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.style.cursor = 'pointer';
+        // 3秒后恢复原始文本
+        setTimeout(() => {
+            btn.textContent = originalText;
+            btn.style.borderColor = '#9c27b0';
+            btn.style.color = '#9c27b0';
+        }, 3000);
     }
 }
 
@@ -2103,7 +2163,7 @@ function escapeHtml(text) {
 function highlightHttpLinks(text) {
     // 匹配 http:// 或 https:// 开头的URL
     const urlRegex = /(https?:\/\/[^\s<>"]+)/gi;
-    return text.replace(urlRegex, function(url) {
+    return text.replace(urlRegex, function (url) {
         return `<a href="${url}" target="_blank" style="color: #007bff; text-decoration: underline; word-break: break-all;" title="点击打开: ${url}">${url}</a>`;
     });
 }
@@ -2403,7 +2463,7 @@ async function deduplicateByEmail() {
             const msg = `去重完成：删除 ${data.deleted_count} 个重复凭证，保留 ${data.kept_count} 个凭证（${data.unique_emails_count} 个唯一邮箱）`;
             showStatus(msg, 'success');
             await AppState.creds.refresh();
-            
+
             // 显示详细信息
             if (data.duplicate_groups && data.duplicate_groups.length > 0) {
                 let details = '去重详情：\n\n';
@@ -2434,7 +2494,7 @@ async function deduplicateAntigravityByEmail() {
             const msg = `去重完成：删除 ${data.deleted_count} 个重复凭证，保留 ${data.kept_count} 个凭证（${data.unique_emails_count} 个唯一邮箱）`;
             showStatus(msg, 'success');
             await AppState.antigravityCreds.refresh();
-            
+
             // 显示详细信息
             if (data.duplicate_groups && data.duplicate_groups.length > 0) {
                 let details = '去重详情：\n\n';
