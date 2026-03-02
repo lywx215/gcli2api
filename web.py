@@ -41,20 +41,25 @@ async def lifespan(app: FastAPI):
 
     log.info("启动 GCLI2API 主服务")
 
-    # 初始化配置缓存（优先执行）
+    # 初始化配置缓存（优先执行，带超时）
     try:
         import config
-        await config.init_config()
+        await asyncio.wait_for(config.init_config(), timeout=10)
         log.info("配置缓存初始化成功")
+    except asyncio.TimeoutError:
+        log.error("配置缓存初始化超时(10s)，继续启动")
     except Exception as e:
         log.error(f"配置缓存初始化失败: {e}")
 
-    # 初始化全局凭证管理器（通过单例工厂）
+    # 初始化全局凭证管理器（带超时，避免 MySQL 连接阻塞整个启动）
     try:
-        # credential_manager 会在第一次调用时自动初始化
-        # 这里预先触发初始化以便在启动时检测错误
-        await credential_manager._get_or_create()
+        await asyncio.wait_for(
+            credential_manager._get_or_create(), timeout=15
+        )
         log.info("凭证管理器初始化成功")
+    except asyncio.TimeoutError:
+        log.error("凭证管理器初始化超时(15s)，将在首次使用时重试")
+        global_credential_manager = None
     except Exception as e:
         log.error(f"凭证管理器初始化失败: {e}")
         global_credential_manager = None
@@ -142,10 +147,12 @@ app.include_router(geminicli_anthropic_router, prefix="", tags=["Geminicli Anthr
 app.include_router(panel_router, prefix="", tags=["Panel Interface"])
 
 # 静态文件路由 - 服务docs目录下的文件
-app.mount("/docs", StaticFiles(directory="docs"), name="docs")
+if os.path.isdir("docs"):
+    app.mount("/docs", StaticFiles(directory="docs"), name="docs")
 
 # 静态文件路由 - 服务front目录下的文件（HTML、JS、CSS等）
-app.mount("/front", StaticFiles(directory="front"), name="front")
+if os.path.isdir("front"):
+    app.mount("/front", StaticFiles(directory="front"), name="front")
 
 
 # 保活接口（仅响应 HEAD）

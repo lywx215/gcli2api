@@ -18,6 +18,79 @@ from .utils import get_env_locked_keys
 router = APIRouter(prefix="/config", tags=["config"])
 
 
+@router.get("/debug-storage")
+async def debug_storage():
+    """调试端点（无需认证）- 用于排查 storage engine 加载问题"""
+    import os
+    import traceback
+    result = {
+        "status": "ok",
+        "timestamp": str(__import__('datetime').datetime.now()),
+        "env": {
+            "MYSQL_URI": "有" if os.getenv("MYSQL_URI") else "无",
+            "GCLI_SERVER_NAME": os.getenv("GCLI_SERVER_NAME", "(空)"),
+            "MONGODB_URI": "有" if os.getenv("MONGODB_URI") else "无",
+        },
+        "adapter": {},
+        "servers_query": {},
+    }
+    
+    try:
+        from src.storage_adapter import _storage_adapter
+        result["adapter"]["exists"] = _storage_adapter is not None
+        if _storage_adapter:
+            result["adapter"]["initialized"] = _storage_adapter._initialized
+            if _storage_adapter._initialized:
+                result["adapter"]["backend_type"] = _storage_adapter.get_backend_type()
+        else:
+            result["adapter"]["initialized"] = False
+    except Exception as e:
+        result["adapter"]["error"] = str(e)
+    
+    try:
+        servers = await _get_servers_list()
+        result["servers_query"]["count"] = len(servers)
+        result["servers_query"]["names"] = [s["name"] for s in servers[:5]]
+    except Exception as e:
+        result["servers_query"]["error"] = str(e)
+        result["servers_query"]["traceback"] = traceback.format_exc()
+    
+    return JSONResponse(content=result)
+
+@router.get("/system-status")
+async def get_system_status(token: str = Depends(verify_panel_token)):
+    """获取 Redis 缓存状态"""
+    result = {"redis": {"enabled": False}}
+
+    try:
+        from src.storage_adapter import _storage_adapter
+        if _storage_adapter and _storage_adapter._initialized:
+            backend = _storage_adapter._backend
+            if hasattr(backend, '_redis_enabled'):
+                result["redis"]["enabled"] = backend._redis_enabled
+                if backend._redis_enabled and backend._redis:
+                    try:
+                        info = await backend._redis.info("memory")
+                        result["redis"]["memory_used_mb"] = round(info.get("used_memory", 0) / 1024 / 1024, 2)
+
+                        gcli_avail = await backend._redis.scard("gcli:avail:geminicli")
+                        gcli_preview = await backend._redis.scard("gcli:preview:geminicli")
+                        anti_avail = await backend._redis.scard("gcli:avail:antigravity")
+                        result["redis"]["pools"] = {
+                            "geminicli_avail": gcli_avail,
+                            "geminicli_preview": gcli_preview,
+                            "antigravity_avail": anti_avail,
+                        }
+                        result["redis"]["total_keys"] = await backend._redis.dbsize()
+                    except Exception as e:
+                        result["redis"]["error"] = str(e)
+                else:
+                    result["redis"]["note"] = "REDIS_URL 未设置或连接失败"
+    except Exception as e:
+        result["redis"]["error"] = str(e)
+
+    return JSONResponse(content=result)
+
 @router.get("/get")
 async def get_config(token: str = Depends(verify_panel_token)):
     """获取当前配置"""
@@ -228,3 +301,292 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
     except Exception as e:
         log.error(f"保存配置失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/storage-engine")
+async def get_storage_engine(token: str = Depends(verify_panel_token)):
+    """获取当前存储引擎信息"""
+    import os
+    log.info("[storage-engine] 端点被调用")
+    try:
+        mysql_uri = os.getenv("MYSQL_URI", "")
+        gcli_server_name = os.getenv("GCLI_SERVER_NAME", "")
+        log.info(f"[storage-engine] MYSQL_URI={'有' if mysql_uri else '无'}, GCLI_SERVER_NAME={gcli_server_name or '(空)'}")
+
+        # 从全局适配器读取（绝不主动初始化，避免 lock 死锁）
+        backend_type = "unknown"
+        try:
+            from src.storage_adapter import _storage_adapter
+            adapter_ready = _storage_adapter and _storage_adapter._initialized
+            log.info(f"[storage-engine] adapter={_storage_adapter is not None}, initialized={adapter_ready}")
+            if adapter_ready:
+                backend_type = _storage_adapter.get_backend_type()
+            else:
+                # 适配器尚未就绪，从环境变量推断
+                if mysql_uri and gcli_server_name:
+                    backend_type = "mysql"
+                elif os.getenv("MONGODB_URI"):
+                    backend_type = "mongodb"
+                else:
+                    backend_type = "sqlite"
+        except Exception as e:
+            log.warning(f"[storage-engine] 读取适配器异常: {e}")
+
+        log.info(f"[storage-engine] backend_type={backend_type}")
+
+        # 获取 servers 列表（非关键，失败返回空）
+        servers = []
+        try:
+            log.info("[storage-engine] 开始获取 servers 列表...")
+            servers = await _get_servers_list()
+            log.info(f"[storage-engine] 获取到 {len(servers)} 个服务器")
+        except Exception as e:
+            log.warning(f"[storage-engine] servers 列表获取失败: {e}")
+
+        result = {
+            "current_engine": backend_type,
+            "mysql_available": bool(mysql_uri),
+            "mysql_configured": bool(mysql_uri and gcli_server_name),
+            "server_name": gcli_server_name or "",
+            "servers": servers,
+        }
+        log.info(f"[storage-engine] 返回结果: engine={backend_type}, servers={len(servers)}")
+        return JSONResponse(content=result)
+    except Exception as e:
+        log.error(f"[storage-engine] 端点异常: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _get_servers_list() -> list:
+    """从 servers 表获取服务器列表（弱关联，表不存在时返回空）"""
+    import os
+    import asyncio
+    mysql_uri = os.getenv("MYSQL_URI", "")
+    if not mysql_uri:
+        return []
+
+    try:
+        import aiomysql
+    except ImportError:
+        log.debug("aiomysql 未安装，跳过 servers 列表获取")
+        return []
+
+    async def _query():
+        from urllib.parse import urlparse
+        parsed = urlparse(mysql_uri)
+        conn = await aiomysql.connect(
+            host=parsed.hostname or "127.0.0.1",
+            port=parsed.port or 3306,
+            user=parsed.username or "root",
+            password=parsed.password or "",
+            db=parsed.path.lstrip("/") or "gcli2api",
+            connect_timeout=5,
+        )
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT name, url, status FROM servers ORDER BY id"
+                )
+                rows = await cur.fetchall()
+                return [
+                    {"name": r[0], "url": r[1], "status": r[2]}
+                    for r in rows
+                ]
+        finally:
+            conn.ensure_closed()
+
+    try:
+        return await asyncio.wait_for(_query(), timeout=8)
+    except Exception as e:
+        log.debug(f"获取 servers 列表失败: {e}")
+        return []
+
+
+@router.post("/storage-engine/preview")
+async def preview_migration(request: dict, token: str = Depends(verify_panel_token)):
+    """预览迁移数据（显示源引擎中的数据量）"""
+    try:
+        storage_adapter = await get_storage_adapter()
+        source_backend = storage_adapter._backend
+
+        # 统计当前引擎中的数据
+        gcli_creds = await source_backend.list_credentials(mode="geminicli")
+        antigravity_creds = await source_backend.list_credentials(mode="antigravity")
+        all_config = await source_backend.get_all_config()
+
+        return JSONResponse(content={
+            "source_engine": storage_adapter.get_backend_type(),
+            "data": {
+                "gcli_credentials": len(gcli_creds),
+                "antigravity_credentials": len(antigravity_creds),
+                "config": len(all_config) if all_config else 0,
+                "total": len(gcli_creds) + len(antigravity_creds) + (len(all_config) if all_config else 0),
+            }
+        })
+    except Exception as e:
+        log.error(f"预览迁移数据失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/storage-engine/switch")
+async def switch_storage_engine(request: dict, token: str = Depends(verify_panel_token)):
+    """切换存储引擎并自动迁移数据（SQLite ↔ MySQL）"""
+    import os
+    try:
+        target_engine = request.get("target_engine", "")
+        migrate_data = request.get("migrate_data", True)
+
+        if target_engine not in ("sqlite", "mysql"):
+            raise HTTPException(status_code=400, detail="目标引擎必须是 'sqlite' 或 'mysql'")
+
+        storage_adapter = await get_storage_adapter()
+        current_type = storage_adapter.get_backend_type()
+
+        if current_type == target_engine:
+            return JSONResponse(content={
+                "message": f"当前已是 {target_engine.upper()} 引擎，无需切换",
+                "engine": current_type,
+                "migration": None
+            })
+
+        # 初始化目标后端
+        if target_engine == "mysql":
+            mysql_uri = os.getenv("MYSQL_URI", "")
+            if not mysql_uri:
+                raise HTTPException(status_code=400, detail="未设置 MYSQL_URI 环境变量，无法切换到 MySQL")
+
+            server_name = request.get("server_name", "") or os.getenv("GCLI_SERVER_NAME", "")
+            if not server_name:
+                raise HTTPException(status_code=400, detail="切换到 MySQL 需要提供 server_name")
+            os.environ["GCLI_SERVER_NAME"] = server_name
+
+            try:
+                from src.storage.mysql_manager import MySQLManager
+                new_backend = MySQLManager()
+                await new_backend.initialize()
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"MySQL 初始化失败: {e}")
+
+        elif target_engine == "sqlite":
+            try:
+                from src.storage.sqlite_manager import SQLiteManager
+                new_backend = SQLiteManager()
+                await new_backend.initialize()
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"SQLite 初始化失败: {e}")
+
+        # 执行数据迁移
+        migration_result = None
+        old_backend = storage_adapter._backend
+
+        if migrate_data and old_backend:
+            migration_result = await _migrate_between_backends(old_backend, new_backend)
+
+        # 切换后端
+        storage_adapter._backend = new_backend
+        if old_backend:
+            try:
+                await old_backend.close()
+            except Exception:
+                pass
+
+        new_type = storage_adapter.get_backend_type()
+        log.info(f"存储引擎已切换: {current_type} → {new_type}")
+
+        msg = f"已从 {current_type.upper()} 切换到 {new_type.upper()}"
+        if migration_result:
+            total = migration_result.get("total_migrated", 0)
+            msg += f"，已迁移 {total} 条数据"
+
+        return JSONResponse(content={
+            "message": msg,
+            "engine": new_type,
+            "migration": migration_result
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"切换存储引擎失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _migrate_between_backends(source, target) -> dict:
+    """在两个 StorageBackend 之间迁移所有数据（并发批量）"""
+    import asyncio
+
+    result = {
+        "gcli_credentials": {"total": 0, "migrated": 0, "errors": []},
+        "antigravity_credentials": {"total": 0, "migrated": 0, "errors": []},
+        "config": {"total": 0, "migrated": 0, "errors": []},
+        "total_migrated": 0,
+    }
+
+    # 并发控制（避免连接池耗尽）
+    sem = asyncio.Semaphore(10)
+
+    async def _migrate_one_credential(filename, mode, result_key):
+        async with sem:
+            try:
+                cred_data = await source.get_credential(filename, mode=mode)
+                state_data = await source.get_credential_state(filename, mode=mode)
+                if cred_data:
+                    await target.store_credential(filename, cred_data, mode=mode)
+                    if state_data:
+                        await target.update_credential_state(filename, state_data, mode=mode)
+                    result[result_key]["migrated"] += 1
+            except Exception as e:
+                result[result_key]["errors"].append(f"{filename}: {str(e)}")
+                log.warning(f"迁移凭证 {filename} 失败: {e}")
+
+    tasks = []
+
+    # 批量迁移 GCLI 凭证
+    try:
+        gcli_files = await source.list_credentials(mode="geminicli")
+        result["gcli_credentials"]["total"] = len(gcli_files)
+        for f in gcli_files:
+            tasks.append(_migrate_one_credential(f, "geminicli", "gcli_credentials"))
+    except Exception as e:
+        log.error(f"列出 GCLI 凭证失败: {e}")
+
+    # 批量迁移 Antigravity 凭证
+    try:
+        ag_files = await source.list_credentials(mode="antigravity")
+        result["antigravity_credentials"]["total"] = len(ag_files)
+        for f in ag_files:
+            tasks.append(_migrate_one_credential(f, "antigravity", "antigravity_credentials"))
+    except Exception as e:
+        log.error(f"列出 Antigravity 凭证失败: {e}")
+
+    # 并发执行所有凭证迁移
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    # 迁移配置（通常很少，顺序即可）
+    try:
+        all_config = await source.get_all_config()
+        if all_config:
+            result["config"]["total"] = len(all_config)
+            for key, value in all_config.items():
+                try:
+                    await target.set_config(key, value)
+                    result["config"]["migrated"] += 1
+                except Exception as e:
+                    result["config"]["errors"].append(f"{key}: {str(e)}")
+                    log.warning(f"迁移配置 {key} 失败: {e}")
+    except Exception as e:
+        log.error(f"获取配置数据失败: {e}")
+
+    result["total_migrated"] = (
+        result["gcli_credentials"]["migrated"] +
+        result["antigravity_credentials"]["migrated"] +
+        result["config"]["migrated"]
+    )
+
+    log.info(f"数据迁移完成: GCLI {result['gcli_credentials']['migrated']}/{result['gcli_credentials']['total']}, "
+             f"Antigravity {result['antigravity_credentials']['migrated']}/{result['antigravity_credentials']['total']}, "
+             f"Config {result['config']['migrated']}/{result['config']['total']}")
+
+    return result
+

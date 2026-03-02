@@ -97,3 +97,6 @@ log.txt
 *.bak
 
 tools/
+
+zeaburcli/
+

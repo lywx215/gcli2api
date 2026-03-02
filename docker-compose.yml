@@ -24,10 +24,8 @@ services:
       # Optional: Logging configuration
       # - LOG_LEVEL=${LOG_LEVEL:-info}
 
-      # Optional: Redis configuration (for distributed storage)
-      # - REDIS_URI=${REDIS_URI}
-      # - REDIS_DATABASE=${REDIS_DATABASE:-0}
-
+      # Optional: Redis configuration (for credential pool cache)
+      - REDIS_URL=${REDIS_URL:-redis://localhost:6379/0}
       # Optional: MongoDB configuration (for distributed storage)
       # - MONGODB_URI=${MONGODB_URI}
       # - MONGODB_DATABASE=${MONGODB_DATABASE:-gcli2api}
@@ -39,22 +37,29 @@ services:
       # - PROXY=${PROXY}
     volumes:
       - ./data/creds:/app/creds
+    healthcheck:
+      test: [ "CMD-SHELL", "python -c \"import sys, urllib.request, os; port = os.environ.get('PORT', '7861'); req = urllib.request.Request(f'http://localhost:{port}/v1/models', headers={'Authorization': 'Bearer ' + os.environ.get('PASSWORD', 'pwd')}); sys.exit(0 if urllib.request.urlopen(req, timeout=5).getcode() == 200 else 1)\"" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      redis:
+        condition: service_healthy
 
-# Example with Redis for distributed storage
-#  redis:
-#    image: redis:7-alpine
-#    container_name: gcli2api-redis
-#    restart: unless-stopped
-#    ports:
-#      - "6379:6379"
-#    volumes:
-#      - redis_data:/data
-#    command: redis-server --appendonly yes
-#    healthcheck:
-#      test: ["CMD", "redis-cli", "ping"]
-#      interval: 10s
-#      timeout: 3s
-#      retries: 3
+  redis:
+    image: redis:7-alpine
+    container_name: gcli2api-redis
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --save 60 1
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
 # Example with MongoDB for distributed storage
 #  mongodb:
@@ -74,6 +79,7 @@ services:
 #      timeout: 5s
 #      retries: 3
 
-#volumes:
-#  redis_data:
-#  mongodb_data:
+volumes:
+  redis_data:
+    #  mongodb_data:
+

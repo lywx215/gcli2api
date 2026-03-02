@@ -86,7 +86,25 @@ class StorageAdapter:
             if self._initialized:
                 return
 
-            # 按优先级检查存储后端：PostgreSQL > MongoDB > SQLite
+            # 按优先级检查存储后端：MySQL > PostgreSQL > SQLite > MongoDB
+            # MySQL 需要同时设置 MYSQL_URI 和 GCLI_SERVER_NAME 才启用
+            mysql_uri = os.getenv("MYSQL_URI", "")
+            gcli_server_name = os.getenv("GCLI_SERVER_NAME", "")
+
+            if mysql_uri and gcli_server_name:
+                # 最高优先级：MySQL（需要同时设置两个环境变量）
+                try:
+                    from .storage.mysql_manager import MySQLManager
+
+                    self._backend = MySQLManager()
+                    await self._backend.initialize()
+                    log.info("Using MySQL storage backend")
+                    self._initialized = True
+                    return
+                except Exception as e:
+                    log.error(f"Failed to initialize MySQL backend: {e}")
+                    log.info("Falling back to next storage backend")
+
             postgresql_uri = os.getenv("POSTGRESQL_URI", "")
             mongodb_uri = os.getenv("MONGODB_URI", "")
 
@@ -273,6 +291,8 @@ class StorageAdapter:
         backend_class_name = self._backend.__class__.__name__
         if "SQLite" in backend_class_name or "sqlite" in backend_class_name.lower():
             return "sqlite"
+        elif "MySQL" in backend_class_name or "mysql" in backend_class_name.lower():
+            return "mysql"
         elif "MongoDB" in backend_class_name or "mongo" in backend_class_name.lower():
             return "mongodb"
         elif "PSQL" in backend_class_name or "Postgres" in backend_class_name or "psql" in backend_class_name.lower():

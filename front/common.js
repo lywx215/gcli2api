@@ -1035,9 +1035,55 @@ function triggerTabDataLoad(tabName) {
     if (tabName === 'manage') AppState.creds.refresh();
     if (tabName === 'antigravity-manage') AppState.antigravityCreds.refresh();
     if (tabName === 'config') loadConfig();
+    if (tabName === 'status') loadSystemStatus();
     if (tabName === 'logs') connectWebSocket();
 }
 
+// =====================================================================
+// Redis 缓存状态
+// =====================================================================
+
+function statusItem(label, value) {
+    return `<div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.15);">
+        <span style="opacity: 0.75;">${label}</span>
+        <span style="font-weight: 600;">${value}</span>
+    </div>`;
+}
+
+async function loadSystemStatus() {
+    const el = document.getElementById('redisStatus');
+    if (!el) return;
+    el.innerHTML = '<div style="opacity: 0.7;">加载中...</div>';
+
+    try {
+        const resp = await fetch('./config/system-status', { headers: getAuthHeaders() });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const r = data.redis || {};
+        let html = '';
+
+        if (r.enabled) {
+            html += statusItem('状态', '<span style="background: rgba(255,255,255,0.25); padding: 2px 8px; border-radius: 4px;">✅ 已连接</span>');
+            if (r.memory_used_mb !== undefined) html += statusItem('内存使用', `${r.memory_used_mb} MB`);
+            if (r.total_keys !== undefined) html += statusItem('总 Key 数', r.total_keys);
+            if (r.pools) {
+                html += statusItem('GCLI 可用池', r.pools.geminicli_avail);
+                html += statusItem('GCLI Preview 池', r.pools.geminicli_preview);
+                html += statusItem('Antigravity 池', r.pools.antigravity_avail);
+            }
+        } else {
+            html += statusItem('状态', '<span style="background: rgba(255,0,0,0.3); padding: 2px 8px; border-radius: 4px;">❌ 未启用</span>');
+            if (r.note) html += statusItem('说明', r.note);
+        }
+        if (r.error) html += statusItem('错误', r.error);
+
+        el.innerHTML = html;
+        const ts = document.getElementById('statusLastUpdate');
+        if (ts) ts.textContent = new Date().toLocaleTimeString();
+    } catch (err) {
+        el.innerHTML = `<div style="color: #ffcccc;">加载失败: ${err.message}</div>`;
+    }
+}
 
 // =====================================================================
 // OAuth认证相关函数
@@ -2785,6 +2831,143 @@ async function loadConfig() {
         showStatus(`网络错误: ${error.message}`, 'error');
     } finally {
         loading.style.display = 'none';
+    }
+
+    // 异步加载存储引擎信息（不阻塞配置表单）
+    loadStorageEngine();
+}
+
+async function loadStorageEngine() {
+    const typeEl = document.getElementById('storageEngineType');
+    const iconEl = document.getElementById('storageEngineIcon');
+    const serverNameEl = document.getElementById('storageServerName');
+    const switchArea = document.getElementById('storageEngineSwitchArea');
+    if (!typeEl) return;
+
+    try {
+        const resp = await fetch('./config/storage-engine', { headers: getAuthHeaders() });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+
+        const engine = (data.current_engine || 'unknown').toUpperCase();
+        const engineColors = { 'MYSQL': '#007bff', 'SQLITE': '#28a745', 'MONGODB': '#4db33d' };
+        typeEl.textContent = engine;
+        typeEl.style.color = engineColors[engine] || '#333';
+
+        if (iconEl) {
+            const icons = { 'MYSQL': '🐬', 'SQLITE': '📦', 'MONGODB': '🍃' };
+            iconEl.textContent = icons[engine] || '💾';
+        }
+
+        if (serverNameEl && data.server_name) {
+            serverNameEl.textContent = data.server_name;
+            serverNameEl.style.display = 'inline-block';
+        }
+
+        if (switchArea && data.mysql_available) {
+            switchArea.style.display = 'flex';
+            // 填充服务器下拉列表
+            const select = document.getElementById('serverNameSelect');
+            if (select && data.servers && data.servers.length > 0) {
+                select.innerHTML = '<option value="">-- 选择服务器 --</option>';
+                data.servers.forEach(s => {
+                    const opt = document.createElement('option');
+                    opt.value = s.name;
+                    opt.textContent = `${s.name} (${s.status || 'active'})`;
+                    if (s.name === data.server_name) opt.selected = true;
+                    select.appendChild(opt);
+                });
+                const inputArea = document.getElementById('serverNameInputArea');
+                if (inputArea) inputArea.style.display = 'flex';
+            }
+        }
+    } catch (err) {
+        typeEl.textContent = '加载失败';
+        typeEl.style.color = '#dc3545';
+        console.error('加载存储引擎失败:', err);
+    }
+}
+
+function onServerNameSelectChange() {
+    const select = document.getElementById('serverNameSelect');
+    const custom = document.getElementById('serverNameCustom');
+    if (select && custom) {
+        custom.style.display = select.value === '__custom__' ? 'inline-block' : 'none';
+    }
+}
+
+async function switchStorageEngine() {
+    const btn = document.getElementById('switchEngineBtn');
+    const select = document.getElementById('serverNameSelect');
+    const customInput = document.getElementById('serverNameCustom');
+
+    // 确定目标引擎：当前是mysql则切到sqlite，反之切到mysql
+    const typeEl = document.getElementById('storageEngineType');
+    const currentEngine = (typeEl ? typeEl.textContent.trim().toLowerCase() : 'unknown');
+    const targetEngine = currentEngine === 'mysql' ? 'sqlite' : 'mysql';
+
+    // 获取 server_name
+    let serverName = '';
+    if (select) {
+        serverName = select.value === '__custom__' ? (customInput ? customInput.value.trim() : '') : select.value;
+    }
+    // 下拉未选择时，使用当前显示的 server_name
+    if (!serverName) {
+        const badge = document.getElementById('storageServerName');
+        if (badge) serverName = badge.textContent.trim();
+    }
+
+    if (targetEngine === 'mysql' && !serverName) {
+        showMessageModal('提示', '切换到 MySQL 需要选择或输入 server_name', 'warning');
+        return;
+    }
+
+    // 先预览迁移数据量
+    let previewText = '';
+    try {
+        const previewResp = await fetch('./config/storage-engine/preview', {
+            method: 'POST',
+            headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        });
+        if (previewResp.ok) {
+            const preview = await previewResp.json();
+            const d = preview.data || {};
+            previewText = `\n\n当前数据: GCLI凭证 ${d.gcli_credentials || 0} 条, Antigravity凭证 ${d.antigravity_credentials || 0} 条, 配置 ${d.config || 0} 项`;
+        }
+    } catch (e) { /* 预览失败不阻塞 */ }
+
+    const confirmed = confirm(
+        `确认要从 ${currentEngine.toUpperCase()} 切换到 ${targetEngine.toUpperCase()} 吗？\n\n数据将自动迁移到目标引擎。${previewText}`
+    );
+    if (!confirmed) return;
+
+    btn.disabled = true;
+    btn.textContent = '切换中...';
+
+    try {
+        const resp = await fetch('./config/storage-engine/switch', {
+            method: 'POST',
+            headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target_engine: targetEngine,
+                server_name: serverName,
+                migrate_data: true
+            })
+        });
+
+        const data = await resp.json();
+        if (resp.ok) {
+            showMessageModal('切换成功', data.message || '存储引擎已切换', 'success');
+            loadStorageEngine();
+        } else {
+            showMessageModal('切换失败', data.detail || data.error || '未知错误', 'error');
+        }
+    } catch (err) {
+        showMessageModal('切换失败', `请求失败: ${err.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '切换引擎';
     }
 }
 
