@@ -640,23 +640,36 @@ async def normalize_gemini_request(
                 thinking_config.pop("thinkingBudget", None)  # 避免与 thinkingLevel 冲突
 
             # includeThoughts 逻辑:
+            # 0. 如果客户端显式传入了 includeThoughts，以客户端为准
             # 1. 如果是 pro 模型，为 return_thoughts
             # 2. 如果不是 pro 模型，检查是否有思考预算或思考等级
-            base_model = get_base_model_name(model)
-            if "pro" in base_model:
-                include_thoughts = return_thoughts
-            elif "3-flash" in base_model:
-                if thinking_level is None:
-                    include_thoughts = False
-                else:
-                    include_thoughts = return_thoughts
+            client_include_thoughts = (
+                request.get("generationConfig", {})
+                .get("thinkingConfig", {})
+                .get("includeThoughts")
+            )
+
+            if client_include_thoughts is not None:
+                # 客户端显式指定了 includeThoughts，优先使用
+                include_thoughts = client_include_thoughts
+                log.debug(f"[GEMINI_FIX] 使用客户端显式指定的 includeThoughts={include_thoughts}")
             else:
-                # 非 pro 模型: 有思考预算或等级才包含思考
-                # 注意: 思考预算为 0 时不包含思考
-                if thinking_budget is None or thinking_budget == 0:
-                    include_thoughts = False
-                else:
+                # 客户端未指定，使用模型名称推断的默认逻辑
+                base_model = get_base_model_name(model)
+                if "pro" in base_model:
                     include_thoughts = return_thoughts
+                elif "3-flash" in base_model:
+                    if thinking_level is None:
+                        include_thoughts = False
+                    else:
+                        include_thoughts = return_thoughts
+                else:
+                    # 非 pro 模型: 有思考预算或等级才包含思考
+                    # 注意: 思考预算为 0 时不包含思考
+                    if thinking_budget is None or thinking_budget == 0:
+                        include_thoughts = False
+                    else:
+                        include_thoughts = return_thoughts
 
             thinking_config["includeThoughts"] = include_thoughts
 

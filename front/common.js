@@ -1089,6 +1089,54 @@ async function loadSystemStatus() {
 }
 
 // =====================================================================
+// Redis 缓存状态
+// =====================================================================
+
+function statusItem(label, value) {
+    return `<div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+        <span style="opacity: 0.8;">${label}</span>
+        <span style="font-weight: 600;">${value}</span>
+    </div>`;
+}
+
+async function loadSystemStatus() {
+    const el = document.getElementById('redisStatus');
+    if (!el) return;
+    el.innerHTML = '<div style="opacity: 0.7;">加载中...</div>';
+
+    try {
+        const resp = await fetch('./config/system-status', { headers: getAuthHeaders() });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const r = data.redis || {};
+
+        let html = '';
+        if (r.enabled) {
+            html += statusItem('状态', '<span style="background: rgba(255,255,255,0.25); padding: 2px 8px; border-radius: 4px;">✅ 已启用</span>');
+            if (r.server_name) html += statusItem('服务器', r.server_name);
+            if (r.memory_used_mb !== undefined) html += statusItem('内存使用', `${r.memory_used_mb} MB`);
+            if (r.total_keys !== undefined) html += statusItem('总 Key 数', r.total_keys);
+            if (r.pools) {
+                html += statusItem('GCLI 可用池', r.pools.geminicli_avail);
+                html += statusItem('GCLI Preview 池', r.pools.geminicli_preview);
+                html += statusItem('Antigravity 池', r.pools.antigravity_avail);
+            }
+        } else {
+            html += statusItem('状态', '<span style="background: rgba(255,0,0,0.3); padding: 2px 8px; border-radius: 4px;">❌ 未启用</span>');
+        }
+        if (r.note) html += statusItem('说明', r.note);
+        if (r.error) html += statusItem('错误', r.error);
+
+        el.innerHTML = html;
+        const ts = document.getElementById('statusLastUpdate');
+        if (ts) ts.textContent = new Date().toLocaleTimeString();
+    } catch (err) {
+        el.innerHTML = `<div style="color: #ffcccc;">加载失败: ${err.message}</div>`;
+    }
+}
+
+
+// =====================================================================
 // OAuth认证相关函数
 // =====================================================================
 async function startAuth() {

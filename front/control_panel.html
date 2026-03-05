@@ -2321,6 +2321,28 @@
                 </div>
             </div>
 
+            <!-- 系统状态标签页 -->
+            <div id="statusTab" class="tab-content">
+                <div style="max-width: 600px; margin: 0 auto;">
+                    <div
+                        style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); border-radius: 12px; padding: 24px; color: white; box-shadow: 0 4px 15px rgba(79,172,254,0.3);">
+                        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px;">
+                            <span style="font-size: 24px;">⚡</span>
+                            <h4 style="margin: 0; font-size: 18px;">Redis 缓存</h4>
+                            <button class="btn" onclick="loadSystemStatus()"
+                                style="margin-left: auto; background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 4px 12px; font-size: 12px; border-radius: 6px;">🔄
+                                刷新</button>
+                        </div>
+                        <div id="redisStatus" style="font-size: 14px;">
+                            <div style="opacity: 0.7;">加载中...</div>
+                        </div>
+                    </div>
+                    <div style="text-align: right; color: #999; font-size: 12px; margin-top: 8px;">
+                        最后更新: <span id="statusLastUpdate">-</span>
+                    </div>
+                </div>
+            </div>
+
             <!-- 实时日志标签页 -->
             <div id="logsTab" class="tab-content">
                 <h3>实时日志</h3>

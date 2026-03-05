@@ -59,7 +59,8 @@ async def debug_storage():
 
 @router.get("/system-status")
 async def get_system_status(token: str = Depends(verify_panel_token)):
-    """获取 Redis 缓存状态"""
+    """获取系统状态（Redis 缓存状态），仅显示本服务器的内容"""
+    import os
     result = {"redis": {"enabled": False}}
 
     try:
@@ -70,18 +71,31 @@ async def get_system_status(token: str = Depends(verify_panel_token)):
                 result["redis"]["enabled"] = backend._redis_enabled
                 if backend._redis_enabled and backend._redis:
                     try:
+                        # 获取本服务器的 server_name
+                        server_name = getattr(backend, '_server_name', 'default')
+                        result["redis"]["server_name"] = server_name
+
                         info = await backend._redis.info("memory")
                         result["redis"]["memory_used_mb"] = round(info.get("used_memory", 0) / 1024 / 1024, 2)
 
-                        gcli_avail = await backend._redis.scard("gcli:avail:geminicli")
-                        gcli_preview = await backend._redis.scard("gcli:preview:geminicli")
-                        anti_avail = await backend._redis.scard("gcli:avail:antigravity")
+                        # 使用正确的 key 格式（包含 server_name）查询本服务器的池大小
+                        gcli_avail = await backend._redis.scard(f"gcli:{server_name}:avail:geminicli")
+                        gcli_preview = await backend._redis.scard(f"gcli:{server_name}:preview:geminicli")
+                        anti_avail = await backend._redis.scard(f"gcli:{server_name}:avail:antigravity")
                         result["redis"]["pools"] = {
                             "geminicli_avail": gcli_avail,
                             "geminicli_preview": gcli_preview,
                             "antigravity_avail": anti_avail,
                         }
-                        result["redis"]["total_keys"] = await backend._redis.dbsize()
+
+                        # 使用 SCAN 统计本服务器的 key 数量（而非 dbsize 统计所有 key）
+                        cursor, count = 0, 0
+                        while True:
+                            cursor, keys = await backend._redis.scan(cursor, match=f"gcli:{server_name}:*", count=1000)
+                            count += len(keys)
+                            if cursor == 0:
+                                break
+                        result["redis"]["total_keys"] = count
                     except Exception as e:
                         result["redis"]["error"] = str(e)
                 else:
@@ -90,6 +104,7 @@ async def get_system_status(token: str = Depends(verify_panel_token)):
         result["redis"]["error"] = str(e)
 
     return JSONResponse(content=result)
+
 
 @router.get("/get")
 async def get_config(token: str = Depends(verify_panel_token)):
