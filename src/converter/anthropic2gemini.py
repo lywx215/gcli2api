@@ -802,9 +802,38 @@ def gemini_to_anthropic_response(
     Returns:
         Anthropic 格式的响应体字典，或原始响应 (如果状态码不是 2xx)
     """
-    # 非 2xx 状态码直接返回原始响应
+    # 非 2xx 状态码 - 转换为 Anthropic 标准错误格式
     if not (200 <= status_code < 300):
-        return gemini_response
+        # HTTP 状态码到 Anthropic error type 的映射
+        _anthropic_error_type_map = {
+            400: "invalid_request_error",
+            401: "authentication_error",
+            403: "permission_error",
+            404: "not_found_error",
+            429: "rate_limit_error",
+            500: "api_error",
+            503: "overloaded_error",
+        }
+
+        # 提取错误消息
+        error_message = ""
+        if isinstance(gemini_response, dict) and "error" in gemini_response:
+            err = gemini_response["error"]
+            if isinstance(err, dict):
+                error_message = err.get("message", "")
+            elif isinstance(err, str):
+                error_message = err
+
+        if not error_message:
+            error_message = str(gemini_response) if gemini_response else "Unknown error"
+
+        return {
+            "type": "error",
+            "error": {
+                "type": _anthropic_error_type_map.get(status_code, "api_error"),
+                "message": error_message
+            }
+        }
 
     # 处理 GeminiCLI 的 response 包装格式
     if "response" in gemini_response:

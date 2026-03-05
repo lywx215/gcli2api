@@ -31,6 +31,7 @@ from src.api.utils import (
     record_api_call_success,
     record_api_call_error,
     parse_and_log_cooldown,
+    build_error_response,
 )
 from src.utils import get_geminicli_user_agent
 
@@ -142,11 +143,7 @@ async def stream_request(
 
     if not cred_result:
         # 如果返回值是None，直接返回错误500
-        yield Response(
-            content=json.dumps({"error": "当前无可用凭证"}),
-            status_code=500,
-            media_type="application/json"
-        )
+        yield build_error_response("当前无可用凭证", 500)
         return
 
     current_file, credential_data = cred_result
@@ -164,11 +161,7 @@ async def stream_request(
 
     except Exception as e:
         log.error(f"准备请求失败: {e}")
-        yield Response(
-            content=json.dumps({"error": f"准备请求失败: {str(e)}"}),
-            status_code=500,
-            media_type="application/json"
-        )
+        yield build_error_response(f"准备请求失败: {str(e)}", 500)
         return
 
     # 3. 调用stream_post_async进行请求
@@ -368,11 +361,7 @@ async def stream_request(
                 )
                 if not switched:
                     log.error("[GEMINICLI STREAM] 重试时无可用凭证或刷新失败")
-                    yield Response(
-                        content=json.dumps({"error": "当前无可用凭证"}),
-                        status_code=500,
-                        media_type="application/json"
-                    )
+                    yield build_error_response("当前无可用凭证", 500)
                     return
                 continue  # 重试
 
@@ -389,11 +378,7 @@ async def stream_request(
                     yield last_error_response
                 else:
                     # 如果没有记录到错误响应，返回500错误
-                    yield Response(
-                        content=json.dumps({"error": f"流式请求异常: {str(e)}"}),
-                        status_code=500,
-                        media_type="application/json"
-                    )
+                    yield build_error_response(f"流式请求异常: {str(e)}", 500)
                 return
 
     # 所有重试均已耗尽（for循环正常结束），返回最后记录的错误
@@ -401,11 +386,7 @@ async def stream_request(
     if last_error_response:
         yield last_error_response
     else:
-        yield Response(
-            content=json.dumps({"error": "请求失败，所有重试均已耗尽"}),
-            status_code=429,
-            media_type="application/json"
-        )
+        yield build_error_response("请求失败，所有重试均已耗尽", 429)
 
 
 async def non_stream_request(
@@ -433,11 +414,7 @@ async def non_stream_request(
 
     if not cred_result:
         # 如果返回值是None，直接返回错误500
-        return Response(
-            content=json.dumps({"error": "当前无可用凭证"}),
-            status_code=500,
-            media_type="application/json"
-        )
+        return build_error_response("当前无可用凭证", 500)
 
     current_file, credential_data = cred_result
 
@@ -454,11 +431,7 @@ async def non_stream_request(
 
     except Exception as e:
         log.error(f"准备请求失败: {e}")
-        return Response(
-            content=json.dumps({"error": f"准备请求失败: {str(e)}"}),
-            status_code=500,
-            media_type="application/json"
-        )
+        return build_error_response(f"准备请求失败: {str(e)}", 500)
 
     # 3. 调用post_async进行请求
     retry_config = await get_retry_config()
@@ -597,11 +570,7 @@ async def non_stream_request(
                     )
                     if not switched:
                         log.error("[NON-STREAM] 重试时无可用凭证或刷新失败")
-                        return Response(
-                            content=json.dumps({"error": "当前无可用凭证"}),
-                            status_code=500,
-                            media_type="application/json"
-                        )
+                        return build_error_response("当前无可用凭证", 500)
                     continue  # 重试
                 else:
                     # 不重试，直接返回原始错误
@@ -648,11 +617,7 @@ async def non_stream_request(
                     )
                     if not switched:
                         log.error("[NON-STREAM] 重试时无可用凭证或刷新失败")
-                        return Response(
-                            content=json.dumps({"error": "当前无可用凭证"}),
-                            status_code=500,
-                            media_type="application/json"
-                        )
+                        return build_error_response("当前无可用凭证", 500)
                     continue  # 重试
                 else:
                     log.error(f"[NON-STREAM] 达到最大重试次数，返回404错误")
@@ -679,11 +644,7 @@ async def non_stream_request(
                 if last_error_response:
                     return last_error_response
                 else:
-                    return Response(
-                        content=json.dumps({"error": f"请求异常: {str(e)}"}),
-                        status_code=500,
-                        media_type="application/json"
-                    )
+                    return build_error_response(f"请求异常: {str(e)}", 500)
 
     # 所有重试都失败，返回最后一次的原始错误
     log.error("[NON-STREAM] 所有重试均失败")

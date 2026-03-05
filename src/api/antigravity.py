@@ -33,6 +33,7 @@ from src.api.utils import (
     record_api_call_error,
     parse_and_log_cooldown,
     collect_streaming_response,
+    build_error_response,
 )
 
 # ==================== 全局凭证管理器 ====================
@@ -274,11 +275,7 @@ async def stream_request(
     if not cred_result:
         # 如果返回值是None，直接返回错误500
         log.error("[ANTIGRAVITY STREAM] 当前无可用凭证")
-        yield Response(
-            content=json.dumps({"error": "当前无可用凭证"}),
-            status_code=500,
-            media_type="application/json"
-        )
+        yield build_error_response("当前无可用凭证", 500)
         return
 
     current_file, credential_data = cred_result
@@ -287,11 +284,7 @@ async def stream_request(
 
     if not access_token:
         log.error(f"[ANTIGRAVITY STREAM] No access token in credential: {current_file}")
-        yield Response(
-            content=json.dumps({"error": "凭证中没有访问令牌"}),
-            status_code=500,
-            media_type="application/json"
-        )
+        yield build_error_response("凭证中没有访问令牌", 500)
         return
 
     # 2. 构建URL和请求头
@@ -477,11 +470,7 @@ async def stream_request(
                     need_retry = True
                 else:
                     log.error(f"[ANTIGRAVITY STREAM] 空回复达到最大重试次数")
-                    yield Response(
-                        content=json.dumps({"error": "服务返回空回复"}),
-                        status_code=500,
-                        media_type="application/json"
-                    )
+                    yield build_error_response("服务返回空回复", 500)
                     return
             
             # 统一处理重试
@@ -498,11 +487,7 @@ async def stream_request(
                     )
                     if not switched:
                         log.error("[ANTIGRAVITY STREAM] 重试时无可用凭证或令牌")
-                        yield Response(
-                            content=json.dumps({"error": "当前无可用凭证"}),
-                            status_code=500,
-                            media_type="application/json"
-                        )
+                        yield build_error_response("当前无可用凭证", 500)
                         return
                 else:
                     await asyncio.sleep(retry_interval)
@@ -521,11 +506,7 @@ async def stream_request(
                     yield last_error_response
                 else:
                     # 如果没有记录到错误响应，返回500错误
-                    yield Response(
-                        content=json.dumps({"error": f"流式请求异常: {str(e)}"}),
-                        status_code=500,
-                        media_type="application/json"
-                    )
+                    yield build_error_response(f"流式请求异常: {str(e)}", 500)
                 return
 
     # 所有重试均已耗尽（for循环正常结束），返回最后记录的错误
@@ -533,11 +514,7 @@ async def stream_request(
     if last_error_response:
         yield last_error_response
     else:
-        yield Response(
-            content=json.dumps({"error": "请求失败，所有重试均已耗尽"}),
-            status_code=429,
-            media_type="application/json"
-        )
+        yield build_error_response("请求失败，所有重试均已耗尽", 429)
 
 
 async def non_stream_request(
@@ -580,11 +557,7 @@ async def non_stream_request(
     if not cred_result:
         # 如果返回值是None，直接返回错误500
         log.error("[ANTIGRAVITY] 当前无可用凭证")
-        return Response(
-            content=json.dumps({"error": "当前无可用凭证"}),
-            status_code=500,
-            media_type="application/json"
-        )
+        return build_error_response("当前无可用凭证", 500)
 
     current_file, credential_data = cred_result
     access_token = credential_data.get("access_token") or credential_data.get("token")
@@ -592,11 +565,7 @@ async def non_stream_request(
 
     if not access_token:
         log.error(f"[ANTIGRAVITY] No access token in credential: {current_file}")
-        return Response(
-            content=json.dumps({"error": "凭证中没有访问令牌"}),
-            status_code=500,
-            media_type="application/json"
-        )
+        return build_error_response("凭证中没有访问令牌", 500)
 
     # 2. 构建URL和请求头
     antigravity_url = await get_antigravity_api_url()
@@ -696,11 +665,7 @@ async def non_stream_request(
                         need_retry = True
                     else:
                         log.error(f"[ANTIGRAVITY] 空回复达到最大重试次数")
-                        return Response(
-                            content=json.dumps({"error": "服务返回空回复"}),
-                            status_code=500,
-                            media_type="application/json"
-                        )
+                        return build_error_response("服务返回空回复", 500)
                 else:
                     # 正常响应
                     await record_api_call_success(
@@ -796,11 +761,7 @@ async def non_stream_request(
                     )
                     if not switched:
                         log.error("[ANTIGRAVITY] 重试时无可用凭证或令牌")
-                        return Response(
-                            content=json.dumps({"error": "当前无可用凭证"}),
-                            status_code=500,
-                            media_type="application/json"
-                        )
+                        return build_error_response("当前无可用凭证", 500)
                 else:
                     await asyncio.sleep(retry_interval)
                 continue  # 重试
@@ -817,22 +778,14 @@ async def non_stream_request(
                 if last_error_response:
                     return last_error_response
                 else:
-                    return Response(
-                        content=json.dumps({"error": f"非流式请求异常: {str(e)}"}),
-                        status_code=500,
-                        media_type="application/json"
-                    )
+                    return build_error_response(f"非流式请求异常: {str(e)}", 500)
 
     # 所有重试都失败，返回最后一次的原始错误（如果有）或500错误
     log.error("[ANTIGRAVITY] 所有重试均失败")
     if last_error_response:
         return last_error_response
     else:
-        return Response(
-            content=json.dumps({"error": "所有重试均失败"}),
-            status_code=500,
-            media_type="application/json"
-        )
+        return build_error_response("所有重试均失败", 500)
 
 
 # ==================== 模型和配额查询 ====================
