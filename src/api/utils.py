@@ -21,6 +21,23 @@ from log import log
 from src.credential_manager import CredentialManager
 
 
+# ==================== 调试日志工具 ====================
+
+def debug_log(message: str, level: str = "debug") -> None:
+    """
+    仅在调试模式下输出日志，正常模式零开销。
+
+    用法:
+        from src.api.utils import debug_log
+        debug_log(f"[STREAM] 收到chunk, 大小: {len(chunk)}")
+        debug_log(f"[STREAM] 严重异常: {e}", level="warning")
+    """
+    from config import is_debug_mode
+    if not is_debug_mode():
+        return
+    getattr(log, level, log.debug)(f"[DEBUG] {message}")
+
+
 # ==================== 统一错误响应构建 ====================
 
 def build_error_response(message: str, status_code: int = 500) -> Response:

@@ -13,6 +13,9 @@ from typing import Any, Optional
 _config_cache: dict[str, Any] = {}
 _config_initialized = False
 
+# 调试模式同步缓存（热路径使用，避免 async 开销）
+_debug_mode_cache: bool = False
+
 # Client Configuration
 
 # 需要自动封禁的错误码 (默认值，可通过环境变量或配置覆盖)
@@ -47,6 +50,7 @@ ENV_MAPPINGS = {
     "PASSWORD": "password",
     "KEEPALIVE_URL": "keepalive_url",
     "KEEPALIVE_INTERVAL": "keepalive_interval",
+    "DEBUG_MODE": "debug_mode",
 }
 
 
@@ -54,7 +58,7 @@ ENV_MAPPINGS = {
 
 async def init_config():
     """初始化配置缓存（启动时调用一次）"""
-    global _config_cache, _config_initialized
+    global _config_cache, _config_initialized, _debug_mode_cache
 
     if _config_initialized:
         return
@@ -69,10 +73,13 @@ async def init_config():
         _config_cache = {}
         _config_initialized = True
 
+    # 刷新调试模式同步缓存
+    _debug_mode_cache = await get_debug_mode()
+
 
 async def reload_config():
     """重新加载配置（修改配置后调用）"""
-    global _config_cache, _config_initialized
+    global _config_cache, _config_initialized, _debug_mode_cache
 
     try:
         from src.storage_adapter import get_storage_adapter
@@ -87,6 +94,9 @@ async def reload_config():
         _config_initialized = True
     except Exception:
         pass
+
+    # 刷新调试模式同步缓存
+    _debug_mode_cache = await get_debug_mode()
 
 
 def _get_cached_config(key: str, default: Any = None) -> Any:
@@ -494,3 +504,32 @@ async def get_keepalive_interval() -> int:
             pass
 
     return int(await get_config_value("keepalive_interval", 60))
+
+
+# Debug Mode
+async def get_debug_mode() -> bool:
+    """
+    Get debug mode setting.
+
+    调试模式：启用后输出额外的调试日志信息。
+    正常模式下这些日志不会输出，不产生任何性能开销。
+
+    Environment variable: DEBUG_MODE
+    Database config key: debug_mode
+    Default: False
+    """
+    env_value = os.getenv("DEBUG_MODE")
+    if env_value:
+        return env_value.lower() in ("true", "1", "yes", "on")
+
+    return bool(await get_config_value("debug_mode", False))
+
+
+def is_debug_mode() -> bool:
+    """
+    同步检查调试模式（零开销，直接读内存缓存）。
+
+    用于热路径中的调试日志判断，避免 async 调用开销。
+    缓存在 init_config() 和 reload_config() 时自动刷新。
+    """
+    return _debug_mode_cache

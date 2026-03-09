@@ -148,6 +148,9 @@ async def get_config(token: str = Depends(verify_panel_token)):
         current_config["antigravity_stream2nostream"] = await config.get_antigravity_stream2nostream()
         current_config["antigravity_switch_credential_enabled"] = await config.get_antigravity_switch_credential_enabled()
 
+        # 调试模式
+        current_config["debug_mode"] = await config.get_debug_mode()
+
         # 保活配置
         current_config["keepalive_url"] = await config.get_keepalive_url()
         current_config["keepalive_interval"] = await config.get_keepalive_interval()
@@ -234,6 +237,10 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
         if "antigravity_switch_credential_enabled" in new_config:
             if not isinstance(new_config["antigravity_switch_credential_enabled"], bool):
                 raise HTTPException(status_code=400, detail="Antigravity切换凭证开关必须是布尔值")
+
+        if "debug_mode" in new_config:
+            if not isinstance(new_config["debug_mode"], bool):
+                raise HTTPException(status_code=400, detail="调试模式开关必须是布尔值")
 
         # 验证保活配置
         if "keepalive_url" in new_config:

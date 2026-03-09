@@ -32,8 +32,23 @@ from src.api.utils import (
     record_api_call_error,
     parse_and_log_cooldown,
     build_error_response,
+    debug_log,
 )
 from src.utils import get_geminicli_user_agent
+
+
+def _debug_log_final_response(tag: str, response) -> None:
+    """调试模式下记录最终返回给客户端的响应内容和HTTP状态码"""
+    try:
+        status = getattr(response, 'status_code', 'N/A')
+        body = ''
+        if hasattr(response, 'body') and response.body:
+            body = response.body.decode('utf-8', errors='replace') if isinstance(response.body, bytes) else str(response.body)
+        elif hasattr(response, 'content') and response.content:
+            body = response.content.decode('utf-8', errors='replace') if isinstance(response.content, bytes) else str(response.content)
+        debug_log(f"[{tag}] 最终返回客户端 -> HTTP {status}, body: {body[:1000]}", level="info")
+    except Exception as e:
+        debug_log(f"[{tag}] 记录最终响应失败: {e}", level="warning")
 
 # ==================== 全局凭证管理器 ====================
 
@@ -143,7 +158,9 @@ async def stream_request(
 
     if not cred_result:
         # 如果返回值是None，直接返回错误500
-        yield build_error_response("当前无可用凭证", 500)
+        err = build_error_response("当前无可用凭证", 500)
+        _debug_log_final_response("GEMINICLI STREAM", err)
+        yield err
         return
 
     current_file, credential_data = cred_result
@@ -161,7 +178,9 @@ async def stream_request(
 
     except Exception as e:
         log.error(f"准备请求失败: {e}")
-        yield build_error_response(f"准备请求失败: {str(e)}", 500)
+        err = build_error_response(f"准备请求失败: {str(e)}", 500)
+        _debug_log_final_response("GEMINICLI STREAM", err)
+        yield err
         return
 
     # 3. 调用stream_post_async进行请求
@@ -270,6 +289,7 @@ async def stream_request(
                         else:
                             # 不重试，直接返回原始错误
                             log.error(f"[GEMINICLI STREAM] 达到最大重试次数或不应重试，返回原始错误")
+                            _debug_log_final_response("GEMINICLI STREAM", chunk)
                             yield chunk
                             return
                     elif status_code == 404 and "preview" in model_name.lower():
@@ -306,6 +326,7 @@ async def stream_request(
                             break
                         else:
                             log.error(f"[GEMINICLI STREAM] 达到最大重试次数，返回404错误")
+                            _debug_log_final_response("GEMINICLI STREAM", chunk)
                             yield chunk
                             return
                     else:
@@ -316,6 +337,7 @@ async def stream_request(
                             None, mode="geminicli", model_name=model_name,
                             error_message=error_body
                         )
+                        _debug_log_final_response("GEMINICLI STREAM", chunk)
                         yield chunk
                         return
                 else:
@@ -361,7 +383,9 @@ async def stream_request(
                 )
                 if not switched:
                     log.error("[GEMINICLI STREAM] 重试时无可用凭证或刷新失败")
-                    yield build_error_response("当前无可用凭证", 500)
+                    err = build_error_response("当前无可用凭证", 500)
+                    _debug_log_final_response("GEMINICLI STREAM", err)
+                    yield err
                     return
                 continue  # 重试
 
@@ -375,18 +399,24 @@ async def stream_request(
                 # 所有重试都失败，返回最后一次的错误（如果有）
                 log.error(f"[GEMINICLI STREAM] 所有重试均失败，最后异常: {e}")
                 if last_error_response:
+                    _debug_log_final_response("GEMINICLI STREAM", last_error_response)
                     yield last_error_response
                 else:
                     # 如果没有记录到错误响应，返回500错误
-                    yield build_error_response(f"流式请求异常: {str(e)}", 500)
+                    err = build_error_response(f"流式请求异常: {str(e)}", 500)
+                    _debug_log_final_response("GEMINICLI STREAM", err)
+                    yield err
                 return
 
     # 所有重试均已耗尽（for循环正常结束），返回最后记录的错误
     log.error("[GEMINICLI STREAM] 所有重试均失败")
     if last_error_response:
+        _debug_log_final_response("GEMINICLI STREAM", last_error_response)
         yield last_error_response
     else:
-        yield build_error_response("请求失败，所有重试均已耗尽", 429)
+        err = build_error_response("请求失败，所有重试均已耗尽", 429)
+        _debug_log_final_response("GEMINICLI STREAM", err)
+        yield err
 
 
 async def non_stream_request(
@@ -414,7 +444,9 @@ async def non_stream_request(
 
     if not cred_result:
         # 如果返回值是None，直接返回错误500
-        return build_error_response("当前无可用凭证", 500)
+        err = build_error_response("当前无可用凭证", 500)
+        _debug_log_final_response("NON-STREAM", err)
+        return err
 
     current_file, credential_data = cred_result
 
@@ -431,7 +463,9 @@ async def non_stream_request(
 
     except Exception as e:
         log.error(f"准备请求失败: {e}")
-        return build_error_response(f"准备请求失败: {str(e)}", 500)
+        err = build_error_response(f"准备请求失败: {str(e)}", 500)
+        _debug_log_final_response("NON-STREAM", err)
+        return err
 
     # 3. 调用post_async进行请求
     retry_config = await get_retry_config()
@@ -570,11 +604,14 @@ async def non_stream_request(
                     )
                     if not switched:
                         log.error("[NON-STREAM] 重试时无可用凭证或刷新失败")
-                        return build_error_response("当前无可用凭证", 500)
+                        err = build_error_response("当前无可用凭证", 500)
+                        _debug_log_final_response("NON-STREAM", err)
+                        return err
                     continue  # 重试
                 else:
                     # 不重试，直接返回原始错误
                     log.error(f"[NON-STREAM] 达到最大重试次数或不应重试，返回原始错误")
+                    _debug_log_final_response("NON-STREAM", last_error_response)
                     return last_error_response
             elif status_code == 404 and "preview" in model_name.lower():
                 # 特殊处理：preview模型返回404，说明该凭证不支持preview模型
@@ -617,10 +654,13 @@ async def non_stream_request(
                     )
                     if not switched:
                         log.error("[NON-STREAM] 重试时无可用凭证或刷新失败")
-                        return build_error_response("当前无可用凭证", 500)
+                        err = build_error_response("当前无可用凭证", 500)
+                        _debug_log_final_response("NON-STREAM", err)
+                        return err
                     continue  # 重试
                 else:
                     log.error(f"[NON-STREAM] 达到最大重试次数，返回404错误")
+                    _debug_log_final_response("NON-STREAM", last_error_response)
                     return last_error_response
             else:
                 # 错误码不在重试范围内，直接返回
@@ -630,6 +670,7 @@ async def non_stream_request(
                     None, mode="geminicli", model_name=model_name,
                     error_message=error_text
                 )
+                _debug_log_final_response("NON-STREAM", last_error_response)
                 return last_error_response
 
         except Exception as e:
@@ -642,12 +683,16 @@ async def non_stream_request(
                 # 所有重试都失败，返回最后一次的错误（如果有）或500错误
                 log.error(f"[NON-STREAM] 所有重试均失败，最后异常: {e}")
                 if last_error_response:
+                    _debug_log_final_response("NON-STREAM", last_error_response)
                     return last_error_response
                 else:
-                    return build_error_response(f"请求异常: {str(e)}", 500)
+                    err = build_error_response(f"请求异常: {str(e)}", 500)
+                    _debug_log_final_response("NON-STREAM", err)
+                    return err
 
     # 所有重试都失败，返回最后一次的原始错误
     log.error("[NON-STREAM] 所有重试均失败")
+    _debug_log_final_response("NON-STREAM", last_error_response)
     return last_error_response
 
 
