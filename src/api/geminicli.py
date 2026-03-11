@@ -289,7 +289,7 @@ async def stream_request(
                         else:
                             # 不重试，返回固定429错误以便下游重试
                             log.error(f"[GEMINICLI STREAM] 达到最大重试次数或不应重试，返回429错误")
-                            err = build_error_response("Server is busy, please retry later", 429)
+                            err = build_error_response("Server is busy, please retry later", 503)
                             _debug_log_final_response("GEMINICLI STREAM", err)
                             yield err
                             return
@@ -399,14 +399,14 @@ async def stream_request(
             else:
                 # 所有重试都失败，返回固定429错误以便下游重试
                 log.error(f"[GEMINICLI STREAM] 所有重试均失败，最后异常: {e}")
-                err = build_error_response("Server is busy, please retry later", 429)
+                err = build_error_response("Server is busy, please retry later", 503)
                 _debug_log_final_response("GEMINICLI STREAM", err)
                 yield err
                 return
 
     # 所有重试均已耗尽（for循环正常结束），返回固定429错误以便下游重试
     log.error("[GEMINICLI STREAM] 所有重试均失败")
-    err = build_error_response("Server is busy, please retry later", 429)
+    err = build_error_response("Server is busy, please retry later", 503)
     _debug_log_final_response("GEMINICLI STREAM", err)
     yield err
 
@@ -603,7 +603,7 @@ async def non_stream_request(
                 else:
                     # 不重试，返回固定429错误以便下游重试
                     log.error(f"[NON-STREAM] 达到最大重试次数或不应重试，返回429错误")
-                    err = build_error_response("Server is busy, please retry later", 429)
+                    err = build_error_response("Server is busy, please retry later", 503)
                     _debug_log_final_response("NON-STREAM", err)
                     return err
             elif status_code == 404 and "preview" in model_name.lower():
@@ -675,13 +675,13 @@ async def non_stream_request(
             else:
                 # 所有重试都失败，返回固定429错误以便下游重试
                 log.error(f"[NON-STREAM] 所有重试均失败，最后异常: {e}")
-                err = build_error_response("Server is busy, please retry later", 429)
+                err = build_error_response("Server is busy, please retry later", 503)
                 _debug_log_final_response("NON-STREAM", err)
                 return err
 
     # 所有重试都失败，返回固定429错误以便下游重试
     log.error("[NON-STREAM] 所有重试均失败")
-    err = build_error_response("Server is busy, please retry later", 429)
+    err = build_error_response("Server is busy, please retry later", 503)
     _debug_log_final_response("NON-STREAM", err)
     return err
 
