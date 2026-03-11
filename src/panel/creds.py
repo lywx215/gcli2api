@@ -1196,6 +1196,28 @@ async def get_credential_quota(
             quota_info = await _fetch_geminicli_quota(access_token, project_id)
 
         if quota_info.get("success"):
+            # 附加 Redis 统计数据
+            try:
+                import asyncio
+                from src.usage_stats import get_credential_stats, set_stats_ttl, _escape_key_part
+
+                stats = await get_credential_stats(filename, mode)
+                models_data = quota_info.get("models", {})
+
+                for model_name, model_data in models_data.items():
+                    # 用 escaped 名称匹配统计 key
+                    escaped = _escape_key_part(model_name)
+                    model_stat = stats.get(escaped, {"total": 0, "success": 0, "fail": 0})
+                    model_data["stats"] = model_stat
+
+                    # 根据 resetTimeRaw 更新统计 TTL
+                    raw = model_data.get("resetTimeRaw")
+                    if raw:
+                        asyncio.create_task(set_stats_ttl(filename, model_name, raw, mode))
+
+            except Exception as e:
+                log.warning(f"[QUOTA] 附加统计数据失败: {e}")
+
             return JSONResponse(content={
                 "success": True,
                 "filename": filename,

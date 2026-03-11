@@ -217,6 +217,9 @@ async def record_api_call_success(
         await credential_manager.record_api_call_result(
             credential_name, True, mode=mode, model_name=model_name
         )
+        # 统计记录（fire-and-forget）
+        from src.usage_stats import record_usage
+        asyncio.create_task(record_usage(credential_name, model_name, True, mode))
 
 
 async def record_api_call_error(
@@ -250,6 +253,9 @@ async def record_api_call_error(
             model_name=model_name,
             error_message=error_message
         )
+        # 统计记录（fire-and-forget）
+        from src.usage_stats import record_usage
+        asyncio.create_task(record_usage(credential_name, model_name, False, mode))
 
 
 # ==================== 429错误处理 ====================

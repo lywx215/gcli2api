@@ -1989,7 +1989,18 @@ async function toggleQuotaDetails(pathId, managerType) {
                                     </div>
                                     <div style="display: flex; justify-content: space-between; align-items: center;">
                                         <button onclick="testModelQuota(this, '${filename}', '${modelName}', '${modeParam}')" style="font-size: 10px; padding: 1px 8px; border: 1px solid #9c27b0; background: white; color: #9c27b0; border-radius: 3px; cursor: pointer;" onmouseover="this.style.background='#9c27b0';this.style.color='white'" onmouseout="this.style.background='white';this.style.color='#9c27b0'">测试</button>
-                                        <div style="font-size: 10px; color: #666;">
+                                        <div style="font-size: 10px; color: #666; display: flex; gap: 6px; align-items: center;">
+                                            ${(() => {
+                                                const stats = quotaData.stats || {};
+                                                const sTotal = stats.total || 0;
+                                                const sSuccess = stats.success || 0;
+                                                const sFail = stats.fail || 0;
+                                                if (sTotal > 0) {
+                                                    const failColor = sFail > 0 ? '#dc3545' : '#28a745';
+                                                    return '<span title="总调用' + sTotal + ' 成功' + sSuccess + ' 失败' + sFail + '" style="cursor:help;">📈<span style="color:#333">' + sTotal + '</span>/<span style="color:#28a745">' + sSuccess + '</span>/<span style="color:' + failColor + '">' + sFail + '</span></span>';
+                                                }
+                                                return '';
+                                            })()}
                                             ${resetTime !== 'N/A' ? '🔄 ' + resetTime : ''}
                                         </div>
                                     </div>
