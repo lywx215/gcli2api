@@ -151,6 +151,9 @@ async def get_config(token: str = Depends(verify_panel_token)):
         # 调试模式
         current_config["debug_mode"] = await config.get_debug_mode()
 
+        # 轮巡模式
+        current_config["routing_mode"] = await config.get_routing_mode()
+
         # 保活配置
         current_config["keepalive_url"] = await config.get_keepalive_url()
         current_config["keepalive_interval"] = await config.get_keepalive_interval()

@@ -186,3 +186,76 @@ async def get_credential_stats(
     except Exception as e:
         log.warning(f"[USAGE_STATS] get_credential_stats error: {e}")
         return {}
+
+
+# ==================== 智能路由查询 ====================
+
+# 参考 preview 模型列表 — 用于计算凭证的 preview 成功率
+REFERENCE_PREVIEW_MODELS = [
+    "gemini-3-pro-preview",
+    "gemini-3.1-pro-preview",
+]
+
+
+async def get_preview_success_rates(
+    candidates: list,
+    mode: str = "geminicli",
+) -> dict:
+    """
+    批量查询每个候选凭证在参考 preview 模型上的综合成功率。
+
+    全部使用 Redis pipeline，单次 round-trip 完成。
+
+    Returns:
+        {filename: success_rate}  success_rate ∈ [0.0, 1.0]
+        无数据的凭证返回 0.5（中性值）
+    """
+    redis = await _get_redis()
+    if redis is None:
+        return {c: 0.5 for c in candidates}
+
+    try:
+        server = _get_server_name()
+
+        # 构建所有需要查询的 key
+        # 对每个 candidate × 每个参考模型，查询 total 和 success
+        keys_map = []  # [(filename, model, 'total'|'success'), ...]
+        pipe = redis.pipeline()
+
+        for filename in candidates:
+            for model in REFERENCE_PREVIEW_MODELS:
+                key_total = _stat_key(server, mode, filename, model, "total")
+                key_success = _stat_key(server, mode, filename, model, "success")
+                pipe.get(key_total)
+                pipe.get(key_success)
+                keys_map.append((filename, model, "total"))
+                keys_map.append((filename, model, "success"))
+
+        values = await pipe.execute()
+
+        # 汇总每个凭证的总 total 和总 success
+        cred_totals = {c: 0 for c in candidates}
+        cred_successes = {c: 0 for c in candidates}
+
+        for (filename, model, counter), value in zip(keys_map, values):
+            v = int(value or 0)
+            if counter == "total":
+                cred_totals[filename] += v
+            else:
+                cred_successes[filename] += v
+
+        # 计算成功率
+        result = {}
+        for filename in candidates:
+            total = cred_totals[filename]
+            if total > 0:
+                result[filename] = cred_successes[filename] / total
+            else:
+                result[filename] = 0.5  # 无数据，中性值
+
+        return result
+
+    except Exception as e:
+        log.warning(f"[USAGE_STATS] get_preview_success_rates error: {e}")
+        return {c: 0.5 for c in candidates}
+

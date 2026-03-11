@@ -3058,11 +3058,14 @@ function populateConfigForm() {
     document.getElementById('compatibilityModeEnabled').checked = Boolean(c.compatibility_mode_enabled);
     document.getElementById('returnThoughtsToFrontend').checked = Boolean(c.return_thoughts_to_frontend !== false);
     document.getElementById('antigravityStream2nostream').checked = Boolean(c.antigravity_stream2nostream !== false);
-<<<<<<< HEAD
     document.getElementById('antigravitySwitchCredentialEnabled').checked = Boolean(c.antigravity_switch_credential_enabled);
-=======
     document.getElementById('debugMode').checked = Boolean(c.debug_mode);
->>>>>>> e2f95c4 (feat: add debug mode toggle to frontend config panel (desktop + mobile))
+
+    // 轮巡模式
+    const routingModeSelect = document.getElementById('routingMode');
+    if (routingModeSelect) {
+        routingModeSelect.value = c.routing_mode || 'normal';
+    }
 
     setConfigField('antiTruncationMaxAttempts', c.anti_truncation_max_attempts || 3);
 
@@ -3116,11 +3119,9 @@ async function saveConfig() {
             compatibility_mode_enabled: getChecked('compatibilityModeEnabled'),
             return_thoughts_to_frontend: getChecked('returnThoughtsToFrontend'),
             antigravity_stream2nostream: getChecked('antigravityStream2nostream'),
-<<<<<<< HEAD
             antigravity_switch_credential_enabled: getChecked('antigravitySwitchCredentialEnabled'),
-=======
             debug_mode: getChecked('debugMode'),
->>>>>>> e2f95c4 (feat: add debug mode toggle to frontend config panel (desktop + mobile))
+            routing_mode: (document.getElementById('routingMode') || {}).value || 'normal',
             anti_truncation_max_attempts: getInt('antiTruncationMaxAttempts', 3),
             keepalive_url: getValue('keepaliveUrl'),
             keepalive_interval: getInt('keepaliveInterval', 60)

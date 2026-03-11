@@ -497,17 +497,18 @@ class MySQLManager:
         """
         Redis 快速路径：随机取候选凭证，跳过冷却中的，返回 (filename, credential_data)。
         失败或池为空时返回 None，由调用方降级到 MySQL。
+
+        routing_mode:
+        - "normal": 随机选择
+        - "unstable": 基于 preview 成功率加权随机选择
         """
         try:
             # 选择候选池
             is_preview_model = model_name and "preview" in model_name.lower()
 
             if mode == "geminicli" and is_preview_model:
-                # preview 模型：只从 preview 池中选
                 pool_key = self._rk_preview(mode)
             elif mode == "geminicli" and model_name and not is_preview_model:
-                # 非 preview 模型：优先从 avail - preview 差集中选
-                # 使用 SDIFF 获取 non-preview 凭证
                 pool_key = self._rk_avail(mode)
             else:
                 pool_key = self._rk_avail(mode)
@@ -523,44 +524,81 @@ class MySQLManager:
             if not candidates:
                 return None
 
-            # 关键修复：SRANDMEMBER 在 count >= pool_size 时返回确定性顺序，
-            # 必须 shuffle 确保真随机
-            random.shuffle(candidates)
-
-            # 非 preview 模型的 preview 偏好处理
-            if mode == "geminicli" and model_name and not is_preview_model:
-                preview_pool_key = self._rk_preview(mode)
-                preview_members = await self._redis.smembers(preview_pool_key)
-
-                # 将候选分为 non-preview 优先和 preview 备选
-                non_preview_candidates = [f for f in candidates if f not in preview_members]
-                preview_candidates = [f for f in candidates if f in preview_members]
-
-                # 优先使用 non-preview，全部冷却时再用 preview
-                ordered_candidates = non_preview_candidates + preview_candidates
-            else:
-                ordered_candidates = candidates
-
-            # 过滤冷却中的凭证
+            # 过滤冷却中的凭证（先过滤再排序，避免无效计算）
+            available_candidates = []
             if model_name:
                 escaped = self._escape_model_name(model_name)
-                for filename in ordered_candidates:
+                # 用 pipeline 批量检查冷却
+                cd_pipe = self._redis.pipeline()
+                for filename in candidates:
                     cd_key = self._rk_cd(mode, filename, escaped)
-                    if not await self._redis.exists(cd_key):
-                        credential_data = await self.get_credential(filename, mode)
-                        if credential_data:
-                            log.debug(f"[Redis HIT] mode={mode} model={model_name} -> {filename}")
-                            return filename, credential_data
-                # 所有候选都在冷却中，降级到 MySQL
-                log.debug(f"[Redis MISS] mode={mode} model={model_name}: all {len(ordered_candidates)} candidates in cooldown, fallback to MySQL")
-                return None
+                    cd_pipe.exists(cd_key)
+                cd_results = await cd_pipe.execute()
+
+                for filename, in_cooldown in zip(candidates, cd_results):
+                    if not in_cooldown:
+                        available_candidates.append(filename)
+
+                if not available_candidates:
+                    log.debug(f"[Redis MISS] mode={mode} model={model_name}: all {len(candidates)} candidates in cooldown, fallback to MySQL")
+                    return None
             else:
-                filename = ordered_candidates[0]
+                available_candidates = list(candidates)
+
+            # ---- 排序策略 ----
+            from config import get_routing_mode_sync
+            routing_mode = get_routing_mode_sync()
+
+            if routing_mode == "unstable" and model_name and mode == "geminicli":
+                # 非稳定期模式：基于 preview 成功率加权随机
+                from src.usage_stats import get_preview_success_rates
+                success_rates = await get_preview_success_rates(available_candidates, mode)
+
+                WEIGHT_FLOOR = 0.1  # 保底权重，防止凭证饿死
+
+                if is_preview_model:
+                    # Preview 请求：成功率高 → 权重大
+                    weights = [max(success_rates.get(f, 0.5), WEIGHT_FLOOR) for f in available_candidates]
+                else:
+                    # 非 Preview 请求：成功率低 → 权重大（负载更轻）
+                    weights = [max(1.0 - success_rates.get(f, 0.5), WEIGHT_FLOOR) for f in available_candidates]
+
+                # 加权随机排序：生成不重复排列
+                ordered = []
+                remaining = list(available_candidates)
+                remaining_weights = list(weights)
+                while remaining:
+                    chosen = random.choices(remaining, weights=remaining_weights, k=1)[0]
+                    ordered.append(chosen)
+                    idx = remaining.index(chosen)
+                    remaining.pop(idx)
+                    remaining_weights.pop(idx)
+
+                log.debug(f"[Redis UNSTABLE] mode={mode} model={model_name} "
+                          f"rates={{{', '.join(f'{f[:12]}:{success_rates.get(f, 0.5):.0%}' for f in ordered)}}} "
+                          f"-> {ordered[0][:20]}")
+            else:
+                # 正常模式：shuffle 随机
+                random.shuffle(available_candidates)
+
+                # 非 preview 模型的 preview 偏好处理（正常模式保留原有逻辑）
+                if mode == "geminicli" and model_name and not is_preview_model:
+                    preview_pool_key = self._rk_preview(mode)
+                    preview_members = await self._redis.smembers(preview_pool_key)
+                    non_preview = [f for f in available_candidates if f not in preview_members]
+                    preview_only = [f for f in available_candidates if f in preview_members]
+                    ordered = non_preview + preview_only
+                else:
+                    ordered = available_candidates
+
+            # 返回第一个能获取到凭证数据的候选
+            for filename in ordered:
                 credential_data = await self.get_credential(filename, mode)
                 if credential_data:
-                    log.debug(f"[Redis HIT] mode={mode} -> {filename}")
+                    log.debug(f"[Redis HIT] mode={mode} model={model_name} -> {filename}")
                     return filename, credential_data
-                return None
+
+            return None
         except Exception as e:
             log.warning(f"Redis get_next_available error: {e}")
             return None
