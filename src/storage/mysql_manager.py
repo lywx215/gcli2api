@@ -500,8 +500,15 @@ class MySQLManager:
         """
         try:
             # 选择候选池
-            if mode == "geminicli" and model_name and "preview" in model_name.lower():
+            is_preview_model = model_name and "preview" in model_name.lower()
+
+            if mode == "geminicli" and is_preview_model:
+                # preview 模型：只从 preview 池中选
                 pool_key = self._rk_preview(mode)
+            elif mode == "geminicli" and model_name and not is_preview_model:
+                # 非 preview 模型：优先从 avail - preview 差集中选
+                # 使用 SDIFF 获取 non-preview 凭证
+                pool_key = self._rk_avail(mode)
             else:
                 pool_key = self._rk_avail(mode)
 
@@ -516,10 +523,28 @@ class MySQLManager:
             if not candidates:
                 return None
 
+            # 关键修复：SRANDMEMBER 在 count >= pool_size 时返回确定性顺序，
+            # 必须 shuffle 确保真随机
+            random.shuffle(candidates)
+
+            # 非 preview 模型的 preview 偏好处理
+            if mode == "geminicli" and model_name and not is_preview_model:
+                preview_pool_key = self._rk_preview(mode)
+                preview_members = await self._redis.smembers(preview_pool_key)
+
+                # 将候选分为 non-preview 优先和 preview 备选
+                non_preview_candidates = [f for f in candidates if f not in preview_members]
+                preview_candidates = [f for f in candidates if f in preview_members]
+
+                # 优先使用 non-preview，全部冷却时再用 preview
+                ordered_candidates = non_preview_candidates + preview_candidates
+            else:
+                ordered_candidates = candidates
+
             # 过滤冷却中的凭证
             if model_name:
                 escaped = self._escape_model_name(model_name)
-                for filename in candidates:
+                for filename in ordered_candidates:
                     cd_key = self._rk_cd(mode, filename, escaped)
                     if not await self._redis.exists(cd_key):
                         credential_data = await self.get_credential(filename, mode)
@@ -527,10 +552,10 @@ class MySQLManager:
                             log.debug(f"[Redis HIT] mode={mode} model={model_name} -> {filename}")
                             return filename, credential_data
                 # 所有候选都在冷却中，降级到 MySQL
-                log.debug(f"[Redis MISS] mode={mode} model={model_name}: all {len(candidates)} candidates in cooldown, fallback to MySQL")
+                log.debug(f"[Redis MISS] mode={mode} model={model_name}: all {len(ordered_candidates)} candidates in cooldown, fallback to MySQL")
                 return None
             else:
-                filename = candidates[0]
+                filename = ordered_candidates[0]
                 credential_data = await self.get_credential(filename, mode)
                 if credential_data:
                     log.debug(f"[Redis HIT] mode={mode} -> {filename}")
