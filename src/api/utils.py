@@ -21,6 +21,15 @@ from log import log
 from src.credential_manager import CredentialManager
 
 
+def _fire_and_forget_cb(task: asyncio.Task):
+    """回调：消费 fire-and-forget 任务的异常，防止任务对象泄漏"""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        log.warning(f"[FireAndForget] 任务异常: {exc}")
+
+
 # ==================== 调试日志工具 ====================
 
 def debug_log(message: str, level: str = "debug") -> None:
@@ -219,7 +228,8 @@ async def record_api_call_success(
         )
         # 统计记录（fire-and-forget）
         from src.usage_stats import record_usage
-        asyncio.create_task(record_usage(credential_name, model_name, True, mode))
+        task = asyncio.create_task(record_usage(credential_name, model_name, True, mode))
+        task.add_done_callback(_fire_and_forget_cb)
 
 
 async def record_api_call_error(
@@ -255,7 +265,8 @@ async def record_api_call_error(
         )
         # 统计记录（fire-and-forget）
         from src.usage_stats import record_usage
-        asyncio.create_task(record_usage(credential_name, model_name, False, mode))
+        task = asyncio.create_task(record_usage(credential_name, model_name, False, mode))
+        task.add_done_callback(_fire_and_forget_cb)
 
 
 # ==================== 429错误处理 ====================

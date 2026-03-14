@@ -77,6 +77,14 @@ async def lifespan(app: FastAPI):
     # 清理资源
     log.info("开始关闭 GCLI2API 主服务")
 
+    # 关闭 httpx 持久化连接池
+    try:
+        from src.httpx_client import http_client
+        await http_client.close()
+        log.info("HTTP连接池已关闭")
+    except Exception as e:
+        log.error(f"关闭HTTP连接池时出错: {e}")
+
     # 停止保活服务
     try:
         await keepalive_service.stop()

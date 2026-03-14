@@ -12,6 +12,15 @@ from log import log
 from src.google_oauth_api import Credentials
 from src.storage_adapter import get_storage_adapter
 
+def _fire_and_forget_cb(task: asyncio.Task):
+    """回调：消费 fire-and-forget 任务的异常，防止任务对象泄漏"""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        log.warning(f"[FireAndForget] 任务异常: {exc}")
+
+
 class CredentialManager:
     """
     统一凭证管理器
@@ -267,11 +276,12 @@ class CredentialManager:
             if success:
             # 条件写入：仅当凭证有错误状态或模型冷却时才写 DB，零内存缓存
             # fire-and-forget，不阻塞请求链路
-                asyncio.create_task(
+                task = asyncio.create_task(
                     self._storage_adapter._backend.record_success(
                         credential_name, model_name=model_name, mode=mode
                     )
                 )
+                task.add_done_callback(_fire_and_forget_cb)
 
             elif error_code:
                 # 记录错误码和错误信息
