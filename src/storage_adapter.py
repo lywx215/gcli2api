@@ -1,8 +1,10 @@
 """
-存储适配器，提供统一的接口来处理 SQLite 和 MongoDB 存储。
-根据配置自动选择存储后端：
+存储适配器，提供统一的接口来处理多种存储后端。
+通过 STORAGE_ENGINE 环境变量显式指定存储后端：
 - 默认使用 SQLite（本地文件存储）
-- 如果设置了 MONGODB_URI 环境变量，则使用 MongoDB
+- STORAGE_ENGINE=mysql 使用 MySQL
+- STORAGE_ENGINE=postgresql 使用 PostgreSQL
+- STORAGE_ENGINE=mongodb 使用 MongoDB
 """
 
 import asyncio
@@ -86,81 +88,74 @@ class StorageAdapter:
             if self._initialized:
                 return
 
-            # 按优先级检查存储后端：MySQL > PostgreSQL > SQLite > MongoDB
-            # MySQL 需要同时设置 MYSQL_URI 和 GCLI_SERVER_NAME 才启用
-            mysql_uri = os.getenv("MYSQL_URI", "")
-            gcli_server_name = os.getenv("GCLI_SERVER_NAME", "")
+            # 通过 STORAGE_ENGINE 环境变量显式指定存储后端
+            # 可选值: sqlite (默认), mysql, postgresql, mongodb
+            # 如果未设置，默认使用 SQLite
+            storage_engine = os.getenv("STORAGE_ENGINE", "sqlite").lower().strip()
+            log.info(f"Storage engine configured: {storage_engine}")
 
-            if mysql_uri and gcli_server_name:
-                # 最高优先级：MySQL（需要同时设置两个环境变量）
-                try:
-                    from .storage.mysql_manager import MySQLManager
-
-                    self._backend = MySQLManager()
-                    await self._backend.initialize()
-                    log.info("Using MySQL storage backend")
-                    self._initialized = True
-                    return
-                except Exception as e:
-                    log.error(f"Failed to initialize MySQL backend: {e}")
-                    log.info("Falling back to next storage backend")
-
-            postgresql_uri = os.getenv("POSTGRESQL_URI", "")
-            mongodb_uri = os.getenv("MONGODB_URI", "")
-
-            if postgresql_uri:
-                # 使用 PostgreSQL
-                try:
-                    from .storage.psql_manager import PSQLManager
-
-                    self._backend = PSQLManager()
-                    await self._backend.initialize()
-                    log.info("Using PostgreSQL storage backend")
-                except Exception as e:
-                    log.error(f"Failed to initialize PostgreSQL backend: {e}")
-                    # 尝试降级到 SQLite
-                    log.info("Falling back to SQLite storage backend")
+            if storage_engine == "mysql":
+                mysql_uri = os.getenv("MYSQL_URI", "")
+                gcli_server_name = os.getenv("GCLI_SERVER_NAME", "")
+                if mysql_uri and gcli_server_name:
                     try:
-                        from .storage.sqlite_manager import SQLiteManager
+                        from .storage.mysql_manager import MySQLManager
 
-                        self._backend = SQLiteManager()
+                        self._backend = MySQLManager()
                         await self._backend.initialize()
-                        log.info("Using SQLite storage backend (fallback)")
-                    except Exception as e2:
-                        log.error(f"Failed to initialize SQLite backend: {e2}")
-                        raise RuntimeError("No storage backend available") from e2
-            elif not mongodb_uri:
-                # 优先使用 SQLite（默认启用，无需环境变量）
-                try:
-                    from .storage.sqlite_manager import SQLiteManager
+                        log.info("Using MySQL storage backend")
+                        self._initialized = True
+                        return
+                    except Exception as e:
+                        log.error(f"Failed to initialize MySQL backend: {e}")
+                        log.info("Falling back to SQLite storage backend")
+                else:
+                    log.warning("STORAGE_ENGINE=mysql but MYSQL_URI or GCLI_SERVER_NAME not set, falling back to SQLite")
 
-                    self._backend = SQLiteManager()
-                    await self._backend.initialize()
-                    log.info("Using SQLite storage backend")
-                except Exception as e:
-                    log.error(f"Failed to initialize SQLite backend: {e}")
-                    raise RuntimeError("No storage backend available") from e
-            else:
-                # 使用 MongoDB
-                try:
-                    from .storage.mongodb_manager import MongoDBManager
-
-                    self._backend = MongoDBManager()
-                    await self._backend.initialize()
-                    log.info("Using MongoDB storage backend")
-                except Exception as e:
-                    log.error(f"Failed to initialize MongoDB backend: {e}")
-                    # 尝试降级到 SQLite
-                    log.info("Falling back to SQLite storage backend")
+            elif storage_engine == "postgresql":
+                postgresql_uri = os.getenv("POSTGRESQL_URI", "")
+                if postgresql_uri:
                     try:
-                        from .storage.sqlite_manager import SQLiteManager
+                        from .storage.psql_manager import PSQLManager
 
-                        self._backend = SQLiteManager()
+                        self._backend = PSQLManager()
                         await self._backend.initialize()
-                        log.info("Using SQLite storage backend (fallback)")
-                    except Exception as e2:
-                        log.error(f"Failed to initialize SQLite backend: {e2}")
-                        raise RuntimeError("No storage backend available") from e2
+                        log.info("Using PostgreSQL storage backend")
+                        self._initialized = True
+                        return
+                    except Exception as e:
+                        log.error(f"Failed to initialize PostgreSQL backend: {e}")
+                        log.info("Falling back to SQLite storage backend")
+                else:
+                    log.warning("STORAGE_ENGINE=postgresql but POSTGRESQL_URI not set, falling back to SQLite")
+
+            elif storage_engine == "mongodb":
+                mongodb_uri = os.getenv("MONGODB_URI", "")
+                if mongodb_uri:
+                    try:
+                        from .storage.mongodb_manager import MongoDBManager
+
+                        self._backend = MongoDBManager()
+                        await self._backend.initialize()
+                        log.info("Using MongoDB storage backend")
+                        self._initialized = True
+                        return
+                    except Exception as e:
+                        log.error(f"Failed to initialize MongoDB backend: {e}")
+                        log.info("Falling back to SQLite storage backend")
+                else:
+                    log.warning("STORAGE_ENGINE=mongodb but MONGODB_URI not set, falling back to SQLite")
+
+            # 默认使用 SQLite（包括回退场景）
+            try:
+                from .storage.sqlite_manager import SQLiteManager
+
+                self._backend = SQLiteManager()
+                await self._backend.initialize()
+                log.info("Using SQLite storage backend")
+            except Exception as e:
+                log.error(f"Failed to initialize SQLite backend: {e}")
+                raise RuntimeError("No storage backend available") from e
 
             self._initialized = True
 

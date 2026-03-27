@@ -28,6 +28,7 @@ class MySQLManager:
         "user_email",
         "model_cooldowns",
         "preview",
+        "tier",
     }
 
     def __init__(self):
@@ -141,6 +142,9 @@ class MySQLManager:
                         -- preview 状态 (只对 geminicli 有效)
                         preview TINYINT(1) DEFAULT 1,
 
+                        -- tier 等级 (free/pro/ultra)
+                        tier VARCHAR(16) DEFAULT 'pro',
+
                         -- 轮换相关
                         rotation_order INT DEFAULT 0,
                         call_count INT DEFAULT 0,
@@ -175,6 +179,9 @@ class MySQLManager:
                         -- 模型级 CD 支持 (JSON)
                         model_cooldowns TEXT,
 
+                        -- tier 等级 (free/pro/ultra)
+                        tier VARCHAR(16) DEFAULT 'pro',
+
                         -- 轮换相关
                         rotation_order INT DEFAULT 0,
                         call_count INT DEFAULT 0,
@@ -204,7 +211,30 @@ class MySQLManager:
                 """)
 
             await conn.commit()
+
+            # 自动添加缺失的 tier 列（兼容旧表结构）
+            await self._ensure_tier_column()
+
             log.debug("MySQL tables and indexes created")
+
+    async def _ensure_tier_column(self):
+        """确保 tier 列存在（兼容旧表结构）"""
+        for table in ["gcli_credentials", "gcli_antigravity_credentials"]:
+            try:
+                async with self._pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute(f"""
+                            SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}' AND COLUMN_NAME = 'tier'
+                        """)
+                        if not await cur.fetchone():
+                            await cur.execute(f"""
+                                ALTER TABLE {table} ADD COLUMN tier VARCHAR(16) DEFAULT 'pro'
+                            """)
+                            log.info(f"Added 'tier' column to {table}")
+                    await conn.commit()
+            except Exception as e:
+                log.warning(f"Failed to ensure tier column in {table}: {e}")
 
     async def _load_config_cache(self):
         """加载配置到内存缓存（仅在初始化时调用一次）"""
@@ -874,7 +904,7 @@ class MySQLManager:
                     if mode == "geminicli":
                         await cur.execute(f"""
                             SELECT disabled, error_codes, last_success,
-                                   user_email, model_cooldowns, preview
+                                   user_email, model_cooldowns, preview, tier
                             FROM {table_name}
                             WHERE server_name = %s AND filename = %s
                         """, (self._server_name, filename))
@@ -888,17 +918,19 @@ class MySQLManager:
                                 "user_email": row[3],
                                 "model_cooldowns": json.loads(row[4] or '{}'),
                                 "preview": bool(row[5]) if row[5] is not None else True,
+                                "tier": row[6] if row[6] is not None else "pro",
                             }
 
                         return {
                             "disabled": False, "error_codes": [],
                             "last_success": time.time(), "user_email": None,
                             "model_cooldowns": {}, "preview": True,
+                            "tier": "pro",
                         }
                     else:
                         await cur.execute(f"""
                             SELECT disabled, error_codes, last_success,
-                                   user_email, model_cooldowns
+                                   user_email, model_cooldowns, tier
                             FROM {table_name}
                             WHERE server_name = %s AND filename = %s
                         """, (self._server_name, filename))
@@ -911,12 +943,14 @@ class MySQLManager:
                                 "last_success": row[2] or time.time(),
                                 "user_email": row[3],
                                 "model_cooldowns": json.loads(row[4] or '{}'),
+                                "tier": row[5] if row[5] is not None else "pro",
                             }
 
                         return {
                             "disabled": False, "error_codes": [],
                             "last_success": time.time(), "user_email": None,
                             "model_cooldowns": {},
+                            "tier": "pro",
                         }
 
         except Exception as e:
@@ -934,14 +968,14 @@ class MySQLManager:
                     if mode == "geminicli":
                         await cur.execute(f"""
                             SELECT filename, disabled, error_codes, last_success,
-                                   user_email, model_cooldowns, preview
+                                   user_email, model_cooldowns, preview, tier
                             FROM {table_name}
                             WHERE server_name = %s
                         """, (self._server_name,))
                     else:
                         await cur.execute(f"""
                             SELECT filename, disabled, error_codes, last_success,
-                                   user_email, model_cooldowns
+                                   user_email, model_cooldowns, tier
                             FROM {table_name}
                             WHERE server_name = %s
                         """, (self._server_name,))
@@ -973,6 +1007,9 @@ class MySQLManager:
 
                         if mode == "geminicli":
                             state["preview"] = bool(row[6]) if row[6] is not None else True
+                            state["tier"] = row[7] if row[7] is not None else "pro"
+                        else:
+                            state["tier"] = row[6] if row[6] is not None else "pro"
 
                         states[filename] = state
 
@@ -992,7 +1029,8 @@ class MySQLManager:
         mode: str = "geminicli",
         error_code_filter: Optional[str] = None,
         cooldown_filter: Optional[str] = None,
-        preview_filter: Optional[str] = None
+        preview_filter: Optional[str] = None,
+        tier_filter: Optional[str] = None
     ) -> Dict[str, Any]:
         """获取凭证的摘要信息（支持分页和状态筛选）"""
         self._ensure_initialized()
@@ -1040,7 +1078,7 @@ class MySQLManager:
                     if mode == "geminicli":
                         query = f"""
                             SELECT filename, disabled, error_codes, last_success,
-                                   user_email, rotation_order, model_cooldowns, preview
+                                   user_email, rotation_order, model_cooldowns, preview, tier
                             FROM {table_name}
                             {where_clause}
                             ORDER BY rotation_order
@@ -1048,7 +1086,7 @@ class MySQLManager:
                     else:
                         query = f"""
                             SELECT filename, disabled, error_codes, last_success,
-                                   user_email, rotation_order, model_cooldowns
+                                   user_email, rotation_order, model_cooldowns, tier
                             FROM {table_name}
                             {where_clause}
                             ORDER BY rotation_order
@@ -1102,6 +1140,9 @@ class MySQLManager:
 
                         if mode == "geminicli":
                             summary["preview"] = bool(row[7]) if row[7] is not None else True
+                            summary["tier"] = row[8] if row[8] is not None else "pro"
+                        else:
+                            summary["tier"] = row[7] if row[7] is not None else "pro"
 
                         # preview 筛选
                         if mode == "geminicli" and preview_filter:
@@ -1109,6 +1150,11 @@ class MySQLManager:
                             if preview_filter == "preview" and not preview_value:
                                 continue
                             elif preview_filter == "no_preview" and preview_value:
+                                continue
+
+                        # tier 筛选
+                        if tier_filter and tier_filter in ("free", "pro", "ultra"):
+                            if summary["tier"] != tier_filter:
                                 continue
 
                         # 冷却筛选
