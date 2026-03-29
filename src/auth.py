@@ -746,6 +746,24 @@ async def asyncio_complete_auth_flow(
                                             for p in user_projects
                                         ],
                                     }
+                            
+                            # API已启用，立即重试fetch_project_id获取正确的cloudaicompanionProject
+                            if project_id:
+                                log.info("API已启用，重试获取cloudaicompanionProject...")
+                                try:
+                                    retry_project_id = await fetch_project_id(
+                                        credentials.access_token,
+                                        GEMINICLI_USER_AGENT,
+                                        code_assist_url
+                                    )
+                                    if retry_project_id:
+                                        log.info(f"✅ 成功获取cloudaicompanionProject: {retry_project_id}")
+                                        project_id = retry_project_id
+                                        flow_data["project_id"] = project_id
+                                    else:
+                                        log.info(f"重试未获取到cloudaicompanionProject，使用项目列表中的: {project_id}")
+                                except Exception as retry_err:
+                                    log.warning(f"重试fetch_project_id失败: {retry_err}，使用项目列表中的: {project_id}")
                         else:
                             # 如果无法获取项目列表，使用默认project_id
                             project_id = DEFAULT_PROJECT_ID
@@ -917,6 +935,24 @@ async def complete_auth_flow_from_callback_url(
                 try:
                     log.info(f"正在为项目 {detected_project_id} 启用必需的API服务...")
                     await enable_required_apis(credentials, detected_project_id)
+                    
+                    # API已启用，如果是通过项目列表获取的ID，重试获取cloudaicompanionProject
+                    if auto_detected and not project_id:
+                        log.info("API已启用，重试获取cloudaicompanionProject...")
+                        try:
+                            code_assist_url = await get_code_assist_endpoint()
+                            retry_project_id = await fetch_project_id(
+                                credentials.access_token,
+                                GEMINICLI_USER_AGENT,
+                                code_assist_url
+                            )
+                            if retry_project_id:
+                                log.info(f"✅ 成功获取cloudaicompanionProject: {retry_project_id}")
+                                detected_project_id = retry_project_id
+                            else:
+                                log.info(f"重试未获取到，使用项目列表中的: {detected_project_id}")
+                        except Exception as retry_err:
+                            log.warning(f"重试fetch_project_id失败: {retry_err}")
                 except Exception as e:
                     log.warning(f"启用API服务失败: {e}")
 
