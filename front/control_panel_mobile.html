@@ -1252,6 +1252,50 @@
                 <h3>批量上传认证文件</h3>
                 <p>支持批量上传 GCLI 和 Antigravity 认证文件</p>
 
+                <!-- Refresh Token 一键添加（手机紧凑版） -->
+                <div style="margin-bottom: 20px; padding: 14px; border: 2px solid #ffc107; border-radius: 8px; background: #fffbf0;">
+                    <h4 style="margin-top: 0; color: #d97706; border-bottom: 2px solid #ffc107; padding-bottom: 8px; font-size: 15px;">
+                        🔑 Refresh Token 一键添加</h4>
+                    <p style="color:#666;font-size:12px;margin:8px 0;">一行一个 refresh_token，最多 200 个</p>
+
+                    <div class="form-group" style="margin-bottom:8px;">
+                        <label for="rtAddMode" style="font-size:13px;">凭证类型：</label>
+                        <select id="rtAddMode" style="padding:5px;border:1px solid #ccc;border-radius:4px;margin-left:6px;font-size:13px;">
+                            <option value="geminicli" selected>GeminiCLI</option>
+                            <option value="antigravity">Antigravity</option>
+                        </select>
+                        <span id="rtTokenCount" style="margin-left:8px;color:#666;font-size:12px;"></span>
+                    </div>
+                    <textarea id="rtRefreshToken" rows="4" placeholder="1//0g...&#10;1//0g..."
+                        oninput="updateRtTokenCount()"
+                        style="width:100%;padding:6px;border:1px solid #ccc;border-radius:4px;font-family:monospace;font-size:11px;box-sizing:border-box;"></textarea>
+
+                    <div style="cursor:pointer;user-select:none;padding:8px 10px;border:1px solid #ddd;border-radius:5px;background:#f8f9fa;display:flex;justify-content:space-between;align-items:center;margin:8px 0;font-size:12px;"
+                        onclick="toggleRtAdvanced()">
+                        <span style="font-weight:bold;color:#555;">⚙️ 高级选项</span>
+                        <span id="rtAdvancedToggleIcon" style="font-size:12px;color:#666;">▶</span>
+                    </div>
+                    <div id="rtAdvancedSection" class="hidden" style="padding:10px;border:1px solid #eee;border-radius:5px;background:#fafafa;font-size:12px;">
+                        <div class="form-group" style="margin-bottom:6px;">
+                            <label for="rtClientId">Client ID（可选）：</label>
+                            <input type="text" id="rtClientId" placeholder="默认 Gemini CLI" style="width:100%;padding:5px;border:1px solid #ccc;border-radius:4px;font-family:monospace;font-size:11px;box-sizing:border-box;" />
+                        </div>
+                        <div class="form-group" style="margin-bottom:6px;">
+                            <label for="rtClientSecret">Client Secret（可选）：</label>
+                            <input type="text" id="rtClientSecret" placeholder="GOCSPX-..." style="width:100%;padding:5px;border:1px solid #ccc;border-radius:4px;font-family:monospace;font-size:11px;box-sizing:border-box;" />
+                        </div>
+                        <div class="form-group" style="margin-bottom:0;">
+                            <label for="rtFilenamePrefix">文件名前缀（可选）：</label>
+                            <input type="text" id="rtFilenamePrefix" placeholder="留空使用 project_id" style="width:100%;padding:5px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;" />
+                        </div>
+                    </div>
+
+                    <button class="btn" onclick="addCredentialByRefreshToken()" style="margin-top:8px;background:#ffc107;color:#000;font-weight:bold;width:100%;">
+                        🔑 批量添加凭证
+                    </button>
+                    <div id="rtAddResult" style="margin-top:10px;"></div>
+                </div>
+
                 <!-- GCLI凭证上传区域 -->
                 <div
                     style="margin-bottom: 25px; padding: 15px; border: 2px solid #007bff; border-radius: 8px; background: #f8f9fa;">
@@ -1332,6 +1376,52 @@
             <div id="manageTab" class="tab-content">
                 <h3>凭证文件管理</h3>
                 <p>管理所有认证文件，查看状态和执行操作</p>
+
+                <!-- 今日调用统计卡片（手机） -->
+                <div id="todayStatsCardMobileGcli" data-mode="geminicli"
+                    style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 8px; padding: 12px; margin: 8px 0; font-size: 13px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <strong>📊 今日 <span id="todayStatsDateGcli" style="opacity:0.85;font-weight:normal;"></span></strong>
+                        <button onclick="refreshTodayStats('geminicli')" style="background:rgba(255,255,255,0.2);border:none;color:white;padding:3px 10px;border-radius:4px;font-size:12px;">↻</button>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:8px;">
+                        <div style="background:rgba(255,255,255,0.15);padding:6px 4px;border-radius:5px;text-align:center;">
+                            <div style="font-size:10px;opacity:0.85;">总</div>
+                            <div id="todayStatsTotalGcli" style="font-size:16px;font-weight:bold;">-</div>
+                        </div>
+                        <div style="background:rgba(40,167,69,0.4);padding:6px 4px;border-radius:5px;text-align:center;">
+                            <div style="font-size:10px;">✅</div>
+                            <div id="todayStatsSuccessGcli" style="font-size:16px;font-weight:bold;">-</div>
+                        </div>
+                        <div style="background:rgba(220,53,69,0.4);padding:6px 4px;border-radius:5px;text-align:center;">
+                            <div style="font-size:10px;">❌</div>
+                            <div id="todayStatsFailGcli" style="font-size:16px;font-weight:bold;">-</div>
+                        </div>
+                        <div style="background:rgba(23,162,184,0.4);padding:6px 4px;border-radius:5px;text-align:center;">
+                            <div style="font-size:10px;">RPM</div>
+                            <div id="todayStatsRpmGcli" style="font-size:16px;font-weight:bold;">-</div>
+                        </div>
+                        <div style="background:rgba(255,255,255,0.15);padding:6px 4px;border-radius:5px;text-align:center;">
+                            <div style="font-size:10px;opacity:0.85;">率</div>
+                            <div id="todayStatsRateGcli" style="font-size:16px;font-weight:bold;">-</div>
+                        </div>
+                    </div>
+                    <div style="background:rgba(0,0,0,0.18);border-radius:6px;overflow:hidden;">
+                        <table style="width:100%;border-collapse:collapse;color:white;font-size:11px;">
+                            <thead><tr style="background:rgba(0,0,0,0.2);">
+                                <th style="padding:5px 6px;text-align:left;">模型</th>
+                                <th style="padding:5px 4px;text-align:right;">总</th>
+                                <th style="padding:5px 4px;text-align:right;">RPM</th>
+                                <th style="padding:5px 4px;text-align:right;">✅</th>
+                                <th style="padding:5px 6px;text-align:right;">❌</th>
+                            </tr></thead>
+                            <tbody id="todayStatsByModelGcli">
+                                <tr><td colspan="5" style="padding:8px;text-align:center;opacity:0.7;">暂无数据</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <div
                     style="background:#f0f7ff;border:1px solid #b8d4f0;border-radius:6px;padding:10px 14px;margin:8px 0;font-size:13px;">
                     <strong>📡 API地址（点击复制）：</strong>
@@ -1526,6 +1616,52 @@
             <div id="antigravity-manageTab" class="tab-content">
                 <h3>Antigravity凭证文件管理</h3>
                 <p>管理所有Antigravity认证文件，查看状态和执行操作</p>
+
+                <!-- 今日调用统计卡片（手机 Antigravity） -->
+                <div id="todayStatsCardMobileAg" data-mode="antigravity"
+                    style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; border-radius: 8px; padding: 12px; margin: 8px 0; font-size: 13px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <strong>📊 今日 <span id="todayStatsDateAg" style="opacity:0.85;font-weight:normal;"></span></strong>
+                        <button onclick="refreshTodayStats('antigravity')" style="background:rgba(255,255,255,0.2);border:none;color:white;padding:3px 10px;border-radius:4px;font-size:12px;">↻</button>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:8px;">
+                        <div style="background:rgba(255,255,255,0.15);padding:6px 4px;border-radius:5px;text-align:center;">
+                            <div style="font-size:10px;opacity:0.85;">总</div>
+                            <div id="todayStatsTotalAg" style="font-size:16px;font-weight:bold;">-</div>
+                        </div>
+                        <div style="background:rgba(255,255,255,0.25);padding:6px 4px;border-radius:5px;text-align:center;">
+                            <div style="font-size:10px;">✅</div>
+                            <div id="todayStatsSuccessAg" style="font-size:16px;font-weight:bold;">-</div>
+                        </div>
+                        <div style="background:rgba(220,53,69,0.5);padding:6px 4px;border-radius:5px;text-align:center;">
+                            <div style="font-size:10px;">❌</div>
+                            <div id="todayStatsFailAg" style="font-size:16px;font-weight:bold;">-</div>
+                        </div>
+                        <div style="background:rgba(23,162,184,0.5);padding:6px 4px;border-radius:5px;text-align:center;">
+                            <div style="font-size:10px;">RPM</div>
+                            <div id="todayStatsRpmAg" style="font-size:16px;font-weight:bold;">-</div>
+                        </div>
+                        <div style="background:rgba(255,255,255,0.25);padding:6px 4px;border-radius:5px;text-align:center;">
+                            <div style="font-size:10px;opacity:0.85;">率</div>
+                            <div id="todayStatsRateAg" style="font-size:16px;font-weight:bold;">-</div>
+                        </div>
+                    </div>
+                    <div style="background:rgba(0,0,0,0.18);border-radius:6px;overflow:hidden;">
+                        <table style="width:100%;border-collapse:collapse;color:white;font-size:11px;">
+                            <thead><tr style="background:rgba(0,0,0,0.2);">
+                                <th style="padding:5px 6px;text-align:left;">模型</th>
+                                <th style="padding:5px 4px;text-align:right;">总</th>
+                                <th style="padding:5px 4px;text-align:right;">RPM</th>
+                                <th style="padding:5px 4px;text-align:right;">✅</th>
+                                <th style="padding:5px 6px;text-align:right;">❌</th>
+                            </tr></thead>
+                            <tbody id="todayStatsByModelAg">
+                                <tr><td colspan="5" style="padding:8px;text-align:center;opacity:0.7;">暂无数据</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <div
                     style="background:#f0f7ff;border:1px solid #b8d4f0;border-radius:6px;padding:10px 14px;margin:8px 0;font-size:13px;">
                     <strong>📡 API地址（点击复制）：</strong>
