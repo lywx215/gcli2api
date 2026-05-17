@@ -19,12 +19,15 @@ from src.models import (
     CredFileActionRequest,
     CredFileBatchActionRequest,
     CredFileBatchTestRequest,
+    RefreshTokenAddRequest,
 )
 from src.storage_adapter import get_storage_adapter
 from src.utils import verify_panel_token, GEMINICLI_USER_AGENT, ANTIGRAVITY_USER_AGENT
 from src.api.antigravity import fetch_quota_info
 from src.google_oauth_api import Credentials, fetch_project_id_and_tier
-from config import get_code_assist_endpoint, get_antigravity_api_url
+from src.httpx_client import post_async
+from config import get_code_assist_endpoint, get_antigravity_api_url, get_oauth_proxy_url
+from datetime import datetime, timedelta, timezone
 from .utils import validate_mode
 
 
@@ -1679,3 +1682,155 @@ async def batch_test_credentials(
     except Exception as e:
         log.error(f"批量测试凭证失败: {e}")
         raise HTTPException(status_code=500, detail=f"批量测试失败: {str(e)}")
+
+
+# =============================================================================
+# Refresh Token 一键添加凭证
+# =============================================================================
+
+# Google Gemini CLI 官方默认 OAuth Client（公开值，从 gemini-cli 源码可查）
+DEFAULT_GEMINI_CLI_CLIENT_ID = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
+DEFAULT_GEMINI_CLI_CLIENT_SECRET = "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"
+
+
+async def _exchange_refresh_token_to_credential(
+    refresh_token: str,
+    client_id: str,
+    client_secret: str,
+) -> dict:
+    """用 refresh_token 换取完整凭证字段，返回 credential dict"""
+    oauth_base_url = await get_oauth_proxy_url()
+    token_url = f"{oauth_base_url.rstrip('/')}/token"
+    data = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token",
+    }
+    response = await post_async(
+        token_url,
+        data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    response.raise_for_status()
+    token_data = response.json()
+
+    access_token = token_data.get("access_token")
+    if not access_token:
+        raise ValueError("响应中未返回 access_token")
+
+    expires_in = int(token_data.get("expires_in", 3600))
+    expiry = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
+
+    # refresh_token 可能在响应中刷新返回新值
+    new_refresh = token_data.get("refresh_token") or refresh_token
+
+    return {
+        "access_token": access_token,
+        "token": access_token,  # 兼容字段
+        "refresh_token": new_refresh,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "scopes": token_data.get("scope", "").split() if token_data.get("scope") else None,
+        "expiry": expiry,
+        "token_uri": f"{oauth_base_url.rstrip('/')}/token",
+    }
+
+
+@router.post("/upload-by-refresh-token")
+async def upload_credentials_by_refresh_token(
+    req: RefreshTokenAddRequest,
+    token: str = Depends(verify_panel_token),
+):
+    """通过 refresh_token 一键添加凭证
+
+    流程：
+    1. 用 refresh_token 调 OAuth /token 端点换 access_token
+    2. 如果未提供 project_id，自动调 loadCodeAssist/onboardUser 探测
+    3. 组装成完整凭证 JSON 并入库
+    """
+    try:
+        mode = validate_mode(req.mode or "geminicli")
+
+        if not req.refresh_token or not req.refresh_token.strip():
+            raise HTTPException(status_code=400, detail="refresh_token 不能为空")
+
+        client_id = (req.client_id or DEFAULT_GEMINI_CLI_CLIENT_ID).strip()
+        client_secret = (req.client_secret or DEFAULT_GEMINI_CLI_CLIENT_SECRET).strip()
+
+        # 1. 换 access_token
+        try:
+            credential_data = await _exchange_refresh_token_to_credential(
+                refresh_token=req.refresh_token.strip(),
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+        except Exception as e:
+            log.error(f"refresh_token 换 access_token 失败: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"refresh_token 无效或网络异常: {e}"
+            )
+
+        # 2. 探测 project_id（用户未提供时）
+        project_id = (req.project_id or "").strip() or None
+        subscription_tier = None
+
+        if mode == "geminicli":
+            api_base_url = await get_code_assist_endpoint()
+            user_agent = GEMINICLI_USER_AGENT
+        else:
+            api_base_url = await get_antigravity_api_url()
+            user_agent = ANTIGRAVITY_USER_AGENT
+
+        if not project_id:
+            try:
+                detected = await fetch_project_id_and_tier(
+                    access_token=credential_data["access_token"],
+                    user_agent=user_agent,
+                    api_base_url=api_base_url,
+                )
+                if detected:
+                    project_id = detected[0]
+                    subscription_tier = detected[1] if len(detected) > 1 else None
+            except Exception as e:
+                log.warning(f"自动探测 project_id 失败: {e}")
+
+        if project_id:
+            credential_data["project_id"] = project_id
+
+        # 3. 生成文件名
+        if req.custom_filename:
+            base = os.path.basename(req.custom_filename.strip())
+            if not base.endswith(".json"):
+                base += ".json"
+            filename = base
+        else:
+            # 用 project_id 或时间戳命名
+            stem = project_id or f"refresh-{int(time.time())}"
+            # 简单清洗
+            stem = "".join(c for c in stem if c.isalnum() or c in "-_")
+            filename = f"{stem}.json"
+
+        # 4. 入库
+        if mode == "antigravity":
+            await credential_manager.add_antigravity_credential(filename, credential_data)
+        else:
+            await credential_manager.add_credential(filename, credential_data)
+
+        log.info(f"通过 refresh_token 成功添加凭证: {filename} (mode={mode})")
+
+        return JSONResponse(content={
+            "success": True,
+            "filename": filename,
+            "project_id": project_id,
+            "subscription_tier": subscription_tier,
+            "mode": mode,
+            "message": f"凭证添加成功: {filename}",
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"通过 refresh_token 添加凭证失败: {e}")
+        raise HTTPException(status_code=500, detail=f"添加失败: {str(e)}")

@@ -3296,3 +3296,101 @@ function autoSetKeepaliveUrl() {
     const url = `${window.location.protocol}//${window.location.host}`;
     document.getElementById('keepaliveUrl').value = url;
 }
+
+
+// ============================================================================
+// Refresh Token 一键添加凭证
+// ============================================================================
+
+function toggleRtAdvanced() {
+    const section = document.getElementById('rtAdvancedSection');
+    const icon = document.getElementById('rtAdvancedToggleIcon');
+    if (section.classList.contains('hidden')) {
+        section.classList.remove('hidden');
+        icon.textContent = '▼';
+    } else {
+        section.classList.add('hidden');
+        icon.textContent = '▶';
+    }
+}
+
+async function addCredentialByRefreshToken() {
+    const refreshToken = document.getElementById('rtRefreshToken').value.trim();
+    const mode = document.getElementById('rtAddMode').value;
+    const clientId = document.getElementById('rtClientId').value.trim();
+    const clientSecret = document.getElementById('rtClientSecret').value.trim();
+    const projectId = document.getElementById('rtProjectId').value.trim();
+    const customFilename = document.getElementById('rtCustomFilename').value.trim();
+    const resultBox = document.getElementById('rtAddResult');
+
+    if (!refreshToken) {
+        showStatus('请填写 refresh_token', 'error');
+        resultBox.innerHTML = '<div style="color:#dc3545;padding:8px;">refresh_token 不能为空</div>';
+        return;
+    }
+
+    resultBox.innerHTML = '<div style="color:#666;padding:8px;">正在交换 access_token，请稍候...</div>';
+
+    const payload = {
+        refresh_token: refreshToken,
+        mode: mode,
+    };
+    if (clientId) payload.client_id = clientId;
+    if (clientSecret) payload.client_secret = clientSecret;
+    if (projectId) payload.project_id = projectId;
+    if (customFilename) payload.custom_filename = customFilename;
+
+    try {
+        const response = await fetch('./creds/upload-by-refresh-token', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${AppState.authToken}`,
+            },
+            body: JSON.stringify(payload),
+        });
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+            const tierLine = data.subscription_tier
+                ? `<div>等级: <code>${data.subscription_tier}</code></div>` : '';
+            const projectLine = data.project_id
+                ? `<div>Project ID: <code>${data.project_id}</code></div>`
+                : '<div style="color:#d97706">未能自动探测 project_id，建议手动填入或在凭证管理中验证</div>';
+            resultBox.innerHTML = `
+                <div style="background:#d4edda;color:#155724;padding:12px;border-radius:5px;border:1px solid #c3e6cb;">
+                    <strong>✅ ${data.message}</strong>
+                    <div style="margin-top:6px;font-size:13px;">
+                        <div>文件名: <code>${data.filename}</code></div>
+                        ${projectLine}
+                        ${tierLine}
+                        <div>模式: <code>${data.mode}</code></div>
+                    </div>
+                </div>
+            `;
+            showStatus('凭证添加成功', 'success');
+            // 清空输入
+            document.getElementById('rtRefreshToken').value = '';
+            document.getElementById('rtCustomFilename').value = '';
+            // 切到凭证管理刷新列表
+            if (typeof loadCredsStatus === 'function' && mode === 'geminicli') {
+                setTimeout(() => loadCredsStatus(0), 500);
+            }
+        } else {
+            resultBox.innerHTML = `
+                <div style="background:#f8d7da;color:#721c24;padding:12px;border-radius:5px;border:1px solid #f5c6cb;">
+                    <strong>❌ 添加失败</strong>
+                    <div style="margin-top:6px;font-size:13px;">${data.detail || data.error || '未知错误'}</div>
+                </div>
+            `;
+            showStatus(`添加失败: ${data.detail || data.error || '未知错误'}`, 'error');
+        }
+    } catch (err) {
+        resultBox.innerHTML = `
+            <div style="background:#f8d7da;color:#721c24;padding:12px;border-radius:5px;">
+                <strong>❌ 网络错误</strong>: ${err.message}
+            </div>
+        `;
+        showStatus(`网络错误: ${err.message}`, 'error');
+    }
+}

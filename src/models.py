@@ -379,5 +379,14 @@ class CredFileBatchTestRequest(BaseModel):
     filenames: List[str]
 
 
+class RefreshTokenAddRequest(BaseModel):
+    refresh_token: str
+    client_id: Optional[str] = None  # 可选，留空使用内置默认值
+    client_secret: Optional[str] = None  # 可选
+    project_id: Optional[str] = None  # 可选，留空自动探测
+    custom_filename: Optional[str] = None  # 可选自定义文件名（不带 .json）
+    mode: Optional[str] = "geminicli"  # geminicli 或 antigravity
+
+
 class ConfigSaveRequest(BaseModel):
     config: dict
