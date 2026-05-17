@@ -17,7 +17,8 @@ from log import log
 from src.credential_manager import credential_manager
 from src.models import (
     CredFileActionRequest,
-    CredFileBatchActionRequest
+    CredFileBatchActionRequest,
+    CredFileBatchTestRequest,
 )
 from src.storage_adapter import get_storage_adapter
 from src.utils import verify_panel_token, GEMINICLI_USER_AGENT, ANTIGRAVITY_USER_AGENT
@@ -279,6 +280,8 @@ async def get_creds_status_common(
             "backend_type": backend_type,
             "model_cooldowns": summary.get("model_cooldowns", {}),
             "tier": summary.get("tier", "pro"),
+            "success_count": summary.get("success_count", 0),
+            "failure_count": summary.get("failure_count", 0),
         }
 
         if mode == "geminicli":
@@ -1391,12 +1394,7 @@ async def configure_preview_channel(
         raise HTTPException(status_code=500, detail=f"配置失败: {str(e)}")
 
 
-@router.post("/test/{filename}")
-async def test_credential(
-    filename: str,
-    mode: str = "geminicli",
-    _token: str = Depends(verify_panel_token)
-):
+async def test_credential_common(filename: str, mode: str = "geminicli") -> JSONResponse:
     """
     测试指定凭证是否可用
 
@@ -1486,10 +1484,17 @@ async def test_credential(
             log.info(f"凭证测试成功: {filename} (mode={mode}, model={test_model}, status={status_code})")
             # 测试成功时清除错误状态
             if status_code == 200:
-                await storage_adapter.update_credential_state(filename, {
-                    "error_codes": [],
-                    "error_messages": {}
-                }, mode=mode)
+                if hasattr(storage_adapter._backend, "record_success"):
+                    await storage_adapter._backend.record_success(
+                        filename,
+                        model_name=test_model,
+                        mode=mode,
+                    )
+                else:
+                    await storage_adapter.update_credential_state(filename, {
+                        "error_codes": [],
+                        "error_messages": {}
+                    }, mode=mode)
 
                 # 如果是 geminicli 模式且第一次测试成功，继续测试 gemini-3-flash-preview
                 if mode == "geminicli":
@@ -1530,6 +1535,15 @@ async def test_credential(
                             log.warning(f"Preview 模型测试失败: {filename} (status={preview_status})")
                     except Exception as e:
                         log.error(f"Preview 模型测试异常: {filename} - {e}")
+            else:
+                error_text = response.text if hasattr(response, 'text') else ""
+                if hasattr(storage_adapter._backend, "record_failure"):
+                    await storage_adapter._backend.record_failure(
+                        filename,
+                        status_code,
+                        error_message=error_text,
+                        mode=mode,
+                    )
 
             # 返回成功响应
             return JSONResponse(
@@ -1550,15 +1564,23 @@ async def test_credential(
                 # 打印详细错误内容到日志
                 log.error(f"凭证测试错误详情 - 文件: {filename}, 模式: {mode}, 状态码: {status_code}, 错误内容: {error_text}")
 
-                # 使用覆盖模式保存错误（与 credential_manager 保持一致）
-                error_codes = [status_code]
-                error_messages = {str(status_code): error_text if error_text else f"HTTP {status_code}"}
+                if hasattr(storage_adapter._backend, "record_failure"):
+                    await storage_adapter._backend.record_failure(
+                        filename,
+                        status_code,
+                        error_message=error_text,
+                        mode=mode,
+                    )
+                else:
+                    # 使用覆盖模式保存错误（与 credential_manager 保持一致）
+                    error_codes = [status_code]
+                    error_messages = {str(status_code): error_text if error_text else f"HTTP {status_code}"}
 
-                # 更新状态
-                await storage_adapter.update_credential_state(filename, {
-                    "error_codes": error_codes,
-                    "error_messages": error_messages
-                }, mode=mode)
+                    # 更新状态
+                    await storage_adapter.update_credential_state(filename, {
+                        "error_codes": error_codes,
+                        "error_messages": error_messages
+                    }, mode=mode)
 
                 log.info(f"已保存测试错误信息: {filename} - 错误码 {status_code}")
             except Exception as e:
@@ -1583,3 +1605,77 @@ async def test_credential(
     except Exception as e:
         log.error(f"测试凭证失败 {filename}: {e}")
         raise HTTPException(status_code=500, detail=f"测试失败: {str(e)}")
+
+
+@router.post("/test/{filename}")
+async def test_credential(
+    filename: str,
+    mode: str = "geminicli",
+    _token: str = Depends(verify_panel_token)
+):
+    return await test_credential_common(filename, mode=mode)
+
+
+@router.post("/batch-test")
+async def batch_test_credentials(
+    request: CredFileBatchTestRequest,
+    mode: str = "geminicli",
+    _token: str = Depends(verify_panel_token)
+):
+    """批量测试选中的凭证。"""
+    try:
+        mode = validate_mode(mode)
+        filenames = [os.path.basename(name) for name in request.filenames if name]
+        filenames = [name for name in filenames if name.endswith(".json")]
+
+        if not filenames:
+            raise HTTPException(status_code=400, detail="请选择要测试的凭证")
+
+        semaphore = asyncio.Semaphore(5)
+
+        async def run_one(filename: str) -> dict:
+            async with semaphore:
+                try:
+                    response = await test_credential_common(filename, mode=mode)
+                    body = json.loads(response.body.decode("utf-8"))
+                    ok = response.status_code == 200 and body.get("success", False)
+                    return {
+                        "filename": filename,
+                        "success": ok,
+                        "status_code": body.get("status_code", response.status_code),
+                        "message": body.get("message") or ("测试成功" if ok else "测试失败"),
+                        "error": body.get("error"),
+                    }
+                except HTTPException as e:
+                    return {
+                        "filename": filename,
+                        "success": False,
+                        "status_code": e.status_code,
+                        "message": str(e.detail),
+                    }
+                except Exception as e:
+                    log.error(f"批量测试凭证失败 {filename}: {e}")
+                    return {
+                        "filename": filename,
+                        "success": False,
+                        "status_code": 500,
+                        "message": str(e),
+                    }
+
+        results = await asyncio.gather(*(run_one(filename) for filename in filenames))
+        success_count = sum(1 for item in results if item.get("success"))
+        failure_count = len(results) - success_count
+
+        return JSONResponse(content={
+            "success_count": success_count,
+            "failure_count": failure_count,
+            "total_count": len(results),
+            "results": results,
+            "message": f"批量消息测试完成：成功 {success_count}/{len(results)} 个凭证",
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"批量测试凭证失败: {e}")
+        raise HTTPException(status_code=500, detail=f"批量测试失败: {str(e)}")

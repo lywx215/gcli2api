@@ -27,6 +27,8 @@ class MongoDBManager:
         "preview",
         "tier",
         "enable_credit",
+        "success_count",
+        "failure_count",
     }
 
     @staticmethod
@@ -656,6 +658,8 @@ class MongoDBManager:
                         "tier": "pro",
                         "rotation_order": next_order,
                         "call_count": 0,
+                        "success_count": 0,
+                        "failure_count": 0,
                         "created_at": current_ts,
                         "updated_at": current_ts,
                     }
@@ -938,6 +942,8 @@ class MongoDBManager:
                     "model_cooldowns": model_cooldowns,
                     "preview": doc.get("preview", True),
                     "tier": doc.get("tier", "pro"),
+                    "success_count": doc.get("success_count", 0),
+                    "failure_count": doc.get("failure_count", 0),
                 }
                 if mode == "antigravity":
                     state["enable_credit"] = doc.get("enable_credit", False)
@@ -952,6 +958,8 @@ class MongoDBManager:
                 "model_cooldowns": {},
                 "preview": True,
                 "tier": "pro",
+                "success_count": 0,
+                "failure_count": 0,
             }
             if mode == "antigravity":
                 default_state["enable_credit"] = False
@@ -980,6 +988,8 @@ class MongoDBManager:
                 "preview": 1,
                 "tier": 1,
                 "enable_credit": 1,
+                "success_count": 1,
+                "failure_count": 1,
                 "_id": 0
             }
 
@@ -1007,6 +1017,8 @@ class MongoDBManager:
                     "model_cooldowns": model_cooldowns,
                     "preview": doc.get("preview", True),
                     "tier": doc.get("tier", "pro"),
+                    "success_count": doc.get("success_count", 0),
+                    "failure_count": doc.get("failure_count", 0),
                 }
                 if mode == "antigravity":
                     state["enable_credit"] = doc.get("enable_credit", False)
@@ -1110,6 +1122,8 @@ class MongoDBManager:
                 "preview": 1,
                 "tier": 1,
                 "enable_credit": 1,
+                "success_count": 1,
+                "failure_count": 1,
                 "_id": 0
             }
 
@@ -1139,6 +1153,8 @@ class MongoDBManager:
                     "model_cooldowns": active_cooldowns,
                     "preview": doc.get("preview", True),
                     "tier": doc.get("tier", "pro"),
+                    "success_count": doc.get("success_count", 0),
+                    "failure_count": doc.get("failure_count", 0),
                 }
 
                 if mode == "antigravity":
@@ -1500,8 +1516,9 @@ class MongoDBManager:
         mode: str = "geminicli"
     ) -> None:
         """
-        成功调用后的条件写入：
-        - 只有当前 error_codes 非空时才清除错误并写 last_success
+        成功调用后的统计写入：
+        - 每次成功都会递增 success_count/call_count
+        - 只有当前 error_codes 非空时才清除错误状态
         - 只有当前存在该模型的冷却键时才清除
         通过 MongoDB 服务端条件匹配实现
         """
@@ -1513,15 +1530,17 @@ class MongoDBManager:
             collection = self._db[collection_name]
             now = time.time()
 
-            # 条件写入：只有 error_codes 非空时才触发，避免无意义的写 IO
             await collection.update_one(
-                {"filename": filename, "error_codes": {"$ne": []}},
-                {"$set": {
-                    "last_success": now,
-                    "error_codes": [],
-                    "error_messages": {},
-                    "updated_at": now,
-                }}
+                {"filename": filename},
+                {
+                    "$inc": {"success_count": 1, "call_count": 1},
+                    "$set": {
+                        "last_success": now,
+                        "error_codes": [],
+                        "error_messages": {},
+                        "updated_at": now,
+                    }
+                }
             )
 
             # 条件删除模型冷却：只有该键存在时才写入
@@ -1537,3 +1556,38 @@ class MongoDBManager:
 
         except Exception as e:
             log.error(f"Error recording success for {filename}: {e}")
+
+    async def record_failure(
+        self,
+        filename: str,
+        error_code: int,
+        error_message: Optional[str] = None,
+        mode: str = "geminicli"
+    ) -> None:
+        """记录一次失败调用，并保存最新错误信息。"""
+        self._ensure_initialized()
+        filename = os.path.basename(filename)
+
+        try:
+            collection_name = self._get_collection_name(mode)
+            collection = self._db[collection_name]
+            now = time.time()
+
+            error_messages = {}
+            if error_message:
+                error_messages[str(error_code)] = error_message
+
+            await collection.update_one(
+                {"filename": filename},
+                {
+                    "$inc": {"failure_count": 1, "call_count": 1},
+                    "$set": {
+                        "error_codes": [error_code],
+                        "error_messages": error_messages,
+                        "updated_at": now,
+                    }
+                }
+            )
+
+        except Exception as e:
+            log.error(f"Error recording failure for {filename}: {e}")

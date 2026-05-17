@@ -265,8 +265,7 @@ class CredentialManager:
         await self._ensure_initialized()
         try:
             if success:
-            # 条件写入：仅当凭证有错误状态或模型冷却时才写 DB，零内存缓存
-            # fire-and-forget，不阻塞请求链路
+                # fire-and-forget，不阻塞请求链路
                 asyncio.create_task(
                     self._storage_adapter._backend.record_success(
                         credential_name, model_name=model_name, mode=mode
@@ -279,12 +278,19 @@ class CredentialManager:
                 if error_message:
                     error_messages[str(error_code)] = error_message
 
-                state_updates = {
-                    "error_codes": [error_code],
-                    "error_messages": error_messages,
-                }
-
-                await self.update_credential_state(credential_name, state_updates, mode=mode)
+                if hasattr(self._storage_adapter._backend, "record_failure"):
+                    await self._storage_adapter._backend.record_failure(
+                        credential_name,
+                        error_code,
+                        error_message=error_message,
+                        mode=mode,
+                    )
+                else:
+                    state_updates = {
+                        "error_codes": [error_code],
+                        "error_messages": error_messages,
+                    }
+                    await self.update_credential_state(credential_name, state_updates, mode=mode)
 
                 # 设置模型级冷却
                 if cooldown_until is not None and model_name:

@@ -67,6 +67,7 @@ function createCredsManager(type) {
                 status: `./creds/status`,
                 action: `./creds/action`,
                 batchAction: `./creds/batch-action`,
+                batchTest: `./creds/batch-test`,
                 download: `./creds/download`,
                 downloadAll: `./creds/download-all`,
                 detail: `./creds/detail`,
@@ -127,7 +128,9 @@ function createCredsManager(type) {
                             model_cooldowns: item.model_cooldowns || {},
                             preview: item.preview,
                             tier: item.tier || 'pro',
-                            enable_credit: !!item.enable_credit
+                            enable_credit: !!item.enable_credit,
+                            success_count: item.success_count || 0,
+                            failure_count: item.failure_count || 0
                         };
                     });
 
@@ -255,7 +258,7 @@ function createCredsManager(type) {
             const selectedCount = this.selectedFiles.size;
             document.getElementById(this.getElementId('SelectedCount')).textContent = `已选择 ${selectedCount} 项`;
 
-            const batchBtnNames = ['Enable', 'Disable', 'Delete', 'Verify', 'Preview'];
+            const batchBtnNames = ['Enable', 'Disable', 'Delete', 'Verify', 'Test', 'Preview'];
             if (this.type === 'antigravity') {
                 batchBtnNames.push('EnableCredit');
                 batchBtnNames.push('DisableCredit');
@@ -734,6 +737,10 @@ function createCredCard(credInfo, manager) {
     const emailInfo = credInfo.user_email
         ? `<div class="cred-email" style="font-size: 12px; color: #666; margin-top: 2px;">${credInfo.user_email}</div>`
         : '<div class="cred-email" style="font-size: 12px; color: #999; margin-top: 2px; font-style: italic;">未获取邮箱</div>';
+    const successCount = Number(credInfo.success_count || 0);
+    const failureCount = Number(credInfo.failure_count || 0);
+    const totalCount = successCount + failureCount;
+    const usageStatsInfo = `<div class="cred-usage-stats" style="font-size: 12px; color: #555; margin-top: 2px;" title="该凭证累计调用统计">统计：成功 ${successCount} / 失败 ${failureCount} / 总计 ${totalCount}</div>`;
 
     const checkboxClass = manager.getElementId('file-checkbox');
 
@@ -744,6 +751,7 @@ function createCredCard(credInfo, manager) {
                 <div>
                     <div class="cred-filename">${filename}</div>
                     ${emailInfo}
+                    ${usageStatsInfo}
                 </div>
             </div>
             <div class="cred-status">${statusBadges}</div>
@@ -1769,6 +1777,73 @@ async function testAntigravityCredential(filename) {
         showStatus(`❌ ${errorMsg}`, 'error');
         showMessageModal('测试失败', `❌ ${errorMsg}`, 'error');
     }
+}
+
+async function batchTestCredentials(manager, label) {
+    const selectedFiles = Array.from(manager.selectedFiles);
+    if (selectedFiles.length === 0) {
+        showStatus(`请先选择要测试的${label}凭证`, 'error');
+        showMessageModal('提示', `请先选择要测试的${label}凭证`, 'error');
+        return;
+    }
+
+    if (!confirm(`确定要批量消息测试 ${selectedFiles.length} 个${label}凭证吗？\n\n后端会限制并发执行，避免请求过载。`)) {
+        return;
+    }
+
+    showStatus(`正在批量测试 ${selectedFiles.length} 个${label}凭证，请稍候...`, 'info');
+
+    try {
+        const response = await fetch(`${manager.getEndpoint('batchTest')}?${manager.getModeParam()}`, {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ filenames: selectedFiles })
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+            showStatus(`批量测试失败: ${data.detail || data.error || '未知错误'}`, 'error');
+            showMessageModal('批量测试失败', data.detail || data.error || '未知错误', 'error');
+            return;
+        }
+
+        const successCount = data.success_count || 0;
+        const failureCount = data.failure_count || 0;
+        const results = data.results || [];
+        const resultMessages = results.map(result => {
+            const prefix = result.success ? '成功' : '失败';
+            const status = result.status_code ? `HTTP ${result.status_code}` : '无状态码';
+            const message = result.message || result.error || '';
+            return `${prefix} ${result.filename}: ${status}${message ? ' - ' + message : ''}`;
+        });
+
+        await manager.refresh();
+
+        const summary = `批量消息测试完成\n\n成功: ${successCount} 个\n失败: ${failureCount} 个\n总计: ${data.total_count || selectedFiles.length} 个\n\n详细结果:\n${resultMessages.join('\n')}`;
+
+        if (failureCount === 0) {
+            showStatus(`批量测试完成：成功 ${successCount}/${selectedFiles.length} 个${label}凭证`, 'success');
+            showMessageModal('批量测试完成', summary, 'success');
+        } else if (successCount === 0) {
+            showStatus(`批量测试完成：全部失败 ${failureCount}/${selectedFiles.length} 个${label}凭证`, 'error');
+            showMessageModal('批量测试完成', summary, 'error');
+        } else {
+            showStatus(`批量测试完成：成功 ${successCount}/${selectedFiles.length} 个，失败 ${failureCount} 个`, 'info');
+            showMessageModal('批量测试完成', summary, 'info');
+        }
+    } catch (error) {
+        const errorMsg = `批量测试失败: ${error.message}`;
+        showStatus(errorMsg, 'error');
+        showMessageModal('批量测试失败', errorMsg, 'error');
+    }
+}
+
+function batchTestSelectedCredentials() {
+    return batchTestCredentials(AppState.creds, '');
+}
+
+function batchTestSelectedAntigravityCredentials() {
+    return batchTestCredentials(AppState.antigravityCreds, 'Antigravity');
 }
 
 async function configurePreviewChannel(filename) {

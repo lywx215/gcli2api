@@ -27,6 +27,8 @@ class PSQLManager:
         "preview",
         "tier",
         "enable_credit",
+        "success_count",
+        "failure_count",
     }
 
     def __init__(self):
@@ -91,6 +93,8 @@ class PSQLManager:
 
                 rotation_order INTEGER DEFAULT 0,
                 call_count INTEGER DEFAULT 0,
+                success_count INTEGER DEFAULT 0,
+                failure_count INTEGER DEFAULT 0,
 
                 created_at DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW()),
                 updated_at DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())
@@ -115,6 +119,8 @@ class PSQLManager:
 
                 rotation_order INTEGER DEFAULT 0,
                 call_count INTEGER DEFAULT 0,
+                success_count INTEGER DEFAULT 0,
+                failure_count INTEGER DEFAULT 0,
 
                 created_at DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW()),
                 updated_at DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())
@@ -159,6 +165,8 @@ class PSQLManager:
                 ("tier", "TEXT DEFAULT 'pro'"),
                 ("rotation_order", "INTEGER DEFAULT 0"),
                 ("call_count", "INTEGER DEFAULT 0"),
+                ("success_count", "INTEGER DEFAULT 0"),
+                ("failure_count", "INTEGER DEFAULT 0"),
                 ("created_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
                 ("updated_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
             ],
@@ -173,6 +181,8 @@ class PSQLManager:
                 ("enable_credit", "INTEGER DEFAULT 0"),
                 ("rotation_order", "INTEGER DEFAULT 0"),
                 ("call_count", "INTEGER DEFAULT 0"),
+                ("success_count", "INTEGER DEFAULT 0"),
+                ("failure_count", "INTEGER DEFAULT 0"),
                 ("created_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
                 ("updated_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
             ],
@@ -498,7 +508,8 @@ class PSQLManager:
             async with self._pool.acquire() as conn:
                 if mode == "geminicli":
                     row = await conn.fetchrow(f"""
-                        SELECT disabled, error_codes, last_success, user_email, model_cooldowns, preview, tier
+                        SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
+                               preview, tier, success_count, failure_count
                         FROM {table_name} WHERE filename = $1
                     """, filename)
 
@@ -511,6 +522,8 @@ class PSQLManager:
                             "model_cooldowns": json.loads(row["model_cooldowns"] or "{}"),
                             "preview": bool(row["preview"]) if row["preview"] is not None else True,
                             "tier": row["tier"] if row["tier"] is not None else "pro",
+                            "success_count": row["success_count"] or 0,
+                            "failure_count": row["failure_count"] or 0,
                         }
 
                     return {
@@ -521,10 +534,13 @@ class PSQLManager:
                         "model_cooldowns": {},
                         "preview": True,
                         "tier": "pro",
+                        "success_count": 0,
+                        "failure_count": 0,
                     }
                 else:
                     row = await conn.fetchrow(f"""
-                        SELECT disabled, error_codes, last_success, user_email, model_cooldowns, tier, enable_credit
+                        SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
+                               tier, enable_credit, success_count, failure_count
                         FROM {table_name} WHERE filename = $1
                     """, filename)
 
@@ -537,6 +553,8 @@ class PSQLManager:
                             "model_cooldowns": json.loads(row["model_cooldowns"] or "{}"),
                             "tier": row["tier"] if row["tier"] is not None else "pro",
                             "enable_credit": bool(row["enable_credit"]) if row["enable_credit"] is not None else False,
+                            "success_count": row["success_count"] or 0,
+                            "failure_count": row["failure_count"] or 0,
                         }
 
                     return {
@@ -547,6 +565,8 @@ class PSQLManager:
                         "model_cooldowns": {},
                         "tier": "pro",
                         "enable_credit": False,
+                        "success_count": 0,
+                        "failure_count": 0,
                     }
 
         except Exception as e:
@@ -565,7 +585,8 @@ class PSQLManager:
                 if mode == "geminicli":
                     rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
-                               user_email, model_cooldowns, preview, tier
+                               user_email, model_cooldowns, preview, tier,
+                               success_count, failure_count
                         FROM {table_name}
                     """)
 
@@ -583,12 +604,15 @@ class PSQLManager:
                             "model_cooldowns": model_cooldowns,
                             "preview": bool(row["preview"]) if row["preview"] is not None else True,
                             "tier": row["tier"] if row["tier"] is not None else "pro",
+                            "success_count": row["success_count"] or 0,
+                            "failure_count": row["failure_count"] or 0,
                         }
                     return states
                 else:
                     rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
-                               user_email, model_cooldowns, tier, enable_credit
+                               user_email, model_cooldowns, tier, enable_credit,
+                               success_count, failure_count
                         FROM {table_name}
                     """)
 
@@ -606,6 +630,8 @@ class PSQLManager:
                             "model_cooldowns": model_cooldowns,
                             "tier": row["tier"] if row["tier"] is not None else "pro",
                             "enable_credit": bool(row["enable_credit"]) if row["enable_credit"] is not None else False,
+                            "success_count": row["success_count"] or 0,
+                            "failure_count": row["failure_count"] or 0,
                         }
                     return states
 
@@ -657,7 +683,8 @@ class PSQLManager:
                 if mode == "geminicli":
                     all_rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
-                               user_email, rotation_order, model_cooldowns, preview, tier
+                               user_email, rotation_order, model_cooldowns, preview, tier,
+                               success_count, failure_count
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -665,7 +692,8 @@ class PSQLManager:
                 else:
                     all_rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
-                               user_email, rotation_order, model_cooldowns, tier, enable_credit
+                               user_email, rotation_order, model_cooldowns, tier, enable_credit,
+                               success_count, failure_count
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -722,6 +750,8 @@ class PSQLManager:
                         "rotation_order": row["rotation_order"],
                         "model_cooldowns": active_cooldowns,
                         "tier": row["tier"] if row["tier"] is not None else "pro",
+                        "success_count": row["success_count"] or 0,
+                        "failure_count": row["failure_count"] or 0,
                     }
 
                     if mode == "geminicli":
@@ -996,7 +1026,7 @@ class PSQLManager:
         model_name: Optional[str] = None,
         mode: str = "geminicli"
     ) -> None:
-        """成功调用后的条件写入"""
+        """成功调用后的统计写入"""
         self._ensure_initialized()
         filename = os.path.basename(filename)
 
@@ -1005,12 +1035,17 @@ class PSQLManager:
             async with self._pool.acquire() as conn:
                 await conn.execute(f"""
                     UPDATE {table_name}
-                    SET last_success = EXTRACT(EPOCH FROM NOW()),
-                        error_codes = '[]',
-                        error_messages = '{{}}',
+                    SET success_count = COALESCE(success_count, 0) + 1,
+                        call_count = COALESCE(call_count, 0) + 1,
+                        last_success = EXTRACT(EPOCH FROM NOW()),
+                        error_codes = CASE
+                            WHEN error_codes IS NOT NULL AND error_codes != '[]' AND error_codes != ''
+                            THEN '[]' ELSE error_codes END,
+                        error_messages = CASE
+                            WHEN error_codes IS NOT NULL AND error_codes != '[]' AND error_codes != ''
+                            THEN '{{}}' ELSE error_messages END,
                         updated_at = EXTRACT(EPOCH FROM NOW())
                     WHERE filename = $1
-                      AND (error_codes IS NOT NULL AND error_codes != '[]' AND error_codes != '')
                 """, filename)
 
                 if model_name:
@@ -1032,3 +1067,39 @@ class PSQLManager:
 
         except Exception as e:
             log.error(f"Error recording success for {filename}: {e}")
+
+    async def record_failure(
+        self,
+        filename: str,
+        error_code: int,
+        error_message: Optional[str] = None,
+        mode: str = "geminicli"
+    ) -> None:
+        """记录一次失败调用，并保存最新错误信息。"""
+        self._ensure_initialized()
+        filename = os.path.basename(filename)
+
+        try:
+            table_name = self._get_table_name(mode)
+            error_messages = {}
+            if error_message:
+                error_messages[str(error_code)] = error_message
+
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    f"""
+                    UPDATE {table_name}
+                    SET failure_count = COALESCE(failure_count, 0) + 1,
+                        call_count = COALESCE(call_count, 0) + 1,
+                        error_codes = $1,
+                        error_messages = $2,
+                        updated_at = EXTRACT(EPOCH FROM NOW())
+                    WHERE filename = $3
+                    """,
+                    json.dumps([error_code]),
+                    json.dumps(error_messages),
+                    filename,
+                )
+
+        except Exception as e:
+            log.error(f"Error recording failure for {filename}: {e}")

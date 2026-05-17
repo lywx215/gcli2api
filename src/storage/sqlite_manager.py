@@ -27,6 +27,8 @@ class SQLiteManager:
         "preview",
         "tier",
         "enable_credit",
+        "success_count",
+        "failure_count",
     }
 
     # 所有必需的列定义（用于自动校验和修复）
@@ -42,6 +44,8 @@ class SQLiteManager:
             ("tier", "TEXT DEFAULT 'pro'"),
             ("rotation_order", "INTEGER DEFAULT 0"),
             ("call_count", "INTEGER DEFAULT 0"),
+            ("success_count", "INTEGER DEFAULT 0"),
+            ("failure_count", "INTEGER DEFAULT 0"),
             ("created_at", "REAL DEFAULT (unixepoch())"),
             ("updated_at", "REAL DEFAULT (unixepoch())")
         ],
@@ -56,6 +60,8 @@ class SQLiteManager:
             ("enable_credit", "INTEGER DEFAULT 0"),
             ("rotation_order", "INTEGER DEFAULT 0"),
             ("call_count", "INTEGER DEFAULT 0"),
+            ("success_count", "INTEGER DEFAULT 0"),
+            ("failure_count", "INTEGER DEFAULT 0"),
             ("created_at", "REAL DEFAULT (unixepoch())"),
             ("updated_at", "REAL DEFAULT (unixepoch())")
         ]
@@ -181,6 +187,8 @@ class SQLiteManager:
                 -- 轮换相关
                 rotation_order INTEGER DEFAULT 0,
                 call_count INTEGER DEFAULT 0,
+                success_count INTEGER DEFAULT 0,
+                failure_count INTEGER DEFAULT 0,
 
                 -- 时间戳
                 created_at REAL DEFAULT (unixepoch()),
@@ -214,6 +222,8 @@ class SQLiteManager:
                 -- 轮换相关
                 rotation_order INTEGER DEFAULT 0,
                 call_count INTEGER DEFAULT 0,
+                success_count INTEGER DEFAULT 0,
+                failure_count INTEGER DEFAULT 0,
 
                 -- 时间戳
                 created_at REAL DEFAULT (unixepoch()),
@@ -691,7 +701,8 @@ class SQLiteManager:
                 # 精确匹配
                 if mode == "geminicli":
                     async with db.execute(f"""
-                        SELECT disabled, error_codes, last_success, user_email, model_cooldowns, preview, tier
+                        SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
+                               preview, tier, success_count, failure_count
                         FROM {table_name} WHERE filename = ?
                     """, (filename,)) as cursor:
                         row = await cursor.fetchone()
@@ -707,6 +718,8 @@ class SQLiteManager:
                                 "model_cooldowns": json.loads(model_cooldowns_json),
                                 "preview": bool(row[5]) if row[5] is not None else True,
                                 "tier": row[6] if row[6] is not None else "pro",
+                                "success_count": row[7] or 0,
+                                "failure_count": row[8] or 0,
                             }
 
                     # 返回默认状态
@@ -718,11 +731,14 @@ class SQLiteManager:
                         "model_cooldowns": {},
                         "preview": True,
                         "tier": "pro",
+                        "success_count": 0,
+                        "failure_count": 0,
                     }
                 else:
                     # antigravity 模式
                     async with db.execute(f"""
-                        SELECT disabled, error_codes, last_success, user_email, model_cooldowns, tier, enable_credit
+                        SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
+                               tier, enable_credit, success_count, failure_count
                         FROM {table_name} WHERE filename = ?
                     """, (filename,)) as cursor:
                         row = await cursor.fetchone()
@@ -738,6 +754,8 @@ class SQLiteManager:
                                 "model_cooldowns": json.loads(model_cooldowns_json),
                                 "tier": row[5] if row[5] is not None else "pro",
                                 "enable_credit": bool(row[6]) if row[6] is not None else False,
+                                "success_count": row[7] or 0,
+                                "failure_count": row[8] or 0,
                             }
 
                     # 返回默认状态
@@ -749,6 +767,8 @@ class SQLiteManager:
                         "model_cooldowns": {},
                         "tier": "pro",
                         "enable_credit": False,
+                        "success_count": 0,
+                        "failure_count": 0,
                     }
 
         except Exception as e:
@@ -765,7 +785,8 @@ class SQLiteManager:
                 if mode == "geminicli":
                     async with db.execute(f"""
                         SELECT filename, disabled, error_codes, last_success,
-                               user_email, model_cooldowns, preview, tier
+                               user_email, model_cooldowns, preview, tier,
+                               success_count, failure_count
                         FROM {table_name}
                     """) as cursor:
                         rows = await cursor.fetchall()
@@ -794,6 +815,8 @@ class SQLiteManager:
                                 "model_cooldowns": model_cooldowns,
                                 "preview": bool(row[6]) if row[6] is not None else True,
                                 "tier": row[7] if row[7] is not None else "pro",
+                                "success_count": row[8] or 0,
+                                "failure_count": row[9] or 0,
                             }
 
                         return states
@@ -801,7 +824,8 @@ class SQLiteManager:
                     # antigravity 模式
                     async with db.execute(f"""
                         SELECT filename, disabled, error_codes, last_success,
-                               user_email, model_cooldowns, tier, enable_credit
+                               user_email, model_cooldowns, tier, enable_credit,
+                               success_count, failure_count
                         FROM {table_name}
                     """) as cursor:
                         rows = await cursor.fetchall()
@@ -830,6 +854,8 @@ class SQLiteManager:
                                 "model_cooldowns": model_cooldowns,
                                 "tier": row[6] if row[6] is not None else "pro",
                                 "enable_credit": bool(row[7]) if row[7] is not None else False,
+                                "success_count": row[8] or 0,
+                                "failure_count": row[9] or 0,
                             }
 
                         return states
@@ -916,7 +942,8 @@ class SQLiteManager:
                 if mode == "geminicli":
                     all_query = f"""
                         SELECT filename, disabled, error_codes, last_success,
-                               user_email, rotation_order, model_cooldowns, preview, tier
+                               user_email, rotation_order, model_cooldowns, preview, tier,
+                               success_count, failure_count
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -924,7 +951,8 @@ class SQLiteManager:
                 else:
                     all_query = f"""
                         SELECT filename, disabled, error_codes, last_success,
-                               user_email, rotation_order, model_cooldowns, tier, enable_credit
+                               user_email, rotation_order, model_cooldowns, tier, enable_credit,
+                               success_count, failure_count
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -984,6 +1012,8 @@ class SQLiteManager:
                             "tier": row[8] if mode == "geminicli" and row[8] is not None else (
                                 row[7] if mode != "geminicli" and row[7] is not None else "pro"
                             ),
+                            "success_count": row[9] or 0,
+                            "failure_count": row[10] or 0,
                         }
 
                         if mode != "geminicli":
@@ -1331,8 +1361,9 @@ class SQLiteManager:
         mode: str = "geminicli"
     ) -> None:
         """
-        成功调用后的条件写入：
-        - 只有当前 error_codes 非空时才清除错误并写 last_success
+        成功调用后的统计写入：
+        - 每次成功都会递增 success_count/call_count
+        - 只有当前 error_codes 非空时才清除错误状态
         - 只有当前存在该模型的冷却键时才清除
         通过 SQL WHERE 条件匹配实现
         """
@@ -1342,15 +1373,19 @@ class SQLiteManager:
         try:
             table_name = self._get_table_name(mode)
             async with aiosqlite.connect(self._db_path) as db:
-                # 条件写入：只有 error_codes 非空时才触发
                 await db.execute(f"""
                     UPDATE {table_name}
-                    SET last_success = unixepoch(),
-                        error_codes   = '[]',
-                        error_messages = '{{}}',
-                        updated_at    = unixepoch()
+                    SET success_count = COALESCE(success_count, 0) + 1,
+                        call_count = COALESCE(call_count, 0) + 1,
+                        last_success = unixepoch(),
+                        error_codes = CASE
+                            WHEN error_codes IS NOT NULL AND error_codes != '[]' AND error_codes != ''
+                            THEN '[]' ELSE error_codes END,
+                        error_messages = CASE
+                            WHEN error_codes IS NOT NULL AND error_codes != '[]' AND error_codes != ''
+                            THEN '{{}}' ELSE error_messages END,
+                        updated_at = unixepoch()
                     WHERE filename = ?
-                      AND (error_codes IS NOT NULL AND error_codes != '[]' AND error_codes != '')
                 """, (filename,))
 
                 # 条件删除模型冷却：只有模型键存在时才写入
@@ -1373,3 +1408,39 @@ class SQLiteManager:
 
         except Exception as e:
             log.error(f"Error recording success for {filename}: {e}")
+
+    async def record_failure(
+        self,
+        filename: str,
+        error_code: int,
+        error_message: Optional[str] = None,
+        mode: str = "geminicli"
+    ) -> None:
+        """记录一次失败调用，并保存最新错误信息。"""
+        self._ensure_initialized()
+        filename = os.path.basename(filename)
+
+        try:
+            table_name = self._get_table_name(mode)
+            error_messages = {}
+            if error_message:
+                error_messages[str(error_code)] = error_message
+
+            async with aiosqlite.connect(self._db_path) as db:
+                await db.execute(f"""
+                    UPDATE {table_name}
+                    SET failure_count = COALESCE(failure_count, 0) + 1,
+                        call_count = COALESCE(call_count, 0) + 1,
+                        error_codes = ?,
+                        error_messages = ?,
+                        updated_at = unixepoch()
+                    WHERE filename = ?
+                """, (
+                    json.dumps([error_code]),
+                    json.dumps(error_messages),
+                    filename,
+                ))
+                await db.commit()
+
+        except Exception as e:
+            log.error(f"Error recording failure for {filename}: {e}")
