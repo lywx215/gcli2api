@@ -1598,13 +1598,13 @@
                 <h3>批量上传认证文件</h3>
                 <p>支持批量上传 GCLI 和 Antigravity 认证文件</p>
 
-                <!-- Refresh Token 一键添加 -->
+                <!-- Refresh Token 一键添加（批量） -->
                 <div
                     style="margin-bottom: 30px; padding: 20px; border: 2px solid #ffc107; border-radius: 8px; background: #fffbf0;">
                     <h4 style="margin-top: 0; color: #d97706; border-bottom: 2px solid #ffc107; padding-bottom: 10px;">
-                        🔑 Refresh Token 一键添加</h4>
+                        🔑 Refresh Token 一键添加（支持批量）</h4>
                     <p style="color: #666; font-size: 13px; margin-bottom: 15px;">
-                        如果你已有 Google OAuth 的 <code>refresh_token</code>，可以直接粘贴在这里，系统会自动换取 access_token、探测 project_id 并保存为可用凭证。
+                        一行一个 refresh_token，系统会自动换 access_token、探测 project_id。最多 200 个。
                     </p>
 
                     <div class="form-group">
@@ -1613,17 +1613,19 @@
                             <option value="geminicli" selected>GeminiCLI</option>
                             <option value="antigravity">Antigravity</option>
                         </select>
+                        <span id="rtTokenCount" style="margin-left: 12px; color: #666; font-size: 13px;"></span>
                     </div>
 
                     <div class="form-group">
-                        <label for="rtRefreshToken" style="font-weight: bold;">Refresh Token <span style="color:#dc3545">*</span></label>
-                        <textarea id="rtRefreshToken" rows="3" placeholder="粘贴 refresh_token，例如 1//0g..."
+                        <label for="rtRefreshToken" style="font-weight: bold;">Refresh Tokens <span style="color:#dc3545">*</span> <span style="color:#666;font-weight:normal;font-size:12px;">（一行一个）</span></label>
+                        <textarea id="rtRefreshToken" rows="6" placeholder="1//0gXXXXXX...&#10;1//0gYYYYYY...&#10;1//0gZZZZZZ..."
+                            oninput="updateRtTokenCount()"
                             style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; font-size: 12px;"></textarea>
                     </div>
 
                     <div style="cursor: pointer; user-select: none; padding: 10px; border: 1px solid #ddd; border-radius: 5px; background: #f8f9fa; display: flex; justify-content: space-between; align-items: center; margin: 10px 0;"
                         onclick="toggleRtAdvanced()">
-                        <span style="font-weight: bold; color: #555;">⚙️ 高级选项（client_id / project_id / 文件名）</span>
+                        <span style="font-weight: bold; color: #555;">⚙️ 高级选项（client_id / client_secret / 文件名前缀）</span>
                         <span id="rtAdvancedToggleIcon" style="font-size: 14px; color: #666;">▶</span>
                     </div>
 
@@ -1639,19 +1641,14 @@
                                 style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; font-size: 12px;" />
                         </div>
                         <div class="form-group">
-                            <label for="rtProjectId">Project ID（可选，留空自动探测）：</label>
-                            <input type="text" id="rtProjectId" placeholder="my-gcp-project"
-                                style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px;" />
-                        </div>
-                        <div class="form-group">
-                            <label for="rtCustomFilename">自定义文件名（可选，不带 .json）：</label>
-                            <input type="text" id="rtCustomFilename" placeholder="留空则使用 project_id 或时间戳"
+                            <label for="rtFilenamePrefix">文件名前缀（可选，会自动拼接 -1/-2/...）：</label>
+                            <input type="text" id="rtFilenamePrefix" placeholder="留空则使用 project_id 或时间戳"
                                 style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px;" />
                         </div>
                     </div>
 
                     <button class="btn" onclick="addCredentialByRefreshToken()" style="margin-top: 10px; background: #ffc107; color: #000; font-weight: bold;">
-                        🔑 添加凭证
+                        🔑 批量添加凭证
                     </button>
                     <div id="rtAddResult" style="margin-top: 12px;"></div>
                 </div>

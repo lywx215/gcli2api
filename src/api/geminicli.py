@@ -806,3 +806,122 @@ if __name__ == "__main__":
 
     # 运行测试
     asyncio.run(main())
+
+
+# ==================== Quota / 模型额度查询 ====================
+
+async def fetch_geminicli_quota_info(
+    access_token: str,
+    project_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """获取 GeminiCLI 凭证的每模型剩余额度。
+
+    使用 cloudcode-pa 的 retrieveUserQuota 接口，需要 project_id。
+    返回结构与 antigravity 的 fetch_quota_info 兼容：
+        {
+          "success": True/False,
+          "models": {
+            "<modelId>": {
+              "remaining": 0.85,
+              "remainingAmount": "850",
+              "resetTime": "12-20 10:30",
+              "resetTimeRaw": "2025-12-20T02:30:00Z",
+              "tokenType": "..."
+            }
+          },
+          "error": "..." # 失败时
+        }
+    """
+    from datetime import datetime, timedelta
+
+    if not project_id:
+        return {
+            "success": False,
+            "error": "缺少 project_id，无法查询 GeminiCLI 额度",
+        }
+
+    user_agent = get_geminicli_user_agent()
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "User-Agent": user_agent,
+        "Accept-Encoding": "gzip",
+    }
+
+    try:
+        api_base = await get_code_assist_endpoint()
+        url = f"{api_base.rstrip('/')}/v1internal:retrieveUserQuota"
+        body = {
+            "project": project_id,
+            "userAgent": user_agent,
+        }
+
+        response = await post_async(
+            url=url,
+            json=body,
+            headers=headers,
+            timeout=30.0,
+        )
+
+        if response.status_code != 200:
+            try:
+                err_body = response.json()
+            except Exception:
+                err_body = response.text
+            log.warning(f"[GEMINICLI QUOTA] HTTP {response.status_code}: {err_body}")
+            return {
+                "success": False,
+                "error": f"HTTP {response.status_code}: {err_body}",
+            }
+
+        data = response.json()
+        log.debug(f"[GEMINICLI QUOTA] Raw response: {json.dumps(data, ensure_ascii=False)[:500]}")
+
+        buckets = data.get("buckets", []) or []
+        quota_info: Dict[str, Any] = {}
+
+        for b in buckets:
+            model_id = b.get("modelId")
+            if not model_id:
+                continue
+            remaining_fraction = b.get("remainingFraction")
+            remaining_amount = b.get("remainingAmount")
+            reset_time_raw = b.get("resetTime", "")
+            token_type = b.get("tokenType", "")
+
+            # 转换为北京时间
+            reset_time_beijing = "N/A"
+            if reset_time_raw:
+                try:
+                    utc_date = datetime.fromisoformat(reset_time_raw.replace("Z", "+00:00"))
+                    beijing_date = utc_date + timedelta(hours=8)
+                    reset_time_beijing = beijing_date.strftime("%m-%d %H:%M")
+                except Exception as e:
+                    log.warning(f"[GEMINICLI QUOTA] Failed to parse reset time: {e}")
+
+            entry: Dict[str, Any] = {
+                "remaining": remaining_fraction if remaining_fraction is not None else 0,
+                "resetTime": reset_time_beijing,
+                "resetTimeRaw": reset_time_raw,
+            }
+            if remaining_amount is not None:
+                entry["remainingAmount"] = remaining_amount
+            if token_type:
+                entry["tokenType"] = token_type
+
+            # 同一模型可能有多个 bucket（不同 tokenType），保留剩余比例最低那个
+            existing = quota_info.get(model_id)
+            if existing is None or entry["remaining"] < existing.get("remaining", 1):
+                quota_info[model_id] = entry
+
+        return {
+            "success": True,
+            "models": quota_info,
+        }
+
+    except Exception as e:
+        log.error(f"[GEMINICLI QUOTA] 调用 retrieveUserQuota 失败: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+        }

@@ -721,7 +721,7 @@ function createCredCard(credInfo, manager) {
         <button class="cred-btn view" onclick="toggle${managerType === 'antigravity' ? 'Antigravity' : ''}CredDetails('${pathId}')">查看内容</button>
         <button class="cred-btn download" onclick="download${managerType === 'antigravity' ? 'Antigravity' : ''}Cred('${filename}')">下载</button>
         <button class="cred-btn email" onclick="fetch${managerType === 'antigravity' ? 'Antigravity' : ''}UserEmail('${filename}')">查看账号邮箱</button>
-        ${managerType === 'antigravity' ? `<button class="cred-btn" onclick="toggleAntigravityQuotaDetails('${pathId}')" title="查看该凭证的额度信息">查看额度</button>` : ''}
+        ${managerType === 'antigravity' ? `<button class="cred-btn" onclick="toggleAntigravityQuotaDetails('${pathId}')" title="查看该凭证的额度信息">查看额度</button>` : `<button class="cred-btn" onclick="toggleGeminicliQuotaDetails('${pathId}')" title="查看每个模型的剩余额度">查看额度</button>`}
         ${managerType === 'antigravity' ? (credInfo.enable_credit
             ? `<button class="cred-btn" data-filename="${filename}" data-action="disable_credit" title="关闭该凭证的Credit模式">关闭 Credit</button>`
             : `<button class="cred-btn" data-filename="${filename}" data-action="enable_credit" title="开启该凭证的Credit模式">开启 Credit</button>`
@@ -769,7 +769,13 @@ function createCredCard(credInfo, manager) {
                 点击"查看额度"按钮加载额度信息...
             </div>
         </div>
-        ` : ''}
+        ` : `
+        <div class="cred-quota-details" id="quota-${pathId}" style="display: none;">
+            <div class="cred-quota-content" data-filename="${filename}" data-loaded="false">
+                点击"查看额度"按钮加载额度信息...
+            </div>
+        </div>
+        `}
     `;
 
     // 添加事件监听
@@ -1891,6 +1897,14 @@ async function configurePreviewChannel(filename) {
 }
 
 async function toggleAntigravityQuotaDetails(pathId) {
+    return _toggleQuotaDetails(pathId, 'antigravity');
+}
+
+async function toggleGeminicliQuotaDetails(pathId) {
+    return _toggleQuotaDetails(pathId, 'geminicli');
+}
+
+async function _toggleQuotaDetails(pathId, mode) {
     const quotaDetails = document.getElementById('quota-' + pathId);
     if (!quotaDetails) return;
 
@@ -1912,7 +1926,7 @@ async function toggleAntigravityQuotaDetails(pathId) {
             contentDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #666;">📊 正在加载额度信息...</div>';
 
             try {
-                const response = await fetch(`./creds/quota/${encodeURIComponent(filename)}?mode=antigravity`, {
+                const response = await fetch(`./creds/quota/${encodeURIComponent(filename)}?mode=${mode}`, {
                     method: 'GET',
                     headers: getAuthHeaders()
                 });
@@ -3314,34 +3328,46 @@ function toggleRtAdvanced() {
     }
 }
 
+function updateRtTokenCount() {
+    const ta = document.getElementById('rtRefreshToken');
+    const counter = document.getElementById('rtTokenCount');
+    if (!ta || !counter) return;
+    const lines = ta.value.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+    counter.textContent = lines.length > 0 ? `已填 ${lines.length} 个` : '';
+}
+
 async function addCredentialByRefreshToken() {
-    const refreshToken = document.getElementById('rtRefreshToken').value.trim();
+    const tokensRaw = document.getElementById('rtRefreshToken').value;
     const mode = document.getElementById('rtAddMode').value;
     const clientId = document.getElementById('rtClientId').value.trim();
     const clientSecret = document.getElementById('rtClientSecret').value.trim();
-    const projectId = document.getElementById('rtProjectId').value.trim();
-    const customFilename = document.getElementById('rtCustomFilename').value.trim();
+    const filenamePrefix = (document.getElementById('rtFilenamePrefix') || {}).value;
     const resultBox = document.getElementById('rtAddResult');
 
-    if (!refreshToken) {
-        showStatus('请填写 refresh_token', 'error');
+    // 切行，去重去空
+    const tokens = Array.from(new Set(
+        tokensRaw.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+    ));
+
+    if (tokens.length === 0) {
+        showStatus('请填写至少一个 refresh_token', 'error');
         resultBox.innerHTML = '<div style="color:#dc3545;padding:8px;">refresh_token 不能为空</div>';
         return;
     }
 
-    resultBox.innerHTML = '<div style="color:#666;padding:8px;">正在交换 access_token，请稍候...</div>';
+    resultBox.innerHTML = `<div style="color:#666;padding:8px;">正在并发处理 ${tokens.length} 个 refresh_token，请稍候...</div>`;
 
+    // 单个也走批量接口，可复用限流逻辑
     const payload = {
-        refresh_token: refreshToken,
+        refresh_tokens: tokens,
         mode: mode,
     };
     if (clientId) payload.client_id = clientId;
     if (clientSecret) payload.client_secret = clientSecret;
-    if (projectId) payload.project_id = projectId;
-    if (customFilename) payload.custom_filename = customFilename;
+    if (filenamePrefix && filenamePrefix.trim()) payload.filename_prefix = filenamePrefix.trim();
 
     try {
-        const response = await fetch('./creds/upload-by-refresh-token', {
+        const response = await fetch('./creds/upload-by-refresh-token-batch', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -3351,39 +3377,68 @@ async function addCredentialByRefreshToken() {
         });
         const data = await response.json();
 
-        if (response.ok && data.success) {
-            const tierLine = data.subscription_tier
-                ? `<div>等级: <code>${data.subscription_tier}</code></div>` : '';
-            const projectLine = data.project_id
-                ? `<div>Project ID: <code>${data.project_id}</code></div>`
-                : '<div style="color:#d97706">未能自动探测 project_id，建议手动填入或在凭证管理中验证</div>';
+        if (!response.ok) {
             resultBox.innerHTML = `
-                <div style="background:#d4edda;color:#155724;padding:12px;border-radius:5px;border:1px solid #c3e6cb;">
-                    <strong>✅ ${data.message}</strong>
-                    <div style="margin-top:6px;font-size:13px;">
-                        <div>文件名: <code>${data.filename}</code></div>
-                        ${projectLine}
-                        ${tierLine}
-                        <div>模式: <code>${data.mode}</code></div>
-                    </div>
+                <div style="background:#f8d7da;color:#721c24;padding:12px;border-radius:5px;">
+                    <strong>❌ 请求失败</strong>: ${data.detail || data.error || response.statusText}
                 </div>
             `;
-            showStatus('凭证添加成功', 'success');
+            showStatus(`请求失败: ${data.detail || data.error || response.statusText}`, 'error');
+            return;
+        }
+
+        const successCount = data.success_count || 0;
+        const failureCount = data.failure_count || 0;
+        const total = data.total_count || tokens.length;
+        const headerColor = failureCount === 0 ? '#28a745' : (successCount > 0 ? '#ffc107' : '#dc3545');
+        const headerBg = failureCount === 0 ? '#d4edda' : (successCount > 0 ? '#fff3cd' : '#f8d7da');
+        const headerTextColor = failureCount === 0 ? '#155724' : (successCount > 0 ? '#856404' : '#721c24');
+
+        let rowsHtml = (data.results || []).map(r => {
+            if (r.success) {
+                const tier = r.subscription_tier ? ` <span style="color:#666">[${r.subscription_tier}]</span>` : '';
+                const pid = r.project_id ? ` project=<code>${r.project_id}</code>` : ' <span style="color:#d97706">project_id未探测到</span>';
+                return `<tr style="border-bottom:1px solid #eee;">
+                    <td style="padding:6px 8px;color:#28a745;">✅</td>
+                    <td style="padding:6px 8px;font-family:monospace;font-size:12px;">${r.refresh_token_preview || ''}</td>
+                    <td style="padding:6px 8px;font-size:12px;"><code>${r.filename || ''}</code>${pid}${tier}</td>
+                </tr>`;
+            } else {
+                return `<tr style="border-bottom:1px solid #eee;">
+                    <td style="padding:6px 8px;color:#dc3545;">❌</td>
+                    <td style="padding:6px 8px;font-family:monospace;font-size:12px;">${r.refresh_token_preview || ''}</td>
+                    <td style="padding:6px 8px;font-size:12px;color:#721c24;">${(r.error || '未知错误').toString().slice(0,200)}</td>
+                </tr>`;
+            }
+        }).join('');
+
+        resultBox.innerHTML = `
+            <div style="background:${headerBg};color:${headerTextColor};padding:12px;border-radius:5px;border:1px solid ${headerColor};">
+                <strong>📊 ${data.message || `成功 ${successCount}/${total}`}</strong>
+            </div>
+            <div style="margin-top:8px;max-height:300px;overflow:auto;border:1px solid #eee;border-radius:5px;background:white;">
+                <table style="width:100%;border-collapse:collapse;">
+                    <thead><tr style="background:#f8f9fa;">
+                        <th style="padding:6px 8px;text-align:left;width:40px;">状态</th>
+                        <th style="padding:6px 8px;text-align:left;width:200px;">Refresh Token</th>
+                        <th style="padding:6px 8px;text-align:left;">结果</th>
+                    </tr></thead>
+                    <tbody>${rowsHtml}</tbody>
+                </table>
+            </div>
+        `;
+
+        if (successCount > 0) {
+            showStatus(`批量添加完成：成功 ${successCount}/${total}`, failureCount === 0 ? 'success' : 'info');
             // 清空输入
             document.getElementById('rtRefreshToken').value = '';
-            document.getElementById('rtCustomFilename').value = '';
-            // 切到凭证管理刷新列表
+            updateRtTokenCount();
+            // 刷新列表
             if (typeof loadCredsStatus === 'function' && mode === 'geminicli') {
                 setTimeout(() => loadCredsStatus(0), 500);
             }
         } else {
-            resultBox.innerHTML = `
-                <div style="background:#f8d7da;color:#721c24;padding:12px;border-radius:5px;border:1px solid #f5c6cb;">
-                    <strong>❌ 添加失败</strong>
-                    <div style="margin-top:6px;font-size:13px;">${data.detail || data.error || '未知错误'}</div>
-                </div>
-            `;
-            showStatus(`添加失败: ${data.detail || data.error || '未知错误'}`, 'error');
+            showStatus(`批量添加全部失败（0/${total}）`, 'error');
         }
     } catch (err) {
         resultBox.innerHTML = `

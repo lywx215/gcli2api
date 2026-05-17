@@ -8,7 +8,7 @@ import json
 import os
 import time
 import zipfile
-from typing import Any, List
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Response
 from fastapi.responses import JSONResponse
@@ -20,6 +20,7 @@ from src.models import (
     CredFileBatchActionRequest,
     CredFileBatchTestRequest,
     RefreshTokenAddRequest,
+    RefreshTokenBatchAddRequest,
 )
 from src.storage_adapter import get_storage_adapter
 from src.utils import verify_panel_token, GEMINICLI_USER_AGENT, ANTIGRAVITY_USER_AGENT
@@ -1154,10 +1155,13 @@ async def get_credential_errors(
 async def get_credential_quota(
     filename: str,
     token: str = Depends(verify_panel_token),
-    mode: str = "antigravity"
+    mode: str = "geminicli"
 ):
     """
-    获取指定凭证的额度信息（仅支持 antigravity 模式）
+    获取指定凭证的额度信息
+
+    - geminicli: 调用 cloudcode-pa retrieveUserQuota（需 project_id）
+    - antigravity: 调用 fetchAvailableModels
     """
     try:
         mode = validate_mode(mode)
@@ -1193,13 +1197,22 @@ async def get_credential_quota(
         if not access_token:
             raise HTTPException(status_code=400, detail="凭证中没有访问令牌")
 
-        # 获取额度信息
-        quota_info = await fetch_quota_info(access_token)
+        # 按 mode 分发获取额度
+        if mode == "antigravity":
+            quota_info = await fetch_quota_info(access_token)
+        else:
+            from src.api.geminicli import fetch_geminicli_quota_info
+            project_id = credential_data.get("project_id")
+            quota_info = await fetch_geminicli_quota_info(
+                access_token=access_token,
+                project_id=project_id,
+            )
 
         if quota_info.get("success"):
             return JSONResponse(content={
                 "success": True,
                 "filename": filename,
+                "mode": mode,
                 "models": quota_info.get("models", {})
             })
         else:
@@ -1208,6 +1221,7 @@ async def get_credential_quota(
                 content={
                     "success": False,
                     "filename": filename,
+                    "mode": mode,
                     "error": quota_info.get("error", "未知错误")
                 }
             )
@@ -1755,78 +1769,25 @@ async def upload_credentials_by_refresh_token(
         if not req.refresh_token or not req.refresh_token.strip():
             raise HTTPException(status_code=400, detail="refresh_token 不能为空")
 
-        client_id = (req.client_id or DEFAULT_GEMINI_CLI_CLIENT_ID).strip()
-        client_secret = (req.client_secret or DEFAULT_GEMINI_CLI_CLIENT_SECRET).strip()
+        result = await _add_credential_by_refresh_token(
+            refresh_token=req.refresh_token.strip(),
+            client_id=req.client_id,
+            client_secret=req.client_secret,
+            project_id=req.project_id,
+            custom_filename=req.custom_filename,
+            mode=mode,
+        )
 
-        # 1. 换 access_token
-        try:
-            credential_data = await _exchange_refresh_token_to_credential(
-                refresh_token=req.refresh_token.strip(),
-                client_id=client_id,
-                client_secret=client_secret,
-            )
-        except Exception as e:
-            log.error(f"refresh_token 换 access_token 失败: {e}")
-            raise HTTPException(
-                status_code=400,
-                detail=f"refresh_token 无效或网络异常: {e}"
-            )
-
-        # 2. 探测 project_id（用户未提供时）
-        project_id = (req.project_id or "").strip() or None
-        subscription_tier = None
-
-        if mode == "geminicli":
-            api_base_url = await get_code_assist_endpoint()
-            user_agent = GEMINICLI_USER_AGENT
-        else:
-            api_base_url = await get_antigravity_api_url()
-            user_agent = ANTIGRAVITY_USER_AGENT
-
-        if not project_id:
-            try:
-                detected = await fetch_project_id_and_tier(
-                    access_token=credential_data["access_token"],
-                    user_agent=user_agent,
-                    api_base_url=api_base_url,
-                )
-                if detected:
-                    project_id = detected[0]
-                    subscription_tier = detected[1] if len(detected) > 1 else None
-            except Exception as e:
-                log.warning(f"自动探测 project_id 失败: {e}")
-
-        if project_id:
-            credential_data["project_id"] = project_id
-
-        # 3. 生成文件名
-        if req.custom_filename:
-            base = os.path.basename(req.custom_filename.strip())
-            if not base.endswith(".json"):
-                base += ".json"
-            filename = base
-        else:
-            # 用 project_id 或时间戳命名
-            stem = project_id or f"refresh-{int(time.time())}"
-            # 简单清洗
-            stem = "".join(c for c in stem if c.isalnum() or c in "-_")
-            filename = f"{stem}.json"
-
-        # 4. 入库
-        if mode == "antigravity":
-            await credential_manager.add_antigravity_credential(filename, credential_data)
-        else:
-            await credential_manager.add_credential(filename, credential_data)
-
-        log.info(f"通过 refresh_token 成功添加凭证: {filename} (mode={mode})")
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["error"])
 
         return JSONResponse(content={
             "success": True,
-            "filename": filename,
-            "project_id": project_id,
-            "subscription_tier": subscription_tier,
+            "filename": result["filename"],
+            "project_id": result["project_id"],
+            "subscription_tier": result["subscription_tier"],
             "mode": mode,
-            "message": f"凭证添加成功: {filename}",
+            "message": f"凭证添加成功: {result['filename']}",
         })
 
     except HTTPException:
@@ -1834,3 +1795,164 @@ async def upload_credentials_by_refresh_token(
     except Exception as e:
         log.error(f"通过 refresh_token 添加凭证失败: {e}")
         raise HTTPException(status_code=500, detail=f"添加失败: {str(e)}")
+
+
+@router.post("/upload-by-refresh-token-batch")
+async def upload_credentials_by_refresh_token_batch(
+    req: RefreshTokenBatchAddRequest,
+    token: str = Depends(verify_panel_token),
+):
+    """批量通过 refresh_token 添加凭证。
+
+    并发执行，限流 5，避免多个 token 同时冲击 Google API。
+    """
+    try:
+        mode = validate_mode(req.mode or "geminicli")
+
+        # 去重 + 去空行
+        seen = set()
+        tokens: List[str] = []
+        for raw in req.refresh_tokens or []:
+            t = (raw or "").strip()
+            if not t or t in seen:
+                continue
+            seen.add(t)
+            tokens.append(t)
+
+        if not tokens:
+            raise HTTPException(status_code=400, detail="未提供有效的 refresh_token")
+
+        if len(tokens) > 200:
+            raise HTTPException(status_code=400, detail=f"批量数量过多，最多 200 个，当前 {len(tokens)} 个")
+
+        prefix = (req.filename_prefix or "").strip() or None
+
+        semaphore = asyncio.Semaphore(5)
+
+        async def run_one(idx: int, rt: str) -> dict:
+            async with semaphore:
+                custom = f"{prefix}-{idx+1}" if prefix else None
+                try:
+                    result = await _add_credential_by_refresh_token(
+                        refresh_token=rt,
+                        client_id=req.client_id,
+                        client_secret=req.client_secret,
+                        project_id=None,  # 批量场景不手填 project_id
+                        custom_filename=custom,
+                        mode=mode,
+                    )
+                    return {
+                        "index": idx,
+                        "refresh_token_preview": rt[:12] + "..." + rt[-6:] if len(rt) > 24 else rt,
+                        "success": result["success"],
+                        "filename": result.get("filename"),
+                        "project_id": result.get("project_id"),
+                        "subscription_tier": result.get("subscription_tier"),
+                        "error": result.get("error"),
+                    }
+                except Exception as e:
+                    log.error(f"批量添加第 {idx+1} 个 refresh_token 失败: {e}")
+                    return {
+                        "index": idx,
+                        "refresh_token_preview": rt[:12] + "..." + rt[-6:] if len(rt) > 24 else rt,
+                        "success": False,
+                        "error": str(e),
+                    }
+
+        results = await asyncio.gather(*(run_one(i, t) for i, t in enumerate(tokens)))
+        success_count = sum(1 for r in results if r.get("success"))
+        failure_count = len(results) - success_count
+
+        return JSONResponse(content={
+            "success_count": success_count,
+            "failure_count": failure_count,
+            "total_count": len(results),
+            "results": results,
+            "message": f"批量添加完成：成功 {success_count}/{len(results)}",
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"批量通过 refresh_token 添加凭证失败: {e}")
+        raise HTTPException(status_code=500, detail=f"批量添加失败: {str(e)}")
+
+
+async def _add_credential_by_refresh_token(
+    refresh_token: str,
+    client_id: Optional[str],
+    client_secret: Optional[str],
+    project_id: Optional[str],
+    custom_filename: Optional[str],
+    mode: str,
+) -> dict:
+    """核心逻辑：换 token + 探测 project + 入库。单个/批量接口共用。"""
+    cid = (client_id or DEFAULT_GEMINI_CLI_CLIENT_ID).strip()
+    csec = (client_secret or DEFAULT_GEMINI_CLI_CLIENT_SECRET).strip()
+
+    # 1. 换 access_token
+    try:
+        credential_data = await _exchange_refresh_token_to_credential(
+            refresh_token=refresh_token,
+            client_id=cid,
+            client_secret=csec,
+        )
+    except Exception as e:
+        log.error(f"refresh_token 换 access_token 失败: {e}")
+        return {
+            "success": False,
+            "error": f"refresh_token 无效或网络异常: {e}",
+        }
+
+    # 2. 探测 project_id
+    pid = (project_id or "").strip() or None
+    subscription_tier = None
+
+    if mode == "geminicli":
+        api_base_url = await get_code_assist_endpoint()
+        user_agent = GEMINICLI_USER_AGENT
+    else:
+        api_base_url = await get_antigravity_api_url()
+        user_agent = ANTIGRAVITY_USER_AGENT
+
+    if not pid:
+        try:
+            detected = await fetch_project_id_and_tier(
+                access_token=credential_data["access_token"],
+                user_agent=user_agent,
+                api_base_url=api_base_url,
+            )
+            if detected:
+                pid = detected[0]
+                subscription_tier = detected[1] if len(detected) > 1 else None
+        except Exception as e:
+            log.warning(f"自动探测 project_id 失败: {e}")
+
+    if pid:
+        credential_data["project_id"] = pid
+
+    # 3. 生成文件名
+    if custom_filename:
+        base = os.path.basename(custom_filename.strip())
+        if not base.endswith(".json"):
+            base += ".json"
+        filename = base
+    else:
+        stem = pid or f"refresh-{int(time.time() * 1000)}"
+        stem = "".join(c for c in stem if c.isalnum() or c in "-_")
+        filename = f"{stem}.json"
+
+    # 4. 入库
+    if mode == "antigravity":
+        await credential_manager.add_antigravity_credential(filename, credential_data)
+    else:
+        await credential_manager.add_credential(filename, credential_data)
+
+    log.info(f"通过 refresh_token 成功添加凭证: {filename} (mode={mode})")
+
+    return {
+        "success": True,
+        "filename": filename,
+        "project_id": pid,
+        "subscription_tier": subscription_tier,
+    }

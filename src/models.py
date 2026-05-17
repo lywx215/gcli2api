@@ -388,5 +388,13 @@ class RefreshTokenAddRequest(BaseModel):
     mode: Optional[str] = "geminicli"  # geminicli 或 antigravity
 
 
+class RefreshTokenBatchAddRequest(BaseModel):
+    refresh_tokens: List[str]  # 一行一个 refresh_token
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    mode: Optional[str] = "geminicli"
+    filename_prefix: Optional[str] = None  # 可选文件名前缀
+
+
 class ConfigSaveRequest(BaseModel):
     config: dict
