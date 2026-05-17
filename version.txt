@@ -1,4 +1,4 @@
-full_hash=64017143b4dc576ae861234b15a564a49ae06ff4
-short_hash=6401714
-message=feat: 今日调用总数统计（成功/失败/总计/成功率）
-date=2026-05-18 02:05:06 +0800
+full_hash=93075146d182cadf2c2ddd363758ecfb246d4afe
+short_hash=9307514
+message=feat(stats): 按模型家族 + 当前 RPM 的今日调用统计
+date=2026-05-18 02:27:25 +0800
