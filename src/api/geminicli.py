@@ -853,7 +853,6 @@ async def fetch_geminicli_quota_info(
         url = f"{api_base.rstrip('/')}/v1internal:retrieveUserQuota"
         body = {
             "project": project_id,
-            "userAgent": user_agent,
         }
 
         response = await post_async(
