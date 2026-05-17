@@ -1,4 +1,4 @@
-full_hash=0b6206e3efc6433b0cd1a3814268ae638718970d
-short_hash=0b6206e
-message=fix(quota): retrieveUserQuota 请求体不能带 userAgent 字段
-date=2026-05-18 01:53:01 +0800
+full_hash=64017143b4dc576ae861234b15a564a49ae06ff4
+short_hash=6401714
+message=feat: 今日调用总数统计（成功/失败/总计/成功率）
+date=2026-05-18 02:05:06 +0800
