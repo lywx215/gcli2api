@@ -1048,8 +1048,14 @@ function switchTab(tabName) {
 
 // 标签页数据加载（从动画中分离出来）
 function triggerTabDataLoad(tabName) {
-    if (tabName === 'manage') AppState.creds.refresh();
-    if (tabName === 'antigravity-manage') AppState.antigravityCreds.refresh();
+    if (tabName === 'manage') {
+        AppState.creds.refresh();
+        if (typeof refreshTodayStats === 'function') refreshTodayStats('geminicli');
+    }
+    if (tabName === 'antigravity-manage') {
+        AppState.antigravityCreds.refresh();
+        if (typeof refreshTodayStats === 'function') refreshTodayStats('antigravity');
+    }
     if (tabName === 'config') loadConfig();
     if (tabName === 'logs') connectWebSocket();
 }
@@ -3447,5 +3453,51 @@ async function addCredentialByRefreshToken() {
             </div>
         `;
         showStatus(`网络错误: ${err.message}`, 'error');
+    }
+}
+
+
+// ============================================================================
+// 今日调用统计
+// ============================================================================
+
+async function refreshTodayStats(mode) {
+    const suffix = mode === 'antigravity' ? 'Ag' : 'Gcli';
+    const dateEl = document.getElementById('todayStatsDate' + suffix);
+    const totalEl = document.getElementById('todayStatsTotal' + suffix);
+    const successEl = document.getElementById('todayStatsSuccess' + suffix);
+    const failEl = document.getElementById('todayStatsFail' + suffix);
+    const rateEl = document.getElementById('todayStatsRate' + suffix);
+
+    if (!totalEl) return;
+
+    try {
+        const url = `./creds/stats-today?mode=${encodeURIComponent(mode)}`;
+        const resp = await fetch(url, { headers: getAuthHeaders() });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || data.error || resp.statusText);
+
+        const success = Number(data.success_count || 0);
+        const fail = Number(data.failure_count || 0);
+        const total = Number(data.total_count || (success + fail));
+        const rate = total > 0 ? Math.round((success / total) * 100) : 0;
+
+        if (dateEl) dateEl.textContent = data.date ? `(${data.date})` : '';
+        totalEl.textContent = total.toLocaleString();
+        successEl.textContent = success.toLocaleString();
+        failEl.textContent = fail.toLocaleString();
+        rateEl.textContent = total > 0 ? `${rate}%` : '-';
+
+        if (data.note) {
+            // 后端不支持时显示提示
+            totalEl.title = data.note;
+        }
+    } catch (err) {
+        console.error('refreshTodayStats failed:', err);
+        if (totalEl) totalEl.textContent = '-';
+        if (successEl) successEl.textContent = '-';
+        if (failEl) failEl.textContent = '-';
+        if (rateEl) rateEl.textContent = '-';
+        if (dateEl) dateEl.textContent = `(加载失败)`;
     }
 }

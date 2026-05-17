@@ -1591,3 +1591,17 @@ class MongoDBManager:
 
         except Exception as e:
             log.error(f"Error recording failure for {filename}: {e}")
+
+    async def get_today_stats(self, mode: Optional[str] = None) -> Dict[str, Any]:
+        from datetime import datetime, timedelta, timezone
+        today = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
+        return {
+            "date": today,
+            "success_count": 0,
+            "failure_count": 0,
+            "total_count": 0,
+            "note": "MongoDB 后端未启用按日统计",
+        }
+
+    async def get_recent_daily_stats(self, days: int = 7, mode: Optional[str] = None) -> List[Dict[str, Any]]:
+        return []

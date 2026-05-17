@@ -1956,3 +1956,61 @@ async def _add_credential_by_refresh_token(
         "project_id": pid,
         "subscription_tier": subscription_tier,
     }
+
+
+# =============================================================================
+# 每日调用统计
+# =============================================================================
+
+@router.get("/stats-today")
+async def get_today_stats(
+    token: str = Depends(verify_panel_token),
+    mode: Optional[str] = None,
+):
+    """今天（北京时间）的总调用统计。
+
+    Query 可选 ?mode=geminicli|antigravity，不传则返回总和+按模式拆分。
+    """
+    try:
+        if mode:
+            mode = validate_mode(mode)
+        storage_adapter = await get_storage_adapter()
+        backend = getattr(storage_adapter, "_backend", None)
+        if backend is None or not hasattr(backend, "get_today_stats"):
+            return JSONResponse(content={
+                "date": "",
+                "success_count": 0,
+                "failure_count": 0,
+                "total_count": 0,
+                "note": "当前存储后端不支持按日统计",
+            })
+        data = await backend.get_today_stats(mode=mode)
+        return JSONResponse(content=data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"获取今日统计失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/stats-recent")
+async def get_recent_daily_stats(
+    token: str = Depends(verify_panel_token),
+    days: int = 7,
+    mode: Optional[str] = None,
+):
+    """最近 N 天的每日调用统计（默认 7，最大 90）。"""
+    try:
+        if mode:
+            mode = validate_mode(mode)
+        storage_adapter = await get_storage_adapter()
+        backend = getattr(storage_adapter, "_backend", None)
+        if backend is None or not hasattr(backend, "get_recent_daily_stats"):
+            return JSONResponse(content={"days": days, "items": []})
+        items = await backend.get_recent_daily_stats(days=days, mode=mode)
+        return JSONResponse(content={"days": days, "items": items})
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"获取近期统计失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

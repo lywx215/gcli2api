@@ -6,11 +6,17 @@ import asyncio
 import json
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
 from log import log
+
+
+def _today_beijing_str() -> str:
+    """返回当前京区时间 yyyy-mm-dd。"""
+    return (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
 
 
 class PSQLManager:
@@ -132,6 +138,18 @@ class PSQLManager:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 updated_at DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())
+            )
+        """)
+
+        # 按日调用统计（按 京区时间 yyyy-mm-dd 聯合主键）
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS daily_stats (
+                date TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                success_count BIGINT NOT NULL DEFAULT 0,
+                failure_count BIGINT NOT NULL DEFAULT 0,
+                updated_at DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW()),
+                PRIMARY KEY (date, mode)
             )
         """)
 
@@ -1065,6 +1083,18 @@ class PSQLManager:
                                 json.dumps(cooldowns), filename
                             )
 
+                # 全局每日统计
+                await conn.execute(
+                    """
+                    INSERT INTO daily_stats (date, mode, success_count, failure_count, updated_at)
+                    VALUES ($1, $2, 1, 0, EXTRACT(EPOCH FROM NOW()))
+                    ON CONFLICT (date, mode) DO UPDATE
+                    SET success_count = daily_stats.success_count + 1,
+                        updated_at = EXTRACT(EPOCH FROM NOW())
+                    """,
+                    _today_beijing_str(), mode,
+                )
+
         except Exception as e:
             log.error(f"Error recording success for {filename}: {e}")
 
@@ -1101,5 +1131,131 @@ class PSQLManager:
                     filename,
                 )
 
+                # 全局每日统计
+                await conn.execute(
+                    """
+                    INSERT INTO daily_stats (date, mode, success_count, failure_count, updated_at)
+                    VALUES ($1, $2, 0, 1, EXTRACT(EPOCH FROM NOW()))
+                    ON CONFLICT (date, mode) DO UPDATE
+                    SET failure_count = daily_stats.failure_count + 1,
+                        updated_at = EXTRACT(EPOCH FROM NOW())
+                    """,
+                    _today_beijing_str(), mode,
+                )
+
         except Exception as e:
             log.error(f"Error recording failure for {filename}: {e}")
+
+    async def get_today_stats(self, mode: Optional[str] = None) -> Dict[str, Any]:
+        """获取今天（北京时间）的总调用统计。
+
+        Args:
+            mode: 'geminicli' / 'antigravity' / None(全部)
+        """
+        self._ensure_initialized()
+        today = _today_beijing_str()
+        try:
+            async with self._pool.acquire() as conn:
+                if mode:
+                    row = await conn.fetchrow(
+                        """
+                        SELECT
+                            COALESCE(success_count, 0) AS s,
+                            COALESCE(failure_count, 0) AS f
+                        FROM daily_stats
+                        WHERE date = $1 AND mode = $2
+                        """,
+                        today, mode,
+                    )
+                    s = int(row["s"]) if row else 0
+                    f = int(row["f"]) if row else 0
+                    return {
+                        "date": today,
+                        "mode": mode,
+                        "success_count": s,
+                        "failure_count": f,
+                        "total_count": s + f,
+                    }
+                else:
+                    rows = await conn.fetch(
+                        """
+                        SELECT mode,
+                               COALESCE(success_count, 0) AS s,
+                               COALESCE(failure_count, 0) AS f
+                        FROM daily_stats
+                        WHERE date = $1
+                        """,
+                        today,
+                    )
+                    by_mode: Dict[str, Dict[str, int]] = {}
+                    total_s = total_f = 0
+                    for r in rows:
+                        m = r["mode"]
+                        s = int(r["s"]); f = int(r["f"])
+                        by_mode[m] = {
+                            "success_count": s,
+                            "failure_count": f,
+                            "total_count": s + f,
+                        }
+                        total_s += s; total_f += f
+                    return {
+                        "date": today,
+                        "by_mode": by_mode,
+                        "success_count": total_s,
+                        "failure_count": total_f,
+                        "total_count": total_s + total_f,
+                    }
+        except Exception as e:
+            log.error(f"get_today_stats failed: {e}")
+            return {
+                "date": today,
+                "success_count": 0,
+                "failure_count": 0,
+                "total_count": 0,
+                "error": str(e),
+            }
+
+    async def get_recent_daily_stats(self, days: int = 7, mode: Optional[str] = None) -> List[Dict[str, Any]]:
+        """获取最近 N 天的每日调用统计（按北京日期）。"""
+        self._ensure_initialized()
+        days = max(1, min(int(days or 7), 90))
+        try:
+            async with self._pool.acquire() as conn:
+                if mode:
+                    rows = await conn.fetch(
+                        """
+                        SELECT date,
+                               COALESCE(success_count, 0) AS s,
+                               COALESCE(failure_count, 0) AS f
+                        FROM daily_stats
+                        WHERE mode = $1
+                        ORDER BY date DESC
+                        LIMIT $2
+                        """,
+                        mode, days,
+                    )
+                else:
+                    rows = await conn.fetch(
+                        """
+                        SELECT date,
+                               SUM(success_count) AS s,
+                               SUM(failure_count) AS f
+                        FROM daily_stats
+                        GROUP BY date
+                        ORDER BY date DESC
+                        LIMIT $1
+                        """,
+                        days,
+                    )
+                return [
+                    {
+                        "date": r["date"],
+                        "success_count": int(r["s"] or 0),
+                        "failure_count": int(r["f"] or 0),
+                        "total_count": int((r["s"] or 0) + (r["f"] or 0)),
+                    }
+                    for r in rows
+                ]
+        except Exception as e:
+            log.error(f"get_recent_daily_stats failed: {e}")
+            return []

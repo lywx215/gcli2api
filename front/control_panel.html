@@ -1727,6 +1727,36 @@
             <div id="manageTab" class="tab-content">
                 <h3>GCLI凭证文件管理</h3>
                 <p>管理所有GCLI认证文件，查看状态和执行操作</p>
+
+                <!-- 今日调用统计卡片 -->
+                <div id="todayStatsCard" data-mode="geminicli"
+                    style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 8px; padding: 16px 20px; margin: 8px 0; box-shadow: 0 2px 8px rgba(102,126,234,0.2);">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                        <div style="font-size:14px;opacity:0.9;">
+                            📊 今日调用统计 <span id="todayStatsDateGcli" style="opacity:0.85;"></span>
+                        </div>
+                        <button onclick="refreshTodayStats('geminicli')" style="background:rgba(255,255,255,0.2);border:none;color:white;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">↻ 刷新</button>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;">
+                        <div style="background:rgba(255,255,255,0.15);padding:10px 12px;border-radius:6px;">
+                            <div style="font-size:12px;opacity:0.85;">总调用</div>
+                            <div id="todayStatsTotalGcli" style="font-size:24px;font-weight:bold;margin-top:2px;">-</div>
+                        </div>
+                        <div style="background:rgba(40,167,69,0.35);padding:10px 12px;border-radius:6px;">
+                            <div style="font-size:12px;opacity:0.95;">✅ 成功</div>
+                            <div id="todayStatsSuccessGcli" style="font-size:24px;font-weight:bold;margin-top:2px;">-</div>
+                        </div>
+                        <div style="background:rgba(220,53,69,0.35);padding:10px 12px;border-radius:6px;">
+                            <div style="font-size:12px;opacity:0.95;">❌ 失败</div>
+                            <div id="todayStatsFailGcli" style="font-size:24px;font-weight:bold;margin-top:2px;">-</div>
+                        </div>
+                        <div style="background:rgba(23,162,184,0.35);padding:10px 12px;border-radius:6px;">
+                            <div style="font-size:12px;opacity:0.95;">📈 成功率</div>
+                            <div id="todayStatsRateGcli" style="font-size:24px;font-weight:bold;margin-top:2px;">-</div>
+                        </div>
+                    </div>
+                </div>
+
                 <div
                     style="background:#f0f7ff;border:1px solid #b8d4f0;border-radius:6px;padding:10px 14px;margin:8px 0;font-size:13px;">
                     <strong>📡 API地址（点击复制）：</strong>
@@ -1889,6 +1919,36 @@
             <div id="antigravity-manageTab" class="tab-content">
                 <h3>Antigravity凭证文件管理</h3>
                 <p>管理所有Antigravity认证文件，查看状态和执行操作</p>
+
+                <!-- 今日调用统计卡片 (Antigravity) -->
+                <div id="todayStatsCardAg" data-mode="antigravity"
+                    style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; border-radius: 8px; padding: 16px 20px; margin: 8px 0; box-shadow: 0 2px 8px rgba(40,167,69,0.2);">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                        <div style="font-size:14px;opacity:0.9;">
+                            📊 今日调用统计 <span id="todayStatsDateAg" style="opacity:0.85;"></span>
+                        </div>
+                        <button onclick="refreshTodayStats('antigravity')" style="background:rgba(255,255,255,0.2);border:none;color:white;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">↻ 刷新</button>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;">
+                        <div style="background:rgba(255,255,255,0.15);padding:10px 12px;border-radius:6px;">
+                            <div style="font-size:12px;opacity:0.85;">总调用</div>
+                            <div id="todayStatsTotalAg" style="font-size:24px;font-weight:bold;margin-top:2px;">-</div>
+                        </div>
+                        <div style="background:rgba(255,255,255,0.2);padding:10px 12px;border-radius:6px;">
+                            <div style="font-size:12px;opacity:0.95;">✅ 成功</div>
+                            <div id="todayStatsSuccessAg" style="font-size:24px;font-weight:bold;margin-top:2px;">-</div>
+                        </div>
+                        <div style="background:rgba(220,53,69,0.45);padding:10px 12px;border-radius:6px;">
+                            <div style="font-size:12px;opacity:0.95;">❌ 失败</div>
+                            <div id="todayStatsFailAg" style="font-size:24px;font-weight:bold;margin-top:2px;">-</div>
+                        </div>
+                        <div style="background:rgba(255,255,255,0.2);padding:10px 12px;border-radius:6px;">
+                            <div style="font-size:12px;opacity:0.95;">📈 成功率</div>
+                            <div id="todayStatsRateAg" style="font-size:24px;font-weight:bold;margin-top:2px;">-</div>
+                        </div>
+                    </div>
+                </div>
+
                 <div
                     style="background:#f0f7ff;border:1px solid #b8d4f0;border-radius:6px;padding:10px 14px;margin:8px 0;font-size:13px;">
                     <strong>📡 API地址（点击复制）：</strong>
