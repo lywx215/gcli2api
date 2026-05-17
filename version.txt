@@ -1,4 +1,4 @@
-full_hash=b445edbb3a3086405844f221274dda73434f81cb
-short_hash=b445edb
-message=feat: 通过 refresh_token 一键添加凭证
-date=2026-05-18 01:35:01 +0800
+full_hash=3c9d6b0d82e271d234402644fc23caad6320f7e1
+short_hash=3c9d6b0
+message=feat: refresh_token 批量添加 + GeminiCLI 模型额度展示
+date=2026-05-18 01:48:26 +0800
