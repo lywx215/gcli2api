@@ -1,4 +1,4 @@
-full_hash=c2d54b5702ff6be716ef5d6865b0efdc99e26a15
-short_hash=c2d54b5
-message=Merge pull request #374 from kushaldotdev/fix/gemini-schema-ref-validation
-date=2026-05-10 09:03:19 +0800
+full_hash=b80c23d2da37ed41f5a5c7e2b7a8898a6e455538
+short_hash=b80c23d
+message=ci: fix invalid sha tag prefix when triggered by version tag
+date=2026-05-18 00:54:09 +0800
