@@ -1051,10 +1051,13 @@ function triggerTabDataLoad(tabName) {
     if (tabName === 'manage') {
         AppState.creds.refresh();
         if (typeof refreshTodayStats === 'function') refreshTodayStats('geminicli');
-    }
-    if (tabName === 'antigravity-manage') {
+        if (typeof startStatsAutoRefresh === 'function') startStatsAutoRefresh('geminicli');
+    } else if (tabName === 'antigravity-manage') {
         AppState.antigravityCreds.refresh();
         if (typeof refreshTodayStats === 'function') refreshTodayStats('antigravity');
+        if (typeof startStatsAutoRefresh === 'function') startStatsAutoRefresh('antigravity');
+    } else {
+        if (typeof stopStatsAutoRefresh === 'function') stopStatsAutoRefresh();
     }
     if (tabName === 'config') loadConfig();
     if (tabName === 'logs') connectWebSocket();
@@ -3461,6 +3464,58 @@ async function addCredentialByRefreshToken() {
 // 今日调用统计
 // ============================================================================
 
+// 模型家族 -> 展示名、顺序、颜色
+const MODEL_FAMILY_DISPLAY = [
+    { key: '2.5-pro',                  label: 'gemini-2.5-pro',                color: '#ff7043' },
+    { key: '2.5-flash',                label: 'gemini-2.5-flash',              color: '#42a5f5' },
+    { key: '2.5-flash-lite',           label: 'gemini-2.5-flash-lite',         color: '#26a69a' },
+    { key: '3-pro-preview',            label: 'gemini-3-pro-preview',          color: '#ab47bc' },
+    { key: '3-flash-preview',          label: 'gemini-3-flash-preview',        color: '#5c6bc0' },
+    { key: '3.1-pro-preview',          label: 'gemini-3.1-pro-preview',        color: '#7e57c2' },
+    { key: '3.1-flash',                label: 'gemini-3.1-flash',              color: '#29b6f6' },
+    { key: '3.1-flash-lite-preview',   label: 'gemini-3.1-flash-lite-preview', color: '#26c6da' },
+    { key: '2.0-flash',                label: 'gemini-2.0-flash',              color: '#78909c' },
+    { key: '2.0-pro',                  label: 'gemini-2.0-pro',                color: '#8d6e63' },
+    { key: 'other',                    label: '其他 / 未知',                   color: '#bdbdbd' },
+];
+
+function _renderModelStatsRows(byFamily, tbodyEl, isHotBg) {
+    if (!tbodyEl) return;
+    const families = byFamily || {};
+    // 按预设顺序输出 + 末尾追加未识别的 family
+    const known = new Set(MODEL_FAMILY_DISPLAY.map(f => f.key));
+    const orderedKeys = MODEL_FAMILY_DISPLAY.map(f => f.key)
+        .filter(k => families[k]);
+    const extraKeys = Object.keys(families).filter(k => !known.has(k));
+
+    const rows = [...orderedKeys, ...extraKeys];
+    if (rows.length === 0) {
+        tbodyEl.innerHTML = '<tr><td colspan="6" style="padding:12px;text-align:center;opacity:0.7;">今日暂无调用</td></tr>';
+        return;
+    }
+
+    tbodyEl.innerHTML = rows.map(key => {
+        const meta = MODEL_FAMILY_DISPLAY.find(f => f.key === key) || { label: key, color: '#bdbdbd' };
+        const f = families[key] || { success: 0, failure: 0, total: 0, rpm: 0 };
+        const total = f.total || 0;
+        const success = f.success || 0;
+        const failure = f.failure || 0;
+        const rpm = f.rpm || 0;
+        const rate = total > 0 ? Math.round((success / total) * 100) + '%' : '-';
+        return `<tr style="border-top:1px solid rgba(255,255,255,0.1);">
+            <td style="padding:6px 12px;">
+                <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${meta.color};margin-right:6px;"></span>
+                ${meta.label}
+            </td>
+            <td style="padding:6px 12px;text-align:right;font-weight:bold;">${total.toLocaleString()}</td>
+            <td style="padding:6px 12px;text-align:right;color:${rpm > 0 ? '#fffaa0' : 'rgba(255,255,255,0.6)'};font-weight:${rpm > 0 ? 'bold' : 'normal'};">${rpm.toLocaleString()}</td>
+            <td style="padding:6px 12px;text-align:right;color:#b9f6ca;">${success.toLocaleString()}</td>
+            <td style="padding:6px 12px;text-align:right;color:#ffabab;">${failure.toLocaleString()}</td>
+            <td style="padding:6px 12px;text-align:right;">${rate}</td>
+        </tr>`;
+    }).join('');
+}
+
 async function refreshTodayStats(mode) {
     const suffix = mode === 'antigravity' ? 'Ag' : 'Gcli';
     const dateEl = document.getElementById('todayStatsDate' + suffix);
@@ -3468,28 +3523,34 @@ async function refreshTodayStats(mode) {
     const successEl = document.getElementById('todayStatsSuccess' + suffix);
     const failEl = document.getElementById('todayStatsFail' + suffix);
     const rateEl = document.getElementById('todayStatsRate' + suffix);
+    const rpmEl = document.getElementById('todayStatsRpm' + suffix);
+    const tbodyEl = document.getElementById('todayStatsByModel' + suffix);
 
     if (!totalEl) return;
 
     try {
-        const url = `./creds/stats-today?mode=${encodeURIComponent(mode)}`;
+        const url = `./creds/stats-today-by-model?mode=${encodeURIComponent(mode)}`;
         const resp = await fetch(url, { headers: getAuthHeaders() });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || data.error || resp.statusText);
 
-        const success = Number(data.success_count || 0);
-        const fail = Number(data.failure_count || 0);
-        const total = Number(data.total_count || (success + fail));
+        const totals = data.totals || { success: 0, failure: 0, total: 0, rpm: 0 };
+        const total = Number(totals.total || (totals.success || 0) + (totals.failure || 0));
+        const success = Number(totals.success || 0);
+        const fail = Number(totals.failure || 0);
+        const rpm = Number(totals.rpm || 0);
         const rate = total > 0 ? Math.round((success / total) * 100) : 0;
 
         if (dateEl) dateEl.textContent = data.date ? `(${data.date})` : '';
         totalEl.textContent = total.toLocaleString();
         successEl.textContent = success.toLocaleString();
         failEl.textContent = fail.toLocaleString();
+        if (rpmEl) rpmEl.textContent = rpm.toLocaleString();
         rateEl.textContent = total > 0 ? `${rate}%` : '-';
 
+        _renderModelStatsRows(data.by_family || {}, tbodyEl);
+
         if (data.note) {
-            // 后端不支持时显示提示
             totalEl.title = data.note;
         }
     } catch (err) {
@@ -3498,6 +3559,25 @@ async function refreshTodayStats(mode) {
         if (successEl) successEl.textContent = '-';
         if (failEl) failEl.textContent = '-';
         if (rateEl) rateEl.textContent = '-';
+        if (rpmEl) rpmEl.textContent = '-';
         if (dateEl) dateEl.textContent = `(加载失败)`;
+        if (tbodyEl) tbodyEl.innerHTML = `<tr><td colspan="6" style="padding:12px;text-align:center;color:#ffabab;">加载失败: ${err.message}</td></tr>`;
+    }
+}
+
+
+// \u5b9a\u65f6\u81ea\u52a8\u5237\u65b0\u7edf\u8ba1\u5361\u7247\nlet _statsAutoRefreshTimer = null;
+function startStatsAutoRefresh(mode) {
+    stopStatsAutoRefresh();
+    _statsAutoRefreshTimer = setInterval(() => {
+        if (typeof refreshTodayStats === 'function') {
+            refreshTodayStats(mode);
+        }
+    }, 30000);
+}
+function stopStatsAutoRefresh() {
+    if (_statsAutoRefreshTimer) {
+        clearInterval(_statsAutoRefreshTimer);
+        _statsAutoRefreshTimer = null;
     }
 }

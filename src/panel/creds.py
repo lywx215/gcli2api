@@ -2014,3 +2014,36 @@ async def get_recent_daily_stats(
     except Exception as e:
         log.error(f"获取近期统计失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/stats-today-by-model")
+async def get_today_stats_by_model(
+    token: str = Depends(verify_panel_token),
+    mode: Optional[str] = None,
+):
+    """今天按模型家族汇总的统计 + 当前 RPM。
+
+    模型家族归一化规则：
+    - gemini-2.5-pro / gemini-2.5-pro-search / gemini-2.5-pro-thinking → 2.5-pro
+    - gemini-2.5-flash / gemini-2.5-flash-lite → 2.5-flash / 2.5-flash-lite
+    - gemini-3-pro-preview / gemini-3.1-pro-preview / gemini-3-flash-preview / gemini-3.1-flash-lite-preview
+    - 其他归入 other
+    """
+    try:
+        if mode:
+            mode = validate_mode(mode)
+        storage_adapter = await get_storage_adapter()
+        backend = getattr(storage_adapter, "_backend", None)
+        if backend is None or not hasattr(backend, "get_today_stats_by_model"):
+            return JSONResponse(content={
+                "by_family": {},
+                "totals": {"success": 0, "failure": 0, "total": 0, "rpm": 0},
+                "note": "当前存储后端不支持按模型统计",
+            })
+        data = await backend.get_today_stats_by_model(mode=mode)
+        return JSONResponse(content=data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"获取今日按模型统计失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

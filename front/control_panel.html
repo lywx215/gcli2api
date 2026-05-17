@@ -1734,10 +1734,11 @@
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
                         <div style="font-size:14px;opacity:0.9;">
                             📊 今日调用统计 <span id="todayStatsDateGcli" style="opacity:0.85;"></span>
+                            <span style="opacity:0.7;font-size:12px;margin-left:8px;">RPM = 近 60 秒调用数</span>
                         </div>
                         <button onclick="refreshTodayStats('geminicli')" style="background:rgba(255,255,255,0.2);border:none;color:white;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">↻ 刷新</button>
                     </div>
-                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;">
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-bottom:10px;">
                         <div style="background:rgba(255,255,255,0.15);padding:10px 12px;border-radius:6px;">
                             <div style="font-size:12px;opacity:0.85;">总调用</div>
                             <div id="todayStatsTotalGcli" style="font-size:24px;font-weight:bold;margin-top:2px;">-</div>
@@ -1751,9 +1752,30 @@
                             <div id="todayStatsFailGcli" style="font-size:24px;font-weight:bold;margin-top:2px;">-</div>
                         </div>
                         <div style="background:rgba(23,162,184,0.35);padding:10px 12px;border-radius:6px;">
-                            <div style="font-size:12px;opacity:0.95;">📈 成功率</div>
+                            <div style="font-size:12px;opacity:0.95;">⚡ 当前 RPM</div>
+                            <div id="todayStatsRpmGcli" style="font-size:24px;font-weight:bold;margin-top:2px;">-</div>
+                        </div>
+                        <div style="background:rgba(255,255,255,0.15);padding:10px 12px;border-radius:6px;">
+                            <div style="font-size:12px;opacity:0.85;">📈 成功率</div>
                             <div id="todayStatsRateGcli" style="font-size:24px;font-weight:bold;margin-top:2px;">-</div>
                         </div>
+                    </div>
+                    <div style="background:rgba(0,0,0,0.15);border-radius:6px;overflow:hidden;">
+                        <table style="width:100%;border-collapse:collapse;color:white;font-size:13px;">
+                            <thead>
+                                <tr style="background:rgba(0,0,0,0.2);">
+                                    <th style="padding:8px 12px;text-align:left;font-weight:600;">模型家族</th>
+                                    <th style="padding:8px 12px;text-align:right;font-weight:600;">今日总数</th>
+                                    <th style="padding:8px 12px;text-align:right;font-weight:600;">RPM</th>
+                                    <th style="padding:8px 12px;text-align:right;font-weight:600;">✅ 成功</th>
+                                    <th style="padding:8px 12px;text-align:right;font-weight:600;">❌ 失败</th>
+                                    <th style="padding:8px 12px;text-align:right;font-weight:600;">成功率</th>
+                                </tr>
+                            </thead>
+                            <tbody id="todayStatsByModelGcli">
+                                <tr><td colspan="6" style="padding:12px;text-align:center;opacity:0.7;">暂无数据</td></tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
 
@@ -1926,10 +1948,11 @@
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
                         <div style="font-size:14px;opacity:0.9;">
                             📊 今日调用统计 <span id="todayStatsDateAg" style="opacity:0.85;"></span>
+                            <span style="opacity:0.7;font-size:12px;margin-left:8px;">RPM = 近 60 秒调用数</span>
                         </div>
                         <button onclick="refreshTodayStats('antigravity')" style="background:rgba(255,255,255,0.2);border:none;color:white;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">↻ 刷新</button>
                     </div>
-                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;">
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-bottom:10px;">
                         <div style="background:rgba(255,255,255,0.15);padding:10px 12px;border-radius:6px;">
                             <div style="font-size:12px;opacity:0.85;">总调用</div>
                             <div id="todayStatsTotalAg" style="font-size:24px;font-weight:bold;margin-top:2px;">-</div>
@@ -1942,10 +1965,31 @@
                             <div style="font-size:12px;opacity:0.95;">❌ 失败</div>
                             <div id="todayStatsFailAg" style="font-size:24px;font-weight:bold;margin-top:2px;">-</div>
                         </div>
+                        <div style="background:rgba(23,162,184,0.45);padding:10px 12px;border-radius:6px;">
+                            <div style="font-size:12px;opacity:0.95;">⚡ 当前 RPM</div>
+                            <div id="todayStatsRpmAg" style="font-size:24px;font-weight:bold;margin-top:2px;">-</div>
+                        </div>
                         <div style="background:rgba(255,255,255,0.2);padding:10px 12px;border-radius:6px;">
                             <div style="font-size:12px;opacity:0.95;">📈 成功率</div>
                             <div id="todayStatsRateAg" style="font-size:24px;font-weight:bold;margin-top:2px;">-</div>
                         </div>
+                    </div>
+                    <div style="background:rgba(0,0,0,0.15);border-radius:6px;overflow:hidden;">
+                        <table style="width:100%;border-collapse:collapse;color:white;font-size:13px;">
+                            <thead>
+                                <tr style="background:rgba(0,0,0,0.2);">
+                                    <th style="padding:8px 12px;text-align:left;font-weight:600;">模型家族</th>
+                                    <th style="padding:8px 12px;text-align:right;font-weight:600;">今日总数</th>
+                                    <th style="padding:8px 12px;text-align:right;font-weight:600;">RPM</th>
+                                    <th style="padding:8px 12px;text-align:right;font-weight:600;">✅ 成功</th>
+                                    <th style="padding:8px 12px;text-align:right;font-weight:600;">❌ 失败</th>
+                                    <th style="padding:8px 12px;text-align:right;font-weight:600;">成功率</th>
+                                </tr>
+                            </thead>
+                            <tbody id="todayStatsByModelAg">
+                                <tr><td colspan="6" style="padding:12px;text-align:center;opacity:0.7;">暂无数据</td></tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
 

@@ -19,6 +19,48 @@ def _today_beijing_str() -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
 
 
+# 模型家族归一化：各种变种（-search / -thinking / -lite / preview / pro / flash 等）
+# 会被映射到其基础系列。按“更特殊在前”的顺序匹配。
+MODEL_FAMILY_RULES = [
+    # 3.1 系
+    ("gemini-3.1-flash-lite-preview", ("3.1-flash-lite", "3.1-flash-lite-preview")),
+    ("gemini-3.1-pro-preview",        ("3.1-pro",        "3.1-pro-preview")),
+    ("gemini-3.1-pro",                ("3.1-pro",        "3.1-pro")),
+    ("gemini-3.1-flash",              ("3.1-flash",      "3.1-flash")),
+    # 3.0 系
+    ("gemini-3-flash-preview",        ("3-flash",        "3-flash-preview")),
+    ("gemini-3-pro-preview",          ("3-pro",          "3-pro-preview")),
+    ("gemini-3-flash",                ("3-flash",        "3-flash")),
+    ("gemini-3-pro",                  ("3-pro",          "3-pro")),
+    # 2.5 系
+    ("gemini-2.5-flash-lite",         ("2.5-flash-lite", "2.5-flash-lite")),
+    ("gemini-2.5-flash",              ("2.5-flash",      "2.5-flash")),
+    ("gemini-2.5-pro",                ("2.5-pro",        "2.5-pro")),
+    # 2.0 / 其他常见家族（预留，避免丢失）
+    ("gemini-2.0-flash",              ("2.0-flash",      "2.0-flash")),
+    ("gemini-2.0-pro",                ("2.0-pro",        "2.0-pro")),
+]
+
+
+def normalize_model_family(model_name: Optional[str]) -> str:
+    """将模型名归一化为家族 key。
+
+    例如 'gemini-2.5-pro-search' / 'gemini-2.5-pro-thinking' 均归为 '2.5-pro'。
+    未识别的返回 'other'。空返回 'unknown'。
+    """
+    if not model_name:
+        return "unknown"
+    name = str(model_name).strip().lower()
+    # 剧本会传入带前缀 '流式抗截断/' 之类的，去掉
+    if "/" in name:
+        name = name.rsplit("/", 1)[-1]
+    for prefix, (_short, family) in MODEL_FAMILY_RULES:
+        if name.startswith(prefix):
+            return family
+    # 带 antigravity 名字、或未知型号
+    return "other"
+
+
 class PSQLManager:
     """PostgreSQL 数据库管理器"""
 
@@ -151,6 +193,33 @@ class PSQLManager:
                 updated_at DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW()),
                 PRIMARY KEY (date, mode)
             )
+        """)
+
+        # 按模型家族的每日统计
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS daily_model_stats (
+                date TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                model_family TEXT NOT NULL,
+                success_count BIGINT NOT NULL DEFAULT 0,
+                failure_count BIGINT NOT NULL DEFAULT 0,
+                updated_at DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW()),
+                PRIMARY KEY (date, mode, model_family)
+            )
+        """)
+
+        # 按分钟中文梅提统计（用于 RPM）
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS minute_model_stats (
+                minute_ts BIGINT NOT NULL,
+                mode TEXT NOT NULL,
+                model_family TEXT NOT NULL,
+                count BIGINT NOT NULL DEFAULT 0,
+                PRIMARY KEY (minute_ts, mode, model_family)
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_minute_model_stats_ts ON minute_model_stats(minute_ts)
         """)
 
         # 索引
@@ -1095,6 +1164,30 @@ class PSQLManager:
                     _today_beijing_str(), mode,
                 )
 
+                # 按模型家族每日 + 分钟调用统计
+                family = normalize_model_family(model_name)
+                today = _today_beijing_str()
+                await conn.execute(
+                    """
+                    INSERT INTO daily_model_stats (date, mode, model_family, success_count, failure_count, updated_at)
+                    VALUES ($1, $2, $3, 1, 0, EXTRACT(EPOCH FROM NOW()))
+                    ON CONFLICT (date, mode, model_family) DO UPDATE
+                    SET success_count = daily_model_stats.success_count + 1,
+                        updated_at = EXTRACT(EPOCH FROM NOW())
+                    """,
+                    today, mode, family,
+                )
+                minute_ts = int(time.time() // 60) * 60
+                await conn.execute(
+                    """
+                    INSERT INTO minute_model_stats (minute_ts, mode, model_family, count)
+                    VALUES ($1, $2, $3, 1)
+                    ON CONFLICT (minute_ts, mode, model_family) DO UPDATE
+                    SET count = minute_model_stats.count + 1
+                    """,
+                    minute_ts, mode, family,
+                )
+
         except Exception as e:
             log.error(f"Error recording success for {filename}: {e}")
 
@@ -1103,7 +1196,8 @@ class PSQLManager:
         filename: str,
         error_code: int,
         error_message: Optional[str] = None,
-        mode: str = "geminicli"
+        mode: str = "geminicli",
+        model_name: Optional[str] = None,
     ) -> None:
         """记录一次失败调用，并保存最新错误信息。"""
         self._ensure_initialized()
@@ -1141,6 +1235,30 @@ class PSQLManager:
                         updated_at = EXTRACT(EPOCH FROM NOW())
                     """,
                     _today_beijing_str(), mode,
+                )
+
+                # 按模型家族每日 + 分钟统计
+                family = normalize_model_family(model_name)
+                today = _today_beijing_str()
+                await conn.execute(
+                    """
+                    INSERT INTO daily_model_stats (date, mode, model_family, success_count, failure_count, updated_at)
+                    VALUES ($1, $2, $3, 0, 1, EXTRACT(EPOCH FROM NOW()))
+                    ON CONFLICT (date, mode, model_family) DO UPDATE
+                    SET failure_count = daily_model_stats.failure_count + 1,
+                        updated_at = EXTRACT(EPOCH FROM NOW())
+                    """,
+                    today, mode, family,
+                )
+                minute_ts = int(time.time() // 60) * 60
+                await conn.execute(
+                    """
+                    INSERT INTO minute_model_stats (minute_ts, mode, model_family, count)
+                    VALUES ($1, $2, $3, 1)
+                    ON CONFLICT (minute_ts, mode, model_family) DO UPDATE
+                    SET count = minute_model_stats.count + 1
+                    """,
+                    minute_ts, mode, family,
                 )
 
         except Exception as e:
@@ -1259,3 +1377,128 @@ class PSQLManager:
         except Exception as e:
             log.error(f"get_recent_daily_stats failed: {e}")
             return []
+
+    async def get_today_stats_by_model(self, mode: Optional[str] = None) -> Dict[str, Any]:
+        """获取今日按模型家族汇总的统计。
+
+        返回:
+            {
+              "date": "yyyy-mm-dd",
+              "by_family": {
+                  "2.5-pro": {"success": x, "failure": y, "total": z, "rpm": r},
+                  ...
+              },
+              "totals": {"success": x, "failure": y, "total": z, "rpm": r}
+            }
+        """
+        self._ensure_initialized()
+        today = _today_beijing_str()
+        # RPM 取最近 60 秒（包含当前分钟）
+        now_ts = int(time.time())
+        from_ts = now_ts - 60
+
+        try:
+            async with self._pool.acquire() as conn:
+                if mode:
+                    daily_rows = await conn.fetch(
+                        """
+                        SELECT model_family,
+                               COALESCE(success_count, 0) AS s,
+                               COALESCE(failure_count, 0) AS f
+                        FROM daily_model_stats
+                        WHERE date = $1 AND mode = $2
+                        """,
+                        today, mode,
+                    )
+                    minute_rows = await conn.fetch(
+                        """
+                        SELECT model_family, COALESCE(SUM(count), 0) AS rpm
+                        FROM minute_model_stats
+                        WHERE minute_ts >= $1 AND mode = $2
+                        GROUP BY model_family
+                        """,
+                        from_ts, mode,
+                    )
+                else:
+                    daily_rows = await conn.fetch(
+                        """
+                        SELECT model_family,
+                               SUM(success_count) AS s,
+                               SUM(failure_count) AS f
+                        FROM daily_model_stats
+                        WHERE date = $1
+                        GROUP BY model_family
+                        """,
+                        today,
+                    )
+                    minute_rows = await conn.fetch(
+                        """
+                        SELECT model_family, COALESCE(SUM(count), 0) AS rpm
+                        FROM minute_model_stats
+                        WHERE minute_ts >= $1
+                        GROUP BY model_family
+                        """,
+                        from_ts,
+                    )
+
+            rpm_map = {r["model_family"]: int(r["rpm"] or 0) for r in minute_rows}
+            by_family: Dict[str, Dict[str, int]] = {}
+            tot_s = tot_f = 0
+            for r in daily_rows:
+                fam = r["model_family"]
+                s = int(r["s"] or 0)
+                f = int(r["f"] or 0)
+                by_family[fam] = {
+                    "success": s,
+                    "failure": f,
+                    "total": s + f,
+                    "rpm": rpm_map.get(fam, 0),
+                }
+                tot_s += s
+                tot_f += f
+
+            # 没今日调用但当前 RPM>0 的模型也展示
+            for fam, rpm in rpm_map.items():
+                if fam not in by_family:
+                    by_family[fam] = {"success": 0, "failure": 0, "total": 0, "rpm": rpm}
+
+            tot_rpm = sum(rpm_map.values())
+            return {
+                "date": today,
+                "mode": mode,
+                "by_family": by_family,
+                "totals": {
+                    "success": tot_s,
+                    "failure": tot_f,
+                    "total": tot_s + tot_f,
+                    "rpm": tot_rpm,
+                },
+            }
+        except Exception as e:
+            log.error(f"get_today_stats_by_model failed: {e}")
+            return {
+                "date": today,
+                "mode": mode,
+                "by_family": {},
+                "totals": {"success": 0, "failure": 0, "total": 0, "rpm": 0},
+                "error": str(e),
+            }
+
+    async def cleanup_minute_stats(self, keep_minutes: int = 1440) -> int:
+        """清理超过 keep_minutes 分钟（默认 24h）的分钟统计数据。"""
+        self._ensure_initialized()
+        try:
+            cutoff = int(time.time()) - max(60, int(keep_minutes) * 60)
+            async with self._pool.acquire() as conn:
+                result = await conn.execute(
+                    "DELETE FROM minute_model_stats WHERE minute_ts < $1",
+                    cutoff,
+                )
+            # asyncpg 返回 'DELETE n'
+            try:
+                return int(str(result).split()[-1])
+            except Exception:
+                return 0
+        except Exception as e:
+            log.error(f"cleanup_minute_stats failed: {e}")
+            return 0

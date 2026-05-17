@@ -67,10 +67,37 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.error(f"保活服务启动失败: {e}")
 
+    # 启动分钟统计表定期清理任务（保留 24h）
+    import asyncio
+    async def _cleanup_minute_stats_loop():
+        try:
+            from src.storage_adapter import get_storage_adapter
+            while True:
+                try:
+                    adapter = await get_storage_adapter()
+                    backend = getattr(adapter, "_backend", None)
+                    if backend is not None and hasattr(backend, "cleanup_minute_stats"):
+                        deleted = await backend.cleanup_minute_stats(keep_minutes=1440)
+                        if deleted:
+                            log.debug(f"清理过期 minute_model_stats {deleted} 行")
+                except Exception as e:
+                    log.warning(f"清理 minute_model_stats 失败: {e}")
+                await asyncio.sleep(600)  # 10 min
+        except asyncio.CancelledError:
+            pass
+
+    cleanup_task = asyncio.create_task(_cleanup_minute_stats_loop())
+
     yield
 
     # 清理资源
     log.info("开始关闭 GCLI2API 主服务")
+
+    # 停止分钟统计清理任务
+    try:
+        cleanup_task.cancel()
+    except Exception:
+        pass
 
     # 停止保活服务
     try:

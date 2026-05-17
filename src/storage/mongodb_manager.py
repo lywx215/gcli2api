@@ -1562,7 +1562,8 @@ class MongoDBManager:
         filename: str,
         error_code: int,
         error_message: Optional[str] = None,
-        mode: str = "geminicli"
+        mode: str = "geminicli",
+        model_name: Optional[str] = None,
     ) -> None:
         """记录一次失败调用，并保存最新错误信息。"""
         self._ensure_initialized()
@@ -1605,3 +1606,17 @@ class MongoDBManager:
 
     async def get_recent_daily_stats(self, days: int = 7, mode: Optional[str] = None) -> List[Dict[str, Any]]:
         return []
+
+    async def get_today_stats_by_model(self, mode: Optional[str] = None) -> Dict[str, Any]:
+        from datetime import datetime, timedelta, timezone
+        today = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
+        return {
+            "date": today,
+            "mode": mode,
+            "by_family": {},
+            "totals": {"success": 0, "failure": 0, "total": 0, "rpm": 0},
+            "note": "MongoDB 后端未启用按模型统计",
+        }
+
+    async def cleanup_minute_stats(self, keep_minutes: int = 1440) -> int:
+        return 0

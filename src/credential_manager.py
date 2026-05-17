@@ -284,6 +284,7 @@ class CredentialManager:
                         error_code,
                         error_message=error_message,
                         mode=mode,
+                        model_name=model_name,
                     )
                 else:
                     state_updates = {
