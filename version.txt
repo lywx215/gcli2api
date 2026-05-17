@@ -1,4 +1,4 @@
-full_hash=3c9d6b0d82e271d234402644fc23caad6320f7e1
-short_hash=3c9d6b0
-message=feat: refresh_token 批量添加 + GeminiCLI 模型额度展示
-date=2026-05-18 01:48:26 +0800
+full_hash=0b6206e3efc6433b0cd1a3814268ae638718970d
+short_hash=0b6206e
+message=fix(quota): retrieveUserQuota 请求体不能带 userAgent 字段
+date=2026-05-18 01:53:01 +0800
