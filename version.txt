@@ -1,4 +1,4 @@
-full_hash=b80c23d2da37ed41f5a5c7e2b7a8898a6e455538
-short_hash=b80c23d
-message=ci: fix invalid sha tag prefix when triggered by version tag
-date=2026-05-18 00:54:09 +0800
+full_hash=b445edbb3a3086405844f221274dda73434f81cb
+short_hash=b445edb
+message=feat: 通过 refresh_token 一键添加凭证
+date=2026-05-18 01:35:01 +0800
