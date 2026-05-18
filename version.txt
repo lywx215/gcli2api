@@ -1,4 +1,4 @@
-full_hash=af83d1119305655dbcdb0ac074f1f1a041d6a488
-short_hash=af83d11
-message=feat(quota): 查看额度时自动同步 remaining=0 的模型到 model_cooldowns
-date=2026-05-18 03:07:20 +0000
+full_hash=13c330bca42e318e175f65ed1b6fd53eaa9a53d3
+short_hash=13c330b
+message=feat(storage): STORAGE_STRICT=1 默认严格模式,不再静默回落到 SQLite
+date=2026-05-18 04:01:40 +0000
