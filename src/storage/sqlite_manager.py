@@ -1043,13 +1043,13 @@ class SQLiteManager:
                             # 只保留没有冷却的凭证
                             if not active_cooldowns:
                                 all_summaries.append(summary)
-                        elif cooldown_filter == "in_cooldown_pro":
-                            # 只保留 Pro 系列在冷却的凭证
-                            if any("pro" in k.lower() for k in active_cooldowns):
+                        elif cooldown_filter == "pro_no_cooldown":
+                            # 只保留 Pro 系列未冷却的凭证（不管 Flash 是否冷却）
+                            if not any("pro" in k.lower() for k in active_cooldowns):
                                 all_summaries.append(summary)
-                        elif cooldown_filter == "in_cooldown_flash":
-                            # 只保留 Flash 系列在冷却的凭证
-                            if any("flash" in k.lower() for k in active_cooldowns):
+                        elif cooldown_filter == "flash_no_cooldown":
+                            # 只保留 Flash 系列未冷却的凭证（不管 Pro 是否冷却）
+                            if not any("flash" in k.lower() for k in active_cooldowns):
                                 all_summaries.append(summary)
                         else:
                             # 不筛选冷却状态

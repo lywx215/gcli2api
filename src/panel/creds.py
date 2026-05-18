@@ -248,8 +248,8 @@ async def get_creds_status_common(
         raise HTTPException(status_code=400, detail="limit 只能是 20、50、100、200、500 或 1000")
     if status_filter not in ["all", "enabled", "disabled"]:
         raise HTTPException(status_code=400, detail="status_filter 只能是 all、enabled 或 disabled")
-    if cooldown_filter and cooldown_filter not in ["all", "in_cooldown", "no_cooldown", "in_cooldown_pro", "in_cooldown_flash"]:
-        raise HTTPException(status_code=400, detail="cooldown_filter 只能是 all、in_cooldown、no_cooldown、in_cooldown_pro 或 in_cooldown_flash")
+    if cooldown_filter and cooldown_filter not in ["all", "in_cooldown", "no_cooldown", "pro_no_cooldown", "flash_no_cooldown"]:
+        raise HTTPException(status_code=400, detail="cooldown_filter 只能是 all、in_cooldown、no_cooldown、pro_no_cooldown 或 flash_no_cooldown")
     if preview_filter and preview_filter not in ["all", "preview", "no_preview"]:
         raise HTTPException(status_code=400, detail="preview_filter 只能是 all、preview 或 no_preview")
     if tier_filter and tier_filter not in ["all", "free", "pro", "ultra"]:

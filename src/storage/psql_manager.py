@@ -863,11 +863,13 @@ class PSQLManager:
                     elif cooldown_filter == "no_cooldown":
                         if not active_cooldowns:
                             all_summaries.append(summary)
-                    elif cooldown_filter == "in_cooldown_pro":
-                        if any("pro" in k.lower() for k in active_cooldowns):
+                    elif cooldown_filter == "pro_no_cooldown":
+                        # 只保留 Pro 系列未冷却的凭证（不管 Flash 是否冷却）
+                        if not any("pro" in k.lower() for k in active_cooldowns):
                             all_summaries.append(summary)
-                    elif cooldown_filter == "in_cooldown_flash":
-                        if any("flash" in k.lower() for k in active_cooldowns):
+                    elif cooldown_filter == "flash_no_cooldown":
+                        # 只保留 Flash 系列未冷却的凭证（不管 Pro 是否冷却）
+                        if not any("flash" in k.lower() for k in active_cooldowns):
                             all_summaries.append(summary)
                     else:
                         all_summaries.append(summary)
