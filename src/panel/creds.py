@@ -1209,6 +1209,42 @@ async def get_credential_quota(
             )
 
         if quota_info.get("success"):
+            # 自动同步 quota=0 的模型到 model_cooldowns
+            try:
+                import time
+                from datetime import datetime as _dt
+                models = quota_info.get("models", {}) or {}
+                synced = []
+                for model_name, info in models.items():
+                    remaining = info.get("remaining")
+                    if remaining is None or remaining > 0:
+                        continue
+                    # quota 为 0：尝试用 resetTimeRaw 解析 cooldown 时间
+                    cooldown_until = None
+                    raw = info.get("resetTimeRaw") or ""
+                    if raw:
+                        try:
+                            iso = raw.replace("Z", "+00:00")
+                            ts = _dt.fromisoformat(iso).timestamp()
+                            # 1970-01-01（epoch 0）或已过期，用 4h 兜底
+                            if ts < time.time() + 60:
+                                ts = None
+                            cooldown_until = ts
+                        except Exception:
+                            cooldown_until = None
+                    if cooldown_until is None:
+                        cooldown_until = time.time() + 4 * 3600
+
+                    if hasattr(storage_adapter._backend, "set_model_cooldown"):
+                        await storage_adapter._backend.set_model_cooldown(
+                            filename, model_name, cooldown_until, mode=mode
+                        )
+                        synced.append(model_name)
+                if synced:
+                    log.info(f"[QUOTA SYNC] {filename}: 自动写入冷却的模型 {synced}")
+            except Exception as sync_err:
+                log.warning(f"[QUOTA SYNC] {filename}: 同步冷却失败: {sync_err}")
+
             return JSONResponse(content={
                 "success": True,
                 "filename": filename,
