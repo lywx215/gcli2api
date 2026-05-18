@@ -58,6 +58,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.error(f"凭证管理器初始化失败: {e}")
         global_credential_manager = None
+        # STORAGE_STRICT=1 (默认) 时, 存储后端初始化失败必须 fail-fast,
+        # 让进程退出由容器编排器(docker --restart unless-stopped)自动重拉。
+        strict_mode = os.getenv("STORAGE_STRICT", "1").strip().lower() not in ("0", "false", "no", "off")
+        msg = str(e).lower()
+        if strict_mode and ("strict mode" in msg or "no storage backend" in msg):
+            log.error("严格模式下存储后端初始化失败, 进程将退出 (容器会自动重启)")
+            import sys
+            sys.exit(1)
 
     # OAuth回调服务器将在需要时按需启动
 
