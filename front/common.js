@@ -1870,7 +1870,7 @@ async function batchRefreshCooldownCredentials(manager, label) {
         return;
     }
 
-    if (!confirm(`将对 ${selectedFiles.length} 个${label}凭证拉取实时额度，按 Pro/Flash 系列解除“有额度但在冷却”的 cooldown。\n\n继续吗？`)) {
+    if (!confirm(`将对 ${selectedFiles.length} 个${label}凭证拉取实时额度，并按模型双向同步冷却：\n  ✅ 有额度但在冷却 → 解除\n  🧊 没额度但未冷却 → 补冷\n\n继续吗？`)) {
         return;
     }
 
@@ -1901,18 +1901,23 @@ async function batchRefreshCooldownCredentials(manager, label) {
                 return `❌ ${r.filename}: ${r.error || '检测失败'}`;
             }
             const cleared = (r.cleared && r.cleared.length) ? ` ✅解除: ${r.cleared.join(', ')}` : '';
+            const added = (r.added_cooldown && r.added_cooldown.length) ? ` 🧊补冷: ${r.added_cooldown.join(', ')}` : '';
             const kept = (r.skipped_no_quota && r.skipped_no_quota.length) ? ` ⏳保留: ${r.skipped_no_quota.join(', ')}` : '';
             const unknown = (r.skipped_unknown && r.skipped_unknown.length) ? ` ❓未知: ${r.skipped_unknown.join(', ')}` : '';
-            const tag = (cleared || kept || unknown) ? '🔄' : '✅';
-            return `${tag} ${r.filename}:${cleared}${kept}${unknown}` + (cleared || kept || unknown ? '' : ' 无需调整');
+            const anyChange = !!(cleared || added);
+            const tag = anyChange ? '🔄' : '✅';
+            const trail = (cleared || added || kept || unknown) ? '' : ' 无需调整';
+            return `${tag} ${r.filename}:${cleared}${added}${kept}${unknown}${trail}`;
         });
 
         await manager.refresh();
 
-        const summary = `批量额度检测 + 冷却解除完成\n\n成功: ${successCount} 个\n失败: ${failureCount} 个\n总计: ${data.total_count || selectedFiles.length} 个\n解除冷却: ${clearedTotal} 个（涉及 ${affected} 个凭证）\n\n详细结果:\n${lines.join('\n')}`;
+        const addedTotal = data.added_total || 0;
+        const affectedAdded = data.affected_creds_added || 0;
+        const summary = `批量额度检测 + 双向冷却同步完成\n\n成功: ${successCount} 个\n失败: ${failureCount} 个\n总计: ${data.total_count || selectedFiles.length} 个\n✅解除冷却: ${clearedTotal} 个（${affected} 凭证）\n🧊补加冷却: ${addedTotal} 个（${affectedAdded} 凭证）\n\n详细结果:\n${lines.join('\n')}`;
 
         const tone = failureCount === 0 ? 'success' : (successCount === 0 ? 'error' : 'info');
-        showStatus(`额度检测完成：解除 ${clearedTotal} 个冷却（${affected}/${selectedFiles.length} 凭证）`, tone);
+        showStatus(`额度检测完成：解除 ${clearedTotal} 个 / 补冷 ${addedTotal} 个（${selectedFiles.length} 凭证）`, tone);
         showMessageModal('批量额度检测完成', summary, tone);
     } catch (error) {
         const errorMsg = `批量额度检测失败: ${error.message}`;
