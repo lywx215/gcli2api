@@ -1,4 +1,4 @@
-full_hash=f3a26beb0b35c3cfe49504c37b47ca054e5153a2
-short_hash=f3a26be
-message=feat(quota): 额度卡片增加重置倒计时显示
-date=2026-05-18 02:55:05 +0000
+full_hash=3a661c2180406648fcae8fc4005bc6083abaf614
+short_hash=3a661c2
+message=fix(cooldown): RESOURCE_EXHAUSTED 兜底冷却放宽消息匹配 + 支持 quotaResetDelay
+date=2026-05-18 02:59:49 +0000
