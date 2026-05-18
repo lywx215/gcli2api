@@ -1332,17 +1332,18 @@ async def batch_refresh_cooldown(
     mode: str = "geminicli",
     _token: str = Depends(verify_panel_token),
 ):
-    """批量检测凭证额度，精确按模型名解除"该模型有额度但仍在冷却"的 cooldown。
+    """批量检测凭证额度，按模型实时 quota 双向同步 cooldown。
 
-    逻辑：
+    双向逻辑（精确按模型名匹配）：
       1. 逐个凭证拉取 quota
-      2. 对凭证 model_cooldowns 中每条未过期的冷却记录，
-         在实时 quota 中精确查找同名模型：
-           - 该模型 remaining > 0 → 解除冷却（quota 没爆，应该是误锁，比如 capacity 抖动锁的 4h）
-           - 该模型 remaining = 0 → 保留冷却（真没额度，4h 兜底是对的）
-           - 该模型 quota 里查不到 → 保留冷却（保守不动）
-      3. 不再使用 "系列" 粗粒度匹配。flash-lite 等独立 bucket 不会牵连普通 flash。
-      4. 返回汇总结果
+      2. 解冷方向（清除误锁）：
+         凭证 model_cooldowns 中未过期的记录里，对应模型实时 quota.remaining > 0
+         → 解除冷却（capacity 抖动等误锁）
+      3. 加冷方向（补漏锁）：
+         实时 quota 里 remaining=0 的模型，如果当前没在冷却 / 冷却已过期
+         → 写入冷却（quotaResetTimeStamp 优先，否则 4h 兜底）
+      4. 不再使用 "系列" 粗粒度匹配，flash-lite 等独立 bucket 不会牵连普通 flash
+      5. 返回汇总结果
     """
     try:
         mode = validate_mode(mode)
@@ -1384,11 +1385,31 @@ async def batch_refresh_cooldown(
                     detail = await storage_adapter.get_credential_state(filename, mode=mode)
                     cooldowns = (detail or {}).get("model_cooldowns", {}) or {}
 
-                    cleared = []         # 真正解冷的模型
-                    skipped_no_quota = []  # 因 quota=0 保留冷却的模型
-                    skipped_unknown = []   # 在实时 quota 里查不到的模型
+                    cleared = []           # 解冷：模型有额度但被锁
+                    skipped_no_quota = []  # 不动：模型 quota=0 且已被锁，保持原样
+                    skipped_unknown = []   # 不动：被锁的模型在实时 quota 里查不到
+                    added_cooldown = []    # 加冷：模型 quota=0 但没在冷却，补冷
+                    cooldown_skipped_active = []  # 不动：模型 quota=0 但已经在冷却中（无需重复）
+
                     now = time.time()
+                    DEFAULT_COOLDOWN_HOURS = 4
+
+                    def _resolve_cooldown_until_for_model(quota_entry: dict) -> float:
+                        # 优先用 Google 给的 resetTimeRaw，必须是未来时间且非 epoch 0
+                        from datetime import datetime as _dt
+                        raw = quota_entry.get("resetTimeRaw") or ""
+                        if raw:
+                            try:
+                                iso = raw.replace("Z", "+00:00")
+                                ts = _dt.fromisoformat(iso).timestamp()
+                                if ts > now + 60:
+                                    return ts
+                            except Exception:
+                                pass
+                        return now + DEFAULT_COOLDOWN_HOURS * 3600
+
                     if can_set_cooldown:
+                        # === 解冷方向 ===
                         for cd_model, cd_until in list(cooldowns.items()):
                             try:
                                 cd_ts = float(cd_until)
@@ -1397,7 +1418,6 @@ async def batch_refresh_cooldown(
                             if cd_ts <= now:
                                 continue  # 已过期不动
 
-                            # 精确按模型名查 quota
                             quota_entry = models.get(cd_model)
                             if quota_entry is None:
                                 skipped_unknown.append(cd_model)
@@ -1413,6 +1433,32 @@ async def batch_refresh_cooldown(
                             if ok:
                                 cleared.append(cd_model)
 
+                        # === 加冷方向 ===
+                        for model_name, info in models.items():
+                            remaining = info.get("remaining")
+                            if remaining is None or remaining > 0:
+                                continue  # 有额度，不补冷
+
+                            # quota=0 的模型
+                            existing = cooldowns.get(model_name)
+                            existing_ts = None
+                            if existing is not None:
+                                try:
+                                    existing_ts = float(existing)
+                                except (TypeError, ValueError):
+                                    existing_ts = None
+                            # 已经在冷却中（未过期）就不重复设置
+                            if existing_ts is not None and existing_ts > now:
+                                cooldown_skipped_active.append(model_name)
+                                continue
+
+                            cooldown_until = _resolve_cooldown_until_for_model(info)
+                            ok = await backend.set_model_cooldown(
+                                filename, model_name, cooldown_until, mode=mode
+                            )
+                            if ok:
+                                added_cooldown.append(model_name)
+
                     return {
                         "filename": filename,
                         "success": True,
@@ -1420,6 +1466,8 @@ async def batch_refresh_cooldown(
                         "cleared": cleared,
                         "skipped_no_quota": skipped_no_quota,
                         "skipped_unknown": skipped_unknown,
+                        "added_cooldown": added_cooldown,
+                        "cooldown_skipped_active": cooldown_skipped_active,
                         "model_count": len(models),
                     }
                 except Exception as e:
@@ -1433,18 +1481,24 @@ async def batch_refresh_cooldown(
         results = await asyncio.gather(*(run_one(filename) for filename in filenames))
         success_count = sum(1 for r in results if r.get("success"))
         cleared_total = sum(len(r.get("cleared", [])) for r in results)
-        affected_creds = sum(1 for r in results if r.get("cleared"))
+        added_total = sum(len(r.get("added_cooldown", [])) for r in results)
+        affected_creds_cleared = sum(1 for r in results if r.get("cleared"))
+        affected_creds_added = sum(1 for r in results if r.get("added_cooldown"))
 
         return JSONResponse(content={
             "success_count": success_count,
             "failure_count": len(results) - success_count,
             "total_count": len(results),
             "cleared_total": cleared_total,
-            "affected_creds": affected_creds,
+            "added_total": added_total,
+            "affected_creds": affected_creds_cleared,           # 兼容旧字段
+            "affected_creds_cleared": affected_creds_cleared,
+            "affected_creds_added": affected_creds_added,
             "results": results,
             "message": (
                 f"完成：{success_count}/{len(results)} 凭证拉取额度成功，"
-                f"解除了 {cleared_total} 个冷却（涉及 {affected_creds} 个凭证）"
+                f"解除 {cleared_total} 个冷却（涉及 {affected_creds_cleared} 凭证），"
+                f"补加 {added_total} 个冷却（涉及 {affected_creds_added} 凭证）"
             ),
         })
 
