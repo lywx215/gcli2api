@@ -1,4 +1,4 @@
-full_hash=13c330bca42e318e175f65ed1b6fd53eaa9a53d3
-short_hash=13c330b
-message=feat(storage): STORAGE_STRICT=1 默认严格模式,不再静默回落到 SQLite
-date=2026-05-18 04:01:40 +0000
+full_hash=7587dfb4bcba278e725b85f657b3a20dcf0d8334
+short_hash=7587dfb
+message=fix(storage): 严格模式下让进程真正退出, 而不是被 lifespan try/except 吞掉
+date=2026-05-18 04:04:29 +0000
