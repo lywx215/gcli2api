@@ -477,6 +477,7 @@ def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
         error_obj = error_response.get("error", {})
         details = error_obj.get("details", [])
 
+        # 优先级 1: 显式的 quotaResetTimeStamp
         for detail in details:
             if detail.get("@type") == "type.googleapis.com/google.rpc.ErrorInfo":
                 reset_timestamp_str = detail.get("metadata", {}).get("quotaResetTimeStamp")
@@ -491,14 +492,27 @@ def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
 
                     return reset_dt.astimezone(timezone.utc).timestamp()
 
-        # 如果是 RESOURCE_EXHAUSTED 错误且消息完全匹配，设置默认4小时冷却时间
-        if (
-            error_obj.get("status") == "RESOURCE_EXHAUSTED"
-            and error_obj.get("message") == "Resource has been exhausted (e.g. check quota)."
-        ):
-            import time
-            cooldown_until = time.time() + RESOURCE_EXHAUSTED_COOLDOWN_HOURS * 3600
-            return cooldown_until
+        # 优先级 2: quotaResetDelay (相对延迟)
+        import time as _time
+        import re as _re
+        for detail in details:
+            if detail.get("@type") == "type.googleapis.com/google.rpc.ErrorInfo":
+                delay_str = detail.get("metadata", {}).get("quotaResetDelay")
+                if delay_str:
+                    # 解析格式: "13h19m1.20964964s" 或 "0s"
+                    m = _re.match(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?", delay_str)
+                    if m and any(m.groups()):
+                        h = int(m.group(1) or 0)
+                        mi = int(m.group(2) or 0)
+                        sec = float(m.group(3) or 0)
+                        delay_sec = h * 3600 + mi * 60 + sec
+                        if delay_sec > 0:
+                            return _time.time() + delay_sec
+
+        # 优先级 3: RESOURCE_EXHAUSTED 兜底（任意消息文案）
+        # 兼容 "Resource has been exhausted..." 和 "You have exhausted your capacity..." 等
+        if error_obj.get("status") == "RESOURCE_EXHAUSTED":
+            return _time.time() + RESOURCE_EXHAUSTED_COOLDOWN_HOURS * 3600
 
         return None
 
