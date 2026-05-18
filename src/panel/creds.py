@@ -1332,14 +1332,16 @@ async def batch_refresh_cooldown(
     mode: str = "geminicli",
     _token: str = Depends(verify_panel_token),
 ):
-    """批量检测凭证额度，按系列解除“有额度但在冷却”的冷却。
+    """批量检测凭证额度，精确按模型名解除"该模型有额度但仍在冷却"的 cooldown。
 
     逻辑：
       1. 逐个凭证拉取 quota
-      2. 按系列判定额度:
-         - Pro 系列: 属于 Pro 的任一模型 remaining > 0 认为有额度
-         - Flash 系列: 同上
-      3. 只清理该凭证中 “同系列且冷却还未到期” 的 model_cooldowns 记录
+      2. 对凭证 model_cooldowns 中每条未过期的冷却记录，
+         在实时 quota 中精确查找同名模型：
+           - 该模型 remaining > 0 → 解除冷却（quota 没爆，应该是误锁，比如 capacity 抖动锁的 4h）
+           - 该模型 remaining = 0 → 保留冷却（真没额度，4h 兜底是对的）
+           - 该模型 quota 里查不到 → 保留冷却（保守不动）
+      3. 不再使用 "系列" 粗粒度匹配。flash-lite 等独立 bucket 不会牵连普通 flash。
       4. 返回汇总结果
     """
     try:
@@ -1368,7 +1370,7 @@ async def batch_refresh_cooldown(
                         }
                     models = quota.get("models", {}) or {}
 
-                    # 按系列聚合额度状态
+                    # 顺手统计一下系列状态，仅用于回显展示，不参与解冷决策
                     family_has_quota = {"pro": False, "flash": False}
                     for model_name, info in models.items():
                         family = _model_family(model_name)
@@ -1382,7 +1384,9 @@ async def batch_refresh_cooldown(
                     detail = await storage_adapter.get_credential_state(filename, mode=mode)
                     cooldowns = (detail or {}).get("model_cooldowns", {}) or {}
 
-                    cleared = []
+                    cleared = []         # 真正解冷的模型
+                    skipped_no_quota = []  # 因 quota=0 保留冷却的模型
+                    skipped_unknown = []   # 在实时 quota 里查不到的模型
                     now = time.time()
                     if can_set_cooldown:
                         for cd_model, cd_until in list(cooldowns.items()):
@@ -1392,21 +1396,30 @@ async def batch_refresh_cooldown(
                                 continue
                             if cd_ts <= now:
                                 continue  # 已过期不动
-                            family = _model_family(cd_model)
-                            if not family:
+
+                            # 精确按模型名查 quota
+                            quota_entry = models.get(cd_model)
+                            if quota_entry is None:
+                                skipped_unknown.append(cd_model)
                                 continue
-                            if family_has_quota.get(family):
-                                ok = await backend.set_model_cooldown(
-                                    filename, cd_model, None, mode=mode
-                                )
-                                if ok:
-                                    cleared.append(cd_model)
+                            remaining = quota_entry.get("remaining")
+                            if remaining is None or remaining <= 0:
+                                skipped_no_quota.append(cd_model)
+                                continue
+
+                            ok = await backend.set_model_cooldown(
+                                filename, cd_model, None, mode=mode
+                            )
+                            if ok:
+                                cleared.append(cd_model)
 
                     return {
                         "filename": filename,
                         "success": True,
                         "family_has_quota": family_has_quota,
                         "cleared": cleared,
+                        "skipped_no_quota": skipped_no_quota,
+                        "skipped_unknown": skipped_unknown,
                         "model_count": len(models),
                     }
                 except Exception as e:

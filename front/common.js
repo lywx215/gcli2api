@@ -1900,10 +1900,11 @@ async function batchRefreshCooldownCredentials(manager, label) {
             if (!r.success) {
                 return `❌ ${r.filename}: ${r.error || '检测失败'}`;
             }
-            const fq = r.family_has_quota || {};
-            const flags = `Pro=${fq.pro ? '✅' : '❌'} Flash=${fq.flash ? '✅' : '❌'}`;
-            const cleared = (r.cleared && r.cleared.length) ? ` 已解除: ${r.cleared.join(', ')}` : '';
-            return `✅ ${r.filename}: ${flags}${cleared}`;
+            const cleared = (r.cleared && r.cleared.length) ? ` ✅解除: ${r.cleared.join(', ')}` : '';
+            const kept = (r.skipped_no_quota && r.skipped_no_quota.length) ? ` ⏳保留: ${r.skipped_no_quota.join(', ')}` : '';
+            const unknown = (r.skipped_unknown && r.skipped_unknown.length) ? ` ❓未知: ${r.skipped_unknown.join(', ')}` : '';
+            const tag = (cleared || kept || unknown) ? '🔄' : '✅';
+            return `${tag} ${r.filename}:${cleared}${kept}${unknown}` + (cleared || kept || unknown ? '' : ' 无需调整');
         });
 
         await manager.refresh();
