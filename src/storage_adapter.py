@@ -106,12 +106,14 @@ class StorageAdapter:
                 except Exception as e:
                     log.error(f"Failed to initialize PostgreSQL backend: {e}")
                     if strict_mode:
-                        # fail-fast: 让进程退出, 由容器编排器(docker --restart)自动重拉
+                        # fail-fast: 物理退出进程, 不依赖 try/except 捕获,
+                        # 由容器编排器(docker --restart unless-stopped)自动重拉
                         log.error(
                             "STORAGE_STRICT=1: 已配置 POSTGRESQL_URI 但初始化失败, "
                             "拒绝回落到 SQLite。请检查 PG 连接与权限, 或显式设置 STORAGE_STRICT=0 允许回落。"
                         )
-                        raise RuntimeError("PostgreSQL backend init failed (strict mode)") from e
+                        log.error("严格模式: 进程立即退出, 容器将自动重启")
+                        os._exit(1)
                     # 非严格模式: 降级到 SQLite
                     log.warning("Falling back to SQLite storage backend (STORAGE_STRICT=0)")
                     try:
@@ -149,7 +151,8 @@ class StorageAdapter:
                             "STORAGE_STRICT=1: 已配置 MONGODB_URI 但初始化失败, "
                             "拒绝回落到 SQLite。请检查 MongoDB 连接, 或显式设置 STORAGE_STRICT=0 允许回落。"
                         )
-                        raise RuntimeError("MongoDB backend init failed (strict mode)") from e
+                        log.error("严格模式: 进程立即退出, 容器将自动重启")
+                        os._exit(1)
                     log.warning("Falling back to SQLite storage backend (STORAGE_STRICT=0)")
                     try:
                         from .storage.sqlite_manager import SQLiteManager
