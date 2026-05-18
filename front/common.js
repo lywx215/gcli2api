@@ -68,6 +68,7 @@ function createCredsManager(type) {
                 action: `./creds/action`,
                 batchAction: `./creds/batch-action`,
                 batchTest: `./creds/batch-test`,
+                batchRefreshCooldown: `./creds/batch-refresh-cooldown`,
                 download: `./creds/download`,
                 downloadAll: `./creds/download-all`,
                 detail: `./creds/detail`,
@@ -258,7 +259,7 @@ function createCredsManager(type) {
             const selectedCount = this.selectedFiles.size;
             document.getElementById(this.getElementId('SelectedCount')).textContent = `已选择 ${selectedCount} 项`;
 
-            const batchBtnNames = ['Enable', 'Disable', 'Delete', 'Verify', 'Test', 'Preview'];
+            const batchBtnNames = ['Enable', 'Disable', 'Delete', 'Verify', 'Test', 'Preview', 'RefreshCooldown'];
             if (this.type === 'antigravity') {
                 batchBtnNames.push('EnableCredit');
                 batchBtnNames.push('DisableCredit');
@@ -1859,6 +1860,72 @@ function batchTestSelectedCredentials() {
 
 function batchTestSelectedAntigravityCredentials() {
     return batchTestCredentials(AppState.antigravityCreds, 'Antigravity');
+}
+
+async function batchRefreshCooldownCredentials(manager, label) {
+    const selectedFiles = Array.from(manager.selectedFiles);
+    if (selectedFiles.length === 0) {
+        showStatus(`请先选择要检测额度的${label}凭证`, 'error');
+        showMessageModal('提示', `请先选择要检测额度的${label}凭证`, 'error');
+        return;
+    }
+
+    if (!confirm(`将对 ${selectedFiles.length} 个${label}凭证拉取实时额度，按 Pro/Flash 系列解除“有额度但在冷却”的 cooldown。\n\n继续吗？`)) {
+        return;
+    }
+
+    showStatus(`正在检测 ${selectedFiles.length} 个${label}凭证额度，请稍候...`, 'info');
+
+    try {
+        const response = await fetch(`${manager.getEndpoint('batchRefreshCooldown')}?${manager.getModeParam()}`, {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ filenames: selectedFiles })
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+            showStatus(`批量额度检测失败: ${data.detail || data.error || '未知错误'}`, 'error');
+            showMessageModal('批量额度检测失败', data.detail || data.error || '未知错误', 'error');
+            return;
+        }
+
+        const successCount = data.success_count || 0;
+        const failureCount = data.failure_count || 0;
+        const clearedTotal = data.cleared_total || 0;
+        const affected = data.affected_creds || 0;
+        const results = data.results || [];
+
+        const lines = results.map(r => {
+            if (!r.success) {
+                return `❌ ${r.filename}: ${r.error || '检测失败'}`;
+            }
+            const fq = r.family_has_quota || {};
+            const flags = `Pro=${fq.pro ? '✅' : '❌'} Flash=${fq.flash ? '✅' : '❌'}`;
+            const cleared = (r.cleared && r.cleared.length) ? ` 已解除: ${r.cleared.join(', ')}` : '';
+            return `✅ ${r.filename}: ${flags}${cleared}`;
+        });
+
+        await manager.refresh();
+
+        const summary = `批量额度检测 + 冷却解除完成\n\n成功: ${successCount} 个\n失败: ${failureCount} 个\n总计: ${data.total_count || selectedFiles.length} 个\n解除冷却: ${clearedTotal} 个（涉及 ${affected} 个凭证）\n\n详细结果:\n${lines.join('\n')}`;
+
+        const tone = failureCount === 0 ? 'success' : (successCount === 0 ? 'error' : 'info');
+        showStatus(`额度检测完成：解除 ${clearedTotal} 个冷却（${affected}/${selectedFiles.length} 凭证）`, tone);
+        showMessageModal('批量额度检测完成', summary, tone);
+    } catch (error) {
+        const errorMsg = `批量额度检测失败: ${error.message}`;
+        showStatus(errorMsg, 'error');
+        showMessageModal('批量额度检测失败', errorMsg, 'error');
+    }
+}
+
+function batchRefreshCooldownSelectedCredentials() {
+    return batchRefreshCooldownCredentials(AppState.creds, '');
+}
+
+function batchRefreshCooldownSelectedAntigravityCredentials() {
+    return batchRefreshCooldownCredentials(AppState.antigravityCreds, 'Antigravity');
 }
 
 async function configurePreviewChannel(filename) {

@@ -443,6 +443,14 @@ async def collect_streaming_response(stream_generator) -> Response:
 
 RESOURCE_EXHAUSTED_COOLDOWN_HOURS = 4  # RESOURCE_EXHAUSTED 错误的默认冷却时间（小时）
 
+# Google 返回的 reason 中表示"服务端容量挤爆"（不是用户额度耗尽）的标记。
+# 这种情况通常几秒就恢复，不应该用 4h 兜底锁死，否则会把可用凭证误判为冷却。
+CAPACITY_EXHAUSTED_REASONS = {
+    "MODEL_CAPACITY_EXHAUSTED",
+    "RESOURCE_EXHAUSTED",   # 个别响应只给了笼统的 reason
+    "NO_CAPACITY_AVAILABLE",
+}
+
 
 def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
     """
@@ -453,6 +461,12 @@ def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
 
     Returns:
         Unix时间戳（秒），如果无法解析则返回None
+
+    设计要点：
+      - QUOTA_EXHAUSTED（用户每日额度耗尽）走 4h 兜底
+      - MODEL_CAPACITY_EXHAUSTED（Google 服务端排队挤爆，常见于 preview 模型）
+        没有可解析的 reset 字段时直接返回 None，不锁冷却。
+        这种 429 通常 2-3 秒就恢复，由调度器重试一次即可。
 
     示例错误响应:
     {
@@ -476,6 +490,14 @@ def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
     try:
         error_obj = error_response.get("error", {})
         details = error_obj.get("details", [])
+
+        # 收集 ErrorInfo 中的 reason，用于决定是否兜底
+        reasons = set()
+        for detail in details:
+            if detail.get("@type") == "type.googleapis.com/google.rpc.ErrorInfo":
+                reason = detail.get("reason")
+                if reason:
+                    reasons.add(reason)
 
         # 优先级 1: 显式的 quotaResetTimeStamp
         for detail in details:
@@ -509,9 +531,12 @@ def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
                         if delay_sec > 0:
                             return _time.time() + delay_sec
 
-        # 优先级 3: RESOURCE_EXHAUSTED 兜底（任意消息文案）
-        # 兼容 "Resource has been exhausted..." 和 "You have exhausted your capacity..." 等
+        # 优先级 3: 仅当确认是"用户每日额度耗尽"才兜底 4h。
+        # 容量挤爆类 reason（MODEL_CAPACITY_EXHAUSTED 等）不锁冷却。
         if error_obj.get("status") == "RESOURCE_EXHAUSTED":
+            if reasons & CAPACITY_EXHAUSTED_REASONS and "QUOTA_EXHAUSTED" not in reasons:
+                # 服务端容量问题：让调度器自然重试，不写入冷却
+                return None
             return _time.time() + RESOURCE_EXHAUSTED_COOLDOWN_HOURS * 3600
 
         return None

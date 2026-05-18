@@ -1269,6 +1269,179 @@ async def get_credential_quota(
         raise HTTPException(status_code=500, detail=f"获取额度失败: {str(e)}")
 
 
+# ---------------------------------------------------------------------------
+# 模型系列判断 / 额度检测 + 有额度自动解除冷却
+# ---------------------------------------------------------------------------
+
+def _model_family(model_name: str) -> Optional[str]:
+    """根据模型名判断属于 Pro 还是 Flash 系列。
+
+    返回 "pro" / "flash" / None。大小写不敏感。
+    """
+    if not model_name:
+        return None
+    name = model_name.lower()
+    if "flash" in name:
+        return "flash"
+    if "pro" in name:
+        return "pro"
+    return None
+
+
+async def _fetch_quota_for_credential(filename: str, mode: str) -> dict:
+    """获取单个凭证的额度信息，不会主动同步 cooldown。
+
+    返回结构:
+        {
+            "success": bool,
+            "models": {model_name: {"remaining": float, ...}},
+            "error": str,         # 可选
+        }
+    """
+    storage_adapter = await get_storage_adapter()
+    credential_data = await storage_adapter.get_credential(filename, mode=mode)
+    if not credential_data:
+        return {"success": False, "error": "凭证不存在"}
+
+    creds = Credentials.from_dict(credential_data)
+    await creds.refresh_if_needed()
+    updated_data = creds.to_dict()
+    if updated_data != credential_data:
+        await storage_adapter.store_credential(filename, updated_data, mode=mode)
+        credential_data = updated_data
+
+    access_token = credential_data.get("access_token") or credential_data.get("token")
+    if not access_token:
+        return {"success": False, "error": "凭证中没有 access_token"}
+
+    if mode == "antigravity":
+        info = await fetch_quota_info(access_token)
+    else:
+        from src.api.geminicli import fetch_geminicli_quota_info
+        project_id = credential_data.get("project_id")
+        info = await fetch_geminicli_quota_info(
+            access_token=access_token,
+            project_id=project_id,
+        )
+    return info
+
+
+@router.post("/batch-refresh-cooldown")
+async def batch_refresh_cooldown(
+    request: CredFileBatchTestRequest,
+    mode: str = "geminicli",
+    _token: str = Depends(verify_panel_token),
+):
+    """批量检测凭证额度，按系列解除“有额度但在冷却”的冷却。
+
+    逻辑：
+      1. 逐个凭证拉取 quota
+      2. 按系列判定额度:
+         - Pro 系列: 属于 Pro 的任一模型 remaining > 0 认为有额度
+         - Flash 系列: 同上
+      3. 只清理该凭证中 “同系列且冷却还未到期” 的 model_cooldowns 记录
+      4. 返回汇总结果
+    """
+    try:
+        mode = validate_mode(mode)
+        filenames = [os.path.basename(name) for name in request.filenames if name]
+        filenames = [name for name in filenames if name.endswith(".json")]
+
+        if not filenames:
+            raise HTTPException(status_code=400, detail="请选择要检测的凭证")
+
+        storage_adapter = await get_storage_adapter()
+        backend = getattr(storage_adapter, "_backend", None)
+        can_set_cooldown = hasattr(backend, "set_model_cooldown")
+
+        semaphore = asyncio.Semaphore(5)
+
+        async def run_one(filename: str) -> dict:
+            async with semaphore:
+                try:
+                    quota = await _fetch_quota_for_credential(filename, mode=mode)
+                    if not quota.get("success"):
+                        return {
+                            "filename": filename,
+                            "success": False,
+                            "error": quota.get("error", "获取额度失败"),
+                        }
+                    models = quota.get("models", {}) or {}
+
+                    # 按系列聚合额度状态
+                    family_has_quota = {"pro": False, "flash": False}
+                    for model_name, info in models.items():
+                        family = _model_family(model_name)
+                        if not family:
+                            continue
+                        remaining = info.get("remaining")
+                        if remaining is not None and remaining > 0:
+                            family_has_quota[family] = True
+
+                    # 获取该凭证现有 cooldown
+                    detail = await storage_adapter.get_credential_state(filename, mode=mode)
+                    cooldowns = (detail or {}).get("model_cooldowns", {}) or {}
+
+                    cleared = []
+                    now = time.time()
+                    if can_set_cooldown:
+                        for cd_model, cd_until in list(cooldowns.items()):
+                            try:
+                                cd_ts = float(cd_until)
+                            except (TypeError, ValueError):
+                                continue
+                            if cd_ts <= now:
+                                continue  # 已过期不动
+                            family = _model_family(cd_model)
+                            if not family:
+                                continue
+                            if family_has_quota.get(family):
+                                ok = await backend.set_model_cooldown(
+                                    filename, cd_model, None, mode=mode
+                                )
+                                if ok:
+                                    cleared.append(cd_model)
+
+                    return {
+                        "filename": filename,
+                        "success": True,
+                        "family_has_quota": family_has_quota,
+                        "cleared": cleared,
+                        "model_count": len(models),
+                    }
+                except Exception as e:
+                    log.warning(f"[BATCH REFRESH COOLDOWN] {filename} 失败: {e}")
+                    return {
+                        "filename": filename,
+                        "success": False,
+                        "error": str(e),
+                    }
+
+        results = await asyncio.gather(*(run_one(filename) for filename in filenames))
+        success_count = sum(1 for r in results if r.get("success"))
+        cleared_total = sum(len(r.get("cleared", [])) for r in results)
+        affected_creds = sum(1 for r in results if r.get("cleared"))
+
+        return JSONResponse(content={
+            "success_count": success_count,
+            "failure_count": len(results) - success_count,
+            "total_count": len(results),
+            "cleared_total": cleared_total,
+            "affected_creds": affected_creds,
+            "results": results,
+            "message": (
+                f"完成：{success_count}/{len(results)} 凭证拉取额度成功，"
+                f"解除了 {cleared_total} 个冷却（涉及 {affected_creds} 个凭证）"
+            ),
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"批量检测额度失败: {e}")
+        raise HTTPException(status_code=500, detail=f"批量检测额度失败: {str(e)}")
+
+
 @router.post("/configure-preview/{filename}")
 async def configure_preview_channel(
     filename: str,
