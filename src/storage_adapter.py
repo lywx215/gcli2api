@@ -90,6 +90,11 @@ class StorageAdapter:
             postgresql_uri = os.getenv("POSTGRESQL_URI", "")
             mongodb_uri = os.getenv("MONGODB_URI", "")
 
+            # 严格模式: 配了 POSTGRESQL_URI/MONGODB_URI 但连不上时直接 fail-fast,
+            # 不再静默回落到 SQLite (避免数据写到不同后端、统计丢失)。
+            # 关闭严格模式: 设置环境变量 STORAGE_STRICT=0
+            strict_mode = os.getenv("STORAGE_STRICT", "1").strip().lower() not in ("0", "false", "no", "off")
+
             if postgresql_uri:
                 # 使用 PostgreSQL
                 try:
@@ -100,8 +105,15 @@ class StorageAdapter:
                     log.info("Using PostgreSQL storage backend")
                 except Exception as e:
                     log.error(f"Failed to initialize PostgreSQL backend: {e}")
-                    # 尝试降级到 SQLite
-                    log.info("Falling back to SQLite storage backend")
+                    if strict_mode:
+                        # fail-fast: 让进程退出, 由容器编排器(docker --restart)自动重拉
+                        log.error(
+                            "STORAGE_STRICT=1: 已配置 POSTGRESQL_URI 但初始化失败, "
+                            "拒绝回落到 SQLite。请检查 PG 连接与权限, 或显式设置 STORAGE_STRICT=0 允许回落。"
+                        )
+                        raise RuntimeError("PostgreSQL backend init failed (strict mode)") from e
+                    # 非严格模式: 降级到 SQLite
+                    log.warning("Falling back to SQLite storage backend (STORAGE_STRICT=0)")
                     try:
                         from .storage.sqlite_manager import SQLiteManager
 
@@ -132,8 +144,13 @@ class StorageAdapter:
                     log.info("Using MongoDB storage backend")
                 except Exception as e:
                     log.error(f"Failed to initialize MongoDB backend: {e}")
-                    # 尝试降级到 SQLite
-                    log.info("Falling back to SQLite storage backend")
+                    if strict_mode:
+                        log.error(
+                            "STORAGE_STRICT=1: 已配置 MONGODB_URI 但初始化失败, "
+                            "拒绝回落到 SQLite。请检查 MongoDB 连接, 或显式设置 STORAGE_STRICT=0 允许回落。"
+                        )
+                        raise RuntimeError("MongoDB backend init failed (strict mode)") from e
+                    log.warning("Falling back to SQLite storage backend (STORAGE_STRICT=0)")
                     try:
                         from .storage.sqlite_manager import SQLiteManager
 
