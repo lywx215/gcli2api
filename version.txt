@@ -1,4 +1,4 @@
-full_hash=7587dfb4bcba278e725b85f657b3a20dcf0d8334
-short_hash=7587dfb
-message=fix(storage): 严格模式下让进程真正退出, 而不是被 lifespan try/except 吞掉
-date=2026-05-18 04:04:29 +0000
+full_hash=a7aebecb2420283239764cc69d188669f1452d52
+short_hash=a7aebec
+message=fix(storage): 严格模式失败用 os._exit(1) 物理退出, 不再依赖 raise
+date=2026-05-18 04:09:19 +0000
