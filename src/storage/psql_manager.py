@@ -863,6 +863,12 @@ class PSQLManager:
                     elif cooldown_filter == "no_cooldown":
                         if not active_cooldowns:
                             all_summaries.append(summary)
+                    elif cooldown_filter == "in_cooldown_pro":
+                        if any("pro" in k.lower() for k in active_cooldowns):
+                            all_summaries.append(summary)
+                    elif cooldown_filter == "in_cooldown_flash":
+                        if any("flash" in k.lower() for k in active_cooldowns):
+                            all_summaries.append(summary)
                     else:
                         all_summaries.append(summary)
 
