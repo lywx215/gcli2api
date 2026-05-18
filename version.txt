@@ -1,4 +1,4 @@
-full_hash=26c9580d8183d6e03fe5a44e6472b6731a0f706c
-short_hash=26c9580
-message=refactor: cooldown 筛选改为反向语义 (pro_no_cooldown / flash_no_cooldown)
-date=2026-05-18 01:55:30 +0000
+full_hash=f3a26beb0b35c3cfe49504c37b47ca054e5153a2
+short_hash=f3a26be
+message=feat(quota): 额度卡片增加重置倒计时显示
+date=2026-05-18 02:55:05 +0000
