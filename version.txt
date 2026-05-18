@@ -1,4 +1,4 @@
-full_hash=400cf3f2cd94f08de79f00a47d004c16695ad584
-short_hash=400cf3f
-message=Merge fix-exact-model-match-for-cooldown: 精确解冷
-date=2026-05-18 09:27:44 +0000
+full_hash=08bb6570b90d083a220f411d2e6d4fffee16cb97
+short_hash=08bb657
+message=Merge feat-bidirectional-cooldown-sync: 双向同步冷却
+date=2026-05-18 09:39:43 +0000
