@@ -1,4 +1,4 @@
-full_hash=a7aebecb2420283239764cc69d188669f1452d52
-short_hash=a7aebec
-message=fix(storage): 严格模式失败用 os._exit(1) 物理退出, 不再依赖 raise
-date=2026-05-18 04:09:19 +0000
+full_hash=82ce5176408acf8b9c0f51953e936360e46efd82
+short_hash=82ce517
+message=Merge feat-capacity-vs-quota: capacity vs quota distinction + batch refresh
+date=2026-05-18 17:11:05 +0800
