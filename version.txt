@@ -1,4 +1,4 @@
-full_hash=82ce5176408acf8b9c0f51953e936360e46efd82
-short_hash=82ce517
-message=Merge feat-capacity-vs-quota: capacity vs quota distinction + batch refresh
-date=2026-05-18 17:11:05 +0800
+full_hash=400cf3f2cd94f08de79f00a47d004c16695ad584
+short_hash=400cf3f
+message=Merge fix-exact-model-match-for-cooldown: 精确解冷
+date=2026-05-18 09:27:44 +0000
