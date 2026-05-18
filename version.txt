@@ -1,4 +1,4 @@
-full_hash=8685c83c445a60d7384d45d070c4f4378e5d4c20
-short_hash=8685c83
-message=Merge branch feat-cooldown-by-family for v1.4.2
-date=2026-05-18 01:50:25 +0000
+full_hash=26c9580d8183d6e03fe5a44e6472b6731a0f706c
+short_hash=26c9580
+message=refactor: cooldown 筛选改为反向语义 (pro_no_cooldown / flash_no_cooldown)
+date=2026-05-18 01:55:30 +0000
