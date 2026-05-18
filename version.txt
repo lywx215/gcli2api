@@ -1,4 +1,4 @@
-full_hash=3a661c2180406648fcae8fc4005bc6083abaf614
-short_hash=3a661c2
-message=fix(cooldown): RESOURCE_EXHAUSTED 兜底冷却放宽消息匹配 + 支持 quotaResetDelay
-date=2026-05-18 02:59:49 +0000
+full_hash=af83d1119305655dbcdb0ac074f1f1a041d6a488
+short_hash=af83d11
+message=feat(quota): 查看额度时自动同步 remaining=0 的模型到 model_cooldowns
+date=2026-05-18 03:07:20 +0000
