@@ -1964,10 +1964,31 @@ async function _toggleQuotaDetails(pathId, mode) {
                             <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;">
                         `;
 
+                        const _nowMs = Date.now();
                         for (const [modelName, quotaData] of Object.entries(models)) {
                             // 后端返回的是剩余比例 (0-1)，不是绝对数量
                             const remainingFraction = quotaData.remaining || 0;
                             const resetTime = quotaData.resetTime || 'N/A';
+                            const resetTimeRaw = quotaData.resetTimeRaw || '';
+
+                            // 倒计时（基于 resetTimeRaw 的 UTC 时间）
+                            let countdownStr = '';
+                            if (resetTimeRaw) {
+                                try {
+                                    const resetMs = new Date(resetTimeRaw).getTime();
+                                    const remainSec = Math.max(0, Math.floor((resetMs - _nowMs) / 1000));
+                                    if (remainSec > 0) {
+                                        const h = Math.floor(remainSec / 3600);
+                                        const m = Math.floor((remainSec % 3600) / 60);
+                                        const sec = remainSec % 60;
+                                        if (h > 0) countdownStr = `${h}h${m}m`;
+                                        else if (m > 0) countdownStr = `${m}m${sec}s`;
+                                        else countdownStr = `${sec}s`;
+                                    } else {
+                                        countdownStr = '已重置';
+                                    }
+                                } catch (e) { /* ignore */ }
+                            }
 
                             // 计算已使用百分比（1 - 剩余比例）
                             const usedPercentage = Math.round((1 - remainingFraction) * 100);
@@ -1993,7 +2014,7 @@ async function _toggleQuotaDetails(pathId, mode) {
                                         <div style="width: ${usedPercentage}%; height: 100%; background-color: ${percentageColor}; transition: width 0.3s ease;"></div>
                                     </div>
                                     <div style="font-size: 10px; color: #666; text-align: right;">
-                                        ${resetTime !== 'N/A' ? '🔄 ' + resetTime : ''}
+                                        ${resetTime !== 'N/A' ? '🔄 ' + resetTime + (countdownStr ? ` <span style="color:${remainingPercentage <= 0 ? '#dc3545' : '#17a2b8'};font-weight:bold;">(⏱️ ${countdownStr})</span>` : '') : ''}
                                     </div>
                                 </div>
                             `;
