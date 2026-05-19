@@ -25,6 +25,7 @@ from src.models import (
 from src.storage_adapter import get_storage_adapter
 from src.utils import verify_panel_token, GEMINICLI_USER_AGENT, ANTIGRAVITY_USER_AGENT
 from src.api.antigravity import fetch_quota_info
+from src.api.utils import check_should_auto_ban
 from src.google_oauth_api import Credentials, fetch_project_id_and_tier
 from src.httpx_client import post_async
 from config import get_code_assist_endpoint, get_antigravity_api_url, get_oauth_proxy_url
@@ -1876,6 +1877,21 @@ async def test_credential_common(filename: str, mode: str = "geminicli") -> JSON
                     }, mode=mode)
 
                 log.info(f"已保存测试错误信息: {filename} - 错误码 {status_code}")
+
+                # 测试失败也触发自动封禁（与真实业务调用对齐）：
+                # auto_ban_enabled=True 且 status_code 在 auto_ban_error_codes 列表内时
+                # 直接禁用该凭证，避免轮询命中已知会失败的凭证
+                try:
+                    if await check_should_auto_ban(status_code):
+                        log.warning(
+                            f"[BATCH-TEST AUTO_BAN] Status {status_code} triggers auto-ban "
+                            f"for credential: {filename} (mode={mode})"
+                        )
+                        await credential_manager.set_cred_disabled(
+                            filename, True, mode=mode
+                        )
+                except Exception as ban_err:
+                    log.error(f"测试失败自动封禁触发异常 {filename}: {ban_err}")
             except Exception as e:
                 log.error(f"保存测试错误信息失败: {e}")
 
