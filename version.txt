@@ -1,4 +1,4 @@
-full_hash=b5bd776662737ecb35b303c42bab0e8c6060adc6
-short_hash=b5bd776
-message=Merge feat-antigravity-3.5-flash-family: 归一 Antigravity 新模型到家族统计
-date=2026-05-20 07:57:59 +0000
+full_hash=0db9ab17b4e562963adb4af173c61576731f6d1e
+short_hash=0db9ab1
+message=merge: 合并上游 su-kaka/gcli2api master，引入 RooCode/New API 中转兼容修复
+date=2026-05-21 00:57:54 +0000
