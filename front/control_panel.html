@@ -1838,6 +1838,10 @@
                         <span class="stat-number" id="statDisabled">0</span>
                         <span class="stat-label">禁用</span>
                     </div>
+                    <div class="stat-item disabled">
+                        <span class="stat-number" id="statPermanentDisabled">0</span>
+                        <span class="stat-label">永久禁用</span>
+                    </div>
                 </div>
 
                 <div class="manage-actions">
@@ -1859,6 +1863,8 @@
                             disabled>批量启用</button>
                         <button class="batch-btn batch-disable" id="batchDisableBtn" onclick="batchAction('disable')"
                             disabled>批量禁用</button>
+                        <button class="batch-btn batch-disable" id="batchPermanentDisableBtn" onclick="batchAction('permanent_disable')"
+                            disabled>批量永久禁用</button>
                         <button class="batch-btn batch-delete" id="batchDeleteBtn" onclick="batchAction('delete')"
                             disabled>批量删除</button>
                         <button class="batch-btn" id="batchVerifyBtn" onclick="batchVerifyProjectIds()"
@@ -1881,6 +1887,7 @@
                         <option value="all">全部凭证</option>
                         <option value="enabled">仅启用</option>
                         <option value="disabled">仅禁用</option>
+                        <option value="permanent_disabled">永久禁用</option>
                     </select>
 
                     <label for="errorCodeFilter" style="margin-left: 20px;">错误码：</label>
@@ -2049,6 +2056,10 @@
                         <span class="stat-number" id="antigravityStatDisabled">0</span>
                         <span class="stat-label">禁用</span>
                     </div>
+                    <div class="stat-item disabled">
+                        <span class="stat-number" id="antigravityStatPermanentDisabled">0</span>
+                        <span class="stat-label">永久禁用</span>
+                    </div>
                 </div>
 
                 <div class="manage-actions">
@@ -2070,6 +2081,8 @@
                             onclick="batchAntigravityAction('enable')" disabled>批量启用</button>
                         <button class="batch-btn batch-disable" id="antigravityBatchDisableBtn"
                             onclick="batchAntigravityAction('disable')" disabled>批量禁用</button>
+                        <button class="batch-btn batch-disable" id="antigravityBatchPermanentDisableBtn"
+                            onclick="batchAntigravityAction('permanent_disable')" disabled>批量永久禁用</button>
                         <button class="batch-btn batch-delete" id="antigravityBatchDeleteBtn"
                             onclick="batchAntigravityAction('delete')" disabled>批量删除</button>
                         <button class="batch-btn" id="antigravityBatchEnableCreditBtn"
@@ -2095,6 +2108,7 @@
                         <option value="all">全部凭证</option>
                         <option value="enabled">仅启用</option>
                         <option value="disabled">仅禁用</option>
+                        <option value="permanent_disabled">永久禁用</option>
                     </select>
 
                     <label for="antigravityErrorCodeFilter" style="margin-left: 20px;">错误码：</label>

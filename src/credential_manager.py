@@ -155,8 +155,11 @@ class CredentialManager:
         """设置凭证的启用/禁用状态"""
         try:
             log.info(f"[CredMgr] set_cred_disabled 开始: credential_name={credential_name}, disabled={disabled}, mode={mode}")
+            updates = {"disabled": disabled}
+            if not disabled:
+                updates["permanent_disabled"] = False
             success = await self.update_credential_state(
-                credential_name, {"disabled": disabled}, mode=mode
+                credential_name, updates, mode=mode
             )
             log.info(f"[CredMgr] update_credential_state 返回: success={success}")
             if success:

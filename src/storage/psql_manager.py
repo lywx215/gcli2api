@@ -79,6 +79,9 @@ class PSQLManager:
         "error_codes",
         "error_messages",
         "disabled",
+        "permanent_disabled",
+        "cycle_stats",
+        "last_cycle_stats",
         "last_success",
         "user_email",
         "model_cooldowns",
@@ -140,6 +143,9 @@ class PSQLManager:
                 credential_data TEXT NOT NULL,
 
                 disabled INTEGER DEFAULT 0,
+                permanent_disabled INTEGER DEFAULT 0,
+                cycle_stats TEXT DEFAULT '{}',
+                last_cycle_stats TEXT DEFAULT '{}',
                 error_codes TEXT DEFAULT '[]',
                 error_messages TEXT DEFAULT '[]',
                 last_success DOUBLE PRECISION,
@@ -166,6 +172,9 @@ class PSQLManager:
                 credential_data TEXT NOT NULL,
 
                 disabled INTEGER DEFAULT 0,
+                permanent_disabled INTEGER DEFAULT 0,
+                cycle_stats TEXT DEFAULT '{}',
+                last_cycle_stats TEXT DEFAULT '{}',
                 error_codes TEXT DEFAULT '[]',
                 error_messages TEXT DEFAULT '[]',
                 last_success DOUBLE PRECISION,
@@ -264,6 +273,9 @@ class PSQLManager:
                 ("call_count", "INTEGER DEFAULT 0"),
                 ("success_count", "INTEGER DEFAULT 0"),
                 ("failure_count", "INTEGER DEFAULT 0"),
+                ("permanent_disabled", "INTEGER DEFAULT 0"),
+                ("cycle_stats", "TEXT DEFAULT '{}'"),
+                ("last_cycle_stats", "TEXT DEFAULT '{}'"),
                 ("created_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
                 ("updated_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
             ],
@@ -280,6 +292,9 @@ class PSQLManager:
                 ("call_count", "INTEGER DEFAULT 0"),
                 ("success_count", "INTEGER DEFAULT 0"),
                 ("failure_count", "INTEGER DEFAULT 0"),
+                ("permanent_disabled", "INTEGER DEFAULT 0"),
+                ("cycle_stats", "TEXT DEFAULT '{}'"),
+                ("last_cycle_stats", "TEXT DEFAULT '{}'"),
                 ("created_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
                 ("updated_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
             ],
@@ -606,7 +621,7 @@ class PSQLManager:
                 if mode == "geminicli":
                     row = await conn.fetchrow(f"""
                         SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
-                               preview, tier, success_count, failure_count
+                               preview, tier, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
                         FROM {table_name} WHERE filename = $1
                     """, filename)
 
@@ -621,6 +636,9 @@ class PSQLManager:
                             "tier": row["tier"] if row["tier"] is not None else "pro",
                             "success_count": row["success_count"] or 0,
                             "failure_count": row["failure_count"] or 0,
+                            "permanent_disabled": bool(row["permanent_disabled"]),
+                            "cycle_stats": json.loads(row["cycle_stats"] or "{}"),
+                            "last_cycle_stats": json.loads(row["last_cycle_stats"] or "{}"),
                         }
 
                     return {
@@ -637,7 +655,7 @@ class PSQLManager:
                 else:
                     row = await conn.fetchrow(f"""
                         SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
-                               tier, enable_credit, success_count, failure_count
+                               tier, enable_credit, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
                         FROM {table_name} WHERE filename = $1
                     """, filename)
 
@@ -652,6 +670,9 @@ class PSQLManager:
                             "enable_credit": bool(row["enable_credit"]) if row["enable_credit"] is not None else False,
                             "success_count": row["success_count"] or 0,
                             "failure_count": row["failure_count"] or 0,
+                            "permanent_disabled": bool(row["permanent_disabled"]),
+                            "cycle_stats": json.loads(row["cycle_stats"] or "{}"),
+                            "last_cycle_stats": json.loads(row["last_cycle_stats"] or "{}"),
                         }
 
                     return {
@@ -683,7 +704,7 @@ class PSQLManager:
                     rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, model_cooldowns, preview, tier,
-                               success_count, failure_count
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
                         FROM {table_name}
                     """)
 
@@ -703,13 +724,16 @@ class PSQLManager:
                             "tier": row["tier"] if row["tier"] is not None else "pro",
                             "success_count": row["success_count"] or 0,
                             "failure_count": row["failure_count"] or 0,
+                            "permanent_disabled": bool(row["permanent_disabled"]),
+                            "cycle_stats": json.loads(row["cycle_stats"] or "{}"),
+                            "last_cycle_stats": json.loads(row["last_cycle_stats"] or "{}"),
                         }
                     return states
                 else:
                     rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, model_cooldowns, tier, enable_credit,
-                               success_count, failure_count
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
                         FROM {table_name}
                     """)
 
@@ -729,6 +753,9 @@ class PSQLManager:
                             "enable_credit": bool(row["enable_credit"]) if row["enable_credit"] is not None else False,
                             "success_count": row["success_count"] or 0,
                             "failure_count": row["failure_count"] or 0,
+                            "permanent_disabled": bool(row["permanent_disabled"]),
+                            "cycle_stats": json.loads(row["cycle_stats"] or "{}"),
+                            "last_cycle_stats": json.loads(row["last_cycle_stats"] or "{}"),
                         }
                     return states
 
@@ -757,22 +784,26 @@ class PSQLManager:
             async with self._pool.acquire() as conn:
                 # 全局统计
                 stats_rows = await conn.fetch(
-                    f"SELECT disabled, COUNT(*) AS cnt FROM {table_name} GROUP BY disabled"
+                    f"SELECT disabled, permanent_disabled, COUNT(*) AS cnt FROM {table_name} GROUP BY disabled, permanent_disabled"
                 )
-                global_stats = {"total": 0, "normal": 0, "disabled": 0}
+                global_stats = {"total": 0, "normal": 0, "disabled": 0, "permanent_disabled": 0}
                 for r in stats_rows:
                     global_stats["total"] += r["cnt"]
-                    if r["disabled"]:
-                        global_stats["disabled"] = r["cnt"]
+                    if r["permanent_disabled"]:
+                        global_stats["permanent_disabled"] += r["cnt"]
+                    elif r["disabled"]:
+                        global_stats["disabled"] += r["cnt"]
                     else:
-                        global_stats["normal"] = r["cnt"]
+                        global_stats["normal"] += r["cnt"]
 
                 # WHERE 子句
                 where_clauses = []
                 if status_filter == "enabled":
-                    where_clauses.append("disabled = 0")
+                    where_clauses.append("disabled = 0 AND COALESCE(permanent_disabled, 0) = 0")
                 elif status_filter == "disabled":
-                    where_clauses.append("disabled = 1")
+                    where_clauses.append("disabled = 1 AND COALESCE(permanent_disabled, 0) = 0")
+                elif status_filter == "permanent_disabled":
+                    where_clauses.append("COALESCE(permanent_disabled, 0) = 1")
 
                 where_clause = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
@@ -781,7 +812,7 @@ class PSQLManager:
                     all_rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, preview, tier,
-                               success_count, failure_count
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -790,7 +821,7 @@ class PSQLManager:
                     all_rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, tier, enable_credit,
-                               success_count, failure_count
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -841,6 +872,7 @@ class PSQLManager:
                     summary = {
                         "filename": row["filename"],
                         "disabled": bool(row["disabled"]),
+                        "permanent_disabled": bool(row["permanent_disabled"]),
                         "error_codes": error_codes,
                         "last_success": row["last_success"] or current_time,
                         "user_email": row["user_email"],
@@ -849,6 +881,8 @@ class PSQLManager:
                         "tier": row["tier"] if row["tier"] is not None else "pro",
                         "success_count": row["success_count"] or 0,
                         "failure_count": row["failure_count"] or 0,
+                        "cycle_stats": json.loads(row["cycle_stats"] or "{}"),
+                        "last_cycle_stats": json.loads(row["last_cycle_stats"] or "{}"),
                     }
 
                     if mode == "geminicli":
@@ -905,7 +939,7 @@ class PSQLManager:
                 "total": 0,
                 "offset": offset,
                 "limit": limit,
-                "stats": {"total": 0, "normal": 0, "disabled": 0},
+                "stats": {"total": 0, "normal": 0, "disabled": 0, "permanent_disabled": 0},
             }
 
     async def get_duplicate_credentials_by_email(self, mode: str = "geminicli") -> Dict[str, Any]:
@@ -1052,7 +1086,7 @@ class PSQLManager:
         cooldown_until: Optional[float],
         mode: str = "geminicli"
     ) -> bool:
-        """设置特定模型的冷却时间"""
+        """设置特定模型的冷却时间；新增有效冷却时结算上一轮循环统计。"""
         self._ensure_initialized()
         filename = os.path.basename(filename)
 
@@ -1060,7 +1094,7 @@ class PSQLManager:
             table_name = self._get_table_name(mode)
             async with self._pool.acquire() as conn:
                 row = await conn.fetchrow(
-                    f"SELECT model_cooldowns FROM {table_name} WHERE filename = $1", filename
+                    f"SELECT model_cooldowns, cycle_stats FROM {table_name} WHERE filename = $1", filename
                 )
 
                 if not row:
@@ -1068,21 +1102,37 @@ class PSQLManager:
                     return False
 
                 model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
-
+                close_cycle = False
                 if cooldown_until is None:
                     model_cooldowns.pop(model_name, None)
                 else:
+                    previous_until = model_cooldowns.get(model_name)
                     model_cooldowns[model_name] = cooldown_until
+                    close_cycle = not previous_until or previous_until <= time.time()
 
-                await conn.execute(
-                    f"""
-                    UPDATE {table_name}
-                    SET model_cooldowns = $1,
-                        updated_at = EXTRACT(EPOCH FROM NOW())
-                    WHERE filename = $2
-                    """,
-                    json.dumps(model_cooldowns), filename
-                )
+                if close_cycle:
+                    new_cycle_stats, last_cycle_stats = self._close_cycle_stats(row["cycle_stats"], model_name)
+                    await conn.execute(
+                        f"""
+                        UPDATE {table_name}
+                        SET model_cooldowns = $1,
+                            cycle_stats = $2,
+                            last_cycle_stats = $3,
+                            updated_at = EXTRACT(EPOCH FROM NOW())
+                        WHERE filename = $4
+                        """,
+                        json.dumps(model_cooldowns), new_cycle_stats, last_cycle_stats, filename
+                    )
+                else:
+                    await conn.execute(
+                        f"""
+                        UPDATE {table_name}
+                        SET model_cooldowns = $1,
+                            updated_at = EXTRACT(EPOCH FROM NOW())
+                        WHERE filename = $2
+                        """,
+                        json.dumps(model_cooldowns), filename
+                    )
 
             log.debug(f"Set model cooldown: {filename}, model_name={model_name}, cooldown_until={cooldown_until}")
             return True
@@ -1138,10 +1188,12 @@ class PSQLManager:
         try:
             table_name = self._get_table_name(mode)
             async with self._pool.acquire() as conn:
+                stats_row = await conn.fetchrow(f"SELECT cycle_stats FROM {table_name} WHERE filename = $1", filename)
                 await conn.execute(f"""
                     UPDATE {table_name}
                     SET success_count = COALESCE(success_count, 0) + 1,
                         call_count = COALESCE(call_count, 0) + 1,
+                        cycle_stats = $2,
                         last_success = EXTRACT(EPOCH FROM NOW()),
                         error_codes = CASE
                             WHEN error_codes IS NOT NULL AND error_codes != '[]' AND error_codes != ''
@@ -1151,7 +1203,7 @@ class PSQLManager:
                             THEN '{{}}' ELSE error_messages END,
                         updated_at = EXTRACT(EPOCH FROM NOW())
                     WHERE filename = $1
-                """, filename)
+                """, filename, self._bump_cycle_stats(stats_row["cycle_stats"] if stats_row else None, model_name))
 
                 if model_name:
                     row = await conn.fetchrow(
@@ -1228,16 +1280,19 @@ class PSQLManager:
                 error_messages[str(error_code)] = error_message
 
             async with self._pool.acquire() as conn:
+                stats_row = await conn.fetchrow(f"SELECT cycle_stats FROM {table_name} WHERE filename = $1", filename)
                 await conn.execute(
                     f"""
                     UPDATE {table_name}
                     SET failure_count = COALESCE(failure_count, 0) + 1,
                         call_count = COALESCE(call_count, 0) + 1,
-                        error_codes = $1,
-                        error_messages = $2,
+                        cycle_stats = $1,
+                        error_codes = $2,
+                        error_messages = $3,
                         updated_at = EXTRACT(EPOCH FROM NOW())
-                    WHERE filename = $3
+                    WHERE filename = $4
                     """,
+                    self._bump_cycle_stats(stats_row["cycle_stats"] if stats_row else None, model_name),
                     json.dumps([error_code]),
                     json.dumps(error_messages),
                     filename,
@@ -1281,6 +1336,55 @@ class PSQLManager:
 
         except Exception as e:
             log.error(f"Error recording failure for {filename}: {e}")
+
+
+    @staticmethod
+    def _model_cycle_family(model_name: Optional[str]) -> str:
+        model = (model_name or "").lower()
+        if "pro" in model:
+            return "pro"
+        if "flash" in model:
+            return "flash"
+        return "other"
+
+    @staticmethod
+    def _bump_cycle_stats(raw: Optional[str], model_name: Optional[str]) -> str:
+        now = time.time()
+        try:
+            stats = json.loads(raw or "{}")
+        except Exception:
+            stats = {}
+        if not isinstance(stats, dict):
+            stats = {}
+        stats.setdefault("started_at", now)
+        stats.setdefault("pro", 0)
+        stats.setdefault("flash", 0)
+        stats.setdefault("other", 0)
+        stats["total"] = int(stats.get("total") or 0) + 1
+        family = PSQLManager._model_cycle_family(model_name)
+        stats[family] = int(stats.get(family) or 0) + 1
+        stats["updated_at"] = now
+        return json.dumps(stats)
+
+    @staticmethod
+    def _close_cycle_stats(raw: Optional[str], model_name: Optional[str]) -> tuple[str, str]:
+        now = time.time()
+        try:
+            last_stats = json.loads(raw or "{}")
+        except Exception:
+            last_stats = {}
+        if not isinstance(last_stats, dict):
+            last_stats = {}
+        family = PSQLManager._model_cycle_family(model_name)
+        last_stats.setdefault("started_at", now)
+        last_stats.setdefault("total", 0)
+        last_stats.setdefault("pro", 0)
+        last_stats.setdefault("flash", 0)
+        last_stats.setdefault("other", 0)
+        last_stats["ended_at"] = now
+        last_stats["cooldown_family"] = family
+        new_stats = {"started_at": now, "total": 0, "pro": 0, "flash": 0, "other": 0}
+        return json.dumps(new_stats), json.dumps(last_stats)
 
     async def get_today_stats(self, mode: Optional[str] = None) -> Dict[str, Any]:
         """获取今天（北京时间）的总调用统计。
@@ -1395,6 +1499,55 @@ class PSQLManager:
         except Exception as e:
             log.error(f"get_recent_daily_stats failed: {e}")
             return []
+
+
+    @staticmethod
+    def _model_cycle_family(model_name: Optional[str]) -> str:
+        model = (model_name or "").lower()
+        if "pro" in model:
+            return "pro"
+        if "flash" in model:
+            return "flash"
+        return "other"
+
+    @staticmethod
+    def _bump_cycle_stats(raw: Optional[str], model_name: Optional[str]) -> str:
+        now = time.time()
+        try:
+            stats = json.loads(raw or "{}")
+        except Exception:
+            stats = {}
+        if not isinstance(stats, dict):
+            stats = {}
+        stats.setdefault("started_at", now)
+        stats.setdefault("pro", 0)
+        stats.setdefault("flash", 0)
+        stats.setdefault("other", 0)
+        stats["total"] = int(stats.get("total") or 0) + 1
+        family = PSQLManager._model_cycle_family(model_name)
+        stats[family] = int(stats.get(family) or 0) + 1
+        stats["updated_at"] = now
+        return json.dumps(stats)
+
+    @staticmethod
+    def _close_cycle_stats(raw: Optional[str], model_name: Optional[str]) -> tuple[str, str]:
+        now = time.time()
+        try:
+            last_stats = json.loads(raw or "{}")
+        except Exception:
+            last_stats = {}
+        if not isinstance(last_stats, dict):
+            last_stats = {}
+        family = PSQLManager._model_cycle_family(model_name)
+        last_stats.setdefault("started_at", now)
+        last_stats.setdefault("total", 0)
+        last_stats.setdefault("pro", 0)
+        last_stats.setdefault("flash", 0)
+        last_stats.setdefault("other", 0)
+        last_stats["ended_at"] = now
+        last_stats["cooldown_family"] = family
+        new_stats = {"started_at": now, "total": 0, "pro": 0, "flash": 0, "other": 0}
+        return json.dumps(new_stats), json.dumps(last_stats)
 
     async def get_today_stats_by_model(self, mode: Optional[str] = None) -> Dict[str, Any]:
         """获取今日按模型家族汇总的统计。

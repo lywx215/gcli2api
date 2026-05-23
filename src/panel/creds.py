@@ -287,6 +287,8 @@ async def get_creds_status_common(
             "tier": summary.get("tier", "pro"),
             "success_count": summary.get("success_count", 0),
             "failure_count": summary.get("failure_count", 0),
+            "cycle_stats": summary.get("cycle_stats", {}),
+            "last_cycle_stats": summary.get("last_cycle_stats", {}),
         }
 
         if mode == "geminicli":
@@ -823,6 +825,15 @@ async def creds_action(
                 log.error(f"Web请求: 文件 {filename} 禁用失败 (mode={mode})")
                 raise HTTPException(status_code=500, detail="禁用凭证失败，可能凭证不存在")
 
+        elif action == "permanent_disable":
+            log.info(f"Web请求: 永久禁用文件 {filename} (mode={mode})")
+            result = await credential_manager.update_credential_state(
+                filename, {"disabled": True, "permanent_disabled": True}, mode=mode
+            )
+            if result:
+                return JSONResponse(content={"message": f"已永久禁用凭证文件 {os.path.basename(filename)}"})
+            raise HTTPException(status_code=500, detail="永久禁用凭证失败，可能凭证不存在")
+
         elif action == "delete":
             try:
                 # 使用 CredentialManager 删除凭证（包含队列/状态同步）
@@ -915,6 +926,12 @@ async def creds_batch_action(
 
                 elif action == "disable":
                     await credential_manager.set_cred_disabled(filename, True, mode=mode)
+                    success_count += 1
+
+                elif action == "permanent_disable":
+                    await credential_manager.update_credential_state(
+                        filename, {"disabled": True, "permanent_disabled": True}, mode=mode
+                    )
                     success_count += 1
 
                 elif action == "delete":

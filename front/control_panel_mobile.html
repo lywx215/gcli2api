@@ -1505,6 +1505,8 @@
                             disabled>批量启用</button>
                         <button class="btn btn-small" id="batchDisableBtn" onclick="batchAction('disable')"
                             disabled>批量禁用</button>
+                        <button class="btn btn-small" id="batchPermanentDisableBtn" onclick="batchAction('permanent_disable')"
+                            disabled>永久禁用</button>
                         <button class="btn btn-small btn-danger" id="batchDeleteBtn" onclick="batchAction('delete')"
                             disabled>批量删除</button>
                         <button class="btn btn-small" id="batchVerifyBtn" onclick="batchVerifyProjectIds()"
@@ -1529,6 +1531,7 @@
                             <option value="all">全部凭证</option>
                             <option value="enabled">仅启用</option>
                             <option value="disabled">仅禁用</option>
+                        <option value="permanent_disabled">永久禁用</option>
                         </select>
                     </div>
 
@@ -1746,6 +1749,8 @@
                             onclick="batchAntigravityAction('enable')" disabled>批量启用</button>
                         <button class="btn btn-small" id="antigravityBatchDisableBtn"
                             onclick="batchAntigravityAction('disable')" disabled>批量禁用</button>
+                        <button class="btn btn-small" id="antigravityBatchPermanentDisableBtn"
+                            onclick="batchAntigravityAction('permanent_disable')" disabled>永久禁用</button>
                         <button class="btn btn-small btn-danger" id="antigravityBatchDeleteBtn"
                             onclick="batchAntigravityAction('delete')" disabled>批量删除</button>
                         <button class="btn btn-small" id="antigravityBatchEnableCreditBtn"
@@ -1772,6 +1777,7 @@
                             <option value="all">全部凭证</option>
                             <option value="enabled">仅启用</option>
                             <option value="disabled">仅禁用</option>
+                        <option value="permanent_disabled">永久禁用</option>
                         </select>
                     </div>
 
