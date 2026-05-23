@@ -59,7 +59,7 @@ function createCredsManager(type) {
         currentCooldownFilter: 'all',
         currentPreviewFilter: 'all',
         currentTierFilter: 'all',
-        statsData: { total: 0, normal: 0, disabled: 0 },
+        statsData: { total: 0, normal: 0, disabled: 0, permanent_disabled: 0 },
 
         // API端点
         getEndpoint: (action) => {
@@ -122,6 +122,7 @@ function createCredsManager(type) {
                             filename: item.filename,
                             status: {
                                 disabled: item.disabled,
+                                permanent_disabled: item.permanent_disabled || false,
                                 error_codes: item.error_codes || [],
                                 last_success: item.last_success,
                             },
@@ -131,7 +132,9 @@ function createCredsManager(type) {
                             tier: item.tier || 'pro',
                             enable_credit: !!item.enable_credit,
                             success_count: item.success_count || 0,
-                            failure_count: item.failure_count || 0
+                            failure_count: item.failure_count || 0,
+                            cycle_stats: item.cycle_stats || {},
+                            last_cycle_stats: item.last_cycle_stats || {}
                         };
                     });
 
@@ -150,7 +153,7 @@ function createCredsManager(type) {
 
                     let msg = `已加载 ${data.total} 个${type === 'antigravity' ? 'Antigravity' : ''}凭证文件`;
                     if (this.currentStatusFilter !== 'all') {
-                        msg += ` (筛选: ${this.currentStatusFilter === 'enabled' ? '仅启用' : '仅禁用'})`;
+                        msg += ` (筛选: ${this.currentStatusFilter === 'enabled' ? '仅启用' : (this.currentStatusFilter === 'permanent_disabled' ? '永久禁用' : '仅禁用')})`;
                     }
                     showStatus(msg, 'success');
                 } else {
@@ -165,9 +168,11 @@ function createCredsManager(type) {
 
         // 计算统计数据（仅用于兼容旧版本后端）
         calculateStats() {
-            this.statsData = { total: this.totalCount, normal: 0, disabled: 0 };
+            this.statsData = { total: this.totalCount, normal: 0, disabled: 0, permanent_disabled: 0 };
             Object.values(this.data).forEach(credInfo => {
-                if (credInfo.status.disabled) {
+                if (credInfo.status.permanent_disabled) {
+                    this.statsData.permanent_disabled++;
+                } else if (credInfo.status.disabled) {
                     this.statsData.disabled++;
                 } else {
                     this.statsData.normal++;
@@ -180,6 +185,8 @@ function createCredsManager(type) {
             document.getElementById(this.getElementId('StatTotal')).textContent = this.statsData.total;
             document.getElementById(this.getElementId('StatNormal')).textContent = this.statsData.normal;
             document.getElementById(this.getElementId('StatDisabled')).textContent = this.statsData.disabled;
+            const permanentEl = document.getElementById(this.getElementId('StatPermanentDisabled'));
+            if (permanentEl) permanentEl.textContent = this.statsData.permanent_disabled || 0;
         },
 
         // 渲染凭证列表
@@ -259,7 +266,7 @@ function createCredsManager(type) {
             const selectedCount = this.selectedFiles.size;
             document.getElementById(this.getElementId('SelectedCount')).textContent = `已选择 ${selectedCount} 项`;
 
-            const batchBtnNames = ['Enable', 'Disable', 'Delete', 'Verify', 'Test', 'Preview', 'RefreshCooldown'];
+            const batchBtnNames = ['Enable', 'Disable', 'PermanentDisable', 'Delete', 'Verify', 'Test', 'Preview', 'RefreshCooldown'];
             if (this.type === 'antigravity') {
                 batchBtnNames.push('EnableCredit');
                 batchBtnNames.push('DisableCredit');
@@ -326,6 +333,7 @@ function createCredsManager(type) {
                 enable: '启用',
                 disable: '禁用',
                 delete: '删除',
+                permanent_disable: '永久禁用',
                 enable_credit: '开启积分',
                 disable_credit: '关闭积分'
             };
@@ -640,13 +648,15 @@ function createCredCard(credInfo, manager) {
     const managerType = manager.type;
 
     // 卡片样式
-    div.className = status.disabled ? 'cred-card disabled' : 'cred-card';
+    div.className = (status.disabled || status.permanent_disabled) ? 'cred-card disabled' : 'cred-card';
 
     // 状态徽章
     let statusBadges = '';
-    statusBadges += status.disabled
-        ? '<span class="status-badge disabled">已禁用</span>'
-        : '<span class="status-badge enabled">已启用</span>';
+    statusBadges += status.permanent_disabled
+        ? '<span class="status-badge disabled">永久禁用</span>'
+        : (status.disabled
+            ? '<span class="status-badge disabled">已禁用</span>'
+            : '<span class="status-badge enabled">已启用</span>');
 
     if (status.error_codes && status.error_codes.length > 0) {
         statusBadges += `<span class="error-codes">错误码: ${status.error_codes.join(', ')}</span>`;
@@ -672,6 +682,15 @@ function createCredCard(credInfo, manager) {
     const tierLabel = tier.toUpperCase();
     const tierColor = tier === 'ultra' ? '#ff9800' : (tier === 'free' ? '#607d8b' : '#2e7d32');
     statusBadges += `<span class="status-badge" style="background-color: ${tierColor}; color: white;" title="凭证等级: ${tierLabel}">Tier: ${tierLabel}</span>`;
+
+    const cycle = credInfo.cycle_stats || {};
+    const lastCycle = credInfo.last_cycle_stats || {};
+    if ((cycle.total || 0) > 0) {
+        statusBadges += `<span class="status-badge" style="background-color: #6f42c1; color: white;" title="当前循环：Pro ${cycle.pro || 0} / Flash ${cycle.flash || 0} / 其他 ${cycle.other || 0}">循环 ${cycle.total || 0}｜P${cycle.pro || 0}/F${cycle.flash || 0}</span>`;
+    }
+    if ((lastCycle.total || 0) > 0) {
+        statusBadges += `<span class="status-badge" style="background-color: #795548; color: white;" title="上轮到 ${lastCycle.cooldown_family || 'unknown'} 冷却前：Pro ${lastCycle.pro || 0} / Flash ${lastCycle.flash || 0} / 其他 ${lastCycle.other || 0}">上轮 ${lastCycle.total || 0}｜P${lastCycle.pro || 0}/F${lastCycle.flash || 0}</span>`;
+    }
 
     // Credit 状态显示（仅 antigravity）
     if (managerType === 'antigravity') {
@@ -715,10 +734,13 @@ function createCredCard(credInfo, manager) {
 
     // 操作按钮
     const actionButtons = `
-        ${status.disabled
-            ? `<button class="cred-btn enable" data-filename="${filename}" data-action="enable">启用</button>`
-            : `<button class="cred-btn disable" data-filename="${filename}" data-action="disable">禁用</button>`
+        ${status.permanent_disabled
+            ? `<button class="cred-btn enable" data-filename="${filename}" data-action="enable">恢复启用</button>`
+            : (status.disabled
+                ? `<button class="cred-btn enable" data-filename="${filename}" data-action="enable">启用</button>`
+                : `<button class="cred-btn disable" data-filename="${filename}" data-action="disable">禁用</button>`)
         }
+        ${status.permanent_disabled ? '' : `<button class="cred-btn disable" data-filename="${filename}" data-action="permanent_disable" title="从普通禁用区移入永久禁用区，不删除凭证">永久禁用</button>`}
         <button class="cred-btn view" onclick="toggle${managerType === 'antigravity' ? 'Antigravity' : ''}CredDetails('${pathId}')">查看内容</button>
         <button class="cred-btn download" onclick="download${managerType === 'antigravity' ? 'Antigravity' : ''}Cred('${filename}')">下载</button>
         <button class="cred-btn email" onclick="fetch${managerType === 'antigravity' ? 'Antigravity' : ''}UserEmail('${filename}')">查看账号邮箱</button>
@@ -2948,6 +2970,7 @@ function populateConfigForm() {
     document.getElementById('compatibilityModeEnabled').checked = Boolean(c.compatibility_mode_enabled);
     document.getElementById('returnThoughtsToFrontend').checked = Boolean(c.return_thoughts_to_frontend !== false);
     document.getElementById('antigravityStream2nostream').checked = Boolean(c.antigravity_stream2nostream !== false);
+    document.getElementById('antigravitySwitchCredentialEnabled').checked = Boolean(c.antigravity_switch_credential_enabled);
 
     setConfigField('antiTruncationMaxAttempts', c.anti_truncation_max_attempts || 3);
 
@@ -3001,6 +3024,7 @@ async function saveConfig() {
             compatibility_mode_enabled: getChecked('compatibilityModeEnabled'),
             return_thoughts_to_frontend: getChecked('returnThoughtsToFrontend'),
             antigravity_stream2nostream: getChecked('antigravityStream2nostream'),
+            antigravity_switch_credential_enabled: getChecked('antigravitySwitchCredentialEnabled'),
             anti_truncation_max_attempts: getInt('antiTruncationMaxAttempts', 3),
             keepalive_url: getValue('keepaliveUrl'),
             keepalive_interval: getInt('keepaliveInterval', 60)
