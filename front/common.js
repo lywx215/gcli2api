@@ -683,15 +683,6 @@ function createCredCard(credInfo, manager) {
     const tierColor = tier === 'ultra' ? '#ff9800' : (tier === 'free' ? '#607d8b' : '#2e7d32');
     statusBadges += `<span class="status-badge" style="background-color: ${tierColor}; color: white;" title="凭证等级: ${tierLabel}">Tier: ${tierLabel}</span>`;
 
-    const cycle = credInfo.cycle_stats || {};
-    const lastCycle = credInfo.last_cycle_stats || {};
-    if ((cycle.total || 0) > 0) {
-        statusBadges += `<span class="status-badge" style="background-color: #6f42c1; color: white;" title="当前循环：Pro ${cycle.pro || 0} / Flash ${cycle.flash || 0} / 其他 ${cycle.other || 0}">循环 ${cycle.total || 0}｜P${cycle.pro || 0}/F${cycle.flash || 0}</span>`;
-    }
-    if ((lastCycle.total || 0) > 0) {
-        statusBadges += `<span class="status-badge" style="background-color: #795548; color: white;" title="上轮到 ${lastCycle.cooldown_family || 'unknown'} 冷却前：Pro ${lastCycle.pro || 0} / Flash ${lastCycle.flash || 0} / 其他 ${lastCycle.other || 0}">上轮 ${lastCycle.total || 0}｜P${lastCycle.pro || 0}/F${lastCycle.flash || 0}</span>`;
-    }
-
     // Credit 状态显示（仅 antigravity）
     if (managerType === 'antigravity') {
         if (credInfo.enable_credit) {
@@ -761,11 +752,20 @@ function createCredCard(credInfo, manager) {
         ? `<div class="cred-email" style="font-size: 12px; color: #666; margin-top: 2px;">${credInfo.user_email}</div>`
         : '<div class="cred-email" style="font-size: 12px; color: #999; margin-top: 2px; font-style: italic;">未获取邮箱</div>';
     const currentCycle = credInfo.cycle_stats || {};
+    const lastCycle = credInfo.last_cycle_stats || {};
     const cycleTotal = Number(currentCycle.total || 0);
     const cyclePro = Number(currentCycle.pro || 0);
     const cycleFlash = Number(currentCycle.flash || 0);
     const cycleOther = Number(currentCycle.other || 0);
-    const usageStatsInfo = `<div class="cred-usage-stats" style="font-size: 12px; color: #555; margin-top: 2px;" title="当前循环调用统计：从上一轮冷却结算后开始，到下一次进入冷却前累计">当前循环：Pro ${cyclePro} / Flash ${cycleFlash} / 其他 ${cycleOther} / 总计 ${cycleTotal}</div>`;
+    const lastTotal = Number(lastCycle.total || 0);
+    const lastPro = Number(lastCycle.pro || 0);
+    const lastFlash = Number(lastCycle.flash || 0);
+    const lastOther = Number(lastCycle.other || 0);
+    const currentCycleLine = `<div class="cred-usage-stats" style="font-size: 12px; color: #555; margin-top: 2px;" title="当前循环调用统计：从上一轮冷却结算后开始，到下一次进入冷却前累计">当前循环：Pro ${cyclePro} / Flash ${cycleFlash} / 其他 ${cycleOther} / 总计 ${cycleTotal}</div>`;
+    const lastCycleLine = lastTotal > 0
+        ? `<div class="cred-usage-stats" style="font-size: 12px; color: #777; margin-top: 2px;" title="上一轮循环统计：进入 ${lastCycle.cooldown_family || unknown} 冷却前累计">上一轮：Pro ${lastPro} / Flash ${lastFlash} / 其他 ${lastOther} / 总计 ${lastTotal}</div>`
+        : ;
+    const usageStatsInfo = currentCycleLine + lastCycleLine;
 
     const checkboxClass = manager.getElementId('file-checkbox');
 
