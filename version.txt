@@ -1,4 +1,4 @@
-full_hash=a3dca88a2387aaea505e911233e3384a59c15356
-short_hash=a3dca88
-message=fix(creds): allow permanent filter and show cycle stats
-date=2026-05-23 12:04:35 +0000
+full_hash=25b961812465170814748c8b0951c0095ea359ec
+short_hash=25b9618
+message=fix(panel): remove cycle badges and show last cycle inline
+date=2026-05-23 12:13:27 +0000
