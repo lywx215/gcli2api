@@ -74,6 +74,21 @@ def is_anti_truncation_model(model_name: str) -> bool:
     return model_name.startswith("流式抗截断/")
 
 
+ANTIGRAVITY_MODEL_ALIASES = {
+    # Some clients/proxies strip the final Antigravity model tier because
+    # -high/-low also look like local thinking-level suffixes.  Keep these
+    # compatibility aliases at the Antigravity route boundary so requests
+    # still hit real upstream model IDs.
+    "gemini-3.1-pro": "gemini-3.1-pro-high",
+    "gemini-3.5-flash": "gemini-3.5-flash-low",
+}
+
+
+def normalize_antigravity_model_alias(model_name: str) -> str:
+    """Map stripped Antigravity model names back to real upstream IDs."""
+    return ANTIGRAVITY_MODEL_ALIASES.get(model_name, model_name)
+
+
 def get_base_model_from_feature_model(model_name: str) -> str:
     """Get base model name from feature model name."""
     # Remove feature prefixes

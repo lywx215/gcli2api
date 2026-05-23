@@ -469,8 +469,26 @@ def prepare_image_generation_request(
 
 # ==================== 模型特性辅助函数 ====================
 
-def get_base_model_name(model_name: str) -> str:
-    """移除模型名称中的后缀,返回基础模型名"""
+ANTIGRAVITY_NATIVE_MODEL_IDS = {
+    # Antigravity exposes these as first-class model IDs. Their trailing
+    # -high/-low suffixes are part of the upstream model name, not local
+    # thinking-level feature suffixes.
+    "gemini-3.1-pro-high",
+    "gemini-3.1-pro-low",
+    "gemini-3.5-flash-low",
+}
+
+
+def get_base_model_name(model_name: str, mode: str = "geminicli") -> str:
+    """移除模型名称中的本地功能后缀,返回基础模型名。
+
+    Antigravity 的部分官方模型 ID 本身以 -high/-low 结尾，不能按
+    GeminiCLI 的思考档位后缀剥掉，否则会把 gemini-3.1-pro-high
+    错改成不存在的 gemini-3.1-pro。
+    """
+    if mode == "antigravity" and model_name in ANTIGRAVITY_NATIVE_MODEL_IDS:
+        return model_name
+
     # 按照从长到短的顺序排列，避免短后缀先于长后缀被匹配
     suffixes = [
         "-maxthinking", "-nothinking",  # 兼容旧模式
@@ -668,7 +686,7 @@ async def normalize_gemini_request(
                 result_tools.append({"googleSearch": {}})
 
         # 3. 模型名称处理
-        result["model"] = get_base_model_name(model)
+        result["model"] = get_base_model_name(model, mode=mode)
 
     elif mode == "antigravity":
         
