@@ -1,4 +1,4 @@
-full_hash=25b961812465170814748c8b0951c0095ea359ec
-short_hash=25b9618
-message=fix(panel): remove cycle badges and show last cycle inline
-date=2026-05-23 12:13:27 +0000
+full_hash=97a6117936d51241ed7fd4a5c57cbf54e95439f1
+short_hash=97a6117
+message=fix(panel): quote fallback in last cycle tooltip
+date=2026-05-23 12:18:12 +0000
