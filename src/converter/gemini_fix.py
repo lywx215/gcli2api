@@ -712,40 +712,56 @@ async def normalize_gemini_request(
             return prepare_image_generation_request(result, model)
         else:
             # 3. 思考模型处理
-            if is_thinking_model(model) or ("thinkingBudget" in generation_config.get("thinkingConfig", {}) and generation_config["thinkingConfig"]["thinkingBudget"] != 0):
+            # Antigravity native tiered model IDs already encode their tier in
+            # the upstream model name. Do not inject local thinkingConfig for
+            # them; the backend rejects gemini-3.1-pro-high with an explicit
+            # thinkingBudget as INVALID_ARGUMENT.
+            is_native_antigravity_tier = model in ANTIGRAVITY_NATIVE_MODEL_IDS
+            should_apply_thinking_config = (not is_native_antigravity_tier) and (
+                is_thinking_model(model)
+                or (
+                    "thinkingBudget" in generation_config.get("thinkingConfig", {})
+                    and generation_config["thinkingConfig"]["thinkingBudget"] != 0
+                )
+            )
+
+            if should_apply_thinking_config:
                 # 直接设置 thinkingConfig
                 if "thinkingConfig" not in generation_config:
                     generation_config["thinkingConfig"] = {}
-                
+
                 thinking_config = generation_config["thinkingConfig"]
                 # 优先使用传入的思考预算，否则使用默认值
                 if "thinkingBudget" not in thinking_config:
                     thinking_config["thinkingBudget"] = 1024
                 thinking_config.pop("thinkingLevel", None)  # 避免与 thinkingBudget 冲突
                 thinking_config["includeThoughts"] = return_thoughts
-                
+            elif is_native_antigravity_tier:
+                generation_config.pop("thinkingConfig", None)
+
+            if should_apply_thinking_config:
                 # 检查最后一个 assistant 消息是否以 thinking 块开始
                 contents = result.get("contents", [])
 
                 if "claude" in model.lower():
                     # 检测是否有工具调用（MCP场景）
                     has_tool_calls = any(
-                        isinstance(content, dict) and 
+                        isinstance(content, dict) and
                         any(
                             isinstance(part, dict) and ("functionCall" in part or "function_call" in part)
                             for part in content.get("parts", [])
                         )
                         for content in contents
                     )
-                    
+
                     if has_tool_calls:
-                        # MCP 场景：检测到工具调用，移除 thinkingConfig
+                        # MCP 场景：检测到工具调用，移除 thinkingConfig 避免失效
                         log.warning(f"[ANTIGRAVITY] 检测到工具调用（MCP场景），移除 thinkingConfig 避免失效")
                         generation_config.pop("thinkingConfig", None)
                     else:
                         # 非 MCP 场景：填充思考块
                         # log.warning(f"[ANTIGRAVITY] 最后一个 assistant 消息不以 thinking 块开始，自动填充思考块")
-                        
+
                         # 找到最后一个 model 角色的 content
                         for i in range(len(contents) - 1, -1, -1):
                             content = contents[i]
@@ -762,7 +778,7 @@ async def normalize_gemini_request(
                                     content["parts"] = [thinking_part] + parts
                                     log.debug(f"[ANTIGRAVITY] 已在最后一个 assistant 消息开头插入思考块（含跳过验证签名）")
                                 break
-                
+
             # 移除 -thinking 后缀
             model = model.replace("-thinking", "")
 
