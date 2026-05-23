@@ -1,4 +1,4 @@
-full_hash=97a6117936d51241ed7fd4a5c57cbf54e95439f1
-short_hash=97a6117
-message=fix(panel): quote fallback in last cycle tooltip
-date=2026-05-23 12:18:12 +0000
+full_hash=c8248632ff273ff26bd99900fdfb1150a1b114e2
+short_hash=c824863
+message=Merge fix-antigravity-model-suffixes follow-up: skip anti tier thinkingConfig
+date=2026-05-23 18:49:43 +0000
