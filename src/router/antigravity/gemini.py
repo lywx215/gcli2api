@@ -26,6 +26,7 @@ from log import log
 # 本地模块 - 工具和认证
 from src.utils import (
     get_base_model_from_feature_model,
+    normalize_antigravity_model_alias,
     is_anti_truncation_model,
     authenticate_gemini_flexible,
     is_fake_streaming_model
@@ -87,7 +88,7 @@ async def generate_content(
 
     # 处理模型名称和功能检测
     use_anti_truncation = is_anti_truncation_model(model)
-    real_model = get_base_model_from_feature_model(model)
+    real_model = normalize_antigravity_model_alias(get_base_model_from_feature_model(model))
 
     # 对于抗截断模型的非流式请求，给出警告
     if use_anti_truncation:
@@ -149,7 +150,7 @@ async def stream_generate_content(
     # 处理模型名称和功能检测
     use_fake_streaming = is_fake_streaming_model(model)
     use_anti_truncation = is_anti_truncation_model(model)
-    real_model = get_base_model_from_feature_model(model)
+    real_model = normalize_antigravity_model_alias(get_base_model_from_feature_model(model))
 
     # 更新模型名为真实模型名
     normalized_dict["model"] = real_model
