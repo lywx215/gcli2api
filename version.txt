@@ -1,4 +1,4 @@
-full_hash=c8248632ff273ff26bd99900fdfb1150a1b114e2
-short_hash=c824863
-message=Merge fix-antigravity-model-suffixes follow-up: skip anti tier thinkingConfig
-date=2026-05-23 18:49:43 +0000
+full_hash=9c00a16baca907b27072aea82b91cc5ad91f6a19
+short_hash=9c00a16
+message=fix(antigravity): cover all current tier suffix model IDs
+date=2026-05-23 18:52:15 +0000
