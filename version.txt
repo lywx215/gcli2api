@@ -1,4 +1,4 @@
-full_hash=73aa90f4af8f56e62f0e57f27cdab2a4ed9a22b2
-short_hash=73aa90f
-message=Merge feat-cycle-stats-permanent-disable: 循环统计与永久禁用
-date=2026-05-23 11:50:56 +0000
+full_hash=a3dca88a2387aaea505e911233e3384a59c15356
+short_hash=a3dca88
+message=fix(creds): allow permanent filter and show cycle stats
+date=2026-05-23 12:04:35 +0000
