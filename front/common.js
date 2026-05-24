@@ -59,6 +59,7 @@ function createCredsManager(type) {
         currentCooldownFilter: 'all',
         currentPreviewFilter: 'all',
         currentTierFilter: 'all',
+        currentRemarkFilter: '__all__',
         statsData: { total: 0, normal: 0, disabled: 0, permanent_disabled: 0 },
 
         // API端点
@@ -76,7 +77,8 @@ function createCredsManager(type) {
                 refreshAllEmails: `./creds/refresh-all-emails`,
                 deduplicate: `./creds/deduplicate-by-email`,
                 verifyProject: `./creds/verify-project`,
-                quota: `./creds/quota`
+                quota: `./creds/quota`,
+                remark: `./creds/remark`
             };
             return endpoints[action] || '';
         },
@@ -108,8 +110,9 @@ function createCredsManager(type) {
                 const cooldownFilter = this.currentCooldownFilter || 'all';
                 const previewFilter = this.currentPreviewFilter || 'all';
                 const tierFilter = this.currentTierFilter || 'all';
+                const remarkFilter = this.currentRemarkFilter || '__all__';
                 const response = await fetch(
-                    `${this.getEndpoint('status')}?offset=${offset}&limit=${this.pageSize}&status_filter=${this.currentStatusFilter}&error_code_filter=${errorCodeFilter}&cooldown_filter=${cooldownFilter}&preview_filter=${previewFilter}&tier_filter=${tierFilter}&${this.getModeParam()}`,
+                    `${this.getEndpoint('status')}?offset=${offset}&limit=${this.pageSize}&status_filter=${this.currentStatusFilter}&error_code_filter=${errorCodeFilter}&cooldown_filter=${cooldownFilter}&preview_filter=${previewFilter}&tier_filter=${tierFilter}&remark_filter=${encodeURIComponent(remarkFilter)}&${this.getModeParam()}`,
                     { headers: getAuthHeaders() }
                 );
 
@@ -126,6 +129,7 @@ function createCredsManager(type) {
                                 error_codes: item.error_codes || [],
                                 last_success: item.last_success,
                             },
+                            remark: item.remark || '',
                             user_email: item.user_email,
                             model_cooldowns: item.model_cooldowns || {},
                             preview: item.preview,
@@ -253,10 +257,13 @@ function createCredsManager(type) {
             const cooldownFilterEl = document.getElementById(this.getElementId('CooldownFilter'));
             const previewFilterEl = document.getElementById(this.getElementId('PreviewFilter'));
             const tierFilterEl = document.getElementById(this.getElementId('TierFilter'));
+            const remarkFilterEl = document.getElementById(this.getElementId('RemarkFilter'));
             this.currentErrorCodeFilter = errorCodeFilterEl ? errorCodeFilterEl.value : 'all';
             this.currentCooldownFilter = cooldownFilterEl ? cooldownFilterEl.value : 'all';
             this.currentPreviewFilter = previewFilterEl ? previewFilterEl.value : 'all';
             this.currentTierFilter = tierFilterEl ? tierFilterEl.value : 'all';
+            const remarkValue = remarkFilterEl ? remarkFilterEl.value.trim() : '';
+            this.currentRemarkFilter = remarkValue ? remarkValue : '__all__';
             this.currentPage = 1;
             this.refresh();
         },
@@ -741,6 +748,7 @@ function createCredCard(credInfo, manager) {
             : `<button class="cred-btn" data-filename="${filename}" data-action="enable_credit" title="开启该凭证的Credit模式">开启 Credit</button>`
         ) : ''}
         ${managerType !== 'antigravity' ? `<button class="cred-btn" onclick="configurePreviewChannel('${filename}')" title="配置Preview通道，启用实验性功能">设置预览</button>` : ''}
+        <button class="cred-btn" data-filename="${filename}" data-action="remark" title="给该凭证设置备注/标签">备注</button>
         <button class="cred-btn" onclick="verify${managerType === 'antigravity' ? 'Antigravity' : ''}ProjectId('${filename}')" title="重新获取Project ID，可恢复403错误">检验</button>
         <button class="cred-btn" onclick="test${managerType === 'antigravity' ? 'Antigravity' : ''}Credential('${filename}')" title="测试凭证是否可用">消息测试</button>
         <button class="cred-btn" onclick="toggle${managerType === 'antigravity' ? 'Antigravity' : ''}ErrorDetails('${pathId}')" title="查看该凭证的详细报错信息">查看报错</button>
@@ -748,8 +756,13 @@ function createCredCard(credInfo, manager) {
     `;
 
     // 邮箱信息
+    const remark = (credInfo.remark || '').toString();
+    const remarkBadge = remark
+        ? `<span class="status-badge" style="background-color: #6f42c1; color: white; margin-left: 6px;" title="备注/标签: ${escapeHtml(remark)}">🏷 ${escapeHtml(remark)}</span>`
+        : '';
+
     const emailInfo = credInfo.user_email
-        ? `<div class="cred-email" style="font-size: 12px; color: #666; margin-top: 2px;">${credInfo.user_email}</div>`
+        ? `<div class="cred-email" style="font-size: 12px; color: #666; margin-top: 2px;">${escapeHtml(credInfo.user_email)}</div>`
         : '<div class="cred-email" style="font-size: 12px; color: #999; margin-top: 2px; font-style: italic;">未获取邮箱</div>';
     const currentCycle = credInfo.cycle_stats || {};
     const lastCycle = credInfo.last_cycle_stats || {};
@@ -774,7 +787,7 @@ function createCredCard(credInfo, manager) {
             <div style="display: flex; align-items: center; gap: 10px;">
                 <input type="checkbox" class="${checkboxClass}" data-filename="${filename}" onchange="toggle${managerType === 'antigravity' ? 'Antigravity' : ''}FileSelection('${filename}')">
                 <div>
-                    <div class="cred-filename">${filename}</div>
+                    <div class="cred-filename">${escapeHtml(filename)}${remarkBadge}</div>
                     ${emailInfo}
                     ${usageStatsInfo}
                 </div>
@@ -812,6 +825,8 @@ function createCredCard(credInfo, manager) {
                 if (confirm(`确定要删除${managerType === 'antigravity' ? ' Antigravity ' : ''}凭证文件吗？\n${fn}`)) {
                     manager.action(fn, action);
                 }
+            } else if (action === 'remark') {
+                updateCredRemark(manager, fn);
             } else {
                 manager.action(fn, action);
             }
@@ -819,6 +834,35 @@ function createCredCard(credInfo, manager) {
     });
 
     return div;
+}
+
+
+async function updateCredRemark(manager, filename) {
+    const current = (manager.data[filename] && manager.data[filename].remark) || '';
+    const remark = prompt(`给凭证设置备注/标签（留空清除）：\n${filename}`, current);
+    if (remark === null) return;
+    const cleanRemark = remark.trim();
+    if (cleanRemark.length > 64) {
+        showStatus('备注不能超过 64 个字符', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(`${manager.getEndpoint('remark')}/${encodeURIComponent(filename)}?${manager.getModeParam()}`, {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ remark: cleanRemark })
+        });
+        const data = await response.json();
+        if (response.ok) {
+            showStatus(cleanRemark ? `备注已保存: ${cleanRemark}` : '备注已清除', 'success');
+            await manager.refresh();
+        } else {
+            showStatus(`备注保存失败: ${data.detail || data.error || '未知错误'}`, 'error');
+        }
+    } catch (error) {
+        showStatus(`备注保存失败: ${error.message}`, 'error');
+    }
 }
 
 // =====================================================================

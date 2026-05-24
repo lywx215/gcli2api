@@ -10,7 +10,7 @@ import time
 import zipfile
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Response
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Response, Body
 from fastapi.responses import JSONResponse
 
 from log import log
@@ -238,7 +238,7 @@ async def upload_credentials_common(
 
 async def get_creds_status_common(
     offset: int, limit: int, status_filter: str, mode: str = "geminicli",
-    error_code_filter: str = None, cooldown_filter: str = None, preview_filter: str = None, tier_filter: str = None
+    error_code_filter: str = None, cooldown_filter: str = None, preview_filter: str = None, tier_filter: str = None, remark_filter: str = None
 ) -> JSONResponse:
     """获取凭证文件状态的通用函数"""
     mode = validate_mode(mode)
@@ -255,8 +255,8 @@ async def get_creds_status_common(
         raise HTTPException(status_code=400, detail="preview_filter 只能是 all、preview 或 no_preview")
     if tier_filter and tier_filter not in ["all", "free", "pro", "ultra"]:
         raise HTTPException(status_code=400, detail="tier_filter 只能是 all、free、pro 或 ultra")
-
-
+    if remark_filter is not None and len(remark_filter) > 64:
+        raise HTTPException(status_code=400, detail="remark_filter 不能超过 64 个字符")
 
     storage_adapter = await get_storage_adapter()
     backend_info = await storage_adapter.get_backend_info()
@@ -271,7 +271,8 @@ async def get_creds_status_common(
         error_code_filter=error_code_filter if error_code_filter and error_code_filter != "all" else None,
         cooldown_filter=cooldown_filter if cooldown_filter and cooldown_filter != "all" else None,
         preview_filter=preview_filter if preview_filter and preview_filter != "all" else None,
-        tier_filter=tier_filter if tier_filter and tier_filter != "all" else None
+        tier_filter=tier_filter if tier_filter and tier_filter != "all" else None,
+        remark_filter=remark_filter if remark_filter is not None and remark_filter != "__all__" else None
     )
 
     creds_list = []
@@ -289,6 +290,7 @@ async def get_creds_status_common(
             "failure_count": summary.get("failure_count", 0),
             "cycle_stats": summary.get("cycle_stats", {}),
             "last_cycle_stats": summary.get("last_cycle_stats", {}),
+            "remark": summary.get("remark", ""),
         }
 
         if mode == "geminicli":
@@ -669,6 +671,7 @@ async def get_creds_status(
     cooldown_filter: str = "all",
     preview_filter: str = "all",
     tier_filter: str = "all",
+    remark_filter: str = "__all__",
     mode: str = "geminicli"
 ):
     """
@@ -694,12 +697,47 @@ async def get_creds_status(
             error_code_filter=error_code_filter,
             cooldown_filter=cooldown_filter,
             preview_filter=preview_filter,
-            tier_filter=tier_filter
+            tier_filter=tier_filter,
+            remark_filter=remark_filter
         )
     except HTTPException:
         raise
     except Exception as e:
         log.error(f"获取凭证状态失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/remark/{filename}")
+async def update_cred_remark(
+    filename: str,
+    payload: dict = Body(...),
+    token: str = Depends(verify_panel_token),
+    mode: str = "geminicli"
+):
+    """更新凭证备注/标签。"""
+    try:
+        mode = validate_mode(mode)
+        if not filename.endswith(".json"):
+            raise HTTPException(status_code=400, detail="无效的文件名")
+
+        remark = str(payload.get("remark", "")).strip()
+        if len(remark) > 64:
+            raise HTTPException(status_code=400, detail="备注不能超过 64 个字符")
+
+        storage_adapter = await get_storage_adapter()
+        credential_data = await storage_adapter.get_credential(filename, mode=mode)
+        if not credential_data:
+            raise HTTPException(status_code=404, detail="凭证不存在")
+
+        updated = await storage_adapter.update_credential_state(filename, {"remark": remark}, mode=mode)
+        if not updated:
+            raise HTTPException(status_code=500, detail="备注保存失败")
+
+        return JSONResponse(content={"message": "备注已保存", "filename": os.path.basename(filename), "remark": remark})
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"更新凭证备注失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

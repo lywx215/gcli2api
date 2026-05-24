@@ -32,6 +32,7 @@ class SQLiteManager:
         "enable_credit",
         "success_count",
         "failure_count",
+        "remark",
     }
 
     # 所有必需的列定义（用于自动校验和修复）
@@ -52,6 +53,7 @@ class SQLiteManager:
             ("call_count", "INTEGER DEFAULT 0"),
             ("success_count", "INTEGER DEFAULT 0"),
             ("failure_count", "INTEGER DEFAULT 0"),
+            ("remark", "TEXT DEFAULT ''"),
             ("created_at", "REAL DEFAULT (unixepoch())"),
             ("updated_at", "REAL DEFAULT (unixepoch())")
         ],
@@ -71,6 +73,7 @@ class SQLiteManager:
             ("call_count", "INTEGER DEFAULT 0"),
             ("success_count", "INTEGER DEFAULT 0"),
             ("failure_count", "INTEGER DEFAULT 0"),
+            ("remark", "TEXT DEFAULT ''"),
             ("created_at", "REAL DEFAULT (unixepoch())"),
             ("updated_at", "REAL DEFAULT (unixepoch())")
         ]
@@ -201,6 +204,7 @@ class SQLiteManager:
                 call_count INTEGER DEFAULT 0,
                 success_count INTEGER DEFAULT 0,
                 failure_count INTEGER DEFAULT 0,
+                remark TEXT DEFAULT '',
 
                 -- 时间戳
                 created_at REAL DEFAULT (unixepoch()),
@@ -239,6 +243,7 @@ class SQLiteManager:
                 call_count INTEGER DEFAULT 0,
                 success_count INTEGER DEFAULT 0,
                 failure_count INTEGER DEFAULT 0,
+                remark TEXT DEFAULT '',
 
                 -- 时间戳
                 created_at REAL DEFAULT (unixepoch()),
@@ -717,7 +722,7 @@ class SQLiteManager:
                 if mode == "geminicli":
                     async with db.execute(f"""
                         SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
-                               preview, tier, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
+                               preview, tier, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name} WHERE filename = ?
                     """, (filename,)) as cursor:
                         row = await cursor.fetchone()
@@ -738,6 +743,7 @@ class SQLiteManager:
                                 "permanent_disabled": bool(row[9]) if len(row) > 9 else False,
                                 "cycle_stats": json.loads(row[10] or "{}") if len(row) > 10 else {},
                                 "last_cycle_stats": json.loads(row[11] or "{}") if len(row) > 11 else {},
+                                "remark": row[12] or "" if len(row) > 12 else "",
                             }
 
                     # 返回默认状态
@@ -751,12 +757,13 @@ class SQLiteManager:
                         "tier": "pro",
                         "success_count": 0,
                         "failure_count": 0,
+                        "remark": "",
                     }
                 else:
                     # antigravity 模式
                     async with db.execute(f"""
                         SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
-                               tier, enable_credit, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
+                               tier, enable_credit, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name} WHERE filename = ?
                     """, (filename,)) as cursor:
                         row = await cursor.fetchone()
@@ -777,6 +784,7 @@ class SQLiteManager:
                                 "permanent_disabled": bool(row[9]) if len(row) > 9 else False,
                                 "cycle_stats": json.loads(row[10] or "{}") if len(row) > 10 else {},
                                 "last_cycle_stats": json.loads(row[11] or "{}") if len(row) > 11 else {},
+                                "remark": row[12] or "" if len(row) > 12 else "",
                             }
 
                     # 返回默认状态
@@ -790,6 +798,7 @@ class SQLiteManager:
                         "enable_credit": False,
                         "success_count": 0,
                         "failure_count": 0,
+                        "remark": "",
                     }
 
         except Exception as e:
@@ -807,7 +816,7 @@ class SQLiteManager:
                     async with db.execute(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, model_cooldowns, preview, tier,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name}
                     """) as cursor:
                         rows = await cursor.fetchall()
@@ -841,6 +850,7 @@ class SQLiteManager:
                                 "permanent_disabled": bool(row[10]) if len(row) > 10 else False,
                                 "cycle_stats": json.loads(row[11] or "{}") if len(row) > 11 else {},
                                 "last_cycle_stats": json.loads(row[12] or "{}") if len(row) > 12 else {},
+                                "remark": row[13] or "" if len(row) > 13 else "",
                             }
 
                         return states
@@ -849,7 +859,7 @@ class SQLiteManager:
                     async with db.execute(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, model_cooldowns, tier, enable_credit,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name}
                     """) as cursor:
                         rows = await cursor.fetchall()
@@ -883,6 +893,7 @@ class SQLiteManager:
                                 "permanent_disabled": bool(row[10]) if len(row) > 10 else False,
                                 "cycle_stats": json.loads(row[11] or "{}") if len(row) > 11 else {},
                                 "last_cycle_stats": json.loads(row[12] or "{}") if len(row) > 12 else {},
+                                "remark": row[13] or "" if len(row) > 13 else "",
                             }
 
                         return states
@@ -900,7 +911,8 @@ class SQLiteManager:
         error_code_filter: Optional[str] = None,
         cooldown_filter: Optional[str] = None,
         preview_filter: Optional[str] = None,
-        tier_filter: Optional[str] = None
+        tier_filter: Optional[str] = None,
+        remark_filter: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         获取凭证的摘要信息（不包含完整凭证数据）- 支持分页和状态筛选
@@ -974,7 +986,7 @@ class SQLiteManager:
                     all_query = f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, preview, tier,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -983,7 +995,7 @@ class SQLiteManager:
                     all_query = f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, tier, enable_credit,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -1032,6 +1044,10 @@ class SQLiteManager:
                             if not match:
                                 continue
 
+                        row_remark = row[14] or "" if len(row) > 14 else ""
+                        if remark_filter is not None and row_remark != remark_filter:
+                            continue
+
                         summary = {
                             "filename": filename,
                             "disabled": bool(row[1]),
@@ -1048,6 +1064,7 @@ class SQLiteManager:
                             "failure_count": row[10] or 0,
                             "cycle_stats": json.loads(row[12] or "{}") if len(row) > 12 else {},
                             "last_cycle_stats": json.loads(row[13] or "{}") if len(row) > 13 else {},
+                            "remark": row_remark,
                         }
 
                         if mode != "geminicli":

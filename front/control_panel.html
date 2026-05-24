@@ -1924,6 +1924,9 @@
                         <option value="ultra">Ultra</option>
                     </select>
 
+                    <label for="remarkFilter" style="margin-left: 20px;">备注：</label>
+                    <input id="remarkFilter" class="filter-select" style="width: 120px;" placeholder="全部/输入备注" onchange="applyStatusFilter()" onkeydown="if(event.key==='Enter') applyStatusFilter()">
+
                     <label for="pageSizeSelect" style="margin-left: 20px;">每页显示：</label>
                     <select id="pageSizeSelect" class="page-size-select" onchange="changePageSize()">
                         <option value="20">20</option>
@@ -2139,6 +2142,9 @@
                         <option value="pro">Pro</option>
                         <option value="ultra">Ultra</option>
                     </select>
+
+                    <label for="antigravityRemarkFilter" style="margin-left: 20px;">备注：</label>
+                    <input id="antigravityRemarkFilter" class="filter-select" style="width: 120px;" placeholder="全部/输入备注" onchange="applyAntigravityStatusFilter()" onkeydown="if(event.key==='Enter') applyAntigravityStatusFilter()">
 
                     <label for="antigravityPageSizeSelect" style="margin-left: 20px;">每页显示：</label>
                     <select id="antigravityPageSizeSelect" class="page-size-select"
