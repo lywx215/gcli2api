@@ -1,4 +1,4 @@
-full_hash=9c00a16baca907b27072aea82b91cc5ad91f6a19
-short_hash=9c00a16
-message=fix(antigravity): cover all current tier suffix model IDs
-date=2026-05-23 18:52:15 +0000
+full_hash=364c24498e00dcee029048454ae93e8527a17cae
+short_hash=364c244
+message=Merge feat-credential-remarks: add credential remarks
+date=2026-05-24 05:47:39 +0000
