@@ -962,6 +962,7 @@ class MongoDBManager:
                 "tier": "pro",
                 "success_count": 0,
                 "failure_count": 0,
+                "remark": "",
             }
             if mode == "antigravity":
                 default_state["enable_credit"] = False
