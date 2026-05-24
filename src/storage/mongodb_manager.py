@@ -29,6 +29,7 @@ class MongoDBManager:
         "enable_credit",
         "success_count",
         "failure_count",
+        "remark",
     }
 
     @staticmethod
@@ -944,6 +945,7 @@ class MongoDBManager:
                     "tier": doc.get("tier", "pro"),
                     "success_count": doc.get("success_count", 0),
                     "failure_count": doc.get("failure_count", 0),
+                    "remark": doc.get("remark", ""),
                 }
                 if mode == "antigravity":
                     state["enable_credit"] = doc.get("enable_credit", False)
@@ -990,6 +992,7 @@ class MongoDBManager:
                 "enable_credit": 1,
                 "success_count": 1,
                 "failure_count": 1,
+                "remark": 1,
                 "_id": 0
             }
 
@@ -1019,6 +1022,7 @@ class MongoDBManager:
                     "tier": doc.get("tier", "pro"),
                     "success_count": doc.get("success_count", 0),
                     "failure_count": doc.get("failure_count", 0),
+                    "remark": doc.get("remark", ""),
                 }
                 if mode == "antigravity":
                     state["enable_credit"] = doc.get("enable_credit", False)
@@ -1039,7 +1043,8 @@ class MongoDBManager:
         error_code_filter: Optional[str] = None,
         cooldown_filter: Optional[str] = None,
         preview_filter: Optional[str] = None,
-        tier_filter: Optional[str] = None
+        tier_filter: Optional[str] = None,
+        remark_filter: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         获取凭证的摘要信息（不包含完整凭证数据）- 支持分页和状态筛选
@@ -1124,6 +1129,7 @@ class MongoDBManager:
                 "enable_credit": 1,
                 "success_count": 1,
                 "failure_count": 1,
+                "remark": 1,
                 "_id": 0
             }
 
@@ -1155,6 +1161,7 @@ class MongoDBManager:
                     "tier": doc.get("tier", "pro"),
                     "success_count": doc.get("success_count", 0),
                     "failure_count": doc.get("failure_count", 0),
+                    "remark": doc.get("remark", ""),
                 }
 
                 if mode == "antigravity":
@@ -1166,6 +1173,9 @@ class MongoDBManager:
                         continue
                     if preview_filter == "no_preview" and preview_value:
                         continue
+
+                if remark_filter is not None and summary.get("remark", "") != remark_filter:
+                    continue
 
                 # 应用tier筛选
                 if tier_filter and tier_filter in ("free", "pro", "ultra"):
