@@ -90,6 +90,7 @@ class PSQLManager:
         "enable_credit",
         "success_count",
         "failure_count",
+        "remark",
     }
 
     def __init__(self):
@@ -159,6 +160,7 @@ class PSQLManager:
                 call_count INTEGER DEFAULT 0,
                 success_count INTEGER DEFAULT 0,
                 failure_count INTEGER DEFAULT 0,
+                remark TEXT DEFAULT '',
 
                 created_at DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW()),
                 updated_at DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())
@@ -188,6 +190,7 @@ class PSQLManager:
                 call_count INTEGER DEFAULT 0,
                 success_count INTEGER DEFAULT 0,
                 failure_count INTEGER DEFAULT 0,
+                remark TEXT DEFAULT '',
 
                 created_at DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW()),
                 updated_at DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())
@@ -276,6 +279,7 @@ class PSQLManager:
                 ("permanent_disabled", "INTEGER DEFAULT 0"),
                 ("cycle_stats", "TEXT DEFAULT '{}'"),
                 ("last_cycle_stats", "TEXT DEFAULT '{}'"),
+                ("remark", "TEXT DEFAULT ''"),
                 ("created_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
                 ("updated_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
             ],
@@ -295,6 +299,7 @@ class PSQLManager:
                 ("permanent_disabled", "INTEGER DEFAULT 0"),
                 ("cycle_stats", "TEXT DEFAULT '{}'"),
                 ("last_cycle_stats", "TEXT DEFAULT '{}'"),
+                ("remark", "TEXT DEFAULT ''"),
                 ("created_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
                 ("updated_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
             ],
@@ -621,7 +626,7 @@ class PSQLManager:
                 if mode == "geminicli":
                     row = await conn.fetchrow(f"""
                         SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
-                               preview, tier, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
+                               preview, tier, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name} WHERE filename = $1
                     """, filename)
 
@@ -639,6 +644,7 @@ class PSQLManager:
                             "permanent_disabled": bool(row["permanent_disabled"]),
                             "cycle_stats": json.loads(row["cycle_stats"] or "{}"),
                             "last_cycle_stats": json.loads(row["last_cycle_stats"] or "{}"),
+                            "remark": row["remark"] or "",
                         }
 
                     return {
@@ -651,11 +657,12 @@ class PSQLManager:
                         "tier": "pro",
                         "success_count": 0,
                         "failure_count": 0,
+                        "remark": "",
                     }
                 else:
                     row = await conn.fetchrow(f"""
                         SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
-                               tier, enable_credit, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
+                               tier, enable_credit, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name} WHERE filename = $1
                     """, filename)
 
@@ -673,6 +680,7 @@ class PSQLManager:
                             "permanent_disabled": bool(row["permanent_disabled"]),
                             "cycle_stats": json.loads(row["cycle_stats"] or "{}"),
                             "last_cycle_stats": json.loads(row["last_cycle_stats"] or "{}"),
+                            "remark": row["remark"] or "",
                         }
 
                     return {
@@ -685,6 +693,7 @@ class PSQLManager:
                         "enable_credit": False,
                         "success_count": 0,
                         "failure_count": 0,
+                        "remark": "",
                     }
 
         except Exception as e:
@@ -704,7 +713,7 @@ class PSQLManager:
                     rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, model_cooldowns, preview, tier,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name}
                     """)
 
@@ -727,13 +736,14 @@ class PSQLManager:
                             "permanent_disabled": bool(row["permanent_disabled"]),
                             "cycle_stats": json.loads(row["cycle_stats"] or "{}"),
                             "last_cycle_stats": json.loads(row["last_cycle_stats"] or "{}"),
+                            "remark": row["remark"] or "",
                         }
                     return states
                 else:
                     rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, model_cooldowns, tier, enable_credit,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name}
                     """)
 
@@ -756,6 +766,7 @@ class PSQLManager:
                             "permanent_disabled": bool(row["permanent_disabled"]),
                             "cycle_stats": json.loads(row["cycle_stats"] or "{}"),
                             "last_cycle_stats": json.loads(row["last_cycle_stats"] or "{}"),
+                            "remark": row["remark"] or "",
                         }
                     return states
 
@@ -772,7 +783,8 @@ class PSQLManager:
         error_code_filter: Optional[str] = None,
         cooldown_filter: Optional[str] = None,
         preview_filter: Optional[str] = None,
-        tier_filter: Optional[str] = None
+        tier_filter: Optional[str] = None,
+        remark_filter: Optional[str] = None
     ) -> Dict[str, Any]:
         """获取凭证的摘要信息，支持分页和状态筛选"""
         self._ensure_initialized()
@@ -812,7 +824,7 @@ class PSQLManager:
                     all_rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, preview, tier,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -821,7 +833,7 @@ class PSQLManager:
                     all_rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, tier, enable_credit,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -869,6 +881,10 @@ class PSQLManager:
                         if not match:
                             continue
 
+                    row_remark = row["remark"] or ""
+                    if remark_filter is not None and row_remark != remark_filter:
+                        continue
+
                     summary = {
                         "filename": row["filename"],
                         "disabled": bool(row["disabled"]),
@@ -883,6 +899,7 @@ class PSQLManager:
                         "failure_count": row["failure_count"] or 0,
                         "cycle_stats": json.loads(row["cycle_stats"] or "{}"),
                         "last_cycle_stats": json.loads(row["last_cycle_stats"] or "{}"),
+                        "remark": row_remark,
                     }
 
                     if mode == "geminicli":
