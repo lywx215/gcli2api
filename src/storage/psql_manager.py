@@ -1385,22 +1385,49 @@ class PSQLManager:
 
     @staticmethod
     def _close_cycle_stats(raw: Optional[str], model_name: Optional[str]) -> tuple[str, str]:
+        """Close only the model family that just entered cooldown.
+
+        Pro and Flash quotas are independent buckets. When a Pro model enters
+        cooldown, Flash may still be usable, so the current Flash counter should
+        keep accumulating instead of being reset together with Pro. The returned
+        last_cycle_stats therefore contains the closed family only, while
+        cycle_stats keeps the other families as the new current cycle.
+        """
         now = time.time()
         try:
-            last_stats = json.loads(raw or "{}")
+            current_stats = json.loads(raw or "{}")
         except Exception:
-            last_stats = {}
-        if not isinstance(last_stats, dict):
-            last_stats = {}
+            current_stats = {}
+        if not isinstance(current_stats, dict):
+            current_stats = {}
+
         family = PSQLManager._model_cycle_family(model_name)
-        last_stats.setdefault("started_at", now)
-        last_stats.setdefault("total", 0)
-        last_stats.setdefault("pro", 0)
-        last_stats.setdefault("flash", 0)
-        last_stats.setdefault("other", 0)
-        last_stats["ended_at"] = now
-        last_stats["cooldown_family"] = family
-        new_stats = {"started_at": now, "total": 0, "pro": 0, "flash": 0, "other": 0}
+        families = ("pro", "flash", "other")
+
+        for key in families:
+            current_stats[key] = int(current_stats.get(key) or 0)
+        current_stats["total"] = sum(current_stats[key] for key in families)
+
+        last_stats = {
+            "started_at": current_stats.get("started_at", now),
+            "total": current_stats.get(family, 0),
+            "pro": current_stats["pro"] if family == "pro" else 0,
+            "flash": current_stats["flash"] if family == "flash" else 0,
+            "other": current_stats["other"] if family == "other" else 0,
+            "updated_at": current_stats.get("updated_at", now),
+            "ended_at": now,
+            "cooldown_family": family,
+        }
+
+        new_stats = {
+            "started_at": now,
+            "pro": current_stats["pro"],
+            "flash": current_stats["flash"],
+            "other": current_stats["other"],
+        }
+        new_stats[family] = 0
+        new_stats["total"] = sum(new_stats[key] for key in families)
+
         return json.dumps(new_stats), json.dumps(last_stats)
 
     async def get_today_stats(self, mode: Optional[str] = None) -> Dict[str, Any]:
@@ -1548,22 +1575,49 @@ class PSQLManager:
 
     @staticmethod
     def _close_cycle_stats(raw: Optional[str], model_name: Optional[str]) -> tuple[str, str]:
+        """Close only the model family that just entered cooldown.
+
+        Pro and Flash quotas are independent buckets. When a Pro model enters
+        cooldown, Flash may still be usable, so the current Flash counter should
+        keep accumulating instead of being reset together with Pro. The returned
+        last_cycle_stats therefore contains the closed family only, while
+        cycle_stats keeps the other families as the new current cycle.
+        """
         now = time.time()
         try:
-            last_stats = json.loads(raw or "{}")
+            current_stats = json.loads(raw or "{}")
         except Exception:
-            last_stats = {}
-        if not isinstance(last_stats, dict):
-            last_stats = {}
+            current_stats = {}
+        if not isinstance(current_stats, dict):
+            current_stats = {}
+
         family = PSQLManager._model_cycle_family(model_name)
-        last_stats.setdefault("started_at", now)
-        last_stats.setdefault("total", 0)
-        last_stats.setdefault("pro", 0)
-        last_stats.setdefault("flash", 0)
-        last_stats.setdefault("other", 0)
-        last_stats["ended_at"] = now
-        last_stats["cooldown_family"] = family
-        new_stats = {"started_at": now, "total": 0, "pro": 0, "flash": 0, "other": 0}
+        families = ("pro", "flash", "other")
+
+        for key in families:
+            current_stats[key] = int(current_stats.get(key) or 0)
+        current_stats["total"] = sum(current_stats[key] for key in families)
+
+        last_stats = {
+            "started_at": current_stats.get("started_at", now),
+            "total": current_stats.get(family, 0),
+            "pro": current_stats["pro"] if family == "pro" else 0,
+            "flash": current_stats["flash"] if family == "flash" else 0,
+            "other": current_stats["other"] if family == "other" else 0,
+            "updated_at": current_stats.get("updated_at", now),
+            "ended_at": now,
+            "cooldown_family": family,
+        }
+
+        new_stats = {
+            "started_at": now,
+            "pro": current_stats["pro"],
+            "flash": current_stats["flash"],
+            "other": current_stats["other"],
+        }
+        new_stats[family] = 0
+        new_stats["total"] = sum(new_stats[key] for key in families)
+
         return json.dumps(new_stats), json.dumps(last_stats)
 
     async def get_today_stats_by_model(self, mode: Optional[str] = None) -> Dict[str, Any]:
