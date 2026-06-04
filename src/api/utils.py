@@ -21,6 +21,70 @@ from log import log
 from src.credential_manager import CredentialManager
 
 
+def _fire_and_forget_cb(task: asyncio.Task):
+    """回调：消费 fire-and-forget 任务的异常，防止任务对象泄漏"""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        log.warning(f"[FireAndForget] 任务异常: {exc}")
+
+
+# ==================== 调试日志工具 ====================
+
+def debug_log(message: str, level: str = "debug") -> None:
+    """
+    仅在调试模式下输出日志，正常模式零开销。
+
+    用法:
+        from src.api.utils import debug_log
+        debug_log(f"[STREAM] 收到chunk, 大小: {len(chunk)}")
+        debug_log(f"[STREAM] 严重异常: {e}", level="warning")
+    """
+    from config import is_debug_mode
+    if not is_debug_mode():
+        return
+    getattr(log, level, log.debug)(f"[DEBUG] {message}")
+
+
+# ==================== 统一错误响应构建 ====================
+
+def build_error_response(message: str, status_code: int = 500) -> Response:
+    """
+    构建 Gemini 原生格式的错误响应
+    
+    API 层统一使用此函数生成错误，路由层的转换函数会根据端点
+    将 Gemini 格式错误转换为 OpenAI / Anthropic 对应格式。
+    
+    Args:
+        message: 错误描述信息
+        status_code: HTTP 状态码
+        
+    Returns:
+        Response 对象，body 为 Gemini 原生错误格式
+    """
+    status_map = {
+        400: "INVALID_ARGUMENT",
+        401: "UNAUTHENTICATED",
+        403: "PERMISSION_DENIED",
+        404: "NOT_FOUND",
+        429: "RESOURCE_EXHAUSTED",
+        500: "INTERNAL",
+        503: "UNAVAILABLE",
+    }
+    return Response(
+        content=json.dumps({
+            "error": {
+                "code": status_code,
+                "message": message,
+                "status": status_map.get(status_code, "INTERNAL")
+            }
+        }),
+        status_code=status_code,
+        media_type="application/json"
+    )
+
+
 # ==================== 错误检查与处理 ====================
 
 async def check_should_auto_ban(status_code: int) -> bool:
@@ -162,6 +226,10 @@ async def record_api_call_success(
         await credential_manager.record_api_call_result(
             credential_name, True, mode=mode, model_name=model_name
         )
+        # 统计记录（fire-and-forget）
+        from src.usage_stats import record_usage
+        task = asyncio.create_task(record_usage(credential_name, model_name, True, mode))
+        task.add_done_callback(_fire_and_forget_cb)
 
 
 async def record_api_call_error(
@@ -195,6 +263,10 @@ async def record_api_call_error(
             model_name=model_name,
             error_message=error_message
         )
+        # 统计记录（fire-and-forget）
+        from src.usage_stats import record_usage
+        task = asyncio.create_task(record_usage(credential_name, model_name, False, mode))
+        task.add_done_callback(_fire_and_forget_cb)
 
 
 # ==================== 429错误处理 ====================
@@ -379,22 +451,14 @@ async def collect_streaming_response(stream_generator) -> Response:
 
     except Exception as e:
         log.error(f"[STREAM COLLECTOR] Error collecting stream after {line_count} lines: {e}")
-        return Response(
-            content=json.dumps({"error": f"收集流式响应失败: {str(e)}"}),
-            status_code=500,
-            media_type="application/json"
-        )
+        return build_error_response(f"收集流式响应失败: {str(e)}", 500)
 
     log.debug(f"[STREAM COLLECTOR] Finished iteration, has_data={has_data}, line_count={line_count}")
 
     # 如果没有收集到任何数据，返回错误
     if not has_data:
         log.error(f"[STREAM COLLECTOR] No data collected from stream after {line_count} lines")
-        return Response(
-            content=json.dumps({"error": "No data collected from stream"}),
-            status_code=500,
-            media_type="application/json"
-        )
+        return build_error_response("No data collected from stream", 500)
 
     # 组装最终的parts
     final_parts = []

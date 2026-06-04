@@ -1468,24 +1468,55 @@ def convert_gemini_to_openai_response(
     Returns:
         OpenAI 格式的响应体字典,或原始响应 (如果状态码不是 2xx)
     """
-    # 非 2xx 状态码直接返回原始响应
+    # 非 2xx 状态码 - 转换为 OpenAI 标准错误格式
     if not (200 <= status_code < 300):
+        # HTTP 状态码到 OpenAI error type 的映射
+        _openai_error_type_map = {
+            400: "invalid_request_error",
+            401: "authentication_error",
+            403: "permission_error",
+            404: "not_found_error",
+            429: "rate_limit_error",
+            500: "server_error",
+            503: "service_unavailable_error",
+        }
+
+        # 尝试解析为字典
+        error_dict = None
         if isinstance(gemini_response, dict):
-            return gemini_response
+            error_dict = gemini_response
         else:
-            # 如果是响应对象,尝试解析为字典
             try:
                 if hasattr(gemini_response, "json"):
-                    return gemini_response.json()
+                    error_dict = gemini_response.json()
                 elif hasattr(gemini_response, "body"):
                     body = gemini_response.body
                     if isinstance(body, bytes):
-                        return json.loads(body.decode())
-                    return json.loads(str(body))
-                else:
-                    return {"error": str(gemini_response)}
+                        error_dict = json.loads(body.decode())
+                    else:
+                        error_dict = json.loads(str(body))
             except Exception:
-                return {"error": str(gemini_response)}
+                error_dict = None
+
+        # 提取错误消息
+        error_message = ""
+        if error_dict and "error" in error_dict:
+            err = error_dict["error"]
+            if isinstance(err, dict):
+                error_message = err.get("message", "")
+            elif isinstance(err, str):
+                error_message = err
+
+        if not error_message:
+            error_message = str(gemini_response) if gemini_response else "Unknown error"
+
+        return {
+            "error": {
+                "message": error_message,
+                "type": _openai_error_type_map.get(status_code, "api_error"),
+                "code": status_code
+            }
+        }
 
     # 确保是字典格式
     if not isinstance(gemini_response, dict):

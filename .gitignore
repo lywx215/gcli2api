@@ -97,3 +97,9 @@ log.txt
 *.bak
 
 tools/
+
+zeaburcli/
+sshcli/
+tests/
+
+参考项目/

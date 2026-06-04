@@ -95,6 +95,29 @@ class StorageAdapter:
             # 关闭严格模式: 设置环境变量 STORAGE_STRICT=0
             strict_mode = os.getenv("STORAGE_STRICT", "1").strip().lower() not in ("0", "false", "no", "off")
 
+            # MySQL support (requires MYSQL_URI and GCLI_SERVER_NAME)
+            mysql_uri = os.getenv("MYSQL_URI", "")
+            gcli_server_name = os.getenv("GCLI_SERVER_NAME", "")
+            if mysql_uri and gcli_server_name:
+                try:
+                    from .storage.mysql_manager import MySQLManager
+
+                    self._backend = MySQLManager()
+                    await self._backend.initialize()
+                    log.info("Using MySQL storage backend")
+                    self._initialized = True
+                    return
+                except Exception as e:
+                    log.error(f"Failed to initialize MySQL backend: {e}")
+                    if strict_mode:
+                        log.error(
+                            "STORAGE_STRICT=1: 已配置 MYSQL_URI 但初始化失败, "
+                            "拒绝回落到 SQLite。请检查 MySQL 连接, 或显式设置 STORAGE_STRICT=0 允许回落。"
+                        )
+                        log.error("严格模式: 进程立即退出, 容器将自动重启")
+                        os._exit(1)
+                    log.warning("Falling back to SQLite storage backend (STORAGE_STRICT=0)")
+
             if postgresql_uri:
                 # 使用 PostgreSQL
                 try:
@@ -295,6 +318,8 @@ class StorageAdapter:
             return "sqlite"
         elif "MongoDB" in backend_class_name or "mongo" in backend_class_name.lower():
             return "mongodb"
+        elif "MySQL" in backend_class_name or "mysql" in backend_class_name.lower():
+            return "mysql"
         elif "PSQL" in backend_class_name or "Postgres" in backend_class_name or "psql" in backend_class_name.lower():
             return "postgresql"
         else:

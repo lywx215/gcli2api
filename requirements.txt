@@ -9,6 +9,7 @@ PyJWT>=2.10.1
 oauthlib>=3.3.1
 motor>=3.7.1
 aiosqlite>=0.20.0
+aiomysql>=0.2.0
 pypinyin>=0.51.0
 redis>=4.2.0
 asyncpg

@@ -116,6 +116,6 @@ async def stream_post_async(
                 async for chunk in r.aiter_bytes():
                     yield chunk
             else:
-                # 通过aiter_lines转化成str流返回
+                # 通过aiter_lines转化成bytes流返回（统一为bytes避免下游str/bytes混合）
                 async for line in r.aiter_lines():
-                    yield line
+                    yield line.encode('utf-8') if isinstance(line, str) else line
