@@ -99,5 +99,7 @@ log.txt
 tools/
 
 zeaburcli/
+sshcli/
+tests/
 
 参考项目/
