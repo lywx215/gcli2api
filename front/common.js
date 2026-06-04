@@ -1129,6 +1129,7 @@ function triggerTabDataLoad(tabName) {
         if (typeof stopStatsAutoRefresh === 'function') stopStatsAutoRefresh();
     }
     if (tabName === 'config') loadConfig();
+    if (tabName === 'status') { if (typeof loadSystemStatus === 'function') loadSystemStatus(); }
     if (tabName === 'logs') connectWebSocket();
 }
 
@@ -2978,6 +2979,8 @@ async function loadConfig() {
             populateConfigForm();
             form.classList.remove('hidden');
             showStatus('配置加载成功', 'success');
+            // 异步加载存储引擎信息（不阻塞配置表单）
+            if (typeof loadStorageEngine === 'function') loadStorageEngine();
         } else {
             showStatus(`加载配置失败: ${data.detail || data.error || '未知错误'}`, 'error');
         }
@@ -3754,3 +3757,242 @@ function stopStatsAutoRefresh() {
         _statsAutoRefreshTimer = null;
     }
 }
+
+
+// =====================================================================
+// 系统状态 - Redis 缓存 (dev2 自定义)
+// =====================================================================
+
+function statusItem(label, value) {
+    return `<div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+        <span style="opacity: 0.8;">${label}</span>
+        <span style="font-weight: 600;">${value}</span>
+    </div>`;
+}
+
+async function loadSystemStatus() {
+    const el = document.getElementById('redisStatus');
+    if (!el) return;
+    el.innerHTML = '<div style="opacity: 0.7;">加载中...</div>';
+
+    try {
+        const resp = await fetch('./config/system-status', { headers: getAuthHeaders() });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const r = data.redis || {};
+
+        let html = '';
+        if (r.enabled) {
+            html += statusItem('状态', '<span style="background: rgba(255,255,255,0.25); padding: 2px 8px; border-radius: 4px;">✅ 已启用</span>');
+            if (r.server_name) html += statusItem('服务器', r.server_name);
+            if (r.memory_used_mb !== undefined) html += statusItem('内存使用', `${r.memory_used_mb} MB`);
+            if (r.total_keys !== undefined) html += statusItem('总 Key 数', r.total_keys);
+            if (r.pools) {
+                html += statusItem('GCLI 可用数', r.pools.geminicli_avail);
+                html += statusItem('GCLI Preview 数', r.pools.geminicli_preview);
+                html += statusItem('Antigravity 数', r.pools.antigravity_avail);
+            }
+        } else {
+            html += statusItem('状态', '<span style="background: rgba(255,0,0,0.3); padding: 2px 8px; border-radius: 4px;">❌ 未启用</span>');
+        }
+        if (r.note) html += statusItem('说明', r.note);
+        if (r.error) html += statusItem('错误', r.error);
+
+        el.innerHTML = html;
+        const ts = document.getElementById('statusLastUpdate');
+        if (ts) ts.textContent = new Date().toLocaleTimeString();
+    } catch (err) {
+        el.innerHTML = `<div style="color: #ffcccc;">加载失败: ${err.message}</div>`;
+    }
+}
+
+
+// =====================================================================
+// 存储引擎管理 (dev2 自定义)
+// =====================================================================
+
+async function loadStorageEngine() {
+    const typeEl = document.getElementById('storageEngineType');
+    const iconEl = document.getElementById('storageEngineIcon');
+    const serverNameEl = document.getElementById('storageServerName');
+    const switchArea = document.getElementById('storageEngineSwitchArea');
+    if (!typeEl) return;
+
+    try {
+        const resp = await fetch('./config/storage-engine', { headers: getAuthHeaders() });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+
+        const engine = (data.current_engine || 'unknown').toUpperCase();
+        const engineColors = { 'MYSQL': '#007bff', 'SQLITE': '#28a745', 'MONGODB': '#4db33d', 'POSTGRESQL': '#336791' };
+        typeEl.textContent = engine;
+        typeEl.style.color = engineColors[engine] || '#333';
+
+        if (iconEl) {
+            const icons = { 'MYSQL': '🐬', 'SQLITE': '📦', 'MONGODB': '🍃', 'POSTGRESQL': '🐘' };
+            iconEl.textContent = icons[engine] || '💾';
+        }
+
+        if (serverNameEl && data.server_name) {
+            serverNameEl.textContent = data.server_name;
+            serverNameEl.style.display = 'inline-block';
+        }
+
+        if (switchArea && data.mysql_available) {
+            switchArea.style.display = 'flex';
+            const select = document.getElementById('serverNameSelect');
+            if (select && data.servers && data.servers.length > 0) {
+                select.innerHTML = '<option value="">-- 选择服务器 --</option>';
+                data.servers.forEach(s => {
+                    const opt = document.createElement('option');
+                    opt.value = s.name;
+                    opt.textContent = `${s.name} (${s.status || 'active'})`;
+                    if (s.name === data.server_name) opt.selected = true;
+                    select.appendChild(opt);
+                });
+                const inputArea = document.getElementById('serverNameInputArea');
+                if (inputArea) inputArea.style.display = 'flex';
+            }
+        }
+    } catch (err) {
+        typeEl.textContent = '加载失败';
+        typeEl.style.color = '#dc3545';
+        console.error('加载存储引擎失败:', err);
+    }
+}
+
+function onServerNameSelectChange() {
+    const select = document.getElementById('serverNameSelect');
+    const custom = document.getElementById('serverNameCustom');
+    if (select && custom) {
+        custom.style.display = select.value === '__custom__' ? 'inline-block' : 'none';
+    }
+}
+
+async function switchStorageEngine() {
+    const btn = document.getElementById('switchEngineBtn');
+    const select = document.getElementById('serverNameSelect');
+    const customInput = document.getElementById('serverNameCustom');
+
+    const typeEl = document.getElementById('storageEngineType');
+    const currentEngine = (typeEl ? typeEl.textContent.trim().toLowerCase() : 'unknown');
+    const targetEngine = currentEngine === 'mysql' ? 'sqlite' : 'mysql';
+
+    let serverName = '';
+    if (select) {
+        serverName = select.value === '__custom__' ? (customInput ? customInput.value.trim() : '') : select.value;
+    }
+    if (!serverName) {
+        const badge = document.getElementById('storageServerName');
+        if (badge) serverName = badge.textContent.trim();
+    }
+
+    if (targetEngine === 'mysql' && !serverName) {
+        showMessageModal('提示', '切换到 MySQL 需要选择或输入 server_name', 'warning');
+        return;
+    }
+
+    let previewText = '';
+    try {
+        const previewResp = await fetch('./config/storage-engine/preview', {
+            method: 'POST',
+            headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        });
+        if (previewResp.ok) {
+            const preview = await previewResp.json();
+            const d = preview.data || {};
+            previewText = `\n\n当前数据: GCLI凭证 ${d.gcli_credentials || 0} 个, Antigravity凭证 ${d.antigravity_credentials || 0} 个, 配置 ${d.config || 0} 项`;
+        }
+    } catch (e) { /* 预览失败不阻断 */ }
+
+    const confirmed = confirm(
+        `确认要从 ${currentEngine.toUpperCase()} 切换到 ${targetEngine.toUpperCase()} 吗？\n\n数据将自动迁移到目标引擎。${previewText}`
+    );
+    if (!confirmed) return;
+
+    btn.disabled = true;
+    btn.textContent = '切换中...';
+
+    try {
+        const resp = await fetch('./config/storage-engine/switch', {
+            method: 'POST',
+            headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target_engine: targetEngine,
+                server_name: serverName,
+                migrate_data: true
+            })
+        });
+
+        const data = await resp.json();
+        if (resp.ok) {
+            showMessageModal('切换成功', data.message || '存储引擎已切换', 'success');
+            loadStorageEngine();
+        } else {
+            showMessageModal('切换失败', data.detail || data.error || '未知错误', 'error');
+        }
+    } catch (err) {
+        showMessageModal('切换失败', `请求失败: ${err.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '切换引擎';
+    }
+}
+
+
+// =====================================================================
+// 额度卡片中的单模型测试 (dev2 自定义)
+// =====================================================================
+
+async function testModelQuota(btn, filename, modelName, mode) {
+    const originalText = btn.textContent;
+    btn.textContent = '…';
+    btn.disabled = true;
+    btn.style.cursor = 'wait';
+
+    try {
+        const response = await fetch(
+            `./creds/test/${encodeURIComponent(filename)}?mode=${mode}&model=${encodeURIComponent(modelName)}`,
+            { method: 'POST', headers: getAuthHeaders() }
+        );
+        const data = await response.json();
+
+        if (response.ok || response.status === 429) {
+            btn.textContent = '✓';
+            btn.style.borderColor = '#28a745';
+            btn.style.color = '#28a745';
+            const msg = response.status === 429
+                ? `${modelName}: 限流中但凭证有效 (429)`
+                : `${modelName}: 测试成功 ✅`;
+            showStatus(msg, response.status === 429 ? 'info' : 'success');
+        } else {
+            btn.textContent = '✗';
+            btn.style.borderColor = '#dc3545';
+            btn.style.color = '#dc3545';
+            const errorDetail = data.error || data.detail || data.message || '';
+            showStatus(`${modelName}: 测试失败 (HTTP ${response.status})`, 'error');
+            if (errorDetail) {
+                showMessageModal(
+                    `${modelName} 测试失败 (HTTP ${response.status})`,
+                    errorDetail,
+                    'error'
+                );
+            }
+        }
+    } catch (error) {
+        btn.textContent = '✗';
+        btn.style.borderColor = '#dc3545';
+        btn.style.color = '#dc3545';
+        showStatus(`${modelName}: 网络错误 - ${error.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.style.cursor = 'pointer';
+        setTimeout(() => {
+            btn.textContent = originalText;
+            btn.style.borderColor = '#9c27b0';
+            btn.style.color = '#9c27b0';
+        }, 3000);
+    }
+}
+
