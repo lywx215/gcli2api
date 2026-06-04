@@ -75,7 +75,6 @@ async def lifespan(app: FastAPI):
         log.error(f"保活服务启动失败: {e}")
 
     # 启动分钟统计表定期清理任务（保留 24h）
-    import asyncio
     async def _cleanup_minute_stats_loop():
         try:
             from src.storage_adapter import get_storage_adapter
