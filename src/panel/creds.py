@@ -1743,7 +1743,7 @@ async def configure_preview_channel(
         raise HTTPException(status_code=500, detail=f"配置失败: {str(e)}")
 
 
-async def test_credential_common(filename: str, mode: str = "geminicli") -> JSONResponse:
+async def test_credential_common(filename: str, mode: str = "geminicli", model: str = None) -> JSONResponse:
     """
     测试指定凭证是否可用
 
@@ -1794,10 +1794,10 @@ async def test_credential_common(filename: str, mode: str = "geminicli") -> JSON
         if not project_id:
             raise HTTPException(status_code=400, detail="凭证中没有项目ID")
 
-        # 根据模式选择 API 端点和请求头
-        # 对于 geminicli 模式，使用两次测试：gemini-2.5-flash 和 gemini-3-flash-preview
-        # 对于 antigravity 模式，只使用 gemini-2.5-flash
-        test_model = "gemini-2.5-flash"
+        # 使用指定的模型或默认模型
+        test_model = model if model else "gemini-2.5-flash"
+        # 如果指定了具体模型，则跳过后续的 preview 模型测试
+        skip_preview_test = model is not None
 
         if mode == "antigravity":
             api_base_url = await get_antigravity_api_url()
@@ -1845,8 +1845,8 @@ async def test_credential_common(filename: str, mode: str = "geminicli") -> JSON
                         "error_messages": {}
                     }, mode=mode)
 
-                # 如果是 geminicli 模式且第一次测试成功，继续测试 gemini-3-flash-preview
-                if mode == "geminicli":
+                # 如果是 geminicli 模式且第一次测试成功，继续测试 gemini-3-flash-preview（仅在未指定具体模型时）
+                if mode == "geminicli" and not skip_preview_test:
                     preview_model = "gemini-3-flash-preview"
                     log.info(f"开始测试 preview 模型: {filename} (model={preview_model})")
 
@@ -1975,9 +1975,10 @@ async def test_credential_common(filename: str, mode: str = "geminicli") -> JSON
 async def test_credential(
     filename: str,
     mode: str = "geminicli",
+    model: str = None,
     _token: str = Depends(verify_panel_token)
 ):
-    return await test_credential_common(filename, mode=mode)
+    return await test_credential_common(filename, mode=mode, model=model)
 
 
 @router.post("/batch-test")

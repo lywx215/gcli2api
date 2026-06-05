@@ -864,9 +864,14 @@ async def fetch_geminicli_quota_info(
             except Exception:
                 err_body = response.text
             log.warning(f"[GEMINICLI QUOTA] HTTP {response.status_code}: {err_body}")
+            # 序列化为 JSON 字符串，前端可解析并格式化展示
+            if isinstance(err_body, dict):
+                err_str = json.dumps(err_body, ensure_ascii=False)
+            else:
+                err_str = str(err_body)
             return {
                 "success": False,
-                "error": f"HTTP {response.status_code}: {err_body}",
+                "error": f"HTTP {response.status_code}: {err_str}",
             }
 
         data = response.json()

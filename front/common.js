@@ -2155,8 +2155,11 @@ async function _toggleQuotaDetails(pathId, mode) {
                                     <div style="width: 100%; height: 8px; background-color: #e9ecef; border-radius: 4px; overflow: hidden; margin-bottom: 4px;">
                                         <div style="width: ${usedPercentage}%; height: 100%; background-color: ${percentageColor}; transition: width 0.3s ease;"></div>
                                     </div>
-                                    <div style="font-size: 10px; color: #666; text-align: right;">
-                                        ${resetTime !== 'N/A' ? '🔄 ' + resetTime + (countdownStr ? ` <span style="color:${remainingPercentage <= 0 ? '#dc3545' : '#17a2b8'};font-weight:bold;">(⏱️ ${countdownStr})</span>` : '') : ''}
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <button onclick="testModelQuota(this, '${filename}', '${modelName}', '${mode}')" style="font-size: 10px; padding: 1px 8px; border: 1px solid #9c27b0; background: white; color: #9c27b0; border-radius: 3px; cursor: pointer;" onmouseover="this.style.background='#9c27b0';this.style.color='white'" onmouseout="this.style.background='white';this.style.color='#9c27b0'">测试</button>
+                                        <div style="font-size: 10px; color: #666;">
+                                            ${resetTime !== 'N/A' ? '🔄 ' + resetTime + (countdownStr ? ` <span style="color:${remainingPercentage <= 0 ? '#dc3545' : '#17a2b8'};font-weight:bold;">(⏱️ ${countdownStr})</span>` : '') : ''}
+                                        </div>
                                     </div>
                                 </div>
                             `;
@@ -2168,16 +2171,71 @@ async function _toggleQuotaDetails(pathId, mode) {
 
                     showStatus('✅ 成功加载额度信息', 'success');
                 } else {
-                    // 失败时显示错误
-                    const errorMsg = data.error || '获取额度信息失败';
-                    contentDiv.innerHTML = `
-                        <div style="text-align: center; padding: 20px; color: #dc3545;">
-                            <div style="font-size: 48px; margin-bottom: 10px;">❌</div>
-                            <div style="font-weight: bold; margin-bottom: 5px;">获取额度信息失败</div>
-                            <div style="font-size: 13px; color: #666;">${errorMsg}</div>
-                        </div>
-                    `;
-                    showStatus(`❌ ${errorMsg}`, 'error');
+                    // 失败时显示格式化的错误信息
+                    const rawError = data.error || data.detail || '获取额度信息失败';
+                    let errorDisplayHTML = '';
+
+                    // 尝试从 "HTTP 403: {...}" 格式中提取 JSON 部分
+                    const httpMatch = String(rawError).match(/^HTTP\s+(\d+):\s*([\s\S]+)$/);
+                    const httpCode = httpMatch ? httpMatch[1] : '';
+                    const jsonPart = httpMatch ? httpMatch[2].trim() : '';
+
+                    let parsed = null;
+                    if (jsonPart) {
+                        try { parsed = JSON.parse(jsonPart); } catch(e) { /* not JSON */ }
+                    }
+
+                    if (parsed && parsed.error) {
+                        // 结构化展示（类似"查看报错"的格式）
+                        const err = parsed.error;
+                        const errMsg = err.message || '';
+                        errorDisplayHTML += `
+                            <div style="padding: 12px; border-left: 3px solid #dc3545; background-color: #f8f9fa; text-align: left;">
+                                <div style="font-weight: bold; color: #dc3545; margin-bottom: 8px;">错误码: ${httpCode || err.code || ''}</div>
+                                <div style="line-height: 1.6; color: #333; white-space: pre-wrap; word-break: break-word;">
+                                    ${highlightHttpLinks(escapeHtml(errMsg))}
+                                </div>
+                        `;
+                        // 显示 details
+                        if (err.details && Array.isArray(err.details)) {
+                            errorDisplayHTML += '<div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed #ddd;">';
+                            errorDisplayHTML += '<div style="font-size: 12px; color: #666; margin-bottom: 5px;">详细信息:</div>';
+                            err.details.forEach(detail => {
+                                errorDisplayHTML += '<div style="font-size: 12px; margin-left: 10px; margin-bottom: 5px;">';
+                                if (detail['@type']) {
+                                    errorDisplayHTML += `<div style="color: #007bff;">类型: ${highlightHttpLinks(escapeHtml(detail['@type']))}</div>`;
+                                }
+                                if (detail.reason) {
+                                    errorDisplayHTML += `<div style="color: #dc3545;">原因: ${escapeHtml(detail.reason)}</div>`;
+                                }
+                                if (detail.metadata) {
+                                    errorDisplayHTML += '<div style="margin-left: 10px; margin-top: 3px;">';
+                                    for (const [key, value] of Object.entries(detail.metadata)) {
+                                        errorDisplayHTML += `<div style="font-family: monospace; color: #333;">${escapeHtml(key)}: ${highlightHttpLinks(escapeHtml(String(value)))}</div>`;
+                                    }
+                                    errorDisplayHTML += '</div>';
+                                }
+                                errorDisplayHTML += '</div>';
+                            });
+                            errorDisplayHTML += '</div>';
+                        }
+                        if (err.status) {
+                            errorDisplayHTML += `<div style="font-size: 12px; color: #666; margin-top: 5px;">状态: ${escapeHtml(err.status)}</div>`;
+                        }
+                        errorDisplayHTML += '</div>';
+                    } else {
+                        // 无法解析时，简单文本显示
+                        errorDisplayHTML = `
+                            <div style="text-align: center; padding: 20px;">
+                                <div style="font-size: 48px; margin-bottom: 10px;">❌</div>
+                                <div style="font-weight: bold; margin-bottom: 5px; color: #dc3545;">获取额度信息失败</div>
+                                <div style="font-size: 13px; color: #666; word-break: break-all;">${escapeHtml(String(rawError))}</div>
+                            </div>
+                        `;
+                    }
+
+                    contentDiv.innerHTML = errorDisplayHTML;
+                    showStatus(`❌ 获取额度信息失败`, 'error');
                 }
             } catch (error) {
                 contentDiv.innerHTML = `
