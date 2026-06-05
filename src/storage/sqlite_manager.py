@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import aiosqlite
 
 from log import log
+from src.storage._stats_common import normalize_model_family, _today_beijing_str
 
 
 class SQLiteManager:
@@ -89,6 +90,15 @@ class SQLiteManager:
         self._config_cache: Dict[str, Any] = {}
         self._config_loaded = False
 
+        # ---- 统计缓冲区 ----
+        # (date, mode) -> {"success": N, "failure": M}
+        self._stats_daily: Dict[Tuple[str, str], Dict[str, int]] = {}
+        # (date, mode, family) -> {"success": N, "failure": M}
+        self._stats_daily_model: Dict[Tuple[str, str, str], Dict[str, int]] = {}
+        # (minute_ts, mode, family) -> count
+        self._stats_minute: Dict[Tuple[int, str, str], int] = {}
+        self._stats_flush_task: Optional[asyncio.Task] = None
+
     async def initialize(self) -> None:
         """初始化 SQLite 数据库"""
         if self._initialized:
@@ -128,6 +138,9 @@ class SQLiteManager:
 
                 self._initialized = True
                 log.info(f"SQLite storage initialized at {self._db_path}")
+
+                # 启动统计刷写后台任务
+                self._stats_flush_task = asyncio.create_task(self._flush_stats_loop())
 
             except Exception as e:
                 log.error(f"Error initializing SQLite: {e}")
@@ -280,6 +293,40 @@ class SQLiteManager:
             )
         """)
 
+        # ---- 统计表 ----
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS daily_stats (
+                date TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                success_count INTEGER DEFAULT 0,
+                failure_count INTEGER DEFAULT 0,
+                updated_at REAL,
+                PRIMARY KEY (date, mode)
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS daily_model_stats (
+                date TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                model_family TEXT NOT NULL,
+                success_count INTEGER DEFAULT 0,
+                failure_count INTEGER DEFAULT 0,
+                updated_at REAL,
+                PRIMARY KEY (date, mode, model_family)
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS minute_model_stats (
+                minute_ts INTEGER NOT NULL,
+                mode TEXT NOT NULL,
+                model_family TEXT NOT NULL,
+                count INTEGER DEFAULT 0,
+                PRIMARY KEY (minute_ts, mode, model_family)
+            )
+        """)
+
         log.debug("SQLite tables and indexes created")
 
     async def _repair_credential_filenames(self, db: aiosqlite.Connection):
@@ -382,7 +429,19 @@ class SQLiteManager:
             self._config_cache = {}
 
     async def close(self) -> None:
-        """关闭数据库连接"""
+        """关闭数据库连接，做最终一次统计刷写"""
+        # 取消后台刷写任务
+        if self._stats_flush_task and not self._stats_flush_task.done():
+            self._stats_flush_task.cancel()
+            try:
+                await self._stats_flush_task
+            except asyncio.CancelledError:
+                pass
+        # 最终刷写
+        try:
+            await self._flush_stats_to_db()
+        except Exception as e:
+            log.warning(f"Final stats flush failed: {e}")
         self._initialized = False
         log.debug("SQLite storage closed")
 
@@ -1466,6 +1525,9 @@ class SQLiteManager:
 
                 await db.commit()
 
+            # 内存统计缓冲递增（零 I/O）
+            self._bump_stats_buffer(model_name, mode, is_success=True)
+
         except Exception as e:
             log.error(f"Error recording success for {filename}: {e}")
 
@@ -1506,6 +1568,9 @@ class SQLiteManager:
                     filename,
                 ))
                 await db.commit()
+
+            # 内存统计缓冲递增（零 I/O）
+            self._bump_stats_buffer(model_name, mode, is_success=False)
 
         except Exception as e:
             log.error(f"Error recording failure for {filename}: {e}")
@@ -1586,107 +1651,352 @@ class SQLiteManager:
 
         return json.dumps(new_stats), json.dumps(last_stats)
 
+    # ============ 统计缓冲 & 刷写 ============
+
+    def _bump_stats_buffer(
+        self,
+        model_name: Optional[str],
+        mode: str,
+        is_success: bool,
+    ) -> None:
+        """在内存缓冲中递增统计计数器（零 I/O，asyncio 单线程无需加锁）。"""
+        family = normalize_model_family(model_name)
+        today = _today_beijing_str()
+        minute_ts = int(time.time() // 60) * 60
+        counter = "success" if is_success else "failure"
+
+        # daily
+        dk = (today, mode)
+        buf = self._stats_daily.get(dk)
+        if buf is None:
+            buf = {"success": 0, "failure": 0}
+            self._stats_daily[dk] = buf
+        buf[counter] += 1
+
+        # daily_model
+        dmk = (today, mode, family)
+        buf2 = self._stats_daily_model.get(dmk)
+        if buf2 is None:
+            buf2 = {"success": 0, "failure": 0}
+            self._stats_daily_model[dmk] = buf2
+        buf2[counter] += 1
+
+        # minute
+        mk = (minute_ts, mode, family)
+        self._stats_minute[mk] = self._stats_minute.get(mk, 0) + 1
+
+    async def _flush_stats_loop(self) -> None:
+        """后台定期刷写统计缓冲到 SQLite。"""
+        try:
+            while True:
+                await asyncio.sleep(60)
+                try:
+                    await self._flush_stats_to_db()
+                except Exception as e:
+                    log.warning(f"Stats flush error: {e}")
+        except asyncio.CancelledError:
+            pass
+
+    async def _flush_stats_to_db(self) -> None:
+        """将内存缓冲原子交换后批量 UPSERT 到 SQLite。"""
+        # 原子交换缓冲（asyncio 单线程，安全）
+        snap_daily = self._stats_daily
+        snap_daily_model = self._stats_daily_model
+        snap_minute = self._stats_minute
+        self._stats_daily = {}
+        self._stats_daily_model = {}
+        self._stats_minute = {}
+
+        if not snap_daily and not snap_daily_model and not snap_minute:
+            return
+
+        now = time.time()
+        try:
+            async with aiosqlite.connect(self._db_path) as db:
+                # daily_stats
+                for (date, mode), counters in snap_daily.items():
+                    await db.execute("""
+                        INSERT INTO daily_stats (date, mode, success_count, failure_count, updated_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(date, mode) DO UPDATE SET
+                            success_count = success_count + excluded.success_count,
+                            failure_count = failure_count + excluded.failure_count,
+                            updated_at = excluded.updated_at
+                    """, (date, mode, counters["success"], counters["failure"], now))
+
+                # daily_model_stats
+                for (date, mode, family), counters in snap_daily_model.items():
+                    await db.execute("""
+                        INSERT INTO daily_model_stats (date, mode, model_family, success_count, failure_count, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(date, mode, model_family) DO UPDATE SET
+                            success_count = success_count + excluded.success_count,
+                            failure_count = failure_count + excluded.failure_count,
+                            updated_at = excluded.updated_at
+                    """, (date, mode, family, counters["success"], counters["failure"], now))
+
+                # minute_model_stats
+                for (minute_ts, mode, family), count in snap_minute.items():
+                    await db.execute("""
+                        INSERT INTO minute_model_stats (minute_ts, mode, model_family, count)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(minute_ts, mode, model_family) DO UPDATE SET
+                            count = count + excluded.count
+                    """, (minute_ts, mode, family, count))
+
+                await db.commit()
+
+            total = len(snap_daily) + len(snap_daily_model) + len(snap_minute)
+            log.debug(f"Stats flushed: {total} entries written to SQLite")
+
+        except Exception as e:
+            # 刷写失败时将数据合并回缓冲，避免丢失
+            for k, v in snap_daily.items():
+                buf = self._stats_daily.get(k)
+                if buf:
+                    buf["success"] += v["success"]
+                    buf["failure"] += v["failure"]
+                else:
+                    self._stats_daily[k] = v
+            for k, v in snap_daily_model.items():
+                buf = self._stats_daily_model.get(k)
+                if buf:
+                    buf["success"] += v["success"]
+                    buf["failure"] += v["failure"]
+                else:
+                    self._stats_daily_model[k] = v
+            for k, v in snap_minute.items():
+                self._stats_minute[k] = self._stats_minute.get(k, 0) + v
+            raise
+
+    # ============ 统计查询 ============
+
     async def get_today_stats(self, mode: Optional[str] = None) -> Dict[str, Any]:
-        # SQLite 模式下未实现按日聚合，仅返回零值占位
-        from datetime import datetime, timedelta, timezone
-        today = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
-        return {
-            "date": today,
-            "success_count": 0,
-            "failure_count": 0,
-            "total_count": 0,
-            "note": "SQLite 后端未启用按日统计",
-        }
+        """获取今天（北京时间）的总调用统计。"""
+        self._ensure_initialized()
+        today = _today_beijing_str()
+        try:
+            async with aiosqlite.connect(self._db_path) as db:
+                if mode:
+                    async with db.execute(
+                        "SELECT COALESCE(success_count,0), COALESCE(failure_count,0) "
+                        "FROM daily_stats WHERE date = ? AND mode = ?",
+                        (today, mode),
+                    ) as cursor:
+                        row = await cursor.fetchone()
+                    s = int(row[0]) if row else 0
+                    f = int(row[1]) if row else 0
+                    # 合并未刷写缓冲
+                    buf = self._stats_daily.get((today, mode))
+                    if buf:
+                        s += buf["success"]
+                        f += buf["failure"]
+                    return {
+                        "date": today,
+                        "mode": mode,
+                        "success_count": s,
+                        "failure_count": f,
+                        "total_count": s + f,
+                    }
+                else:
+                    async with db.execute(
+                        "SELECT mode, COALESCE(success_count,0), COALESCE(failure_count,0) "
+                        "FROM daily_stats WHERE date = ?",
+                        (today,),
+                    ) as cursor:
+                        rows = await cursor.fetchall()
+                    by_mode: Dict[str, Dict[str, int]] = {}
+                    for r in rows:
+                        m = r[0]
+                        by_mode[m] = {"success_count": int(r[1]), "failure_count": int(r[2])}
+                    # 合并未刷写缓冲
+                    for (d, m), buf in self._stats_daily.items():
+                        if d != today:
+                            continue
+                        entry = by_mode.get(m)
+                        if entry:
+                            entry["success_count"] += buf["success"]
+                            entry["failure_count"] += buf["failure"]
+                        else:
+                            by_mode[m] = {"success_count": buf["success"], "failure_count": buf["failure"]}
+                    total_s = sum(v["success_count"] for v in by_mode.values())
+                    total_f = sum(v["failure_count"] for v in by_mode.values())
+                    for v in by_mode.values():
+                        v["total_count"] = v["success_count"] + v["failure_count"]
+                    return {
+                        "date": today,
+                        "by_mode": by_mode,
+                        "success_count": total_s,
+                        "failure_count": total_f,
+                        "total_count": total_s + total_f,
+                    }
+        except Exception as e:
+            log.error(f"get_today_stats failed: {e}")
+            return {
+                "date": today,
+                "success_count": 0,
+                "failure_count": 0,
+                "total_count": 0,
+                "error": str(e),
+            }
 
     async def get_recent_daily_stats(self, days: int = 7, mode: Optional[str] = None) -> List[Dict[str, Any]]:
-        return []
-
-
-    @staticmethod
-    def _model_cycle_family(model_name: Optional[str]) -> str:
-        model = (model_name or "").lower()
-        if "pro" in model:
-            return "pro"
-        if "flash" in model:
-            return "flash"
-        return "other"
-
-    @staticmethod
-    def _bump_cycle_stats(raw: Optional[str], model_name: Optional[str]) -> str:
-        now = time.time()
+        """获取最近 N 天的每日调用统计（按北京日期）。"""
+        self._ensure_initialized()
+        days = max(1, min(int(days or 7), 90))
         try:
-            stats = json.loads(raw or "{}")
-        except Exception:
-            stats = {}
-        if not isinstance(stats, dict):
-            stats = {}
-        stats.setdefault("started_at", now)
-        stats.setdefault("pro", 0)
-        stats.setdefault("flash", 0)
-        stats.setdefault("other", 0)
-        stats["total"] = int(stats.get("total") or 0) + 1
-        family = SQLiteManager._model_cycle_family(model_name)
-        stats[family] = int(stats.get(family) or 0) + 1
-        stats["updated_at"] = now
-        return json.dumps(stats)
+            async with aiosqlite.connect(self._db_path) as db:
+                if mode:
+                    async with db.execute(
+                        "SELECT date, COALESCE(success_count,0), COALESCE(failure_count,0) "
+                        "FROM daily_stats WHERE mode = ? ORDER BY date DESC LIMIT ?",
+                        (mode, days),
+                    ) as cursor:
+                        rows = await cursor.fetchall()
+                else:
+                    async with db.execute(
+                        "SELECT date, SUM(success_count), SUM(failure_count) "
+                        "FROM daily_stats GROUP BY date ORDER BY date DESC LIMIT ?",
+                        (days,),
+                    ) as cursor:
+                        rows = await cursor.fetchall()
+            return [
+                {
+                    "date": r[0],
+                    "success_count": int(r[1] or 0),
+                    "failure_count": int(r[2] or 0),
+                    "total_count": int((r[1] or 0) + (r[2] or 0)),
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            log.error(f"get_recent_daily_stats failed: {e}")
+            return []
 
-    @staticmethod
-    def _close_cycle_stats(raw: Optional[str], model_name: Optional[str]) -> tuple[str, str]:
-        """Close only the model family that just entered cooldown.
-
-        Pro and Flash quotas are independent buckets. When a Pro model enters
-        cooldown, Flash may still be usable, so the current Flash counter should
-        keep accumulating instead of being reset together with Pro. The returned
-        last_cycle_stats therefore contains the closed family only, while
-        cycle_stats keeps the other families as the new current cycle.
-        """
-        now = time.time()
-        try:
-            current_stats = json.loads(raw or "{}")
-        except Exception:
-            current_stats = {}
-        if not isinstance(current_stats, dict):
-            current_stats = {}
-
-        family = SQLiteManager._model_cycle_family(model_name)
-        families = ("pro", "flash", "other")
-
-        for key in families:
-            current_stats[key] = int(current_stats.get(key) or 0)
-        current_stats["total"] = sum(current_stats[key] for key in families)
-
-        last_stats = {
-            "started_at": current_stats.get("started_at", now),
-            "total": current_stats.get(family, 0),
-            "pro": current_stats["pro"] if family == "pro" else 0,
-            "flash": current_stats["flash"] if family == "flash" else 0,
-            "other": current_stats["other"] if family == "other" else 0,
-            "updated_at": current_stats.get("updated_at", now),
-            "ended_at": now,
-            "cooldown_family": family,
-        }
-
-        new_stats = {
-            "started_at": now,
-            "pro": current_stats["pro"],
-            "flash": current_stats["flash"],
-            "other": current_stats["other"],
-        }
-        new_stats[family] = 0
-        new_stats["total"] = sum(new_stats[key] for key in families)
-
-        return json.dumps(new_stats), json.dumps(last_stats)
 
     async def get_today_stats_by_model(self, mode: Optional[str] = None) -> Dict[str, Any]:
-        from datetime import datetime, timedelta, timezone
-        today = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
-        return {
-            "date": today,
-            "mode": mode,
-            "by_family": {},
-            "totals": {"success": 0, "failure": 0, "total": 0, "rpm": 0},
-            "note": "SQLite 后端未启用按模型统计",
-        }
+        """获取今日按模型家族汇总的统计 + 当前 RPM。"""
+        self._ensure_initialized()
+        today = _today_beijing_str()
+        now_ts = int(time.time())
+        from_ts = now_ts - 60
+
+        try:
+            async with aiosqlite.connect(self._db_path) as db:
+                # 每日按模型统计
+                if mode:
+                    async with db.execute(
+                        "SELECT model_family, COALESCE(success_count,0), COALESCE(failure_count,0) "
+                        "FROM daily_model_stats WHERE date = ? AND mode = ?",
+                        (today, mode),
+                    ) as cursor:
+                        daily_rows = await cursor.fetchall()
+                    async with db.execute(
+                        "SELECT model_family, COALESCE(SUM(count),0) "
+                        "FROM minute_model_stats WHERE minute_ts >= ? AND mode = ? "
+                        "GROUP BY model_family",
+                        (from_ts, mode),
+                    ) as cursor:
+                        minute_rows = await cursor.fetchall()
+                else:
+                    async with db.execute(
+                        "SELECT model_family, SUM(success_count), SUM(failure_count) "
+                        "FROM daily_model_stats WHERE date = ? GROUP BY model_family",
+                        (today,),
+                    ) as cursor:
+                        daily_rows = await cursor.fetchall()
+                    async with db.execute(
+                        "SELECT model_family, COALESCE(SUM(count),0) "
+                        "FROM minute_model_stats WHERE minute_ts >= ? "
+                        "GROUP BY model_family",
+                        (from_ts,),
+                    ) as cursor:
+                        minute_rows = await cursor.fetchall()
+
+            # 构建 DB 数据
+            by_family: Dict[str, Dict[str, int]] = {}
+            for r in daily_rows:
+                fam = r[0]
+                by_family[fam] = {"success": int(r[1] or 0), "failure": int(r[2] or 0)}
+
+            rpm_map: Dict[str, int] = {r[0]: int(r[1] or 0) for r in minute_rows}
+
+            # 合并未刷写的 daily_model 缓冲
+            for (d, m, fam), buf in self._stats_daily_model.items():
+                if d != today:
+                    continue
+                if mode and m != mode:
+                    continue
+                entry = by_family.get(fam)
+                if entry:
+                    entry["success"] += buf["success"]
+                    entry["failure"] += buf["failure"]
+                else:
+                    by_family[fam] = {"success": buf["success"], "failure": buf["failure"]}
+
+            # 合并未刷写的 minute 缓冲到 RPM
+            for (mts, m, fam), cnt in self._stats_minute.items():
+                if mts < from_ts:
+                    continue
+                if mode and m != mode:
+                    continue
+                rpm_map[fam] = rpm_map.get(fam, 0) + cnt
+
+            # 组装结果
+            tot_s = tot_f = 0
+            for fam, entry in by_family.items():
+                s = entry["success"]
+                f = entry["failure"]
+                entry["total"] = s + f
+                entry["rpm"] = rpm_map.get(fam, 0)
+                tot_s += s
+                tot_f += f
+
+            # RPM > 0 但今日无调用的模型也展示
+            for fam, rpm in rpm_map.items():
+                if fam not in by_family:
+                    by_family[fam] = {"success": 0, "failure": 0, "total": 0, "rpm": rpm}
+
+            tot_rpm = sum(rpm_map.values())
+            return {
+                "date": today,
+                "mode": mode,
+                "by_family": by_family,
+                "totals": {
+                    "success": tot_s,
+                    "failure": tot_f,
+                    "total": tot_s + tot_f,
+                    "rpm": tot_rpm,
+                },
+            }
+        except Exception as e:
+            log.error(f"get_today_stats_by_model failed: {e}")
+            return {
+                "date": today,
+                "mode": mode,
+                "by_family": {},
+                "totals": {"success": 0, "failure": 0, "total": 0, "rpm": 0},
+                "error": str(e),
+            }
 
     async def cleanup_minute_stats(self, keep_minutes: int = 1440) -> int:
-        return 0
+        """清理超过 keep_minutes 分钟（默认 24h）的分钟统计数据。"""
+        self._ensure_initialized()
+        try:
+            cutoff = int(time.time()) - max(60, int(keep_minutes) * 60)
+            async with aiosqlite.connect(self._db_path) as db:
+                cursor = await db.execute(
+                    "DELETE FROM minute_model_stats WHERE minute_ts < ?", (cutoff,)
+                )
+                deleted = cursor.rowcount
+                await db.commit()
+
+            # 同时清理内存中过期的 minute 条目
+            expired_keys = [k for k in self._stats_minute if k[0] < cutoff]
+            for k in expired_keys:
+                del self._stats_minute[k]
+
+            return deleted
+        except Exception as e:
+            log.error(f"cleanup_minute_stats failed: {e}")
+            return 0
