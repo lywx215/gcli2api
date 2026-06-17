@@ -416,9 +416,10 @@ def prepare_image_generation_request(
     图像生成模型请求体后处理
 
     支持三种方式指定图片参数（优先级从高到低）:
-    1. size 参数: 如 "1024x1536"，自动计算 aspectRatio 和 imageSize
-    2. 模型名后缀: 如 -4k, -2k, -16x9, -1x1
-    3. 默认值: 不设置额外参数
+    1. 客户端原生 generationConfig.imageConfig: 直接透传
+    2. size 参数: 如 "1024x1536"，自动计算 aspectRatio 和 imageSize
+    3. 模型名后缀: 如 -4k, -2k, -16x9, -1x1
+    4. 默认值: 不设置额外参数
 
     Args:
         request_body: 原始请求体
@@ -430,29 +431,42 @@ def prepare_image_generation_request(
     request_body = request_body.copy()
     model_lower = model.lower()
 
-    # 优先使用 size 参数
-    size_str = request_body.pop("size", None)
-    if size_str:
-        image_config = _parse_size_to_image_config(size_str)
-        log.debug(f"[IMAGE] 从 size 参数 '{size_str}' 解析: {image_config}")
+    # ========== 优先级 1：客户端原生 generationConfig.imageConfig ==========
+    client_gen_config = request_body.get("generationConfig") or {}
+    # 兼容 camelCase (Gemini原生) 和 snake_case (Pydantic序列化)
+    client_image_config = (
+        client_gen_config.get("imageConfig")
+        or client_gen_config.get("image_config")
+        or {}
+    )
+
+    if client_image_config:
+        image_config = client_image_config
+        log.debug(f"[IMAGE] 使用客户端原生 imageConfig: {image_config}")
     else:
-        # 从模型名后缀解析
-        image_size = "4K" if "-4k" in model_lower else "2K" if "-2k" in model_lower else None
+        # ========== 优先级 2：size 参数（OpenAI 兼容格式）==========
+        size_str = request_body.pop("size", None)
+        if size_str:
+            image_config = _parse_size_to_image_config(size_str)
+            log.debug(f"[IMAGE] 从 size 参数 '{size_str}' 解析: {image_config}")
+        else:
+            # ========== 优先级 3：模型名后缀 ==========
+            image_size = "4K" if "-4k" in model_lower else "2K" if "-2k" in model_lower else None
 
-        aspect_ratio = None
-        for suffix, ratio in [
-            ("-21x9", "21:9"), ("-16x9", "16:9"), ("-9x16", "9:16"),
-            ("-4x3", "4:3"), ("-3x4", "3:4"), ("-1x1", "1:1")
-        ]:
-            if suffix in model_lower:
-                aspect_ratio = ratio
-                break
+            aspect_ratio = None
+            for suffix, ratio in [
+                ("-21x9", "21:9"), ("-16x9", "16:9"), ("-9x16", "9:16"),
+                ("-4x3", "4:3"), ("-3x4", "3:4"), ("-1x1", "1:1")
+            ]:
+                if suffix in model_lower:
+                    aspect_ratio = ratio
+                    break
 
-        image_config = {}
-        if aspect_ratio:
-            image_config["aspectRatio"] = aspect_ratio
-        if image_size:
-            image_config["imageSize"] = image_size
+            image_config = {}
+            if aspect_ratio:
+                image_config["aspectRatio"] = aspect_ratio
+            if image_size:
+                image_config["imageSize"] = image_size
 
     request_body["model"] = "gemini-3.1-flash-image"  # 统一使用基础模型名
     request_body["generationConfig"] = {

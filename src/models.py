@@ -143,8 +143,8 @@ class GeminiSystemInstruction(BaseModel):
 
 class GeminiImageConfig(BaseModel):
     """图片生成配置"""
-    aspect_ratio: Optional[str] = None  # "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"
-    image_size: Optional[str] = None  # "1K", "2K", "4K"
+    aspectRatio: Optional[str] = None  # "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"
+    imageSize: Optional[str] = None  # "1K", "2K", "4K"
 
 
 class GeminiGenerationConfig(BaseModel):
@@ -161,8 +161,8 @@ class GeminiGenerationConfig(BaseModel):
     presencePenalty: Optional[float] = Field(None, ge=-2.0, le=2.0)
     thinkingConfig: Optional[Dict[str, Any]] = None
     # 图片生成相关参数
-    response_modalities: Optional[List[str]] = None  # ["TEXT", "IMAGE"]
-    image_config: Optional[GeminiImageConfig] = None
+    responseModalities: Optional[List[str]] = None  # ["TEXT", "IMAGE"]
+    imageConfig: Optional[GeminiImageConfig] = None
 
 
 class GeminiSafetySetting(BaseModel):
