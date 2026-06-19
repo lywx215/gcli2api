@@ -521,7 +521,7 @@ class MongoDBManager:
         # Redis 快速路径：根据模型名派生过滤标志，直接在 Redis 分桶中筛选
         if self._redis_enabled:
             model_lower = model_name.lower() if model_name else ""
-            exclude_free = mode == "geminicli" and "pro" in model_lower
+            exclude_free = False
             preview_only = mode == "geminicli" and "preview" in model_lower
             result = await self._get_next_available_from_redis(
                 mode, model_name, exclude_free_tier=exclude_free, preview_only=preview_only
