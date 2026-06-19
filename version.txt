@@ -1,4 +1,4 @@
-full_hash=ff448e735e091a8f6e469db541a4c86ddd19d306
-short_hash=ff448e7
-message=Merge upstream enterprise geminicli compatibility
-date=2026-06-19 16:32:07 +0000
+full_hash=6c4c4f02e9cb6f00d7c69df6735dcb7691ce262d
+short_hash=6c4c4f0
+message=Merge remote-tracking branch 'origin/master'
+date=2026-06-19 16:40:29 +0000
