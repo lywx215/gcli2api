@@ -1,4 +1,4 @@
-full_hash=10ed71fa70d819677b4baf9bc9a3badf57fabf5f
-short_hash=10ed71f
-message=agy请求更新为agy cli模式
-date=2026-06-20 23:46:21 +0800
+full_hash=8a6cf4f7326f41abe42741ea20c2729032356e20
+short_hash=8a6cf4f
+message=feat: support Gemini 3.5 Flash via Code Assist
+date=2026-06-21 14:06:05 +0800
