@@ -26,7 +26,7 @@ from src.storage_adapter import get_storage_adapter
 from src.utils import verify_panel_token, GEMINICLI_USER_AGENT, ANTIGRAVITY_USER_AGENT
 from src.api.antigravity import fetch_quota_info
 from src.api.utils import check_should_auto_ban
-from src.google_oauth_api import Credentials, fetch_project_id_and_tier
+from src.google_oauth_api import Credentials, fetch_project_id_and_tier, get_user_projects, select_default_project, enable_required_apis
 from src.httpx_client import post_async
 from config import get_code_assist_endpoint, get_antigravity_api_url, get_oauth_proxy_url
 from datetime import datetime, timedelta, timezone
@@ -569,16 +569,10 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
         credential_data = credentials.to_dict()
         await storage_adapter.store_credential(filename, credential_data, mode=mode)
 
-    # 获取API端点和对应的User-Agent
+    # 重新获取project id（仅 antigravity 模式请求积分）
     if mode == "antigravity":
         api_base_url = await get_antigravity_api_url()
         user_agent = ANTIGRAVITY_USER_AGENT
-    else:
-        api_base_url = await get_code_assist_endpoint()
-        user_agent = GEMINICLI_USER_AGENT
-
-    # 重新获取project id（仅 antigravity 模式请求积分）
-    if mode == "antigravity":
         project_id, subscription_tier, credit_amount = await fetch_project_id_and_tier(
             access_token=credentials.access_token,
             user_agent=user_agent,
@@ -586,12 +580,24 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
             include_credits=True,
         )
     else:
-        project_id, subscription_tier = await fetch_project_id_and_tier(
-            access_token=credentials.access_token,
-            user_agent=user_agent,
-            api_base_url=api_base_url,
-        )
+        # geminicli 模式：通过项目列表获取 project_id
         credit_amount = None
+        subscription_tier = None
+        user_projects = await get_user_projects(credentials)
+        if user_projects:
+            if len(user_projects) == 1:
+                project_id = user_projects[0].get("projectId")
+            else:
+                project_id = await select_default_project(user_projects)
+        else:
+            project_id = None
+
+        if project_id:
+            log.info(f"正在为项目 {project_id} 启用必需的API服务...")
+            try:
+                await enable_required_apis(credentials, project_id)
+            except Exception as e:
+                log.warning(f"自动启用API服务失败: {e}")
 
     if project_id:
         credential_data["project_id"] = project_id
@@ -2256,23 +2262,27 @@ async def _add_credential_by_refresh_token(
     pid = (project_id or "").strip() or None
     subscription_tier = None
 
-    if mode == "geminicli":
-        api_base_url = await get_code_assist_endpoint()
-        user_agent = GEMINICLI_USER_AGENT
-    else:
-        api_base_url = await get_antigravity_api_url()
-        user_agent = ANTIGRAVITY_USER_AGENT
-
     if not pid:
         try:
-            detected = await fetch_project_id_and_tier(
-                access_token=credential_data["access_token"],
-                user_agent=user_agent,
-                api_base_url=api_base_url,
-            )
-            if detected:
-                pid = detected[0]
-                subscription_tier = detected[1] if len(detected) > 1 else None
+            if mode == "geminicli":
+                credentials = Credentials.from_dict(credential_data)
+                projects = await get_user_projects(credentials)
+                if projects:
+                    if len(projects) == 1:
+                        pid = projects[0].get("projectId")
+                    else:
+                        pid = await select_default_project(projects)
+            else:
+                api_base_url = await get_antigravity_api_url()
+                user_agent = ANTIGRAVITY_USER_AGENT
+                detected = await fetch_project_id_and_tier(
+                    access_token=credential_data["access_token"],
+                    user_agent=user_agent,
+                    api_base_url=api_base_url,
+                )
+                if detected:
+                    pid = detected[0]
+                    subscription_tier = detected[1] if len(detected) > 1 else None
         except Exception as e:
             log.warning(f"自动探测 project_id 失败: {e}")
 
