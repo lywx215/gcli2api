@@ -693,60 +693,18 @@ async def asyncio_complete_auth_flow(
                     log.info("标准模式：通过项目列表获取project_id...")
                     user_projects = await get_user_projects(credentials)
 
-                        if user_projects:
-                            # 如果只有一个项目，自动使用
-                            if len(user_projects) == 1:
-                                # Google API returns projectId in camelCase
-                                project_id = user_projects[0].get("projectId")
-                                if project_id:
-                                    flow_data["project_id"] = project_id
-                                    log.info(f"自动选择唯一项目: {project_id}")
-                                    # 自动启用必需的API服务
-                                    log.info("正在自动启用必需的API服务...")
-                                    await enable_required_apis(credentials, project_id)
-                            # 如果有多个项目，尝试选择默认项目
-                            else:
-                                project_id = await select_default_project(user_projects)
-                                if project_id:
-                                    flow_data["project_id"] = project_id
-                                    log.info(f"自动选择默认项目: {project_id}")
-                                    # 自动启用必需的API服务
-                                    log.info("正在自动启用必需的API服务...")
-                                    await enable_required_apis(credentials, project_id)
-                                else:
-                                    # 返回项目列表让用户选择
-                                    return {
-                                        "success": False,
-                                        "error": "请从以下项目中选择一个",
-                                        "requires_project_selection": True,
-                                        "available_projects": [
-                                            {
-                                                # Google API returns projectId in camelCase
-                                                "project_id": p.get("projectId"),
-                                                "name": p.get("displayName") or p.get("projectId"),
-                                                "projectNumber": p.get("projectNumber"),
-                                            }
-                                            for p in user_projects
-                                        ],
-                                    }
-                            
-                            # API已启用，立即重试fetch_project_id获取正确的cloudaicompanionProject
+                    if user_projects:
+                        # 如果只有一个项目，自动使用
+                        if len(user_projects) == 1:
+                            # Google API returns projectId in camelCase
+                            project_id = user_projects[0].get("projectId")
                             if project_id:
-                                log.info("API已启用，重试获取cloudaicompanionProject...")
-                                try:
-                                    retry_project_id = await fetch_project_id(
-                                        credentials.access_token,
-                                        GEMINICLI_USER_AGENT,
-                                        code_assist_url
-                                    )
-                                    if retry_project_id:
-                                        log.info(f"✅ 成功获取cloudaicompanionProject: {retry_project_id}")
-                                        project_id = retry_project_id
-                                        flow_data["project_id"] = project_id
-                                    else:
-                                        log.info(f"重试未获取到cloudaicompanionProject，使用项目列表中的: {project_id}")
-                                except Exception as retry_err:
-                                    log.warning(f"重试fetch_project_id失败: {retry_err}，使用项目列表中的: {project_id}")
+                                flow_data["project_id"] = project_id
+                                log.info(f"自动选择唯一项目: {project_id}")
+                                # 自动启用必需的API服务
+                                log.info("正在自动启用必需的API服务...")
+                                await enable_required_apis(credentials, project_id)
+                        # 如果有多个项目，尝试选择默认项目
                         else:
                             project_id = await select_default_project(user_projects)
                             if project_id:
@@ -931,23 +889,6 @@ async def complete_auth_flow_from_callback_url(
                     log.info(f"正在为项目 {detected_project_id} 启用必需的API服务...")
                     await enable_required_apis(credentials, detected_project_id)
                     
-                    # API已启用，如果是通过项目列表获取的ID，重试获取cloudaicompanionProject
-                    if auto_detected and not project_id:
-                        log.info("API已启用，重试获取cloudaicompanionProject...")
-                        try:
-                            code_assist_url = await get_code_assist_endpoint()
-                            retry_project_id = await fetch_project_id(
-                                credentials.access_token,
-                                GEMINICLI_USER_AGENT,
-                                code_assist_url
-                            )
-                            if retry_project_id:
-                                log.info(f"✅ 成功获取cloudaicompanionProject: {retry_project_id}")
-                                detected_project_id = retry_project_id
-                            else:
-                                log.info(f"重试未获取到，使用项目列表中的: {detected_project_id}")
-                        except Exception as retry_err:
-                            log.warning(f"重试fetch_project_id失败: {retry_err}")
                 except Exception as e:
                     log.warning(f"启用API服务失败: {e}")
 
