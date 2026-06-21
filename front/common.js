@@ -2112,6 +2112,9 @@ async function _toggleQuotaDetails(pathId, mode) {
                             const remainingFraction = quotaData.remaining || 0;
                             const resetTime = quotaData.resetTime || 'N/A';
                             const resetTimeRaw = quotaData.resetTimeRaw || '';
+                            const displayName = quotaData.displayName || modelName;
+                            const rawModelId = quotaData.rawModelId || modelName;
+                            const testModel = quotaData.testModel || displayName;
 
                             // 倒计时（基于 resetTimeRaw 的 UTC 时间）
                             let countdownStr = '';
@@ -2145,8 +2148,8 @@ async function _toggleQuotaDetails(pathId, mode) {
                             quotaHTML += `
                                 <div style="background: white; border-left: 4px solid ${percentageColor}; border-radius: 4px; padding: 8px 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                        <div style="font-weight: bold; color: #333; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: 8px;" title="${modelName} - 剩余${remainingPercentage}% - ${resetTime}">
-                                            ${modelName}
+                                        <div style="font-weight: bold; color: #333; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: 8px;" title="${displayName} - 剩余${remainingPercentage}% - ${resetTime}${rawModelId !== displayName ? ` (原始: ${rawModelId})` : ''}">
+                                            ${displayName}
                                         </div>
                                         <div style="font-size: 13px; font-weight: bold; color: ${percentageColor}; white-space: nowrap;">
                                             ${remainingPercentage}%
@@ -2156,7 +2159,7 @@ async function _toggleQuotaDetails(pathId, mode) {
                                         <div style="width: ${usedPercentage}%; height: 100%; background-color: ${percentageColor}; transition: width 0.3s ease;"></div>
                                     </div>
                                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                                        <button onclick="testModelQuota(this, '${filename}', '${modelName}', '${mode}')" style="font-size: 10px; padding: 1px 8px; border: 1px solid #9c27b0; background: white; color: #9c27b0; border-radius: 3px; cursor: pointer;" onmouseover="this.style.background='#9c27b0';this.style.color='white'" onmouseout="this.style.background='white';this.style.color='#9c27b0'">测试</button>
+                                        <button onclick="testModelQuota(this, '${filename}', '${testModel}', '${mode}', '${displayName}')" style="font-size: 10px; padding: 1px 8px; border: 1px solid #9c27b0; background: white; color: #9c27b0; border-radius: 3px; cursor: pointer;" onmouseover="this.style.background='#9c27b0';this.style.color='white'" onmouseout="this.style.background='white';this.style.color='#9c27b0'">测试</button>
                                         <div style="font-size: 10px; color: #666;">
                                             ${resetTime !== 'N/A' ? '🔄 ' + resetTime + (countdownStr ? ` <span style="color:${remainingPercentage <= 0 ? '#dc3545' : '#17a2b8'};font-weight:bold;">(⏱️ ${countdownStr})</span>` : '') : ''}
                                         </div>
@@ -4003,8 +4006,9 @@ async function switchStorageEngine() {
 // 额度卡片中的单模型测试 (dev2 自定义)
 // =====================================================================
 
-async function testModelQuota(btn, filename, modelName, mode) {
+async function testModelQuota(btn, filename, modelName, mode, displayName) {
     const originalText = btn.textContent;
+    const displayModelName = displayName || modelName;
     btn.textContent = '…';
     btn.disabled = true;
     btn.style.cursor = 'wait';
@@ -4021,18 +4025,18 @@ async function testModelQuota(btn, filename, modelName, mode) {
             btn.style.borderColor = '#28a745';
             btn.style.color = '#28a745';
             const msg = response.status === 429
-                ? `${modelName}: 限流中但凭证有效 (429)`
-                : `${modelName}: 测试成功 ✅`;
+                ? `${displayModelName}: 限流中但凭证有效 (429)`
+                : `${displayModelName}: 测试成功 ✅`;
             showStatus(msg, response.status === 429 ? 'info' : 'success');
         } else {
             btn.textContent = '✗';
             btn.style.borderColor = '#dc3545';
             btn.style.color = '#dc3545';
             const errorDetail = data.error || data.detail || data.message || '';
-            showStatus(`${modelName}: 测试失败 (HTTP ${response.status})`, 'error');
+            showStatus(`${displayModelName}: 测试失败 (HTTP ${response.status})`, 'error');
             if (errorDetail) {
                 showMessageModal(
-                    `${modelName} 测试失败 (HTTP ${response.status})`,
+                    `${displayModelName} 测试失败 (HTTP ${response.status})`,
                     errorDetail,
                     'error'
                 );
@@ -4042,7 +4046,7 @@ async function testModelQuota(btn, filename, modelName, mode) {
         btn.textContent = '✗';
         btn.style.borderColor = '#dc3545';
         btn.style.color = '#dc3545';
-        showStatus(`${modelName}: 网络错误 - ${error.message}`, 'error');
+        showStatus(`${displayModelName}: 网络错误 - ${error.message}`, 'error');
     } finally {
         btn.disabled = false;
         btn.style.cursor = 'pointer';

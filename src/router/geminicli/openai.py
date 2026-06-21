@@ -26,6 +26,7 @@ from log import log
 # 本地模块 - 工具和认证
 from src.utils import (
     get_base_model_from_feature_model,
+    normalize_geminicli_model_alias,
     is_anti_truncation_model,
     is_fake_streaming_model,
     authenticate_bearer,
@@ -85,8 +86,10 @@ async def chat_completions(
     # 处理模型名称和功能检测
     use_fake_streaming = is_fake_streaming_model(openai_request.model)
     use_anti_truncation = is_anti_truncation_model(openai_request.model)
-    real_model = get_base_model_from_feature_model(openai_request.model)
-
+    public_model = get_base_model_from_feature_model(openai_request.model)
+    real_model = normalize_geminicli_model_alias(public_model)
+    if real_model != public_model:
+        log.info(f"[GEMINICLI-OPENAI] Code Assist 模型别名: {public_model} -> {real_model}")
     # 获取流式标志
     is_streaming = openai_request.stream
 
@@ -104,7 +107,7 @@ async def chat_completions(
     # convert_openai_to_gemini_request 不包含 model 字段，需要手动添加
     gemini_dict["model"] = real_model
 
-    # 规范化 Gemini 请求 (使用 geminicli 模式)
+    # 规范化 Gemini 请求
     from src.converter.gemini_fix import normalize_gemini_request
     gemini_dict = await normalize_gemini_request(gemini_dict, mode="geminicli")
 
@@ -141,7 +144,7 @@ async def chat_completions(
         from src.converter.openai2gemini import convert_gemini_to_openai_response
         openai_response = convert_gemini_to_openai_response(
             gemini_response,
-            real_model,
+            public_model,
             status_code
         )
 
@@ -180,7 +183,7 @@ async def chat_completions(
                 from src.converter.openai2gemini import convert_gemini_to_openai_response
                 openai_error = convert_gemini_to_openai_response(
                     gemini_response,
-                    real_model,
+                    public_model,
                     200
                 )
                 yield f"data: {json.dumps(openai_error)}\n\n".encode()
@@ -195,7 +198,7 @@ async def chat_completions(
             log.debug(f"OpenAI extracted images count: {len(images)}")
 
             # 构建响应块
-            chunks = build_openai_fake_stream_chunks(content, reasoning_content, finish_reason, real_model, images)
+            chunks = build_openai_fake_stream_chunks(content, reasoning_content, finish_reason, public_model, images)
             for idx, chunk in enumerate(chunks):
                 chunk_json = json.dumps(chunk)
                 log.debug(f"[FAKE_STREAM] Yielding chunk #{idx+1}: {chunk_json[:200]}")
@@ -208,7 +211,7 @@ async def chat_completions(
                 "id": "error",
                 "object": "chat.completion.chunk",
                 "created": int(asyncio.get_event_loop().time()),
-                "model": real_model,
+                "model": public_model,
                 "choices": [{
                     "index": 0,
                     "delta": {"content": f"Error: {str(e)}"},
@@ -290,7 +293,7 @@ async def chat_completions(
                     from src.converter.openai2gemini import convert_gemini_to_openai_stream
                     openai_chunk_str = convert_gemini_to_openai_stream(
                         chunk_str,
-                        real_model,
+                        public_model,
                         response_id
                     )
 
@@ -335,7 +338,7 @@ async def chat_completions(
                     from src.converter.openai2gemini import convert_gemini_to_openai_response
                     openai_error = convert_gemini_to_openai_response(
                         gemini_error,
-                        real_model,
+                        public_model,
                         chunk.status_code
                     )
                     yield f"data: {json.dumps(openai_error)}\n\n".encode('utf-8')
@@ -363,7 +366,7 @@ async def chat_completions(
                         from src.converter.openai2gemini import convert_gemini_to_openai_stream
                         openai_chunk_str = convert_gemini_to_openai_stream(
                             chunk_str,
-                            real_model,
+                            public_model,
                             response_id
                         )
 

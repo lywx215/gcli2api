@@ -61,11 +61,23 @@ BASE_MODELS = [
     "gemini-2.5-flash",
     "gemini-3-flash-preview",
     "gemini-3.1-pro-preview",
-    "gemini-3.1-flash-lite-preview"
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3.5-flash"
 ]
 
 
 # ====================== Model Helper Functions ======================
+
+GEMINICLI_MODEL_ALIASES = {
+    # Official Gemini CLI exposes this as gemini-3.5-flash, while the
+    # Code Assist backend currently expects the secondary ID gemini-3-flash.
+    "gemini-3.5-flash": "gemini-3-flash",
+}
+
+
+def normalize_geminicli_model_alias(model_name: str) -> str:
+    """Map public GeminiCLI model names to Code Assist upstream IDs."""
+    return GEMINICLI_MODEL_ALIASES.get(model_name, model_name)
 
 def is_fake_streaming_model(model_name: str) -> bool:
     """Check if model name indicates fake streaming should be used."""
@@ -132,7 +144,11 @@ def get_available_models(router_type: str = "openai") -> List[str]:
             thinking_suffixes = ["-max", "-high", "-medium", "-low", "-minimal"]
         # Gemini 3 系列: 使用思考等级后缀
         elif "gemini-3" in base_model:
-            if "flash" in base_model:
+            if base_model == "gemini-3.5-flash":
+                # Code Assist exposes 3.5 Flash as one official model name;
+                # do not create Antigravity-style high/medium/low variants here.
+                thinking_suffixes = []
+            elif "flash" in base_model:
                 # 3-flash-preview: 支持 high/medium/low/minimal
                 thinking_suffixes = ["-high", "-medium", "-low", "-minimal"]
             elif "pro" in base_model:

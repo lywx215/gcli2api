@@ -24,6 +24,7 @@ from log import log
 # 本地模块 - 工具和认证
 from src.utils import (
     get_base_model_from_feature_model,
+    normalize_geminicli_model_alias,
     is_anti_truncation_model,
     authenticate_gemini_flexible,
     is_fake_streaming_model
@@ -85,8 +86,10 @@ async def generate_content(
 
     # 处理模型名称和功能检测
     use_anti_truncation = is_anti_truncation_model(model)
-    real_model = get_base_model_from_feature_model(model)
-
+    public_model = get_base_model_from_feature_model(model)
+    real_model = normalize_geminicli_model_alias(public_model)
+    if real_model != public_model:
+        log.info(f"[GEMINICLI] Code Assist 模型别名: {public_model} -> {real_model}")
     # 对于抗截断模型的非流式请求，给出警告
     if use_anti_truncation:
         log.warning("抗截断功能仅在流式传输时有效，非流式请求将忽略此设置")
@@ -94,7 +97,7 @@ async def generate_content(
     # 更新模型名为真实模型名
     normalized_dict["model"] = real_model
 
-    # 规范化 Gemini 请求 (使用 geminicli 模式)
+    # 规范化 Gemini 请求
     from src.converter.gemini_fix import normalize_gemini_request
     normalized_dict = await normalize_gemini_request(normalized_dict, mode="geminicli")
 
@@ -116,6 +119,8 @@ async def generate_content(
             # 如果有 response 包装，解包装它
             if "response" in response_data:
                 unwrapped_data = response_data["response"]
+                if isinstance(unwrapped_data, dict) and real_model != public_model:
+                    unwrapped_data["modelVersion"] = public_model
                 return JSONResponse(content=unwrapped_data)
         # 错误响应或没有 response 字段，直接返回
         return response
@@ -146,10 +151,40 @@ async def stream_generate_content(
     # 处理模型名称和功能检测
     use_fake_streaming = is_fake_streaming_model(model)
     use_anti_truncation = is_anti_truncation_model(model)
-    real_model = get_base_model_from_feature_model(model)
-
+    public_model = get_base_model_from_feature_model(model)
+    real_model = normalize_geminicli_model_alias(public_model)
+    if real_model != public_model:
+        log.info(f"[GEMINICLI] Code Assist 流式模型别名: {public_model} -> {real_model}")
     # 更新模型名为真实模型名
     normalized_dict["model"] = real_model
+
+    def _normalize_stream_model_version(chunk):
+        """Rewrite streamed Gemini modelVersion back to the public request name."""
+        if real_model == public_model or not isinstance(chunk, (str, bytes)):
+            return chunk
+
+        was_bytes = isinstance(chunk, bytes)
+        chunk_str = chunk.decode("utf-8") if was_bytes else chunk
+        if not chunk_str.startswith("data: "):
+            return chunk
+
+        json_str = chunk_str[6:].strip()
+        if json_str == "[DONE]":
+            return chunk
+
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError:
+            return chunk
+
+        if isinstance(data, dict):
+            if isinstance(data.get("response"), dict):
+                data["response"]["modelVersion"] = public_model
+            else:
+                data["modelVersion"] = public_model
+
+        normalized = f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+        return normalized.encode("utf-8") if was_bytes else normalized
 
     # ========== 假流式生成器 ==========
     async def fake_stream_generator():
@@ -275,7 +310,7 @@ async def stream_generate_content(
 
                     # 跳过 [DONE] 标记
                     if json_str == "[DONE]":
-                        yield chunk
+                        yield _normalize_stream_model_version(chunk)
                         continue
 
                     try:
@@ -286,20 +321,22 @@ async def stream_generate_content(
                         if "response" in data and "candidates" not in data:
                             log.debug(f"[GEMINICLI-ANTI-TRUNCATION] 展开response包装")
                             unwrapped_data = data["response"]
+                            if isinstance(unwrapped_data, dict) and real_model != public_model:
+                                unwrapped_data["modelVersion"] = public_model
                             # 重新构建SSE格式
                             yield f"data: {json.dumps(unwrapped_data, ensure_ascii=False)}\n\n".encode('utf-8')
                         else:
                             # 已经是展开的格式，直接返回
-                            yield chunk
+                            yield _normalize_stream_model_version(chunk)
                     except json.JSONDecodeError:
                         # JSON解析失败，直接返回原始chunk
-                        yield chunk
+                        yield _normalize_stream_model_version(chunk)
                 else:
                     # 不是SSE格式，直接返回
-                    yield chunk
+                    yield _normalize_stream_model_version(chunk)
             else:
                 # 其他类型，直接返回
-                yield chunk
+                yield _normalize_stream_model_version(chunk)
 
     # ========== 普通流式生成器 ==========
     async def normal_stream_generator():
@@ -353,7 +390,7 @@ async def stream_generate_content(
 
                     # 跳过 [DONE] 标记
                     if json_str == "[DONE]":
-                        yield chunk
+                        yield _normalize_stream_model_version(chunk)
                         continue
 
                     try:
@@ -364,17 +401,19 @@ async def stream_generate_content(
                         if "response" in data and "candidates" not in data:
                             log.debug(f"[GEMINICLI] 展开response包装")
                             unwrapped_data = data["response"]
+                            if isinstance(unwrapped_data, dict) and real_model != public_model:
+                                unwrapped_data["modelVersion"] = public_model
                             # 重新构建SSE格式
                             yield f"data: {json.dumps(unwrapped_data, ensure_ascii=False)}\n\n".encode('utf-8')
                         else:
                             # 已经是展开的格式，直接返回
-                            yield chunk
+                            yield _normalize_stream_model_version(chunk)
                     except json.JSONDecodeError:
                         # JSON解析失败，直接返回原始chunk
-                        yield chunk
+                        yield _normalize_stream_model_version(chunk)
                 else:
                     # 不是SSE格式，直接返回
-                    yield chunk
+                    yield _normalize_stream_model_version(chunk)
 
     # ========== 根据模式选择生成器 ==========
     if use_fake_streaming:

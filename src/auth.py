@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlparse
 
-from config import get_config_value, get_antigravity_api_url
+from config import get_config_value, get_antigravity_api_url, get_code_assist_endpoint
 from log import log
 
 from .google_oauth_api import (
@@ -34,6 +34,7 @@ from .utils import (
     CLIENT_SECRET,
     SCOPES,
     TOKEN_URL,
+    get_geminicli_user_agent,
 )
 
 
@@ -436,6 +437,7 @@ async def complete_auth_flow(
             try:
                 credentials = await flow.exchange_code(auth_code)
                 # credentials 已经在 exchange_code 中获得
+                subscription_tier = None
 
                 # 如果需要自动检测项目ID且没有提供项目ID
                 if flow_data.get("auto_project_detection", False) and not project_id:
@@ -487,10 +489,10 @@ async def complete_auth_flow(
                     log.warning(f"仍未获取到project_id，使用默认project_id: {project_id}")
 
                 # 保存凭证
-                saved_filename = await save_credentials(credentials, project_id)
+                saved_filename = await save_credentials(credentials, project_id, subscription_tier=subscription_tier)
 
                 # 准备返回的凭证数据
-                creds_data = _prepare_credentials_data(credentials, project_id, mode="geminicli")
+                creds_data = _prepare_credentials_data(credentials, project_id, mode="geminicli", subscription_tier=subscription_tier)
 
                 # 清理使用过的流程
                 _cleanup_auth_flow_server(state)
@@ -689,51 +691,68 @@ async def asyncio_complete_auth_flow(
                     }
 
                 # 如果需要自动检测项目ID且没有提供项目ID（标准模式）
+                subscription_tier = None
                 if flow_data.get("auto_project_detection", False) and not project_id:
-                    log.info("标准模式：通过项目列表获取project_id...")
-                    user_projects = await get_user_projects(credentials)
+                    log.info("标准模式：优先通过 loadCodeAssist 获取企业 project_id...")
+                    try:
+                        code_assist_url = await get_code_assist_endpoint()
+                        detected_project_id, subscription_tier = await fetch_project_id_and_tier(
+                            credentials.access_token,
+                            get_geminicli_user_agent(""),
+                            code_assist_url,
+                        )
+                        if detected_project_id:
+                            project_id = detected_project_id
+                            flow_data["project_id"] = project_id
+                            log.info(f"成功从 loadCodeAssist 获取 project_id: {project_id}, tier: {subscription_tier}")
+                    except Exception as e:
+                        log.warning(f"loadCodeAssist 获取 project_id 失败，回退项目列表: {e}")
 
-                    if user_projects:
-                        # 如果只有一个项目，自动使用
-                        if len(user_projects) == 1:
-                            # Google API returns projectId in camelCase
-                            project_id = user_projects[0].get("projectId")
-                            if project_id:
-                                flow_data["project_id"] = project_id
-                                log.info(f"自动选择唯一项目: {project_id}")
-                                # 自动启用必需的API服务
-                                log.info("正在自动启用必需的API服务...")
-                                await enable_required_apis(credentials, project_id)
-                        # 如果有多个项目，尝试选择默认项目
-                        else:
-                            project_id = await select_default_project(user_projects)
-                            if project_id:
-                                flow_data["project_id"] = project_id
-                                log.info(f"自动选择默认项目: {project_id}")
-                                # 自动启用必需的API服务
-                                log.info("正在自动启用必需的API服务...")
-                                await enable_required_apis(credentials, project_id)
+                    if not project_id:
+                        log.info("标准模式：通过项目列表获取project_id...")
+                        user_projects = await get_user_projects(credentials)
+
+                        if user_projects:
+                            # 如果只有一个项目，自动使用
+                            if len(user_projects) == 1:
+                                # Google API returns projectId in camelCase
+                                project_id = user_projects[0].get("projectId")
+                                if project_id:
+                                    flow_data["project_id"] = project_id
+                                    log.info(f"自动选择唯一项目: {project_id}")
+                                    # 自动启用必需的API服务
+                                    log.info("正在自动启用必需的API服务...")
+                                    await enable_required_apis(credentials, project_id)
+                            # 如果有多个项目，尝试选择默认项目
                             else:
-                                # 返回项目列表让用户选择
-                                return {
-                                    "success": False,
-                                    "error": "请从以下项目中选择一个",
-                                    "requires_project_selection": True,
-                                    "available_projects": [
-                                        {
-                                            # Google API returns projectId in camelCase
-                                            "project_id": p.get("projectId"),
-                                            "name": p.get("displayName") or p.get("projectId"),
-                                            "projectNumber": p.get("projectNumber"),
-                                        }
-                                        for p in user_projects
-                                    ],
-                                }
-                    else:
-                        # 如果无法获取项目列表，使用默认project_id
-                        project_id = DEFAULT_PROJECT_ID
-                        flow_data["project_id"] = project_id
-                        log.warning(f"无法获取项目列表，使用默认project_id: {project_id}")
+                                project_id = await select_default_project(user_projects)
+                                if project_id:
+                                    flow_data["project_id"] = project_id
+                                    log.info(f"自动选择默认项目: {project_id}")
+                                    # 自动启用必需的API服务
+                                    log.info("正在自动启用必需的API服务...")
+                                    await enable_required_apis(credentials, project_id)
+                                else:
+                                    # 返回项目列表让用户选择
+                                    return {
+                                        "success": False,
+                                        "error": "请从以下项目中选择一个",
+                                        "requires_project_selection": True,
+                                        "available_projects": [
+                                            {
+                                                # Google API returns projectId in camelCase
+                                                "project_id": p.get("projectId"),
+                                                "name": p.get("displayName") or p.get("projectId"),
+                                                "projectNumber": p.get("projectNumber"),
+                                            }
+                                            for p in user_projects
+                                        ],
+                                    }
+                        else:
+                            # 如果无法获取项目列表，使用默认project_id
+                            project_id = DEFAULT_PROJECT_ID
+                            flow_data["project_id"] = project_id
+                            log.warning(f"无法获取项目列表，使用默认project_id: {project_id}")
                 elif project_id:
                     # 如果已经有项目ID（手动提供或环境检测），也尝试启用API服务
                     log.info("正在为已提供的项目ID自动启用必需的API服务...")
@@ -746,10 +765,10 @@ async def asyncio_complete_auth_flow(
                     log.warning(f"仍未获取到project_id，使用默认project_id: {project_id}")
 
                 # 保存凭证
-                saved_filename = await save_credentials(credentials, project_id)
+                saved_filename = await save_credentials(credentials, project_id, subscription_tier=subscription_tier)
 
                 # 准备返回的凭证数据
-                creds_data = _prepare_credentials_data(credentials, project_id, mode="geminicli")
+                creds_data = _prepare_credentials_data(credentials, project_id, mode="geminicli", subscription_tier=subscription_tier)
 
                 # 清理使用过的流程
                 _cleanup_auth_flow_server(state)
@@ -851,35 +870,50 @@ async def complete_auth_flow_from_callback_url(
             subscription_tier = None
 
             if not project_id:
-                # 通过项目列表获取项目ID
                 try:
-                    log.info("标准模式：通过项目列表获取project_id...")
-                    projects = await get_user_projects(credentials)
-                    if projects:
-                        if len(projects) == 1:
-                            # 只有一个项目，自动使用
-                            # Google API returns projectId in camelCase
-                            detected_project_id = projects[0]["projectId"]
-                            auto_detected = True
-                            log.info(f"自动检测到唯一项目ID: {detected_project_id}")
+                    log.info("标准模式：优先通过 loadCodeAssist 获取project_id...")
+                    code_assist_url = await get_code_assist_endpoint()
+                    detected_project_id, subscription_tier = await fetch_project_id_and_tier(
+                        credentials.access_token,
+                        get_geminicli_user_agent(""),
+                        code_assist_url,
+                    )
+                    if detected_project_id:
+                        auto_detected = True
+                        log.info(f"成功从 loadCodeAssist 获取 project_id: {detected_project_id}, tier: {subscription_tier}")
+                except Exception as e:
+                    log.warning(f"loadCodeAssist 获取 project_id 失败，回退项目列表: {e}")
+
+                if not detected_project_id:
+                    # 通过项目列表获取项目ID
+                    try:
+                        log.info("标准模式：通过项目列表获取project_id...")
+                        projects = await get_user_projects(credentials)
+                        if projects:
+                            if len(projects) == 1:
+                                # 只有一个项目，自动使用
+                                # Google API returns projectId in camelCase
+                                detected_project_id = projects[0]["projectId"]
+                                auto_detected = True
+                                log.info(f"自动检测到唯一项目ID: {detected_project_id}")
+                            else:
+                                # 多个项目，自动选择第一个
+                                # Google API returns projectId in camelCase
+                                detected_project_id = projects[0]["projectId"]
+                                auto_detected = True
+                                log.info(
+                                    f"检测到{len(projects)}个项目，自动选择第一个: {detected_project_id}"
+                                )
+                                log.debug(f"其他可用项目: {[p['projectId'] for p in projects[1:]]}")
                         else:
-                            # 多个项目，自动选择第一个
-                            # Google API returns projectId in camelCase
-                            detected_project_id = projects[0]["projectId"]
-                            auto_detected = True
-                            log.info(
-                                f"检测到{len(projects)}个项目，自动选择第一个: {detected_project_id}"
-                            )
-                            log.debug(f"其他可用项目: {[p['projectId'] for p in projects[1:]]}")
-                    else:
-                        # 没有项目访问权限，使用默认project_id
+                            # 没有项目访问权限，使用默认project_id
+                            detected_project_id = DEFAULT_PROJECT_ID
+                            auto_detected = False
+                            log.warning(f"未检测到可访问项目，使用默认project_id: {detected_project_id}")
+                    except Exception as e:
+                        log.warning(f"获取项目列表失败: {e}，使用默认project_id")
                         detected_project_id = DEFAULT_PROJECT_ID
                         auto_detected = False
-                        log.warning(f"未检测到可访问项目，使用默认project_id: {detected_project_id}")
-                except Exception as e:
-                    log.warning(f"获取项目列表失败: {e}，使用默认project_id")
-                    detected_project_id = DEFAULT_PROJECT_ID
-                    auto_detected = False
             else:
                 detected_project_id = project_id
 

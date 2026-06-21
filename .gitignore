@@ -100,6 +100,7 @@ tools/
 
 zeaburcli/
 sshcli/
+deploy/
 tests/
 
 参考项目/
