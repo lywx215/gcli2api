@@ -297,14 +297,8 @@ async def stream_request(
                         # 特殊处理：preview模型返回404，说明该凭证不支持preview模型
                         log.warning(f"[GEMINICLI STREAM] Preview模型404错误，凭证不支持preview: {current_file}")
 
-                        # 将该凭证的preview状态设置为False
-                        try:
-                            await credential_manager.update_credential_state(
-                                current_file, {"preview": False}, mode="geminicli"
-                            )
-                            log.info(f"[GEMINICLI STREAM] 已将凭证 {current_file} 的preview状态设置为False")
-                        except Exception as e:
-                            log.error(f"[GEMINICLI STREAM] 更新凭证preview状态失败: {e}")
+                        # 不再因为单次 404 自动关闭 preview。
+                        # Preview ON 是用户/配置行为，404 仅记录错误并交给重试/冷却逻辑处理。
 
                         # 记录404错误
                         await record_api_call_error(
@@ -610,14 +604,8 @@ async def non_stream_request(
                 # 特殊处理：preview模型返回404，说明该凭证不支持preview模型
                 log.warning(f"[NON-STREAM] Preview模型404错误，凭证不支持preview: {current_file}")
 
-                # 将该凭证的preview状态设置为False
-                try:
-                    await credential_manager.update_credential_state(
-                        current_file, {"preview": False}, mode="geminicli"
-                    )
-                    log.info(f"[NON-STREAM] 已将凭证 {current_file} 的preview状态设置为False")
-                except Exception as e:
-                    log.error(f"[NON-STREAM] 更新凭证preview状态失败: {e}")
+                # 不再因为单次 404 自动关闭 preview。
+                # Preview ON 是用户/配置行为，404 仅记录错误并交给重试/冷却逻辑处理。
 
                 # 记录404错误
                 await record_api_call_error(

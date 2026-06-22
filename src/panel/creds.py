@@ -1880,11 +1880,8 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                                 "preview": True
                             }, mode=mode)
                         elif preview_status == 404:
-                            # preview 模型返回 404，说明不支持，设置 preview=False
-                            log.warning(f"Preview 模型不支持: {filename} (status=404)")
-                            await storage_adapter.update_credential_state(filename, {
-                                "preview": False
-                            }, mode=mode)
+                            # preview 模型返回 404 时只记录，不再自动覆盖用户设置的 preview=True。
+                            log.warning(f"Preview 模型测试返回404，保持当前Preview状态不变: {filename} (status=404)")
                         else:
                             # 其他错误，保持默认 preview 状态
                             log.warning(f"Preview 模型测试失败: {filename} (status={preview_status})")
