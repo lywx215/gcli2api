@@ -1,4 +1,4 @@
-full_hash=8a6cf4f7326f41abe42741ea20c2729032356e20
-short_hash=8a6cf4f
-message=feat: support Gemini 3.5 Flash via Code Assist
-date=2026-06-21 14:06:05 +0800
+full_hash=6e5dd65461627e8fddc9ab6836792f6c415e23fa
+short_hash=6e5dd65
+message=fix: keep preview setting stable
+date=2026-06-22 23:14:36 +0800
