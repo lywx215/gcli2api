@@ -130,6 +130,11 @@ def get_available_models(router_type: str = "openai") -> List[str]:
         # 基础模型
         models.append(base_model)
 
+        if base_model == "gemini-3.5-flash":
+            # Code Assist currently supports only the official public model name.
+            # Do not expose search/fake-stream/anti-truncation variants that fail upstream.
+            continue
+
         # 假流式模型 (前缀格式)
         models.append(f"假流式/{base_model}")
 
