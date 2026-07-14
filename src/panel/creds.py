@@ -1632,7 +1632,7 @@ async def configure_preview_channel(
         # 根据文档，需要两个步骤：
         # 1. 创建 Release Channel Setting (EXPERIMENTAL)
         # 2. 创建 Setting Binding (绑定到目标项目)
-        from src.httpx_client import post_async
+        from src.httpx_client import post_async, get_async
         import uuid
 
         # 生成唯一的 ID
@@ -1662,6 +1662,25 @@ async def configure_preview_channel(
         if setting_status == 200 or setting_status == 201:
             log.info(f"步骤 1/2: Release Channel Setting 创建成功 (setting_id={setting_id})")
         elif setting_status == 409:
+            list_response = await get_async(
+                url=setting_url,
+                headers=headers,
+                timeout=30.0
+            )
+            if list_response.status_code == 200:
+                try:
+                    list_data = list_response.json()
+                    settings = list_data.get("releaseChannelSettings", [])
+                    if settings:
+                        existing_name = settings[0].get("name", "")
+                        setting_id = existing_name.split("/")[-1]
+                        log.info(f"Existing Release Channel Setting setting_id={setting_id}")
+                    else:
+                        log.warning("Release Channel Setting list returned empty")
+                except Exception as e:
+                    log.warning(f"Failed to parse Release Channel Setting list: {e}")
+            else:
+                log.warning(f"Failed to list Release Channel Settings (status={list_response.status_code})")
             # Setting 已存在，继续下一步
             log.info(f"步骤 1/2: Release Channel Setting 已存在")
         else:

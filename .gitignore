@@ -97,6 +97,7 @@ log.txt
 *.bak
 
 tools/
+aicode/
 
 zeaburcli/
 sshcli/
