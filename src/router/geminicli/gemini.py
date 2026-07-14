@@ -155,7 +155,7 @@ async def stream_generate_content(
     real_model = normalize_geminicli_model_alias(public_model)
     if real_model != public_model:
         log.info(f"[GEMINICLI] Code Assist 流式模型别名: {public_model} -> {real_model}")
-    # 更新模型名为真实模型名
+    # Update request model to the Code Assist upstream ID.
     normalized_dict["model"] = real_model
 
     def _normalize_stream_model_version(chunk):
