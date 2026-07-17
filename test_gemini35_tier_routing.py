@@ -228,3 +228,36 @@ def test_gemini_35_client_model_aliases_and_tiers():
         TIER_CODE_ASSIST_STANDARD,
         TIER_CODE_ASSIST_ENTERPRISE,
     )
+
+
+@pytest.mark.asyncio
+async def test_quota_display_preserves_distinct_google_model_ids(monkeypatch):
+    class QuotaResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "buckets": [
+                    {"modelId": "gemini-3.5-flash", "remainingFraction": 0.8},
+                    {"modelId": "gemini-3-flash", "remainingFraction": 0.7},
+                ]
+            }
+
+    async def fake_post(*args, **kwargs):
+        return QuotaResponse()
+
+    async def fake_endpoint():
+        return "https://example.test"
+
+    monkeypatch.setattr(geminicli, "post_async", fake_post)
+    monkeypatch.setattr(geminicli, "get_code_assist_endpoint", fake_endpoint)
+
+    result = await geminicli.fetch_geminicli_quota_info(
+        access_token="secret-token",
+        project_id="project-123",
+    )
+
+    assert result["success"] is True
+    assert result["models"]["gemini-3.5-flash"]["displayName"] == "gemini-3.5-flash"
+    assert result["models"]["gemini-3-flash"]["displayName"] == "gemini-3-flash"

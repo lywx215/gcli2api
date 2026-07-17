@@ -827,13 +827,6 @@ async def fetch_geminicli_quota_info(
     """
     from datetime import datetime, timedelta
 
-    def _quota_display_name(model_id: str) -> str:
-        # Official Gemini CLI displays the Code Assist backend name
-        # "gemini-3-flash" as the GA model "gemini-3.5-flash".
-        if model_id == "gemini-3-flash":
-            return "gemini-3.5-flash"
-        return model_id
-
     if not project_id:
         return {
             "success": False,
@@ -907,7 +900,10 @@ async def fetch_geminicli_quota_info(
                 "remaining": remaining_fraction if remaining_fraction is not None else 0,
                 "resetTime": reset_time_beijing,
                 "resetTimeRaw": reset_time_raw,
-                "displayName": _quota_display_name(model_id),
+                # Quota cards must preserve Google's raw bucket IDs. Client
+                # aliases are request-routing concerns and must not merge two
+                # independently returned quota buckets into one display name.
+                "displayName": model_id,
                 "rawModelId": model_id,
                 "testModel": model_id,
             }
