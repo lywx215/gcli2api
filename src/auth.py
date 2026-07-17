@@ -20,6 +20,7 @@ from .google_oauth_api import (
     Flow,
     enable_required_apis,
     fetch_project_id_and_tier,
+    fetch_geminicli_subscription_info,
     get_user_projects,
     select_default_project,
 )
@@ -36,11 +37,36 @@ from .utils import (
     TOKEN_URL,
     get_geminicli_user_agent,
 )
+from .subscription_tiers import (
+    GeminiCliSubscriptionInfo,
+    default_tier_for_mode,
+)
 
 
 async def get_callback_port():
     """获取OAuth回调端口"""
     return int(await get_config_value("oauth_callback_port", "11451", "OAUTH_CALLBACK_PORT"))
+
+
+async def _detect_geminicli_subscription(
+    credentials: Credentials, project_id: Optional[str]
+) -> GeminiCliSubscriptionInfo:
+    return await fetch_geminicli_subscription_info(
+        access_token=credentials.access_token,
+        user_agent=get_geminicli_user_agent(""),
+        api_base_url=await get_code_assist_endpoint(),
+        project_id=project_id,
+    )
+
+
+def _subscription_response_fields(info: GeminiCliSubscriptionInfo) -> Dict[str, Any]:
+    return {
+        "subscription_tier": info.tier,
+        "tier_raw_id": info.raw_tier_id,
+        "tier_raw_name": info.raw_tier_name,
+        "tier_detected_at": info.detected_at,
+        "tier_detection_status": info.status,
+    }
 
 
 def _prepare_credentials_data(credentials: Credentials, project_id: str, mode: str = "geminicli", subscription_tier: str = None) -> Dict[str, Any]:
@@ -489,7 +515,14 @@ async def complete_auth_flow(
                     log.warning(f"仍未获取到project_id，使用默认project_id: {project_id}")
 
                 # 保存凭证
-                saved_filename = await save_credentials(credentials, project_id, subscription_tier=subscription_tier)
+                subscription_info = await _detect_geminicli_subscription(
+                    credentials, project_id
+                )
+                subscription_tier = subscription_info.tier
+                saved_filename = await save_credentials(
+                    credentials, project_id, subscription_tier=subscription_tier,
+                    subscription_info=subscription_info,
+                )
 
                 # 准备返回的凭证数据
                 creds_data = _prepare_credentials_data(credentials, project_id, mode="geminicli", subscription_tier=subscription_tier)
@@ -503,6 +536,7 @@ async def complete_auth_flow(
                     "credentials": creds_data,
                     "file_path": saved_filename,
                     "auto_detected_project": flow_data.get("auto_project_detection", False),
+                    **_subscription_response_fields(subscription_info),
                 }
 
             except Exception as e:
@@ -765,7 +799,14 @@ async def asyncio_complete_auth_flow(
                     log.warning(f"仍未获取到project_id，使用默认project_id: {project_id}")
 
                 # 保存凭证
-                saved_filename = await save_credentials(credentials, project_id, subscription_tier=subscription_tier)
+                subscription_info = await _detect_geminicli_subscription(
+                    credentials, project_id
+                )
+                subscription_tier = subscription_info.tier
+                saved_filename = await save_credentials(
+                    credentials, project_id, subscription_tier=subscription_tier,
+                    subscription_info=subscription_info,
+                )
 
                 # 准备返回的凭证数据
                 creds_data = _prepare_credentials_data(credentials, project_id, mode="geminicli", subscription_tier=subscription_tier)
@@ -779,6 +820,7 @@ async def asyncio_complete_auth_flow(
                     "credentials": creds_data,
                     "file_path": saved_filename,
                     "auto_detected_project": flow_data.get("auto_project_detection", False),
+                    **_subscription_response_fields(subscription_info),
                 }
 
             except Exception as e:
@@ -927,7 +969,14 @@ async def complete_auth_flow_from_callback_url(
                     log.warning(f"启用API服务失败: {e}")
 
             # 保存凭证
-            saved_filename = await save_credentials(credentials, detected_project_id, subscription_tier=subscription_tier)
+            subscription_info = await _detect_geminicli_subscription(
+                credentials, detected_project_id
+            )
+            subscription_tier = subscription_info.tier
+            saved_filename = await save_credentials(
+                credentials, detected_project_id, subscription_tier=subscription_tier,
+                subscription_info=subscription_info,
+            )
 
             # 准备返回的凭证数据
             creds_data = _prepare_credentials_data(credentials, detected_project_id, mode="geminicli", subscription_tier=subscription_tier)
@@ -941,6 +990,7 @@ async def complete_auth_flow_from_callback_url(
                 "credentials": creds_data,
                 "file_path": saved_filename,
                 "auto_detected_project": auto_detected,
+                **_subscription_response_fields(subscription_info),
             }
 
         except Exception as e:
@@ -952,7 +1002,13 @@ async def complete_auth_flow_from_callback_url(
         return {"success": False, "error": str(e)}
 
 
-async def save_credentials(creds: Credentials, project_id: str, mode: str = "geminicli", subscription_tier: str = None) -> str:
+async def save_credentials(
+    creds: Credentials,
+    project_id: str,
+    mode: str = "geminicli",
+    subscription_tier: str = None,
+    subscription_info: Optional[GeminiCliSubscriptionInfo] = None,
+) -> str:
     """通过统一存储系统保存凭证"""
     # 生成文件名（使用project_id和时间戳）
     timestamp = int(time.time())
@@ -968,18 +1024,30 @@ async def save_credentials(creds: Credentials, project_id: str, mode: str = "gem
 
     # 通过存储适配器保存
     storage_adapter = await get_storage_adapter()
+    credential_existed = (
+        await storage_adapter.get_credential(filename, mode=mode) is not None
+    )
     success = await storage_adapter.store_credential(filename, creds_data, mode=mode)
 
     if success:
         # 创建默认状态记录
         try:
+            tier_value = subscription_tier or default_tier_for_mode(mode)
             default_state = {
                 "error_codes": [],
                 "disabled": False,
                 "last_success": time.time(),
                 "user_email": None,
-                "tier": subscription_tier,
             }
+            if mode == "antigravity":
+                default_state["tier"] = tier_value
+            elif (
+                subscription_info is not None
+                and subscription_info.status != "unavailable"
+            ):
+                default_state.update(subscription_info.state_fields())
+            elif not credential_existed:
+                default_state["tier"] = default_tier_for_mode(mode)
             await storage_adapter.update_credential_state(filename, default_state, mode=mode)
             log.info(f"凭证和状态已保存到: {filename} (mode={mode})")
         except Exception as e:

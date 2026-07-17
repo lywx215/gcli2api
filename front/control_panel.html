@@ -1813,7 +1813,7 @@
                 <div class="status info" style="margin-bottom: 20px;">
                     <strong>💡 检验功能说明：</strong>
                     <p style="margin: 10px 0;">
-                        点击每个凭证的"检验"按钮可以重新获取Project ID, 并查看账号的tier(free/pro/ultra)。<br>
+                        点击每个凭证的"检验"按钮可以重新获取Project ID，并查看账号的Tier（Code Assist Standard / Enterprise / Free / Pro / Ultra / Unknown）。<br>
                         <strong style="color: #0c5460;">✅ 检验成功可以恢复403错误</strong>，让凭证重新正常工作。<br>
                         建议在遇到403错误时使用此功能。
                     </p>
@@ -1920,9 +1920,12 @@
                     <label for="tierFilter" style="margin-left: 20px;">Tier：</label>
                     <select id="tierFilter" class="filter-select" onchange="applyStatusFilter()">
                         <option value="all">全部</option>
+                        <option value="code_assist_standard">Code Assist Standard</option>
+                        <option value="code_assist_enterprise">Code Assist Enterprise</option>
                         <option value="free">Free</option>
                         <option value="pro">Pro</option>
                         <option value="ultra">Ultra</option>
+                        <option value="unknown">Unknown</option>
                     </select>
 
                     <label for="remarkFilter" style="margin-left: 20px;">备注：</label>

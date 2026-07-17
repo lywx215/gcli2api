@@ -19,6 +19,7 @@ from config import (
 from log import log
 
 from src.httpx_client import get_async, post_async
+from src.subscription_tiers import GeminiCliSubscriptionInfo, normalize_geminicli_subscription
 
 
 class TokenError(Exception):
@@ -529,6 +530,78 @@ async def select_default_project(projects: List[Dict[str, Any]]) -> Optional[str
         f"选择第一个项目作为默认: {project_id} ({first_project.get('displayName', project_id)})"
     )
     return project_id
+
+
+def _safe_tier_log_value(value: Optional[str]) -> str:
+    if not value:
+        return "-"
+    return " ".join(str(value).split())[:128]
+
+
+async def fetch_geminicli_subscription_info(
+    access_token: str,
+    user_agent: str,
+    api_base_url: str,
+    project_id: Optional[str] = None,
+) -> GeminiCliSubscriptionInfo:
+    """Read Gemini CLI subscription information without onboarding the user."""
+    headers = {
+        "User-Agent": user_agent,
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "Accept-Encoding": "gzip",
+    }
+    metadata: Dict[str, Any] = {
+        "ideType": "IDE_UNSPECIFIED",
+        "platform": "PLATFORM_UNSPECIFIED",
+        "pluginType": "GEMINI",
+    }
+    request_body: Dict[str, Any] = {"metadata": metadata}
+    if project_id:
+        request_body["cloudaicompanionProject"] = project_id
+        metadata["duetProject"] = project_id
+
+    request_url = f"{api_base_url.rstrip('/')}/v1internal:loadCodeAssist"
+    try:
+        response = await post_async(
+            request_url,
+            json=request_body,
+            headers=headers,
+            timeout=30.0,
+        )
+        if response.status_code != 200:
+            log.warning(
+                f"[GeminiCLI tier] loadCodeAssist unavailable: HTTP {response.status_code}"
+            )
+            return GeminiCliSubscriptionInfo.unavailable(project_id)
+
+        data = response.json()
+        if not isinstance(data, dict):
+            log.warning("[GeminiCLI tier] loadCodeAssist returned a non-object response")
+            return GeminiCliSubscriptionInfo.unavailable(project_id)
+
+        info = normalize_geminicli_subscription(data, int(time.time()))
+        if not info.project_id and project_id:
+            info = GeminiCliSubscriptionInfo(
+                project_id=project_id,
+                tier=info.tier,
+                raw_tier_id=info.raw_tier_id,
+                raw_tier_name=info.raw_tier_name,
+                detected_at=info.detected_at,
+                status=info.status,
+            )
+        log.info(
+            f"[GeminiCLI tier] status={info.status}, tier={info.tier}, "
+            f"raw_id={_safe_tier_log_value(info.raw_tier_id)}, "
+            f"raw_name={_safe_tier_log_value(info.raw_tier_name)}"
+        )
+        return info
+    except Exception as exc:
+        log.warning(
+            f"[GeminiCLI tier] loadCodeAssist request failed: "
+            f"status=unavailable, error_type={type(exc).__name__}"
+        )
+        return GeminiCliSubscriptionInfo.unavailable(project_id)
 
 
 async def fetch_project_id_and_tier(

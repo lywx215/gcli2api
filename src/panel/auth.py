@@ -22,6 +22,18 @@ from src.models import (
 from src.utils import verify_panel_token
 
 
+def _oauth_subscription_fields(result: dict, mode: str) -> dict:
+    if mode == "antigravity":
+        return {}
+    return {
+        "subscription_tier": result.get("subscription_tier"),
+        "tier_raw_id": result.get("tier_raw_id"),
+        "tier_raw_name": result.get("tier_raw_name"),
+        "tier_detected_at": result.get("tier_detected_at"),
+        "tier_detection_status": result.get("tier_detection_status"),
+    }
+
+
 # 创建路由器
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -98,6 +110,7 @@ async def auth_callback(request: AuthCallbackRequest, token: str = Depends(verif
                     "file_path": result["file_path"],
                     "message": "认证成功，凭证已保存",
                     "auto_detected_project": result.get("auto_detected_project", False),
+                    **_oauth_subscription_fields(result, request.mode),
                 }
             )
         else:
@@ -149,6 +162,7 @@ async def auth_callback_url(request: AuthCallbackUrlRequest, token: str = Depend
                     "file_path": result["file_path"],
                     "message": "从回调URL认证成功，凭证已保存",
                     "auto_detected_project": result.get("auto_detected_project", False),
+                    **_oauth_subscription_fields(result, request.mode),
                 }
             )
         else:

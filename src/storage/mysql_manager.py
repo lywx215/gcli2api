@@ -14,6 +14,7 @@ from urllib.parse import urlparse, parse_qs
 import aiomysql
 
 from log import log
+from src.subscription_tiers import default_tier_for_mode, valid_tiers_for_mode
 
 
 class MySQLManager:
@@ -29,6 +30,9 @@ class MySQLManager:
         "model_cooldowns",
         "preview",
         "tier",
+        "tier_raw_id",
+        "tier_raw_name",
+        "tier_detected_at",
     }
 
     def __init__(self):
@@ -143,7 +147,10 @@ class MySQLManager:
                         preview TINYINT(1) DEFAULT 1,
 
                         -- tier 等级 (free/pro/ultra)
-                        tier VARCHAR(16) DEFAULT 'pro',
+                        tier VARCHAR(32) DEFAULT 'unknown',
+                        tier_raw_id VARCHAR(255),
+                        tier_raw_name VARCHAR(255),
+                        tier_detected_at BIGINT,
 
                         -- 轮换相关
                         rotation_order INT DEFAULT 0,
@@ -180,7 +187,7 @@ class MySQLManager:
                         model_cooldowns TEXT,
 
                         -- tier 等级 (free/pro/ultra)
-                        tier VARCHAR(16) DEFAULT 'pro',
+                        tier VARCHAR(32) DEFAULT 'pro',
 
                         -- 轮换相关
                         rotation_order INT DEFAULT 0,
@@ -219,22 +226,37 @@ class MySQLManager:
 
     async def _ensure_tier_column(self):
         """确保 tier 列存在（兼容旧表结构）"""
-        for table in ["gcli_credentials", "gcli_antigravity_credentials"]:
+        for table, mode in (
+            ("gcli_credentials", "geminicli"),
+            ("gcli_antigravity_credentials", "antigravity"),
+        ):
             try:
                 async with self._pool.acquire() as conn:
                     async with conn.cursor() as cur:
-                        await cur.execute(f"""
-                            SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-                            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}' AND COLUMN_NAME = 'tier'
-                        """)
-                        if not await cur.fetchone():
-                            await cur.execute(f"""
-                                ALTER TABLE {table} ADD COLUMN tier VARCHAR(16) DEFAULT 'pro'
-                            """)
-                            log.info(f"Added 'tier' column to {table}")
+                        tier_default = default_tier_for_mode(mode)
+                        await cur.execute(f"""SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}' AND COLUMN_NAME = 'tier'""")
+                        if await cur.fetchone():
+                            await cur.execute(
+                                f"ALTER TABLE {table} MODIFY COLUMN tier VARCHAR(32) DEFAULT '{tier_default}'"
+                            )
+                        else:
+                            await cur.execute(
+                                f"ALTER TABLE {table} ADD COLUMN tier VARCHAR(32) DEFAULT '{tier_default}'"
+                            )
+                        if mode == "geminicli":
+                            for name, definition in (
+                                ("tier_raw_id", "VARCHAR(255)"),
+                                ("tier_raw_name", "VARCHAR(255)"),
+                                ("tier_detected_at", "BIGINT"),
+                            ):
+                                await cur.execute(f"""SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                                    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}' AND COLUMN_NAME = '{name}'""")
+                                if not await cur.fetchone():
+                                    await cur.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
                     await conn.commit()
             except Exception as e:
-                log.warning(f"Failed to ensure tier column in {table}: {e}")
+                log.warning(f"Failed to ensure tier columns in {table}: {e}")
 
     async def _load_config_cache(self):
         """加载配置到内存缓存（仅在初始化时调用一次）"""
@@ -773,20 +795,20 @@ class MySQLManager:
                                 (server_name, filename, credential_data, disabled,
                                  error_codes, error_messages, last_success,
                                  model_cooldowns, preview, rotation_order,
-                                 call_count, created_at, updated_at)
-                                VALUES (%s, %s, %s, 0, '[]', '[]', %s, '{{}}', 1, %s, 0, %s, %s)
+                                 call_count, created_at, updated_at, tier)
+                                VALUES (%s, %s, %s, 0, '[]', '[]', %s, '{{}}', 1, %s, 0, %s, %s, %s)
                             """, (self._server_name, filename, json.dumps(credential_data),
-                                  current_ts, next_order, current_ts, current_ts))
+                                  current_ts, next_order, current_ts, current_ts, default_tier_for_mode(mode)))
                         else:
                             await cur.execute(f"""
                                 INSERT INTO {table_name}
                                 (server_name, filename, credential_data, disabled,
                                  error_codes, error_messages, last_success,
                                  model_cooldowns, rotation_order,
-                                 call_count, created_at, updated_at)
-                                VALUES (%s, %s, %s, 0, '[]', '[]', %s, '{{}}', %s, 0, %s, %s)
+                                 call_count, created_at, updated_at, tier)
+                                VALUES (%s, %s, %s, 0, '[]', '[]', %s, '{{}}', %s, 0, %s, %s, %s)
                             """, (self._server_name, filename, json.dumps(credential_data),
-                                  current_ts, next_order, current_ts, current_ts))
+                                  current_ts, next_order, current_ts, current_ts, default_tier_for_mode(mode)))
 
                 await conn.commit()
                 log.debug(f"Stored credential: {filename} (mode={mode})")
@@ -895,6 +917,8 @@ class MySQLManager:
                     # antigravity 表没有 preview 列
                     if key == "preview" and mode != "geminicli":
                         continue
+                    if key.startswith("tier_raw_") and mode != "geminicli":
+                        continue
                     if key in ("error_codes", "error_messages", "model_cooldowns"):
                         set_clauses.append(f"{key} = %s")
                         values.append(json.dumps(value))
@@ -967,7 +991,8 @@ class MySQLManager:
                     if mode == "geminicli":
                         await cur.execute(f"""
                             SELECT disabled, error_codes, last_success,
-                                   user_email, model_cooldowns, preview, tier
+                                   user_email, model_cooldowns, preview, tier,
+                                   tier_raw_id, tier_raw_name, tier_detected_at
                             FROM {table_name}
                             WHERE server_name = %s AND filename = %s
                         """, (self._server_name, filename))
@@ -981,14 +1006,20 @@ class MySQLManager:
                                 "user_email": row[3],
                                 "model_cooldowns": json.loads(row[4] or '{}'),
                                 "preview": bool(row[5]) if row[5] is not None else True,
-                                "tier": row[6] if row[6] is not None else "pro",
+                                "tier": row[6] if row[6] is not None else "unknown",
+                                "tier_raw_id": row[7],
+                                "tier_raw_name": row[8],
+                                "tier_detected_at": row[9],
                             }
 
                         return {
                             "disabled": False, "error_codes": [],
                             "last_success": time.time(), "user_email": None,
                             "model_cooldowns": {}, "preview": True,
-                            "tier": "pro",
+                            "tier": "unknown",
+                            "tier_raw_id": None,
+                            "tier_raw_name": None,
+                            "tier_detected_at": None,
                         }
                     else:
                         await cur.execute(f"""
@@ -1031,7 +1062,8 @@ class MySQLManager:
                     if mode == "geminicli":
                         await cur.execute(f"""
                             SELECT filename, disabled, error_codes, last_success,
-                                   user_email, model_cooldowns, preview, tier
+                                   user_email, model_cooldowns, preview, tier,
+                                   tier_raw_id, tier_raw_name, tier_detected_at
                             FROM {table_name}
                             WHERE server_name = %s
                         """, (self._server_name,))
@@ -1070,7 +1102,10 @@ class MySQLManager:
 
                         if mode == "geminicli":
                             state["preview"] = bool(row[6]) if row[6] is not None else True
-                            state["tier"] = row[7] if row[7] is not None else "pro"
+                            state["tier"] = row[7] if row[7] is not None else "unknown"
+                            state["tier_raw_id"] = row[8]
+                            state["tier_raw_name"] = row[9]
+                            state["tier_detected_at"] = row[10]
                         else:
                             state["tier"] = row[6] if row[6] is not None else "pro"
 
@@ -1141,7 +1176,8 @@ class MySQLManager:
                     if mode == "geminicli":
                         query = f"""
                             SELECT filename, disabled, error_codes, last_success,
-                                   user_email, rotation_order, model_cooldowns, preview, tier
+                                   user_email, rotation_order, model_cooldowns, preview, tier,
+                                   tier_raw_id, tier_raw_name, tier_detected_at
                             FROM {table_name}
                             {where_clause}
                             ORDER BY rotation_order
@@ -1203,7 +1239,10 @@ class MySQLManager:
 
                         if mode == "geminicli":
                             summary["preview"] = bool(row[7]) if row[7] is not None else True
-                            summary["tier"] = row[8] if row[8] is not None else "pro"
+                            summary["tier"] = row[8] if row[8] is not None else "unknown"
+                            summary["tier_raw_id"] = row[9]
+                            summary["tier_raw_name"] = row[10]
+                            summary["tier_detected_at"] = row[11]
                         else:
                             summary["tier"] = row[7] if row[7] is not None else "pro"
 
@@ -1216,7 +1255,7 @@ class MySQLManager:
                                 continue
 
                         # tier 筛选
-                        if tier_filter and tier_filter in ("free", "pro", "ultra"):
+                        if tier_filter and tier_filter in valid_tiers_for_mode(mode):
                             if summary["tier"] != tier_filter:
                                 continue
 

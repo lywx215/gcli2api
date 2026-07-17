@@ -133,7 +133,10 @@ function createCredsManager(type) {
                             user_email: item.user_email,
                             model_cooldowns: item.model_cooldowns || {},
                             preview: item.preview,
-                            tier: item.tier || 'pro',
+                            tier: item.tier || (this.type === 'antigravity' ? 'pro' : 'unknown'),
+                            tier_raw_id: item.tier_raw_id,
+                            tier_raw_name: item.tier_raw_name,
+                            tier_detected_at: item.tier_detected_at,
                             enable_credit: !!item.enable_credit,
                             success_count: item.success_count || 0,
                             failure_count: item.failure_count || 0,
@@ -685,10 +688,36 @@ function createCredCard(credInfo, manager) {
     }
 
     // tier 状态显示 (geminicli 和 antigravity 都显示)
-    const tier = (credInfo.tier || 'pro').toString().toLowerCase();
-    const tierLabel = tier.toUpperCase();
-    const tierColor = tier === 'ultra' ? '#ff9800' : (tier === 'free' ? '#607d8b' : '#2e7d32');
-    statusBadges += `<span class="status-badge" style="background-color: ${tierColor}; color: white;" title="凭证等级: ${tierLabel}">Tier: ${tierLabel}</span>`;
+    const tier = (credInfo.tier || (managerType === 'antigravity' ? 'pro' : 'unknown')).toString().toLowerCase();
+    if (managerType === 'antigravity') {
+        const tierLabel = tier.toUpperCase();
+        const tierColor = tier === 'ultra' ? '#ff9800' : (tier === 'free' ? '#607d8b' : '#2e7d32');
+        statusBadges += `<span class="status-badge" style="background-color: ${tierColor}; color: white;" title="凭证等级: ${tierLabel}">Tier: ${tierLabel}</span>`;
+    } else {
+        const tierPresentation = {
+            code_assist_standard: { label: 'Code Assist Standard', color: '#1565c0' },
+            code_assist_enterprise: { label: 'Code Assist Enterprise', color: '#6a1b9a' },
+            free: { label: 'Free', color: '#607d8b' },
+            pro: { label: 'Pro', color: '#2e7d32' },
+            ultra: { label: 'Ultra', color: '#ef6c00' },
+            unknown: { label: 'Unknown', color: '#616161' }
+        }[tier] || { label: 'Unknown', color: '#616161' };
+        const tooltipLines = [`凭证等级: ${tierPresentation.label}`];
+        if (credInfo.tier_raw_id) {
+            tooltipLines.push(`原始 Tier ID: ${credInfo.tier_raw_id}`);
+        }
+        if (credInfo.tier_raw_name) {
+            tooltipLines.push(`原始 Tier 名称: ${credInfo.tier_raw_name}`);
+        }
+        if (credInfo.tier_detected_at) {
+            const detectedDate = new Date(Number(credInfo.tier_detected_at) * 1000);
+            if (!Number.isNaN(detectedDate.getTime())) {
+                tooltipLines.push(`识别时间: ${detectedDate.toLocaleString()}`);
+            }
+        }
+        const tooltip = escapeHtmlAttribute(tooltipLines.join('\n'));
+        statusBadges += `<span class="status-badge" style="background-color: ${tierPresentation.color}; color: white;" title="${tooltip}">Tier: ${tierPresentation.label}</span>`;
+    }
 
     // Credit 状态显示（仅 antigravity）
     if (managerType === 'antigravity') {
@@ -2422,6 +2451,10 @@ function escapeHtml(text) {
 }
 
 // 高亮HTTP链接函数
+
+function escapeHtmlAttribute(text) {
+    return escapeHtml(String(text)).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 function highlightHttpLinks(text) {
     // 匹配 http:// 或 https:// 开头的URL
     const urlRegex = /(https?:\/\/[^\s<>"]+)/gi;

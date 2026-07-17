@@ -12,6 +12,7 @@ import aiosqlite
 
 from log import log
 from src.storage._stats_common import normalize_model_family, _today_beijing_str
+from src.subscription_tiers import default_tier_for_mode, valid_tiers_for_mode
 
 
 class SQLiteManager:
@@ -30,6 +31,9 @@ class SQLiteManager:
         "model_cooldowns",
         "preview",
         "tier",
+        "tier_raw_id",
+        "tier_raw_name",
+        "tier_detected_at",
         "enable_credit",
         "success_count",
         "failure_count",
@@ -49,14 +53,17 @@ class SQLiteManager:
             ("user_email", "TEXT"),
             ("model_cooldowns", "TEXT DEFAULT '{}'"),
             ("preview", "INTEGER DEFAULT 1"),
-            ("tier", "TEXT DEFAULT 'pro'"),
+            ("tier", "TEXT DEFAULT 'unknown'"),
+            ("tier_raw_id", "TEXT"),
+            ("tier_raw_name", "TEXT"),
+            ("tier_detected_at", "INTEGER"),
             ("rotation_order", "INTEGER DEFAULT 0"),
             ("call_count", "INTEGER DEFAULT 0"),
             ("success_count", "INTEGER DEFAULT 0"),
             ("failure_count", "INTEGER DEFAULT 0"),
             ("remark", "TEXT DEFAULT ''"),
-            ("created_at", "REAL DEFAULT (unixepoch())"),
-            ("updated_at", "REAL DEFAULT (unixepoch())")
+            ("created_at", "REAL DEFAULT 0"),
+            ("updated_at", "REAL DEFAULT 0")
         ],
         "antigravity_credentials": [
             ("disabled", "INTEGER DEFAULT 0"),
@@ -75,8 +82,8 @@ class SQLiteManager:
             ("success_count", "INTEGER DEFAULT 0"),
             ("failure_count", "INTEGER DEFAULT 0"),
             ("remark", "TEXT DEFAULT ''"),
-            ("created_at", "REAL DEFAULT (unixepoch())"),
-            ("updated_at", "REAL DEFAULT (unixepoch())")
+            ("created_at", "REAL DEFAULT 0"),
+            ("updated_at", "REAL DEFAULT 0")
         ]
     }
 
@@ -209,8 +216,11 @@ class SQLiteManager:
                 -- preview 状态 (只对 geminicli 有效，默认为 true)
                 preview INTEGER DEFAULT 1,
 
-                -- tier 状态 (只对 geminicli 有效，默认为 pro)
-                tier TEXT DEFAULT 'pro',
+                -- Gemini CLI subscription state
+                tier TEXT DEFAULT 'unknown',
+                tier_raw_id TEXT,
+                tier_raw_name TEXT,
+                tier_detected_at INTEGER,
 
                 -- 轮换相关
                 rotation_order INTEGER DEFAULT 0,
@@ -618,9 +628,9 @@ class SQLiteManager:
 
                     await db.execute(f"""
                         INSERT INTO {table_name}
-                        (filename, credential_data, rotation_order, last_success)
-                        VALUES (?, ?, ?, ?)
-                    """, (filename, json.dumps(credential_data), next_order, time.time()))
+                        (filename, credential_data, rotation_order, last_success, tier)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (filename, json.dumps(credential_data), next_order, time.time(), default_tier_for_mode(mode)))
 
                 await db.commit()
                 log.debug(f"Stored credential: {filename} (mode={mode})")
@@ -719,6 +729,8 @@ class SQLiteManager:
                 if key in self.STATE_FIELDS:
                     if key == "enable_credit" and mode != "antigravity":
                         continue
+                    if key.startswith("tier_raw_") and mode != "geminicli":
+                        continue
                     if key in ("error_codes", "error_messages", "model_cooldowns"):
                         # JSON 字段需要序列化
                         set_clauses.append(f"{key} = ?")
@@ -777,7 +789,8 @@ class SQLiteManager:
                 if mode == "geminicli":
                     async with db.execute(f"""
                         SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
-                               preview, tier, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               preview, tier, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
+                               tier_raw_id, tier_raw_name, tier_detected_at
                         FROM {table_name} WHERE filename = ?
                     """, (filename,)) as cursor:
                         row = await cursor.fetchone()
@@ -792,13 +805,16 @@ class SQLiteManager:
                                 "user_email": row[3],
                                 "model_cooldowns": json.loads(model_cooldowns_json),
                                 "preview": bool(row[5]) if row[5] is not None else True,
-                                "tier": row[6] if row[6] is not None else "pro",
+                                "tier": row[6] if row[6] is not None else "unknown",
                                 "success_count": row[7] or 0,
                                 "failure_count": row[8] or 0,
                                 "permanent_disabled": bool(row[9]) if len(row) > 9 else False,
                                 "cycle_stats": json.loads(row[10] or "{}") if len(row) > 10 else {},
                                 "last_cycle_stats": json.loads(row[11] or "{}") if len(row) > 11 else {},
                                 "remark": row[12] or "" if len(row) > 12 else "",
+                                "tier_raw_id": row[13] if len(row) > 13 else None,
+                                "tier_raw_name": row[14] if len(row) > 14 else None,
+                                "tier_detected_at": row[15] if len(row) > 15 else None,
                             }
 
                     # 返回默认状态
@@ -809,7 +825,10 @@ class SQLiteManager:
                         "user_email": None,
                         "model_cooldowns": {},
                         "preview": True,
-                        "tier": "pro",
+                        "tier": "unknown",
+                        "tier_raw_id": None,
+                        "tier_raw_name": None,
+                        "tier_detected_at": None,
                         "success_count": 0,
                         "failure_count": 0,
                         "remark": "",
@@ -871,7 +890,8 @@ class SQLiteManager:
                     async with db.execute(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, model_cooldowns, preview, tier,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
+                               tier_raw_id, tier_raw_name, tier_detected_at
                         FROM {table_name}
                     """) as cursor:
                         rows = await cursor.fetchall()
@@ -899,13 +919,16 @@ class SQLiteManager:
                                 "user_email": row[4],
                                 "model_cooldowns": model_cooldowns,
                                 "preview": bool(row[6]) if row[6] is not None else True,
-                                "tier": row[7] if row[7] is not None else "pro",
+                                "tier": row[7] if row[7] is not None else "unknown",
                                 "success_count": row[8] or 0,
                                 "failure_count": row[9] or 0,
                                 "permanent_disabled": bool(row[10]) if len(row) > 10 else False,
                                 "cycle_stats": json.loads(row[11] or "{}") if len(row) > 11 else {},
                                 "last_cycle_stats": json.loads(row[12] or "{}") if len(row) > 12 else {},
                                 "remark": row[13] or "" if len(row) > 13 else "",
+                                "tier_raw_id": row[14] if len(row) > 14 else None,
+                                "tier_raw_name": row[15] if len(row) > 15 else None,
+                                "tier_detected_at": row[16] if len(row) > 16 else None,
                             }
 
                         return states
@@ -1041,7 +1064,8 @@ class SQLiteManager:
                     all_query = f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, preview, tier,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
+                               tier_raw_id, tier_raw_name, tier_detected_at
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -1113,7 +1137,7 @@ class SQLiteManager:
                             "rotation_order": row[5],
                             "model_cooldowns": active_cooldowns,
                             "tier": row[8] if mode == "geminicli" and row[8] is not None else (
-                                row[7] if mode != "geminicli" and row[7] is not None else "pro"
+                                row[7] if mode != "geminicli" and row[7] is not None else default_tier_for_mode(mode)
                             ),
                             "success_count": row[9] or 0,
                             "failure_count": row[10] or 0,
@@ -1121,6 +1145,10 @@ class SQLiteManager:
                             "last_cycle_stats": json.loads(row[13] or "{}") if len(row) > 13 else {},
                             "remark": row_remark,
                         }
+                        if mode == "geminicli":
+                            summary["tier_raw_id"] = row[15] if len(row) > 15 else None
+                            summary["tier_raw_name"] = row[16] if len(row) > 16 else None
+                            summary["tier_detected_at"] = row[17] if len(row) > 17 else None
 
                         if mode != "geminicli":
                             summary["enable_credit"] = bool(row[8]) if row[8] is not None else False
@@ -1136,7 +1164,7 @@ class SQLiteManager:
                                     continue
 
                         # 应用tier筛选
-                        if tier_filter and tier_filter in ("free", "pro", "ultra"):
+                        if tier_filter and tier_filter in valid_tiers_for_mode(mode):
                             if summary["tier"] != tier_filter:
                                 continue
 

@@ -26,7 +26,20 @@ from src.storage_adapter import get_storage_adapter
 from src.utils import verify_panel_token, GEMINICLI_USER_AGENT, ANTIGRAVITY_USER_AGENT
 from src.api.antigravity import fetch_quota_info
 from src.api.utils import check_should_auto_ban
-from src.google_oauth_api import Credentials, fetch_project_id_and_tier, get_user_projects, select_default_project, enable_required_apis
+from src.google_oauth_api import (
+    Credentials,
+    enable_required_apis,
+    fetch_geminicli_subscription_info,
+    fetch_project_id_and_tier,
+    get_user_projects,
+    select_default_project,
+)
+from src.subscription_tiers import (
+    GeminiCliSubscriptionInfo,
+    TIER_UNKNOWN,
+    default_tier_for_mode,
+    valid_tiers_for_mode,
+)
 from src.httpx_client import post_async
 from config import get_code_assist_endpoint, get_antigravity_api_url, get_oauth_proxy_url
 from datetime import datetime, timedelta, timezone
@@ -108,6 +121,93 @@ async def clear_all_model_cooldowns_for_credential(
         log.warning(f"清空模型CD时出错: {filename} (mode={mode}), error={e}")
 
 
+async def _detect_uploaded_geminicli_subscription(
+    filename: str, credential_data: dict
+) -> GeminiCliSubscriptionInfo:
+    """Detect and persist Tier for an uploaded Gemini CLI credential.
+
+    Upload remains successful when refresh or loadCodeAssist is temporarily
+    unavailable. In that case the storage layer keeps an existing Tier, while a
+    new credential retains the safe ``unknown`` default.
+    """
+    storage_adapter = await get_storage_adapter()
+    previous_state = await storage_adapter.get_credential_state(
+        filename, mode="geminicli"
+    )
+
+    def preserved_unavailable_info(
+        unavailable_project_id: Optional[str],
+    ) -> GeminiCliSubscriptionInfo:
+        return GeminiCliSubscriptionInfo(
+            project_id=unavailable_project_id,
+            tier=previous_state.get("tier") or TIER_UNKNOWN,
+            raw_tier_id=previous_state.get("tier_raw_id"),
+            raw_tier_name=previous_state.get("tier_raw_name"),
+            detected_at=previous_state.get("tier_detected_at"),
+            status="unavailable",
+        )
+
+    project_id = credential_data.get("project_id")
+    credentials = Credentials.from_dict(credential_data)
+
+    if not credentials.access_token and not credentials.refresh_token:
+        log.warning(
+            f"[GeminiCLI tier] uploaded credential has no usable token: {filename}"
+        )
+        return preserved_unavailable_info(project_id)
+
+    token_refreshed = False
+    if credentials.refresh_token and credentials.is_expired():
+        try:
+            token_refreshed = await credentials.refresh_if_needed()
+        except Exception as exc:
+            # The existing access token may still be accepted when an uploaded
+            # expiry value is missing or stale, so let loadCodeAssist decide.
+            log.warning(
+                f"[GeminiCLI tier] uploaded token refresh failed: "
+                f"status=unavailable, error_type={type(exc).__name__}"
+            )
+
+    if not credentials.access_token:
+        return preserved_unavailable_info(project_id)
+
+    subscription_info = await fetch_geminicli_subscription_info(
+        access_token=credentials.access_token,
+        user_agent=GEMINICLI_USER_AGENT,
+        api_base_url=await get_code_assist_endpoint(),
+        project_id=project_id,
+    )
+
+    credential_changed = token_refreshed
+    if token_refreshed:
+        refreshed_data = credentials.to_dict()
+        credential_data.update(
+            {key: value for key, value in refreshed_data.items() if value is not None}
+        )
+        if "token" in credential_data:
+            credential_data["token"] = credentials.access_token
+
+    detected_project_id = subscription_info.project_id or project_id
+    if detected_project_id and detected_project_id != credential_data.get("project_id"):
+        credential_data["project_id"] = detected_project_id
+        credential_changed = True
+
+    if credential_changed:
+        await storage_adapter.store_credential(
+            filename, credential_data, mode="geminicli"
+        )
+
+    if subscription_info.status != "unavailable":
+        await storage_adapter.update_credential_state(
+            filename, subscription_info.state_fields(), mode="geminicli"
+        )
+
+    if subscription_info.status == "unavailable":
+        return preserved_unavailable_info(subscription_info.project_id or project_id)
+
+    return subscription_info
+
+
 async def upload_credentials_common(
     files: List[UploadFile], mode: str = "geminicli"
 ) -> JSONResponse:
@@ -157,6 +257,7 @@ async def upload_credentials_common(
 
 
     batch_size = 1000
+    tier_detection_semaphore = asyncio.Semaphore(5)
     all_results = []
     total_success = 0
 
@@ -177,8 +278,32 @@ async def upload_credentials_common(
                 else:
                     await credential_manager.add_credential(filename, credential_data)
 
+                result = {
+                    "filename": filename,
+                    "status": "success",
+                    "message": "上传成功",
+                }
+                if mode == "geminicli":
+                    async with tier_detection_semaphore:
+                        subscription_info = await _detect_uploaded_geminicli_subscription(
+                            filename, credential_data
+                        )
+                    result.update(
+                        {
+                            "project_id": subscription_info.project_id
+                            or credential_data.get("project_id"),
+                            "subscription_tier": subscription_info.tier,
+                            "tier_raw_id": subscription_info.raw_tier_id,
+                            "tier_raw_name": subscription_info.raw_tier_name,
+                            "tier_detected_at": subscription_info.detected_at,
+                            "tier_detection_status": subscription_info.status,
+                        }
+                    )
+                    if subscription_info.status == "unavailable":
+                        result["message"] = "上传成功，Tier 暂未识别，请稍后检验"
+
                 log.debug(f"成功上传 {mode} 凭证文件: {filename}")
-                return {"filename": filename, "status": "success", "message": "上传成功"}
+                return result
 
             except json.JSONDecodeError as e:
                 return {
@@ -253,8 +378,10 @@ async def get_creds_status_common(
         raise HTTPException(status_code=400, detail="cooldown_filter 只能是 all、in_cooldown、no_cooldown、pro_no_cooldown 或 flash_no_cooldown")
     if preview_filter and preview_filter not in ["all", "preview", "no_preview"]:
         raise HTTPException(status_code=400, detail="preview_filter 只能是 all、preview 或 no_preview")
-    if tier_filter and tier_filter not in ["all", "free", "pro", "ultra"]:
-        raise HTTPException(status_code=400, detail="tier_filter 只能是 all、free、pro 或 ultra")
+    allowed_tier_filters = ("all", *valid_tiers_for_mode(mode))
+    if tier_filter and tier_filter not in allowed_tier_filters:
+        allowed_text = "、".join(allowed_tier_filters)
+        raise HTTPException(status_code=400, detail=f"tier_filter 只能是 {allowed_text}")
     if remark_filter is not None and len(remark_filter) > 64:
         raise HTTPException(status_code=400, detail="remark_filter 不能超过 64 个字符")
 
@@ -285,13 +412,18 @@ async def get_creds_status_common(
             "last_success": summary["last_success"],
             "backend_type": backend_type,
             "model_cooldowns": summary.get("model_cooldowns", {}),
-            "tier": summary.get("tier", "pro"),
+            "tier": summary.get("tier") or default_tier_for_mode(mode),
             "success_count": summary.get("success_count", 0),
             "failure_count": summary.get("failure_count", 0),
             "cycle_stats": summary.get("cycle_stats", {}),
             "last_cycle_stats": summary.get("last_cycle_stats", {}),
             "remark": summary.get("remark", ""),
         }
+
+        if mode == "geminicli":
+            cred_info["tier_raw_id"] = summary.get("tier_raw_id")
+            cred_info["tier_raw_name"] = summary.get("tier_raw_name")
+            cred_info["tier_detected_at"] = summary.get("tier_detected_at")
 
         if mode == "geminicli":
             cred_info["preview"] = summary.get("preview", True)
@@ -551,6 +683,7 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
 
 
     storage_adapter = await get_storage_adapter()
+    previous_state = await storage_adapter.get_credential_state(filename, mode=mode)
 
     # 获取凭证数据
     credential_data = await storage_adapter.get_credential(filename, mode=mode)
@@ -579,18 +712,21 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
             api_base_url=api_base_url,
             include_credits=True,
         )
+        subscription_info = None
+        tier_raw_id = None
+        tier_raw_name = None
+        tier_detected_at = None
+        tier_detection_status = "detected" if subscription_tier else "unrecognized"
     else:
-        # geminicli 模式：通过项目列表获取 project_id
         credit_amount = None
-        subscription_tier = None
-        user_projects = await get_user_projects(credentials)
-        if user_projects:
-            if len(user_projects) == 1:
-                project_id = user_projects[0].get("projectId")
-            else:
-                project_id = await select_default_project(user_projects)
-        else:
-            project_id = None
+        project_id = credential_data.get("project_id")
+        if not project_id:
+            user_projects = await get_user_projects(credentials)
+            if user_projects:
+                if len(user_projects) == 1:
+                    project_id = user_projects[0].get("projectId")
+                else:
+                    project_id = await select_default_project(user_projects)
 
         if project_id:
             log.info(f"正在为项目 {project_id} 启用必需的API服务...")
@@ -598,6 +734,25 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
                 await enable_required_apis(credentials, project_id)
             except Exception as e:
                 log.warning(f"自动启用API服务失败: {e}")
+
+        subscription_info = await fetch_geminicli_subscription_info(
+            access_token=credentials.access_token,
+            user_agent=GEMINICLI_USER_AGENT,
+            api_base_url=await get_code_assist_endpoint(),
+            project_id=project_id,
+        )
+        project_id = subscription_info.project_id or project_id
+        tier_detection_status = subscription_info.status
+        if subscription_info.status == "unavailable":
+            subscription_tier = previous_state.get("tier") or TIER_UNKNOWN
+            tier_raw_id = previous_state.get("tier_raw_id")
+            tier_raw_name = previous_state.get("tier_raw_name")
+            tier_detected_at = previous_state.get("tier_detected_at")
+        else:
+            subscription_tier = subscription_info.tier
+            tier_raw_id = subscription_info.raw_tier_id
+            tier_raw_name = subscription_info.raw_tier_name
+            tier_detected_at = subscription_info.detected_at
 
     if project_id:
         credential_data["project_id"] = project_id
@@ -611,8 +766,10 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
             "error_codes": []
         }
 
-        # 同步更新状态表中的 tier 字段
-        state_update["tier"] = subscription_tier
+        if mode == "antigravity":
+            state_update["tier"] = subscription_tier
+        elif subscription_info.status != "unavailable":
+            state_update.update(subscription_info.state_fields())
 
         # 如果是 geminicli 模式，直接设置 preview=True
         if mode == "geminicli":
@@ -627,6 +784,10 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
             "filename": filename,
             "project_id": project_id,
             "subscription_tier": subscription_tier,
+            "tier_raw_id": tier_raw_id,
+            "tier_raw_name": tier_raw_name,
+            "tier_detected_at": tier_detected_at,
+            "tier_detection_status": tier_detection_status,
             "message": "检验成功！Project ID已更新，已解除禁用状态并清除错误码，403错误应该已恢复"
         }
 
@@ -2261,6 +2422,7 @@ async def _add_credential_by_refresh_token(
     csec = (client_secret or DEFAULT_GEMINI_CLI_CLIENT_SECRET).strip()
 
     # 1. 换 access_token
+    subscription_info = None
     try:
         credential_data = await _exchange_refresh_token_to_credential(
             refresh_token=refresh_token,
@@ -2273,6 +2435,7 @@ async def _add_credential_by_refresh_token(
             "success": False,
             "error": f"refresh_token 无效或网络异常: {e}",
         }
+    credentials = Credentials.from_dict(credential_data)
 
     # 2. 探测 project_id
     pid = (project_id or "").strip() or None
@@ -2281,7 +2444,6 @@ async def _add_credential_by_refresh_token(
     if not pid:
         try:
             if mode == "geminicli":
-                credentials = Credentials.from_dict(credential_data)
                 projects = await get_user_projects(credentials)
                 if projects:
                     if len(projects) == 1:
@@ -2302,6 +2464,16 @@ async def _add_credential_by_refresh_token(
         except Exception as e:
             log.warning(f"自动探测 project_id 失败: {e}")
 
+    if mode == "geminicli":
+        subscription_info = await fetch_geminicli_subscription_info(
+            access_token=credentials.access_token,
+            user_agent=GEMINICLI_USER_AGENT,
+            api_base_url=await get_code_assist_endpoint(),
+            project_id=pid,
+        )
+        pid = subscription_info.project_id or pid
+        subscription_tier = subscription_info.tier
+
     if pid:
         credential_data["project_id"] = pid
 
@@ -2317,10 +2489,33 @@ async def _add_credential_by_refresh_token(
         filename = f"{stem}.json"
 
     # 4. 入库
+    tier_raw_id = None
+    tier_raw_name = None
+    tier_detected_at = None
+    tier_detection_status = None
     if mode == "antigravity":
         await credential_manager.add_antigravity_credential(filename, credential_data)
     else:
+        storage_adapter = await get_storage_adapter()
+        existed = await storage_adapter.get_credential(filename, mode="geminicli") is not None
+        previous_state = (
+            await storage_adapter.get_credential_state(filename, mode="geminicli")
+            if existed else {}
+        )
         await credential_manager.add_credential(filename, credential_data)
+        if subscription_info.status == "unavailable":
+            subscription_tier = previous_state.get("tier") or TIER_UNKNOWN
+            tier_raw_id = previous_state.get("tier_raw_id")
+            tier_raw_name = previous_state.get("tier_raw_name")
+            tier_detected_at = previous_state.get("tier_detected_at")
+        else:
+            await storage_adapter.update_credential_state(
+                filename, subscription_info.state_fields(), mode="geminicli"
+            )
+            tier_raw_id = subscription_info.raw_tier_id
+            tier_raw_name = subscription_info.raw_tier_name
+            tier_detected_at = subscription_info.detected_at
+        tier_detection_status = subscription_info.status
 
     log.info(f"通过 refresh_token 成功添加凭证: {filename} (mode={mode})")
 
@@ -2329,6 +2524,10 @@ async def _add_credential_by_refresh_token(
         "filename": filename,
         "project_id": pid,
         "subscription_tier": subscription_tier,
+        "tier_raw_id": tier_raw_id,
+        "tier_raw_name": tier_raw_name,
+        "tier_detected_at": tier_detected_at,
+        "tier_detection_status": tier_detection_status,
     }
 
 

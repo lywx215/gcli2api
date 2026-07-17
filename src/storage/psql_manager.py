@@ -13,6 +13,7 @@ import asyncpg
 
 from log import log
 from src.storage._stats_common import MODEL_FAMILY_RULES, normalize_model_family, _today_beijing_str
+from src.subscription_tiers import default_tier_for_mode, valid_tiers_for_mode
 
 
 class PSQLManager:
@@ -31,6 +32,9 @@ class PSQLManager:
         "model_cooldowns",
         "preview",
         "tier",
+        "tier_raw_id",
+        "tier_raw_name",
+        "tier_detected_at",
         "enable_credit",
         "success_count",
         "failure_count",
@@ -98,7 +102,10 @@ class PSQLManager:
 
                 model_cooldowns TEXT DEFAULT '{}',
                 preview INTEGER DEFAULT 1,
-                tier TEXT DEFAULT 'pro',
+                tier TEXT DEFAULT 'unknown',
+                tier_raw_id TEXT,
+                tier_raw_name TEXT,
+                tier_detected_at BIGINT,
 
                 rotation_order INTEGER DEFAULT 0,
                 call_count INTEGER DEFAULT 0,
@@ -215,7 +222,10 @@ class PSQLManager:
                 ("user_email", "TEXT"),
                 ("model_cooldowns", "TEXT DEFAULT '{}'"),
                 ("preview", "INTEGER DEFAULT 1"),
-                ("tier", "TEXT DEFAULT 'pro'"),
+                ("tier", "TEXT DEFAULT 'unknown'"),
+                ("tier_raw_id", "TEXT"),
+                ("tier_raw_name", "TEXT"),
+                ("tier_detected_at", "BIGINT"),
                 ("rotation_order", "INTEGER DEFAULT 0"),
                 ("call_count", "INTEGER DEFAULT 0"),
                 ("success_count", "INTEGER DEFAULT 0"),
@@ -437,10 +447,11 @@ class PSQLManager:
                     await conn.execute(
                         f"""
                         INSERT INTO {table_name}
-                        (filename, credential_data, rotation_order, last_success)
-                        VALUES ($1, $2, $3, $4)
+                        (filename, credential_data, rotation_order, last_success, tier)
+                        VALUES ($1, $2, $3, $4, $5)
                         """,
-                        filename, json.dumps(credential_data), next_order, time.time()
+                        filename, json.dumps(credential_data), next_order, time.time(),
+                        default_tier_for_mode(mode)
                     )
 
             log.debug(f"Stored credential: {filename} (mode={mode})")
@@ -525,6 +536,8 @@ class PSQLManager:
                 if key in self.STATE_FIELDS:
                     if key == "enable_credit" and mode != "antigravity":
                         continue
+                    if key.startswith("tier_raw_") and mode != "geminicli":
+                        continue
                     if key in ("error_codes", "error_messages", "model_cooldowns"):
                         set_clauses.append(f"{key} = ${idx}")
                         values.append(json.dumps(value))
@@ -566,7 +579,8 @@ class PSQLManager:
                 if mode == "geminicli":
                     row = await conn.fetchrow(f"""
                         SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
-                               preview, tier, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               preview, tier, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
+                               tier_raw_id, tier_raw_name, tier_detected_at
                         FROM {table_name} WHERE filename = $1
                     """, filename)
 
@@ -578,7 +592,10 @@ class PSQLManager:
                             "user_email": row["user_email"],
                             "model_cooldowns": json.loads(row["model_cooldowns"] or "{}"),
                             "preview": bool(row["preview"]) if row["preview"] is not None else True,
-                            "tier": row["tier"] if row["tier"] is not None else "pro",
+                            "tier": row["tier"] if row["tier"] is not None else "unknown",
+                            "tier_raw_id": row["tier_raw_id"],
+                            "tier_raw_name": row["tier_raw_name"],
+                            "tier_detected_at": row["tier_detected_at"],
                             "success_count": row["success_count"] or 0,
                             "failure_count": row["failure_count"] or 0,
                             "permanent_disabled": bool(row["permanent_disabled"]),
@@ -594,7 +611,10 @@ class PSQLManager:
                         "user_email": None,
                         "model_cooldowns": {},
                         "preview": True,
-                        "tier": "pro",
+                        "tier": "unknown",
+                        "tier_raw_id": None,
+                        "tier_raw_name": None,
+                        "tier_detected_at": None,
                         "success_count": 0,
                         "failure_count": 0,
                         "remark": "",
@@ -653,7 +673,8 @@ class PSQLManager:
                     rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, model_cooldowns, preview, tier,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
+                               tier_raw_id, tier_raw_name, tier_detected_at
                         FROM {table_name}
                     """)
 
@@ -670,7 +691,10 @@ class PSQLManager:
                             "user_email": row["user_email"],
                             "model_cooldowns": model_cooldowns,
                             "preview": bool(row["preview"]) if row["preview"] is not None else True,
-                            "tier": row["tier"] if row["tier"] is not None else "pro",
+                            "tier": row["tier"] if row["tier"] is not None else "unknown",
+                            "tier_raw_id": row["tier_raw_id"],
+                            "tier_raw_name": row["tier_raw_name"],
+                            "tier_detected_at": row["tier_detected_at"],
                             "success_count": row["success_count"] or 0,
                             "failure_count": row["failure_count"] or 0,
                             "permanent_disabled": bool(row["permanent_disabled"]),
@@ -764,7 +788,8 @@ class PSQLManager:
                     all_rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, preview, tier,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
+                               tier_raw_id, tier_raw_name, tier_detected_at
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -834,7 +859,10 @@ class PSQLManager:
                         "user_email": row["user_email"],
                         "rotation_order": row["rotation_order"],
                         "model_cooldowns": active_cooldowns,
-                        "tier": row["tier"] if row["tier"] is not None else "pro",
+                        "tier": row["tier"] if row["tier"] is not None else default_tier_for_mode(mode),
+                        "tier_raw_id": row["tier_raw_id"] if mode == "geminicli" else None,
+                        "tier_raw_name": row["tier_raw_name"] if mode == "geminicli" else None,
+                        "tier_detected_at": row["tier_detected_at"] if mode == "geminicli" else None,
                         "success_count": row["success_count"] or 0,
                         "failure_count": row["failure_count"] or 0,
                         "cycle_stats": json.loads(row["cycle_stats"] or "{}"),
@@ -854,7 +882,7 @@ class PSQLManager:
                     else:
                         summary["enable_credit"] = bool(row["enable_credit"]) if row["enable_credit"] is not None else False
 
-                    if tier_filter and tier_filter in ("free", "pro", "ultra"):
+                    if tier_filter and tier_filter in valid_tiers_for_mode(mode):
                         if summary["tier"] != tier_filter:
                             continue
 

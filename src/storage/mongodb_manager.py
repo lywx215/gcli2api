@@ -9,6 +9,13 @@ import time
 from typing import Any, Dict, List, Optional
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from src.subscription_tiers import (
+    GEMINICLI_PAID_TIERS,
+    TIER_PRO,
+    TIER_ULTRA,
+    default_tier_for_mode,
+    valid_tiers_for_mode,
+)
 
 from log import log
 
@@ -26,6 +33,9 @@ class MongoDBManager:
         "model_cooldowns",
         "preview",
         "tier",
+        "tier_raw_id",
+        "tier_raw_name",
+        "tier_detected_at",
         "enable_credit",
         "success_count",
         "failure_count",
@@ -246,7 +256,7 @@ class MongoDBManager:
                     avail.append(filename)
 
                     # 按 tier 分桶
-                    tier = doc.get("tier") or "pro"
+                    tier = doc.get("tier") or default_tier_for_mode(mode)
                     tier_buckets.setdefault(tier, []).append(filename)
 
                     # preview 分桶（仅 geminicli）
@@ -281,7 +291,7 @@ class MongoDBManager:
             await pipe2.execute()
 
             # 重建 tier 分桶 Set（原子替换）
-            all_tiers = ("free", "pro", "ultra")
+            all_tiers = valid_tiers_for_mode(mode)
             pipe3 = self._redis.pipeline()
             for tier in all_tiers:
                 tier_key = self._rk_tier(mode, tier)
@@ -336,11 +346,12 @@ class MongoDBManager:
         except Exception as e:
             log.warning(f"Redis rebuild cache error [{mode}]: {e}")
 
-    async def _redis_add_cred(self, mode: str, filename: str, tier: str = "pro", preview: bool = True) -> None:
+    async def _redis_add_cred(self, mode: str, filename: str, tier: Optional[str] = None, preview: bool = True) -> None:
         """将凭证加入 Redis 可用池及对应 tier 分桶、preview 分桶"""
         if not self._redis_enabled:
             return
         try:
+            tier = tier or default_tier_for_mode(mode)
             pipe = self._redis.pipeline()
             pipe.sadd(self._rk_avail(mode), filename)
             pipe.sadd(self._rk_tier(mode, tier), filename)
@@ -361,23 +372,24 @@ class MongoDBManager:
                 pipe.srem(self._rk_tier(mode, tier), filename)
             else:
                 # tier 未知时从所有分桶中移除
-                for t in ("free", "pro", "ultra"):
+                for t in valid_tiers_for_mode(mode):
                     pipe.srem(self._rk_tier(mode, t), filename)
             pipe.srem(self._rk_preview(mode), filename)
             await pipe.execute()
         except Exception as e:
             log.warning(f"Redis remove_cred error: {e}")
 
-    async def _redis_sync_cred(self, mode: str, filename: str, disabled: bool, tier: str = "pro", preview: bool = True) -> None:
+    async def _redis_sync_cred(self, mode: str, filename: str, disabled: bool, tier: Optional[str] = None, preview: bool = True) -> None:
         """根据最新状态同步单个凭证在 Redis 中的集合成员"""
         if not self._redis_enabled:
             return
         try:
+            tier = tier or default_tier_for_mode(mode)
             pipe = self._redis.pipeline()
+            for known_tier in valid_tiers_for_mode(mode):
+                pipe.srem(self._rk_tier(mode, known_tier), filename)
             if disabled:
                 pipe.srem(self._rk_avail(mode), filename)
-                for t in ("free", "pro", "ultra"):
-                    pipe.srem(self._rk_tier(mode, t), filename)
                 pipe.srem(self._rk_preview(mode), filename)
             else:
                 pipe.sadd(self._rk_avail(mode), filename)
@@ -402,9 +414,10 @@ class MongoDBManager:
             if preview_only and exclude_free_tier:
                 # preview 且非 free：preview ∩ (pro ∪ ultra)
                 preview_set = await self._redis.smembers(self._rk_preview(mode))
-                pro_members = await self._redis.smembers(self._rk_tier(mode, "pro"))
-                ultra_members = await self._redis.smembers(self._rk_tier(mode, "ultra"))
-                non_free = pro_members | ultra_members
+                paid_tiers = GEMINICLI_PAID_TIERS if mode == "geminicli" else (TIER_PRO, TIER_ULTRA)
+                non_free = set()
+                for paid_tier in paid_tiers:
+                    non_free |= await self._redis.smembers(self._rk_tier(mode, paid_tier))
                 all_candidates = list(preview_set & non_free)
                 if not all_candidates:
                     log.debug(f"[Redis MISS] mode={mode} preview+non-free: no candidates, fallback to MongoDB")
@@ -422,9 +435,11 @@ class MongoDBManager:
                 if not candidates:
                     return None
             elif exclude_free_tier:
-                pro_members = await self._redis.smembers(self._rk_tier(mode, "pro"))
-                ultra_members = await self._redis.smembers(self._rk_tier(mode, "ultra"))
-                all_candidates = list(pro_members | ultra_members)
+                paid_tiers = GEMINICLI_PAID_TIERS if mode == "geminicli" else (TIER_PRO, TIER_ULTRA)
+                paid_members = set()
+                for paid_tier in paid_tiers:
+                    paid_members |= await self._redis.smembers(self._rk_tier(mode, paid_tier))
+                all_candidates = list(paid_members)
                 if not all_candidates:
                     log.debug(f"[Redis MISS] mode={mode} exclude_free: no non-free creds, fallback to MongoDB")
                     return None
@@ -652,7 +667,7 @@ class MongoDBManager:
                         "user_email": None,
                         "model_cooldowns": {},
                         "preview": True,
-                        "tier": "pro",
+                        "tier": default_tier_for_mode(mode),
                         "rotation_order": next_order,
                         "call_count": 0,
                         "success_count": 0,
@@ -663,6 +678,12 @@ class MongoDBManager:
 
                     if mode == "antigravity":
                         new_credential["enable_credit"] = False
+                    else:
+                        new_credential.update({
+                            "tier_raw_id": None,
+                            "tier_raw_name": None,
+                            "tier_detected_at": None,
+                        })
 
                     await collection.insert_one(new_credential)
                     # 新凭证插入成功，添加到 Redis 可用池
@@ -864,6 +885,10 @@ class MongoDBManager:
 
             if mode != "antigravity":
                 valid_updates.pop("enable_credit", None)
+            else:
+                valid_updates.pop("tier_raw_id", None)
+                valid_updates.pop("tier_raw_name", None)
+                valid_updates.pop("tier_detected_at", None)
 
             if not valid_updates:
                 return True
@@ -887,7 +912,7 @@ class MongoDBManager:
                         {"filename": filename},
                         projection={"tier": 1, "preview": 1, "_id": 0},
                     )
-                    tier_val = (doc or {}).get("tier", "pro") or "pro"
+                    tier_val = (doc or {}).get("tier") or default_tier_for_mode(mode)
                     preview_val = (doc or {}).get("preview", True)
                     await self._redis_sync_cred(mode, filename, disabled=False, tier=tier_val, preview=preview_val)
             elif self._redis_enabled and ("tier" in valid_updates or "preview" in valid_updates):
@@ -897,7 +922,7 @@ class MongoDBManager:
                     projection={"disabled": 1, "tier": 1, "preview": 1, "_id": 0},
                 )
                 if doc and not doc.get("disabled", False):
-                    tier_val = doc.get("tier", "pro") or "pro"
+                    tier_val = doc.get("tier") or default_tier_for_mode(mode)
                     preview_val = doc.get("preview", True)
                     await self._redis_sync_cred(mode, filename, disabled=False, tier=tier_val, preview=preview_val)
 
@@ -938,7 +963,10 @@ class MongoDBManager:
                     "user_email": doc.get("user_email"),
                     "model_cooldowns": model_cooldowns,
                     "preview": doc.get("preview", True),
-                    "tier": doc.get("tier", "pro"),
+                    "tier": doc.get("tier") or default_tier_for_mode(mode),
+                    "tier_raw_id": doc.get("tier_raw_id") if mode == "geminicli" else None,
+                    "tier_raw_name": doc.get("tier_raw_name") if mode == "geminicli" else None,
+                    "tier_detected_at": doc.get("tier_detected_at") if mode == "geminicli" else None,
                     "success_count": doc.get("success_count", 0),
                     "failure_count": doc.get("failure_count", 0),
                     "remark": doc.get("remark", ""),
@@ -955,7 +983,10 @@ class MongoDBManager:
                 "user_email": None,
                 "model_cooldowns": {},
                 "preview": True,
-                "tier": "pro",
+                "tier": default_tier_for_mode(mode),
+                "tier_raw_id": None,
+                "tier_raw_name": None,
+                "tier_detected_at": None,
                 "success_count": 0,
                 "failure_count": 0,
                 "remark": "",
@@ -986,6 +1017,9 @@ class MongoDBManager:
                 "model_cooldowns": 1,
                 "preview": 1,
                 "tier": 1,
+                "tier_raw_id": 1,
+                "tier_raw_name": 1,
+                "tier_detected_at": 1,
                 "enable_credit": 1,
                 "success_count": 1,
                 "failure_count": 1,
@@ -1016,7 +1050,10 @@ class MongoDBManager:
                     "user_email": doc.get("user_email"),
                     "model_cooldowns": model_cooldowns,
                     "preview": doc.get("preview", True),
-                    "tier": doc.get("tier", "pro"),
+                    "tier": doc.get("tier") or default_tier_for_mode(mode),
+                    "tier_raw_id": doc.get("tier_raw_id") if mode == "geminicli" else None,
+                    "tier_raw_name": doc.get("tier_raw_name") if mode == "geminicli" else None,
+                    "tier_detected_at": doc.get("tier_detected_at") if mode == "geminicli" else None,
                     "success_count": doc.get("success_count", 0),
                     "failure_count": doc.get("failure_count", 0),
                     "remark": doc.get("remark", ""),
@@ -1123,6 +1160,9 @@ class MongoDBManager:
                 "model_cooldowns": 1,
                 "preview": 1,
                 "tier": 1,
+                "tier_raw_id": 1,
+                "tier_raw_name": 1,
+                "tier_detected_at": 1,
                 "enable_credit": 1,
                 "success_count": 1,
                 "failure_count": 1,
@@ -1155,7 +1195,10 @@ class MongoDBManager:
                     "rotation_order": doc.get("rotation_order", 0),
                     "model_cooldowns": active_cooldowns,
                     "preview": doc.get("preview", True),
-                    "tier": doc.get("tier", "pro"),
+                    "tier": doc.get("tier") or default_tier_for_mode(mode),
+                    "tier_raw_id": doc.get("tier_raw_id") if mode == "geminicli" else None,
+                    "tier_raw_name": doc.get("tier_raw_name") if mode == "geminicli" else None,
+                    "tier_detected_at": doc.get("tier_detected_at") if mode == "geminicli" else None,
                     "success_count": doc.get("success_count", 0),
                     "failure_count": doc.get("failure_count", 0),
                     "remark": doc.get("remark", ""),
@@ -1175,7 +1218,7 @@ class MongoDBManager:
                     continue
 
                 # 应用tier筛选
-                if tier_filter and tier_filter in ("free", "pro", "ultra"):
+                if tier_filter and tier_filter in valid_tiers_for_mode(mode):
                     if summary["tier"] != tier_filter:
                         continue
 
