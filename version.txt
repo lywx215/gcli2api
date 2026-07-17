@@ -1,4 +1,4 @@
-full_hash=10ed71fa70d819677b4baf9bc9a3badf57fabf5f
-short_hash=10ed71f
-message=agy请求更新为agy cli模式
-date=2026-06-20 23:46:21 +0800
+full_hash=6fa33756cf0e5927aba5e4b526bc4744c550289b
+short_hash=6fa3375
+message=feat: refine Gemini routing, tiers, and panel reliability
+date=2026-07-17 18:13:13 +0800
