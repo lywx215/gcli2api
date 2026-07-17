@@ -1,4 +1,4 @@
-full_hash=6fa33756cf0e5927aba5e4b526bc4744c550289b
-short_hash=6fa3375
-message=feat: refine Gemini routing, tiers, and panel reliability
-date=2026-07-17 18:13:13 +0800
+full_hash=296cbf0d5652bfcf8b26bcbc6af7476bb22854f3
+short_hash=296cbf0
+message=fix: preserve raw Gemini quota model names
+date=2026-07-17 18:20:13 +0800
