@@ -23,6 +23,7 @@ from log import log
 
 from src.credential_manager import credential_manager
 from src.httpx_client import stream_post_async, post_async
+from src.subscription_tiers import required_tiers_for_geminicli_model
 
 # 导入共同的基础功能
 from src.api.utils import (
@@ -35,6 +36,16 @@ from src.api.utils import (
     debug_log,
 )
 from src.utils import get_geminicli_user_agent
+
+
+def _build_no_available_credential_response(model_name: Optional[str]) -> Response:
+    """Return a specific 503 when a Tier-restricted model has no eligible credential."""
+    if required_tiers_for_geminicli_model(model_name):
+        return build_error_response(
+            "无支持 gemini-3.5-flash 的可用 Code Assist Standard/Enterprise 凭证",
+            503,
+        )
+    return build_error_response("当前无可用凭证", 500)
 
 
 def _debug_log_final_response(tag: str, response) -> None:
@@ -157,8 +168,7 @@ async def stream_request(
     )
 
     if not cred_result:
-        # 如果返回值是None，直接返回错误500
-        err = build_error_response("当前无可用凭证", 500)
+        err = _build_no_available_credential_response(model_name)
         _debug_log_final_response("GEMINICLI STREAM", err)
         yield err
         return
@@ -378,7 +388,7 @@ async def stream_request(
                 )
                 if not switched:
                     log.error("[GEMINICLI STREAM] 重试时无可用凭证或刷新失败")
-                    err = build_error_response("当前无可用凭证", 500)
+                    err = _build_no_available_credential_response(model_name)
                     _debug_log_final_response("GEMINICLI STREAM", err)
                     yield err
                     return
@@ -429,8 +439,7 @@ async def non_stream_request(
     )
 
     if not cred_result:
-        # 如果返回值是None，直接返回错误500
-        err = build_error_response("当前无可用凭证", 500)
+        err = _build_no_available_credential_response(model_name)
         _debug_log_final_response("NON-STREAM", err)
         return err
 
@@ -590,7 +599,7 @@ async def non_stream_request(
                     )
                     if not switched:
                         log.error("[NON-STREAM] 重试时无可用凭证或刷新失败")
-                        err = build_error_response("当前无可用凭证", 500)
+                        err = _build_no_available_credential_response(model_name)
                         _debug_log_final_response("NON-STREAM", err)
                         return err
                     continue  # 重试
@@ -635,7 +644,7 @@ async def non_stream_request(
                     )
                     if not switched:
                         log.error("[NON-STREAM] 重试时无可用凭证或刷新失败")
-                        err = build_error_response("当前无可用凭证", 500)
+                        err = _build_no_available_credential_response(model_name)
                         _debug_log_final_response("NON-STREAM", err)
                         return err
                     continue  # 重试

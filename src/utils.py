@@ -62,16 +62,17 @@ BASE_MODELS = [
     "gemini-3-flash-preview",
     "gemini-3.1-pro-preview",
     "gemini-3.1-flash-lite",
-    "gemini-3.5-flash"
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-preview",
 ]
 
 
 # ====================== Model Helper Functions ======================
 
 GEMINICLI_MODEL_ALIASES = {
-    # Official Gemini CLI exposes this as gemini-3.5-flash, while the
-    # Code Assist backend currently expects the secondary ID gemini-3-flash.
-    "gemini-3.5-flash": "gemini-3-flash",
+    # Keep the GA model on Google's matching upstream ID. Expose the legacy
+    # Code Assist ID separately so clients can select it explicitly.
+    "gemini-3.5-flash-preview": "gemini-3-flash",
 }
 
 GEMINICLI_MODEL_ALIAS_SUFFIXES = [

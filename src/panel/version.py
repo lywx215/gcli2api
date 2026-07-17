@@ -2,12 +2,11 @@
 版本信息路由模块 - 处理 /version/* 相关的HTTP请求
 """
 
-import os
-
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from log import log
+from src.versioning import load_version_metadata
 
 
 # 创建路由器
@@ -21,35 +20,16 @@ async def get_version_info(check_update: bool = False):
     可选参数 check_update: 是否检查GitHub上的最新版本
     """
     try:
-        # 获取项目根目录
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        version_file = os.path.join(project_root, "version.txt")
-
-        # 读取version.txt
-        if not os.path.exists(version_file):
+        version_data = load_version_metadata()
+        if version_data["version"] == "unknown":
             return JSONResponse({
                 "success": False,
-                "error": "version.txt文件不存在"
-            })
-
-        version_data = {}
-        with open(version_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if '=' in line:
-                    key, value = line.split('=', 1)
-                    version_data[key] = value
-
-        # 检查必要字段
-        if 'short_hash' not in version_data:
-            return JSONResponse({
-                "success": False,
-                "error": "version.txt格式错误"
+                "error": "无法确定当前版本"
             })
 
         response_data = {
             "success": True,
-            "version": version_data.get('short_hash', 'unknown'),
+            "version": version_data.get('version', 'unknown'),
             "full_hash": version_data.get('full_hash', ''),
             "message": version_data.get('message', ''),
             "date": version_data.get('date', '')
@@ -77,7 +57,7 @@ async def get_version_info(check_update: bool = False):
 
                     latest_hash = remote_version_data.get('full_hash', '')
                     latest_short_hash = remote_version_data.get('short_hash', '')
-                    current_hash = version_data.get('full_hash', '')
+                    current_hash = response_data.get('full_hash', '')
 
                     has_update = (current_hash != latest_hash) if current_hash and latest_hash else None
 

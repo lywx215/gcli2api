@@ -965,6 +965,7 @@ async function login() {
             document.getElementById('loginSection').classList.add('hidden');
             document.getElementById('mainSection').classList.remove('hidden');
             showStatus('登录成功', 'success');
+            await fetchAndDisplayVersion();
             // 显示面板后初始化滑块
             requestAnimationFrame(() => initTabSlider());
         } else {
@@ -3836,7 +3837,8 @@ async function refreshTodayStats(mode) {
 }
 
 
-// \u5b9a\u65f6\u81ea\u52a8\u5237\u65b0\u7edf\u8ba1\u5361\u7247\nlet _statsAutoRefreshTimer = null;
+// 定时自动刷新统计卡片
+let _statsAutoRefreshTimer = null;
 function startStatsAutoRefresh(mode) {
     stopStatsAutoRefresh();
     _statsAutoRefreshTimer = setInterval(() => {
@@ -4090,4 +4092,3 @@ async function testModelQuota(btn, filename, modelName, mode, displayName) {
         }, 3000);
     }
 }
-

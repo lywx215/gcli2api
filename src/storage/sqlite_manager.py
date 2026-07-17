@@ -12,7 +12,11 @@ import aiosqlite
 
 from log import log
 from src.storage._stats_common import normalize_model_family, _today_beijing_str
-from src.subscription_tiers import default_tier_for_mode, valid_tiers_for_mode
+from src.subscription_tiers import (
+    default_tier_for_mode,
+    required_tiers_for_geminicli_model,
+    valid_tiers_for_mode,
+)
 
 
 class SQLiteManager:
@@ -492,17 +496,25 @@ class SQLiteManager:
                 current_time = time.time()
 
                 if mode == "geminicli":
+                    required_tiers = required_tiers_for_geminicli_model(model_name)
+                    tier_clause = ""
+                    query_params: tuple[Any, ...] = ()
+                    if required_tiers:
+                        placeholders = ", ".join("?" for _ in required_tiers)
+                        tier_clause = f" AND tier IN ({placeholders})"
+                        query_params = tuple(required_tiers)
                     async with db.execute(f"""
-                        SELECT filename, credential_data, model_cooldowns, preview
+                        SELECT filename, credential_data, model_cooldowns, preview, tier
                         FROM {table_name}
                         WHERE disabled = 0
+                        {tier_clause}
                         ORDER BY RANDOM()
-                    """) as cursor:
+                    """, query_params) as cursor:
                         rows = await cursor.fetchall()
 
                         if not model_name:
                             if rows:
-                                filename, credential_json, _, _ = rows[0]
+                                filename, credential_json, _, _, _ = rows[0]
                                 credential_data = json.loads(credential_json)
                                 return filename, credential_data
                             return None
@@ -511,7 +523,9 @@ class SQLiteManager:
                         non_preview_creds = []
                         preview_creds = []
 
-                        for filename, credential_json, model_cooldowns_json, preview in rows:
+                        for filename, credential_json, model_cooldowns_json, preview, tier in rows:
+                            if required_tiers and (tier or default_tier_for_mode(mode)) not in required_tiers:
+                                continue
                             model_cooldowns = json.loads(model_cooldowns_json or '{}')
                             model_cooldown = model_cooldowns.get(model_name)
                             if model_cooldown is None or current_time >= model_cooldown:

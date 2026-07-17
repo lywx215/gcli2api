@@ -13,7 +13,11 @@ import asyncpg
 
 from log import log
 from src.storage._stats_common import MODEL_FAMILY_RULES, normalize_model_family, _today_beijing_str
-from src.subscription_tiers import default_tier_for_mode, valid_tiers_for_mode
+from src.subscription_tiers import (
+    default_tier_for_mode,
+    required_tiers_for_geminicli_model,
+    valid_tiers_for_mode,
+)
 
 
 class PSQLManager:
@@ -335,12 +339,19 @@ class PSQLManager:
 
             async with self._pool.acquire() as conn:
                 if mode == "geminicli":
+                    required_tiers = required_tiers_for_geminicli_model(model_name)
+                    tier_clause = ""
+                    query_args: tuple[Any, ...] = ()
+                    if required_tiers:
+                        tier_clause = " AND tier = ANY($1::text[])"
+                        query_args = (list(required_tiers),)
                     rows = await conn.fetch(f"""
-                        SELECT filename, credential_data, model_cooldowns, preview
+                        SELECT filename, credential_data, model_cooldowns, preview, tier
                         FROM {table_name}
                         WHERE disabled = 0
+                        {tier_clause}
                         ORDER BY RANDOM()
-                    """)
+                    """, *query_args)
 
                     if not model_name:
                         if rows:
@@ -352,6 +363,9 @@ class PSQLManager:
                     preview_creds = []
 
                     for row in rows:
+                        tier = row["tier"] or default_tier_for_mode(mode)
+                        if required_tiers and tier not in required_tiers:
+                            continue
                         model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
                         cd = model_cooldowns.get(model_name)
                         if cd is None or current_time >= cd:

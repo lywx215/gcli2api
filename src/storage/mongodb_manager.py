@@ -10,10 +10,8 @@ from typing import Any, Dict, List, Optional
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from src.subscription_tiers import (
-    GEMINICLI_PAID_TIERS,
-    TIER_PRO,
-    TIER_ULTRA,
     default_tier_for_mode,
+    required_tiers_for_geminicli_model,
     valid_tiers_for_mode,
 )
 
@@ -403,27 +401,31 @@ class MongoDBManager:
             log.warning(f"Redis sync_cred error: {e}")
 
     async def _get_next_available_from_redis(
-        self, mode: str, model_name: Optional[str], exclude_free_tier: bool = False, preview_only: bool = False
+        self,
+        mode: str,
+        model_name: Optional[str],
+        required_tiers: Optional[tuple[str, ...]] = None,
+        preview_only: bool = False,
     ) -> Optional[tuple]:
         """
         Redis 快速路径：随机取候选凭证，跳过冷却中的，返回 (filename, credential_data)。
         失败或池为空时返回 None，由调用方降级到 MongoDB。
         """
         try:
-            # 选择候选池优先级：preview_only > exclude_free_tier > 全量池
-            if preview_only and exclude_free_tier:
-                # preview 且非 free：preview ∩ (pro ∪ ultra)
-                preview_set = await self._redis.smembers(self._rk_preview(mode))
-                paid_tiers = GEMINICLI_PAID_TIERS if mode == "geminicli" else (TIER_PRO, TIER_ULTRA)
-                non_free = set()
-                for paid_tier in paid_tiers:
-                    non_free |= await self._redis.smembers(self._rk_tier(mode, paid_tier))
-                all_candidates = list(preview_set & non_free)
-                if not all_candidates:
-                    log.debug(f"[Redis MISS] mode={mode} preview+non-free: no candidates, fallback to MongoDB")
+            # 受限模型先从允许的 Tier 分桶取并集，再叠加 preview 条件。
+            if required_tiers:
+                tier_members = set()
+                for tier in required_tiers:
+                    tier_members |= await self._redis.smembers(self._rk_tier(mode, tier))
+                if preview_only:
+                    tier_members &= await self._redis.smembers(self._rk_preview(mode))
+                if not tier_members:
+                    log.debug(
+                        f"[Redis MISS] mode={mode} model={model_name}: "
+                        f"no candidates for tiers={required_tiers}, fallback to MongoDB"
+                    )
                     return None
-                sample_size = min(len(all_candidates), 10)
-                candidates = random.sample(all_candidates, sample_size)
+                candidates = random.sample(list(tier_members), min(len(tier_members), 10))
             elif preview_only:
                 preview_key = self._rk_preview(mode)
                 preview_size = await self._redis.scard(preview_key)
@@ -434,17 +436,6 @@ class MongoDBManager:
                 candidates = await self._redis.srandmember(preview_key, sample_size)
                 if not candidates:
                     return None
-            elif exclude_free_tier:
-                paid_tiers = GEMINICLI_PAID_TIERS if mode == "geminicli" else (TIER_PRO, TIER_ULTRA)
-                paid_members = set()
-                for paid_tier in paid_tiers:
-                    paid_members |= await self._redis.smembers(self._rk_tier(mode, paid_tier))
-                all_candidates = list(paid_members)
-                if not all_candidates:
-                    log.debug(f"[Redis MISS] mode={mode} exclude_free: no non-free creds, fallback to MongoDB")
-                    return None
-                sample_size = min(len(all_candidates), 10)
-                candidates = random.sample(all_candidates, sample_size)
             else:
                 pool_key = self._rk_avail(mode)
                 pool_size = await self._redis.scard(pool_key)
@@ -534,12 +525,19 @@ class MongoDBManager:
         self._ensure_initialized()
 
         # Redis 快速路径：根据模型名派生过滤标志，直接在 Redis 分桶中筛选
+        required_tiers = (
+            required_tiers_for_geminicli_model(model_name)
+            if mode == "geminicli"
+            else None
+        )
         if self._redis_enabled:
             model_lower = model_name.lower() if model_name else ""
-            exclude_free = False
             preview_only = mode == "geminicli" and "preview" in model_lower
             result = await self._get_next_available_from_redis(
-                mode, model_name, exclude_free_tier=exclude_free, preview_only=preview_only
+                mode,
+                model_name,
+                required_tiers=required_tiers,
+                preview_only=preview_only,
             )
             if result is not None:
                 return result
@@ -553,6 +551,9 @@ class MongoDBManager:
 
             # 构建普通查询（避免 $sample 聚合导致全集合扫描）
             match_query: Dict[str, Any] = {"disabled": False}
+
+            if required_tiers:
+                match_query["tier"] = {"$in": list(required_tiers)}
 
             # preview 模型只允许 preview=True 的凭证
             if mode == "geminicli" and model_name and "preview" in model_name.lower():

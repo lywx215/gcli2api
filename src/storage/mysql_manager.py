@@ -14,7 +14,11 @@ from urllib.parse import urlparse, parse_qs
 import aiomysql
 
 from log import log
-from src.subscription_tiers import default_tier_for_mode, valid_tiers_for_mode
+from src.subscription_tiers import (
+    default_tier_for_mode,
+    required_tiers_for_geminicli_model,
+    valid_tiers_for_mode,
+)
 
 
 class MySQLManager:
@@ -354,6 +358,10 @@ class MySQLManager:
         """未禁用且 preview=True 的凭证 Redis Set key（仅 geminicli）"""
         return f"gcli:preview:{mode}"
 
+    def _rk_tier(self, mode: str, tier: str) -> str:
+        """按 tier 分桶的未禁用凭证 Redis Set key"""
+        return f"gcli:tier:{mode}:{tier}"
+
     def _rk_cd(self, mode: str, filename: str, escaped_model: str) -> str:
         """模型冷却 Redis key（带 TTL）"""
         return f"gcli:cd:{mode}:{filename}:{escaped_model}"
@@ -373,13 +381,13 @@ class MySQLManager:
                 async with conn.cursor() as cur:
                     if mode == "geminicli":
                         await cur.execute(f"""
-                            SELECT filename, disabled, preview, model_cooldowns
+                            SELECT filename, disabled, preview, model_cooldowns, tier
                             FROM {table_name}
                             WHERE server_name = %s
                         """, (self._server_name,))
                     else:
                         await cur.execute(f"""
-                            SELECT filename, disabled, 0, model_cooldowns
+                            SELECT filename, disabled, 0, model_cooldowns, tier
                             FROM {table_name}
                             WHERE server_name = %s
                         """, (self._server_name,))
@@ -387,12 +395,15 @@ class MySQLManager:
 
             avail: List[str] = []
             preview: List[str] = []
+            tier_buckets: Dict[str, List[str]] = {}
             cooldown_entries: List[tuple] = []  # (cd_key, ttl_seconds, value)
             current_time = time.time()
 
-            for filename, disabled, is_preview, model_cooldowns_json in rows:
+            for filename, disabled, is_preview, model_cooldowns_json, tier in rows:
                 if not disabled:
                     avail.append(filename)
+                    normalized_tier = tier or default_tier_for_mode(mode)
+                    tier_buckets.setdefault(normalized_tier, []).append(filename)
                     if mode == "geminicli" and is_preview:
                         preview.append(filename)
 
@@ -432,6 +443,30 @@ class MySQLManager:
                     pipe2.delete(tmp_preview)
             await pipe2.execute()
 
+            # Tier 分桶同样通过临时 key 原子替换。
+            all_tiers = valid_tiers_for_mode(mode)
+            tier_write_pipe = self._redis.pipeline()
+            for tier in all_tiers:
+                tier_key = self._rk_tier(mode, tier)
+                tmp_tier_key = tier_key + ":tmp"
+                tier_write_pipe.delete(tmp_tier_key)
+                members = tier_buckets.get(tier, [])
+                if members:
+                    tier_write_pipe.sadd(tmp_tier_key, *members)
+            await tier_write_pipe.execute()
+
+            tier_swap_pipe = self._redis.pipeline()
+            for tier in all_tiers:
+                tier_key = self._rk_tier(mode, tier)
+                tmp_tier_key = tier_key + ":tmp"
+                members = tier_buckets.get(tier, [])
+                if members:
+                    tier_swap_pipe.rename(tmp_tier_key, tier_key)
+                else:
+                    tier_swap_pipe.delete(tier_key)
+                    tier_swap_pipe.delete(tmp_tier_key)
+            await tier_swap_pipe.execute()
+
             # 批量恢复未过期的模型冷却 TTL Key
             if cooldown_entries:
                 pipe3 = self._redis.pipeline()
@@ -441,18 +476,23 @@ class MySQLManager:
 
             log.debug(
                 f"Redis cache rebuilt [{mode}]: {len(avail)} avail, {len(preview)} preview, "
+                f"tiers={{{', '.join(f'{t}:{len(tier_buckets.get(t, []))}' for t in all_tiers)}}}, "
                 f"{len(cooldown_entries)} cooldown key(s) restored"
             )
         except Exception as e:
             log.warning(f"Redis rebuild cache error [{mode}]: {e}")
 
-    async def _redis_add_cred(self, mode: str, filename: str, preview: bool = True) -> None:
-        """将凭证加入 Redis 可用池"""
+    async def _redis_add_cred(
+        self, mode: str, filename: str, tier: Optional[str] = None, preview: bool = True
+    ) -> None:
+        """将凭证加入 Redis 可用池、Tier 分桶及 preview 分桶"""
         if not self._redis_enabled:
             return
         try:
+            tier = tier or default_tier_for_mode(mode)
             pipe = self._redis.pipeline()
             pipe.sadd(self._rk_avail(mode), filename)
+            pipe.sadd(self._rk_tier(mode, tier), filename)
             if mode == "geminicli" and preview:
                 pipe.sadd(self._rk_preview(mode), filename)
             await pipe.execute()
@@ -467,21 +507,34 @@ class MySQLManager:
             pipe = self._redis.pipeline()
             pipe.srem(self._rk_avail(mode), filename)
             pipe.srem(self._rk_preview(mode), filename)
+            for tier in valid_tiers_for_mode(mode):
+                pipe.srem(self._rk_tier(mode, tier), filename)
             await pipe.execute()
         except Exception as e:
             log.warning(f"Redis remove_cred error: {e}")
 
-    async def _redis_sync_cred(self, mode: str, filename: str, disabled: bool, preview: bool = True) -> None:
+    async def _redis_sync_cred(
+        self,
+        mode: str,
+        filename: str,
+        disabled: bool,
+        tier: Optional[str] = None,
+        preview: bool = True,
+    ) -> None:
         """根据最新状态同步单个凭证在 Redis 中的集合成员"""
         if not self._redis_enabled:
             return
         try:
+            tier = tier or default_tier_for_mode(mode)
             pipe = self._redis.pipeline()
+            for known_tier in valid_tiers_for_mode(mode):
+                pipe.srem(self._rk_tier(mode, known_tier), filename)
             if disabled:
                 pipe.srem(self._rk_avail(mode), filename)
                 pipe.srem(self._rk_preview(mode), filename)
             else:
                 pipe.sadd(self._rk_avail(mode), filename)
+                pipe.sadd(self._rk_tier(mode, tier), filename)
                 if mode == "geminicli":
                     if preview:
                         pipe.sadd(self._rk_preview(mode), filename)
@@ -527,24 +580,41 @@ class MySQLManager:
         try:
             # 选择候选池
             is_preview_model = model_name and "preview" in model_name.lower()
+            required_tiers = (
+                required_tiers_for_geminicli_model(model_name)
+                if mode == "geminicli"
+                else None
+            )
 
-            if mode == "geminicli" and is_preview_model:
+            if required_tiers:
+                tier_members = set()
+                for tier in required_tiers:
+                    tier_members |= await self._redis.smembers(self._rk_tier(mode, tier))
+                if is_preview_model:
+                    tier_members &= await self._redis.smembers(self._rk_preview(mode))
+                if not tier_members:
+                    log.debug(
+                        f"[Redis MISS] mode={mode} model={model_name}: "
+                        f"no candidates for tiers={required_tiers}, fallback to MySQL"
+                    )
+                    return None
+                candidates = random.sample(list(tier_members), min(len(tier_members), 10))
+            elif mode == "geminicli" and is_preview_model:
                 pool_key = self._rk_preview(mode)
-            elif mode == "geminicli" and model_name and not is_preview_model:
-                pool_key = self._rk_avail(mode)
             else:
                 pool_key = self._rk_avail(mode)
 
-            pool_size = await self._redis.scard(pool_key)
-            if pool_size == 0:
-                log.debug(f"[Redis MISS] mode={mode} pool_key={pool_key}: pool empty, fallback to MySQL")
-                return None
+            if not required_tiers:
+                pool_size = await self._redis.scard(pool_key)
+                if pool_size == 0:
+                    log.debug(f"[Redis MISS] mode={mode} pool_key={pool_key}: pool empty, fallback to MySQL")
+                    return None
 
-            # 一次取多个随机成员，减少 round-trip
-            sample_size = min(pool_size, 10)
-            candidates = await self._redis.srandmember(pool_key, sample_size)
-            if not candidates:
-                return None
+                # 一次取多个随机成员，减少 round-trip
+                sample_size = min(pool_size, 10)
+                candidates = await self._redis.srandmember(pool_key, sample_size)
+                if not candidates:
+                    return None
 
             # 过滤冷却中的凭证（先过滤再排序，避免无效计算）
             available_candidates = []
@@ -653,17 +723,25 @@ class MySQLManager:
                     current_time = time.time()
 
                     if mode == "geminicli":
+                        required_tiers = required_tiers_for_geminicli_model(model_name)
+                        tier_clause = ""
+                        query_params: List[Any] = [self._server_name]
+                        if required_tiers:
+                            placeholders = ", ".join("%s" for _ in required_tiers)
+                            tier_clause = f" AND tier IN ({placeholders})"
+                            query_params.extend(required_tiers)
                         await cur.execute(f"""
-                            SELECT filename, credential_data, model_cooldowns, preview
+                            SELECT filename, credential_data, model_cooldowns, preview, tier
                             FROM {table_name}
                             WHERE server_name = %s AND disabled = 0
+                            {tier_clause}
                             ORDER BY RAND()
-                        """, (self._server_name,))
+                        """, tuple(query_params))
                         rows = await cur.fetchall()
 
                         if not model_name:
                             if rows:
-                                filename, credential_json, _, _ = rows[0]
+                                filename, credential_json, _, _, _ = rows[0]
                                 credential_data = json.loads(credential_json)
                                 return filename, credential_data
                             return None
@@ -673,7 +751,9 @@ class MySQLManager:
                         non_preview_creds = []
                         preview_creds = []
 
-                        for filename, credential_json, model_cooldowns_json, preview in rows:
+                        for filename, credential_json, model_cooldowns_json, preview, tier in rows:
+                            if required_tiers and (tier or default_tier_for_mode(mode)) not in required_tiers:
+                                continue
                             model_cooldowns = json.loads(model_cooldowns_json or '{}')
 
                             model_cooldown = model_cooldowns.get(model_name)
@@ -815,7 +895,12 @@ class MySQLManager:
 
                 # Redis: 新增凭证到可用池（新凭证默认 disabled=0, preview=1）
                 if not existing:
-                    await self._redis_add_cred(mode, filename, preview=True)
+                    await self._redis_add_cred(
+                        mode,
+                        filename,
+                        tier=default_tier_for_mode(mode),
+                        preview=True,
+                    )
 
                 return True
 
@@ -945,24 +1030,42 @@ class MySQLManager:
 
                 await conn.commit()
 
-                # Redis: 同步 disabled/preview/cooldown 变更
+                # Redis: 同步 disabled/tier/preview/cooldown 变更
                 if updated_count > 0 and self._redis_enabled:
-                    if "disabled" in state_updates:
-                        # 需要获取当前 preview 状态
+                    if any(key in state_updates for key in ("disabled", "tier", "preview")):
+                        disabled = False
+                        tier = default_tier_for_mode(mode)
                         preview = True
                         if mode == "geminicli":
                             async with self._pool.acquire() as conn2:
                                 async with conn2.cursor() as cur2:
                                     await cur2.execute(f"""
-                                        SELECT preview FROM {table_name}
+                                        SELECT disabled, tier, preview FROM {table_name}
                                         WHERE server_name = %s AND filename = %s
                                     """, (self._server_name, filename))
                                     row = await cur2.fetchone()
                                     if row:
-                                        preview = bool(row[0])
-                        await self._redis_sync_cred(mode, filename, state_updates["disabled"], preview)
-                    elif "preview" in state_updates and mode == "geminicli":
-                        await self._redis_sync_cred(mode, filename, False, state_updates["preview"])
+                                        disabled = bool(row[0])
+                                        tier = row[1] or default_tier_for_mode(mode)
+                                        preview = bool(row[2])
+                        else:
+                            async with self._pool.acquire() as conn2:
+                                async with conn2.cursor() as cur2:
+                                    await cur2.execute(f"""
+                                        SELECT disabled, tier FROM {table_name}
+                                        WHERE server_name = %s AND filename = %s
+                                    """, (self._server_name, filename))
+                                    row = await cur2.fetchone()
+                                    if row:
+                                        disabled = bool(row[0])
+                                        tier = row[1] or default_tier_for_mode(mode)
+                        await self._redis_sync_cred(
+                            mode,
+                            filename,
+                            disabled=disabled,
+                            tier=tier,
+                            preview=preview,
+                        )
                     if "model_cooldowns" in state_updates:
                         # 冷却整体覆盖，重建所有 TTL key
                         cooldowns = state_updates["model_cooldowns"]

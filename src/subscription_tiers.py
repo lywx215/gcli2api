@@ -27,6 +27,53 @@ GEMINICLI_PAID_TIERS = (
     TIER_CODE_ASSIST_ENTERPRISE,
 )
 
+GEMINI_35_FLASH_TIERS = (
+    TIER_CODE_ASSIST_STANDARD,
+    TIER_CODE_ASSIST_ENTERPRISE,
+)
+
+# Keep the GA public ID, the separately exposed compatibility alias, and the
+# Code Assist upstream ID under the same Tier policy. This also covers direct
+# callers and retry paths that enter below the protocol routers.
+_GEMINI_35_FLASH_MODEL_BASES = (
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-preview",
+    "gemini-3-flash",
+)
+_GEMINI_35_FLASH_MODEL_SUFFIXES = (
+    "",
+    "-minimal",
+    "-low",
+    "-medium",
+    "-high",
+    "-search",
+    "-minimal-search",
+    "-low-search",
+    "-medium-search",
+    "-high-search",
+)
+_GEMINI_35_FLASH_MODEL_IDS = frozenset(
+    f"{base}{suffix}"
+    for base in _GEMINI_35_FLASH_MODEL_BASES
+    for suffix in _GEMINI_35_FLASH_MODEL_SUFFIXES
+)
+
+
+def required_tiers_for_geminicli_model(model_name: Optional[str]) -> Optional[tuple[str, ...]]:
+    """Return the hard Tier allow-list for a restricted Gemini CLI model."""
+    if not model_name:
+        return None
+
+    normalized = str(model_name).strip().lower()
+    for prefix in ("假流式/", "流式抗截断/"):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix):]
+            break
+
+    if normalized in _GEMINI_35_FLASH_MODEL_IDS:
+        return GEMINI_35_FLASH_TIERS
+    return None
+
 
 @dataclass(frozen=True)
 class GeminiCliSubscriptionInfo:
