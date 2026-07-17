@@ -18,6 +18,7 @@ from config import (
     get_antigravity_api_url,
     get_antigravity_stream2nostream,
     get_auto_ban_error_codes,
+    is_smart_429_protection_enabled,
 )
 from log import log
 
@@ -35,7 +36,40 @@ from src.api.utils import (
     parse_and_log_cooldown,
     collect_streaming_response,
     build_error_response,
+    smart_retry_delay,
 )
+from src.smart_429 import Upstream429Kind, classify_upstream_429, smart_429_service
+
+
+def _smart_capacity_cooldown(
+    status_code: int, error_text: str, model_name: str, filename: str
+) -> Optional[float]:
+    if status_code != 429 or not is_smart_429_protection_enabled():
+        return None
+    try:
+        payload = json.loads(error_text)
+    except Exception:
+        payload = {}
+    classification = classify_upstream_429(payload, mode="antigravity")
+    if classification.kind != Upstream429Kind.MODEL_CAPACITY_EXHAUSTED:
+        return None
+    return smart_429_service.capacity_cooldown_until(
+        "antigravity", model_name, filename
+    )
+
+
+def _capacity_breaker_response(model_name: str) -> Optional[Response]:
+    if not is_smart_429_protection_enabled():
+        return None
+    retry_after = smart_429_service.capacity_admission_retry_after("antigravity", model_name)
+    if not retry_after:
+        return None
+    return Response(
+        content=json.dumps({"error": {"code": "upstream_capacity_exhausted", "type": "upstream_capacity_exhausted", "message": "Upstream capacity is temporarily exhausted"}}),
+        status_code=503,
+        media_type="application/json",
+        headers={"Retry-After": str(retry_after)},
+    )
 
 # ==================== 全局凭证管理器 ====================
 
@@ -266,18 +300,23 @@ async def _switch_credential_for_retry(
     log_prefix: str,
 ) -> Tuple[bool, Optional[asyncio.Task]]:
     """优先使用预热凭证，失败后退回同步刷新。"""
+    smart_enabled = is_smart_429_protection_enabled()
+    if smart_enabled:
+        await asyncio.sleep(retry_interval)
     if next_cred_task is not None:
         try:
             cred_result = await next_cred_task
             next_cred_task = None
             if cred_result and apply_cred_result(cred_result):
-                await asyncio.sleep(retry_interval)
+                if not smart_enabled:
+                    await asyncio.sleep(retry_interval)
                 return True, next_cred_task
         except Exception as e:
             log.warning(f"{log_prefix} 预热凭证任务失败: {e}")
             next_cred_task = None
 
-    await asyncio.sleep(retry_interval)
+    if not smart_enabled:
+        await asyncio.sleep(retry_interval)
     if await refresh_credential_fast():
         return True, next_cred_task
 
@@ -303,6 +342,10 @@ async def stream_request(
         Response对象（错误时）或 bytes流/str流（成功时）
     """
     model_name = body.get("model", "")
+    breaker_response = _capacity_breaker_response(model_name)
+    if breaker_response is not None:
+        yield breaker_response
+        return
 
     # 1. 获取有效凭证
     cred_result = await credential_manager.get_valid_credential(
@@ -346,12 +389,14 @@ async def stream_request(
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
     next_cred_task = None  # 预热的下一个凭证任务
+    excluded_credentials: set[str] = set()
 
     # 内部函数：快速更新凭证(只更新token和project_id,避免重建整个请求)
     async def refresh_credential_fast():
         nonlocal current_file, access_token, auth_headers, project_id, final_payload
         cred_result = await credential_manager.get_valid_credential(
-            mode="antigravity", model_name=model_name
+            mode="antigravity", model_name=model_name,
+            excluded_credentials=excluded_credentials,
         )
         if not cred_result:
             return None
@@ -410,21 +455,39 @@ async def stream_request(
                                 cooldown_until = await parse_and_log_cooldown(error_body, mode="antigravity")
                             except Exception:
                                 pass
+                        smart_cooldown = _smart_capacity_cooldown(
+                            status_code, error_body or "", model_name, current_file
+                        )
+                        if smart_cooldown is not None:
+                            cooldown_until = smart_cooldown
+
+                        smart_error_recorded = False
+                        if is_smart_429_protection_enabled():
+                            await record_api_call_error(
+                                credential_manager, current_file, status_code,
+                                cooldown_until, mode="antigravity", model_name=model_name,
+                                error_message=error_body,
+                            )
+                            smart_error_recorded = True
 
                         # 预热下一个凭证
+                        if is_smart_429_protection_enabled():
+                            excluded_credentials.add(current_file)
                         if next_cred_task is None and attempt < max_retries:
                             next_cred_task = asyncio.create_task(
                                 credential_manager.get_valid_credential(
-                                    mode="antigravity", model_name=model_name
+                                    mode="antigravity", model_name=model_name,
+                                    excluded_credentials=excluded_credentials,
                                 )
                             )
 
                         # 记录错误并切换凭证
-                        await record_api_call_error(
-                            credential_manager, current_file, status_code,
-                            cooldown_until, mode="antigravity", model_name=model_name,
-                            error_message=error_body
-                        )
+                        if not smart_error_recorded:
+                            await record_api_call_error(
+                                credential_manager, current_file, status_code,
+                                cooldown_until, mode="antigravity", model_name=model_name,
+                                error_message=error_body
+                            )
 
                         # 检查是否应该重试
                         should_retry = await handle_error_with_retry(
@@ -458,6 +521,8 @@ async def stream_request(
                         await record_api_call_success(
                             credential_manager, current_file, mode="antigravity", model_name=model_name
                         )
+                        if is_smart_429_protection_enabled():
+                            smart_429_service.record_success("antigravity", model_name, current_file)
                         success_recorded = True
                         log.debug(f"[ANTIGRAVITY STREAM] 开始接收流式响应，模型: {model_name}")
 
@@ -495,7 +560,7 @@ async def stream_request(
 
                 switched, next_cred_task = await _switch_credential_for_retry(
                     next_cred_task=next_cred_task,
-                    retry_interval=retry_interval,
+                    retry_interval=(smart_retry_delay(attempt, retry_interval) if retry_config.get("smart_429") else retry_interval),
                     refresh_credential_fast=refresh_credential_fast,
                     apply_cred_result=apply_cred_result,
                     log_prefix="[ANTIGRAVITY STREAM]",
@@ -512,7 +577,8 @@ async def stream_request(
                         yield build_error_response("当前无可用凭证", 500)
                         return
                 else:
-                    await asyncio.sleep(retry_interval)
+                    if not is_smart_429_protection_enabled():
+                        await asyncio.sleep(retry_interval)
                 continue  # 重试
 
         except Exception as e:
@@ -569,6 +635,9 @@ async def non_stream_request(
     log.debug("[ANTIGRAVITY] 使用传统非流式模式")
 
     model_name = body.get("model", "")
+    breaker_response = _capacity_breaker_response(model_name)
+    if breaker_response is not None:
+        return breaker_response
 
     # 1. 获取有效凭证
     cred_result = await credential_manager.get_valid_credential(
@@ -610,12 +679,14 @@ async def non_stream_request(
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
     next_cred_task = None  # 预热的下一个凭证任务
+    excluded_credentials: set[str] = set()
 
     # 内部函数：快速更新凭证(只更新token和project_id,避免重建整个请求)
     async def refresh_credential_fast():
         nonlocal current_file, access_token, auth_headers, project_id, final_payload
         cred_result = await credential_manager.get_valid_credential(
-            mode="antigravity", model_name=model_name
+            mode="antigravity", model_name=model_name,
+            excluded_credentials=excluded_credentials,
         )
         if not cred_result:
             return None
@@ -676,6 +747,8 @@ async def non_stream_request(
                     await record_api_call_success(
                         credential_manager, current_file, mode="antigravity", model_name=model_name
                     )
+                    if is_smart_429_protection_enabled():
+                        smart_429_service.record_success("antigravity", model_name, current_file)
                     return Response(
                         content=response.content,
                         status_code=200,
@@ -708,21 +781,39 @@ async def non_stream_request(
                             cooldown_until = await parse_and_log_cooldown(error_text, mode="antigravity")
                         except Exception:
                             pass
+                    smart_cooldown = _smart_capacity_cooldown(
+                        status_code, error_text, model_name, current_file
+                    )
+                    if smart_cooldown is not None:
+                        cooldown_until = smart_cooldown
+
+                    smart_error_recorded = False
+                    if is_smart_429_protection_enabled():
+                        await record_api_call_error(
+                            credential_manager, current_file, status_code,
+                            cooldown_until, mode="antigravity", model_name=model_name,
+                            error_message=error_text,
+                        )
+                        smart_error_recorded = True
 
                     # 并行预热下一个凭证,不阻塞当前处理
+                    if is_smart_429_protection_enabled():
+                        excluded_credentials.add(current_file)
                     if next_cred_task is None and attempt < max_retries:
                         next_cred_task = asyncio.create_task(
                             credential_manager.get_valid_credential(
-                                mode="antigravity", model_name=model_name
+                                mode="antigravity", model_name=model_name,
+                                excluded_credentials=excluded_credentials,
                             )
                         )
 
                     # 记录错误并切换凭证
-                    await record_api_call_error(
-                        credential_manager, current_file, status_code,
-                        cooldown_until, mode="antigravity", model_name=model_name,
-                        error_message=error_text
-                    )
+                    if not smart_error_recorded:
+                        await record_api_call_error(
+                            credential_manager, current_file, status_code,
+                            cooldown_until, mode="antigravity", model_name=model_name,
+                            error_message=error_text
+                        )
 
                     # 检查是否应该重试
                     should_retry = await handle_error_with_retry(
@@ -753,7 +844,7 @@ async def non_stream_request(
 
                 switched, next_cred_task = await _switch_credential_for_retry(
                     next_cred_task=next_cred_task,
-                    retry_interval=retry_interval,
+                    retry_interval=(smart_retry_delay(attempt, retry_interval) if retry_config.get("smart_429") else retry_interval),
                     refresh_credential_fast=refresh_credential_fast,
                     apply_cred_result=apply_cred_result,
                     log_prefix="[ANTIGRAVITY]",
@@ -769,7 +860,8 @@ async def non_stream_request(
                         log.error("[ANTIGRAVITY] 重试时无可用凭证或令牌")
                         return build_error_response("当前无可用凭证", 500)
                 else:
-                    await asyncio.sleep(retry_interval)
+                    if not is_smart_429_protection_enabled():
+                        await asyncio.sleep(retry_interval)
                 continue  # 重试
 
         except Exception as e:

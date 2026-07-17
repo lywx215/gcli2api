@@ -43,6 +43,13 @@ class PSQLManager:
         "success_count",
         "failure_count",
         "remark",
+        "health_status",
+        "quarantine_reason",
+        "probe_stage",
+        "next_probe_at",
+        "last_health_check_at",
+        "health_check_started_at",
+        "health_state_version",
     }
 
     def __init__(self):
@@ -110,6 +117,14 @@ class PSQLManager:
                 tier_raw_id TEXT,
                 tier_raw_name TEXT,
                 tier_detected_at BIGINT,
+
+                health_status TEXT DEFAULT 'healthy',
+                quarantine_reason TEXT,
+                probe_stage INTEGER DEFAULT 0,
+                next_probe_at DOUBLE PRECISION,
+                last_health_check_at DOUBLE PRECISION,
+                health_check_started_at DOUBLE PRECISION,
+                health_state_version BIGINT DEFAULT 0,
 
                 rotation_order INTEGER DEFAULT 0,
                 call_count INTEGER DEFAULT 0,
@@ -238,6 +253,13 @@ class PSQLManager:
                 ("cycle_stats", "TEXT DEFAULT '{}'"),
                 ("last_cycle_stats", "TEXT DEFAULT '{}'"),
                 ("remark", "TEXT DEFAULT ''"),
+                ("health_status", "TEXT DEFAULT 'healthy'"),
+                ("quarantine_reason", "TEXT"),
+                ("probe_stage", "INTEGER DEFAULT 0"),
+                ("next_probe_at", "DOUBLE PRECISION"),
+                ("last_health_check_at", "DOUBLE PRECISION"),
+                ("health_check_started_at", "DOUBLE PRECISION"),
+                ("health_state_version", "BIGINT DEFAULT 0"),
                 ("created_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
                 ("updated_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
             ],
@@ -328,12 +350,19 @@ class PSQLManager:
     # ============ 凭证查询方法 ============
 
     async def get_next_available_credential(
-        self, mode: str = "geminicli", model_name: Optional[str] = None
+        self,
+        mode: str = "geminicli",
+        model_name: Optional[str] = None,
+        excluded_credentials: Optional[set[str]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """随机获取一个可用凭证（负载均衡）"""
         self._ensure_initialized()
 
         try:
+            from config import is_smart_429_protection_enabled
+            smart_enabled = is_smart_429_protection_enabled()
+            health_enabled = mode == "geminicli" and smart_enabled
+            excluded = set(excluded_credentials or ()) if smart_enabled else set()
             table_name = self._get_table_name(mode)
             current_time = time.time()
 
@@ -345,17 +374,20 @@ class PSQLManager:
                     if required_tiers:
                         tier_clause = " AND tier = ANY($1::text[])"
                         query_args = (list(required_tiers),)
+                    health_clause = " AND COALESCE(health_status, 'healthy') = 'healthy'" if health_enabled else ""
                     rows = await conn.fetch(f"""
                         SELECT filename, credential_data, model_cooldowns, preview, tier
                         FROM {table_name}
                         WHERE disabled = 0
+                        {health_clause}
                         {tier_clause}
                         ORDER BY RANDOM()
                     """, *query_args)
 
                     if not model_name:
-                        if rows:
-                            return rows[0]["filename"], json.loads(rows[0]["credential_data"])
+                        available_rows = [row for row in rows if row["filename"] not in excluded]
+                        if available_rows:
+                            return available_rows[0]["filename"], json.loads(available_rows[0]["credential_data"])
                         return None
 
                     is_preview_model = "preview" in model_name.lower()
@@ -363,6 +395,8 @@ class PSQLManager:
                     preview_creds = []
 
                     for row in rows:
+                        if row["filename"] in excluded:
+                            continue
                         tier = row["tier"] or default_tier_for_mode(mode)
                         if required_tiers and tier not in required_tiers:
                             continue
@@ -393,13 +427,16 @@ class PSQLManager:
                     """)
 
                     if not model_name:
-                        if rows:
-                            credential_data = json.loads(rows[0]["credential_data"])
-                            credential_data["enable_credit"] = bool(rows[0]["enable_credit"])
-                            return rows[0]["filename"], credential_data
+                        available_rows = [row for row in rows if row["filename"] not in excluded]
+                        if available_rows:
+                            credential_data = json.loads(available_rows[0]["credential_data"])
+                            credential_data["enable_credit"] = bool(available_rows[0]["enable_credit"])
+                            return available_rows[0]["filename"], credential_data
                         return None
 
                     for row in rows:
+                        if row["filename"] in excluded:
+                            continue
                         model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
                         cd = model_cooldowns.get(model_name)
                         if cd is None or current_time >= cd:
@@ -428,6 +465,30 @@ class PSQLManager:
         except Exception as e:
             log.error(f"Error getting available credentials list: {e}")
             return []
+
+    async def check_smart_429_capability(self) -> tuple[bool, Optional[str]]:
+        required = {
+            "health_status", "quarantine_reason", "probe_stage", "next_probe_at",
+            "last_health_check_at", "health_check_started_at", "health_state_version",
+        }
+        try:
+            self._ensure_initialized()
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() AND table_name = 'credentials'"
+                )
+                columns = {row["column_name"] for row in rows}
+                missing = sorted(required - columns)
+                if missing:
+                    return False, f"missing_health_fields:{','.join(missing)}"
+                await conn.execute(
+                    "UPDATE credentials SET health_state_version = "
+                    "COALESCE(health_state_version, 0) WHERE FALSE"
+                )
+            return True, None
+        except Exception as exc:
+            return False, f"health_fields_unavailable:{exc}"
 
     # ============ StorageBackend 协议方法 ============
 
@@ -595,6 +656,8 @@ class PSQLManager:
                         SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
                                preview, tier, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
                                tier_raw_id, tier_raw_name, tier_detected_at
+                               , health_status, quarantine_reason, probe_stage, next_probe_at,
+                               last_health_check_at, health_check_started_at, health_state_version
                         FROM {table_name} WHERE filename = $1
                     """, filename)
 
@@ -616,6 +679,13 @@ class PSQLManager:
                             "cycle_stats": json.loads(row["cycle_stats"] or "{}"),
                             "last_cycle_stats": json.loads(row["last_cycle_stats"] or "{}"),
                             "remark": row["remark"] or "",
+                            "health_status": row["health_status"] or "healthy",
+                            "quarantine_reason": row["quarantine_reason"],
+                            "probe_stage": row["probe_stage"] or 0,
+                            "next_probe_at": row["next_probe_at"],
+                            "last_health_check_at": row["last_health_check_at"],
+                            "health_check_started_at": row["health_check_started_at"],
+                            "health_state_version": row["health_state_version"] or 0,
                         }
 
                     return {
@@ -632,6 +702,13 @@ class PSQLManager:
                         "success_count": 0,
                         "failure_count": 0,
                         "remark": "",
+                        "health_status": "healthy",
+                        "quarantine_reason": None,
+                        "probe_stage": 0,
+                        "next_probe_at": None,
+                        "last_health_check_at": None,
+                        "health_check_started_at": None,
+                        "health_state_version": 0,
                     }
                 else:
                     row = await conn.fetchrow(f"""
@@ -689,6 +766,8 @@ class PSQLManager:
                                user_email, model_cooldowns, preview, tier,
                                success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
                                tier_raw_id, tier_raw_name, tier_detected_at
+                               , health_status, quarantine_reason, probe_stage, next_probe_at,
+                               last_health_check_at, health_check_started_at, health_state_version
                         FROM {table_name}
                     """)
 
@@ -715,6 +794,13 @@ class PSQLManager:
                             "cycle_stats": json.loads(row["cycle_stats"] or "{}"),
                             "last_cycle_stats": json.loads(row["last_cycle_stats"] or "{}"),
                             "remark": row["remark"] or "",
+                            "health_status": row["health_status"] or "healthy",
+                            "quarantine_reason": row["quarantine_reason"],
+                            "probe_stage": row["probe_stage"] or 0,
+                            "next_probe_at": row["next_probe_at"],
+                            "last_health_check_at": row["last_health_check_at"],
+                            "health_check_started_at": row["health_check_started_at"],
+                            "health_state_version": row["health_state_version"] or 0,
                         }
                     return states
                 else:
@@ -804,6 +890,8 @@ class PSQLManager:
                                user_email, rotation_order, model_cooldowns, preview, tier,
                                success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
                                tier_raw_id, tier_raw_name, tier_detected_at
+                               , health_status, quarantine_reason, probe_stage, next_probe_at,
+                               last_health_check_at, health_check_started_at, health_state_version
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -886,6 +974,13 @@ class PSQLManager:
 
                     if mode == "geminicli":
                         summary["preview"] = bool(row["preview"]) if row["preview"] is not None else True
+                        summary["health_status"] = row["health_status"] or "healthy"
+                        summary["quarantine_reason"] = row["quarantine_reason"]
+                        summary["probe_stage"] = row["probe_stage"] or 0
+                        summary["next_probe_at"] = row["next_probe_at"]
+                        summary["last_health_check_at"] = row["last_health_check_at"]
+                        summary["health_check_started_at"] = row["health_check_started_at"]
+                        summary["health_state_version"] = row["health_state_version"] or 0
 
                         if preview_filter:
                             preview_value = summary.get("preview", True)

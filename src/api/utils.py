@@ -16,6 +16,9 @@ from config import (
     get_retry_429_enabled,
     get_retry_429_interval,
     get_retry_429_max_retries,
+    get_smart_429_max_attempts,
+    get_smart_429_retry_base_interval,
+    is_smart_429_protection_enabled,
 )
 from log import log
 from src.credential_manager import CredentialManager
@@ -160,7 +163,10 @@ async def handle_error_with_retry(
         bool: True表示需要继续重试，False表示不需要重试
     """
     # 优先检查自动封禁
+    smart_enabled = is_smart_429_protection_enabled()
     should_auto_ban = await check_should_auto_ban(status_code)
+    if smart_enabled and status_code == 429:
+        should_auto_ban = False
 
     if should_auto_ban:
         # 触发自动封禁
@@ -172,17 +178,20 @@ async def handle_error_with_retry(
                 f"[{mode.upper()} RETRY] Retrying with next credential after auto-ban "
                 f"(status {status_code}, attempt {attempt + 1}/{max_retries})"
             )
-            await asyncio.sleep(retry_interval)
+            if not smart_enabled:
+                await asyncio.sleep(retry_interval)
             return True
         return False
 
     # 如果不触发自动封禁，仅对429、503和500错误进行重试
-    if status_code in (429, 500, 503) and retry_enabled and attempt < max_retries:
+    retryable_statuses = (429, 503) if smart_enabled and mode == "antigravity" else (429, 500, 503)
+    if status_code in retryable_statuses and retry_enabled and attempt < max_retries:
         log.info(
             f"[{mode.upper()} RETRY] {status_code} error encountered, retrying "
             f"(attempt {attempt + 1}/{max_retries})"
         )
-        await asyncio.sleep(retry_interval)
+        if not smart_enabled:
+            await asyncio.sleep(retry_interval)
         return True
 
     # 其他错误不进行重试
@@ -198,11 +207,27 @@ async def get_retry_config() -> Dict[str, Any]:
     Returns:
         包含重试配置的字典
     """
+    if is_smart_429_protection_enabled():
+        attempts = await get_smart_429_max_attempts()
+        return {
+            "retry_enabled": True,
+            "max_retries": attempts - 1,
+            "retry_interval": await get_smart_429_retry_base_interval(),
+            "smart_429": True,
+        }
     return {
         "retry_enabled": await get_retry_429_enabled(),
         "max_retries": await get_retry_429_max_retries(),
         "retry_interval": await get_retry_429_interval(),
+        "smart_429": False,
     }
+
+
+def smart_retry_delay(attempt: int, base_interval: float) -> float:
+    """SMART backoff: base, 3*base, ... with jitter; callers sleep once."""
+    import random
+    delay = base_interval * (2 * max(0, attempt) + 1)
+    return delay * random.uniform(0.8, 1.2)
 
 
 # ==================== API调用结果记录 ====================
@@ -511,7 +536,6 @@ RESOURCE_EXHAUSTED_COOLDOWN_HOURS = 4  # RESOURCE_EXHAUSTED 错误的默认冷�
 # 这种情况通常几秒就恢复，不应该用 4h 兜底锁死，否则会把可用凭证误判为冷却。
 CAPACITY_EXHAUSTED_REASONS = {
     "MODEL_CAPACITY_EXHAUSTED",
-    "RESOURCE_EXHAUSTED",   # 个别响应只给了笼统的 reason
     "NO_CAPACITY_AVAILABLE",
 }
 
@@ -600,6 +624,8 @@ def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
         if error_obj.get("status") == "RESOURCE_EXHAUSTED":
             if reasons & CAPACITY_EXHAUSTED_REASONS and "QUOTA_EXHAUSTED" not in reasons:
                 # 服务端容量问题：让调度器自然重试，不写入冷却
+                return None
+            if is_smart_429_protection_enabled() and "QUOTA_EXHAUSTED" not in reasons:
                 return None
             return _time.time() + RESOURCE_EXHAUSTED_COOLDOWN_HOURS * 3600
 

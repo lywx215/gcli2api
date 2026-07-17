@@ -37,6 +37,13 @@ class MySQLManager:
         "tier_raw_id",
         "tier_raw_name",
         "tier_detected_at",
+        "health_status",
+        "quarantine_reason",
+        "probe_stage",
+        "next_probe_at",
+        "last_health_check_at",
+        "health_check_started_at",
+        "health_state_version",
     }
 
     def __init__(self):
@@ -156,6 +163,14 @@ class MySQLManager:
                         tier_raw_name VARCHAR(255),
                         tier_detected_at BIGINT,
 
+                        health_status VARCHAR(32) DEFAULT 'healthy',
+                        quarantine_reason VARCHAR(255),
+                        probe_stage INT DEFAULT 0,
+                        next_probe_at DOUBLE,
+                        last_health_check_at DOUBLE,
+                        health_check_started_at DOUBLE,
+                        health_state_version BIGINT DEFAULT 0,
+
                         -- 轮换相关
                         rotation_order INT DEFAULT 0,
                         call_count INT DEFAULT 0,
@@ -225,6 +240,7 @@ class MySQLManager:
 
             # 自动添加缺失的 tier 列（兼容旧表结构）
             await self._ensure_tier_column()
+            await self._ensure_smart_429_columns()
 
             log.debug("MySQL tables and indexes created")
 
@@ -261,6 +277,32 @@ class MySQLManager:
                     await conn.commit()
             except Exception as e:
                 log.warning(f"Failed to ensure tier columns in {table}: {e}")
+
+    async def _ensure_smart_429_columns(self):
+        definitions = {
+            "health_status": "VARCHAR(32) DEFAULT 'healthy'",
+            "quarantine_reason": "VARCHAR(255)",
+            "probe_stage": "INT DEFAULT 0",
+            "next_probe_at": "DOUBLE",
+            "last_health_check_at": "DOUBLE",
+            "health_check_started_at": "DOUBLE",
+            "health_state_version": "BIGINT DEFAULT 0",
+        }
+        try:
+            async with self._pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    for name, definition in definitions.items():
+                        await cur.execute(
+                            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+                            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'gcli_credentials' "
+                            "AND COLUMN_NAME = %s",
+                            (name,),
+                        )
+                        if not await cur.fetchone():
+                            await cur.execute(f"ALTER TABLE gcli_credentials ADD COLUMN {name} {definition}")
+                await conn.commit()
+        except Exception as exc:
+            log.warning(f"Failed to ensure SMART 429 columns in gcli_credentials: {exc}")
 
     async def _load_config_cache(self):
         """加载配置到内存缓存（仅在初始化时调用一次）"""
@@ -567,7 +609,10 @@ class MySQLManager:
             log.warning(f"Redis clear_cooldown error: {e}")
 
     async def _get_next_available_from_redis(
-        self, mode: str, model_name: Optional[str]
+        self,
+        mode: str,
+        model_name: Optional[str],
+        excluded_credentials: Optional[set[str]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
         Redis 快速路径：随机取候选凭证，跳过冷却中的，返回 (filename, credential_data)。
@@ -578,6 +623,7 @@ class MySQLManager:
         - "unstable": 基于 preview 成功率加权随机选择
         """
         try:
+            excluded = set(excluded_credentials or ())
             # 选择候选池
             is_preview_model = model_name and "preview" in model_name.lower()
             required_tiers = (
@@ -615,6 +661,10 @@ class MySQLManager:
                 candidates = await self._redis.srandmember(pool_key, sample_size)
                 if not candidates:
                     return None
+
+            candidates = [candidate for candidate in candidates if candidate not in excluded]
+            if not candidates:
+                return None
 
             # 过滤冷却中的凭证（先过滤再排序，避免无效计算）
             available_candidates = []
@@ -685,6 +735,11 @@ class MySQLManager:
 
             # 返回第一个能获取到凭证数据的候选
             for filename in ordered:
+                from config import is_smart_429_protection_enabled
+                if mode == "geminicli" and is_smart_429_protection_enabled():
+                    state = await self.get_credential_state(filename, mode)
+                    if state.get("health_status", "healthy") != "healthy":
+                        continue
                 credential_data = await self.get_credential(filename, mode)
                 if credential_data:
                     log.debug(f"[Redis HIT] mode={mode} model={model_name} -> {filename}")
@@ -698,7 +753,10 @@ class MySQLManager:
     # ============ 凭证查询方法 ============
 
     async def get_next_available_credential(
-        self, mode: str = "geminicli", model_name: Optional[str] = None
+        self,
+        mode: str = "geminicli",
+        model_name: Optional[str] = None,
+        excluded_credentials: Optional[set[str]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
         随机获取一个可用凭证（负载均衡）
@@ -709,9 +767,14 @@ class MySQLManager:
         """
         self._ensure_initialized()
 
+        from config import is_smart_429_protection_enabled
+        smart_enabled = is_smart_429_protection_enabled()
+        health_enabled = mode == "geminicli" and smart_enabled
+        excluded = set(excluded_credentials or ()) if smart_enabled else set()
+
         # Redis 快速路径
         if self._redis_enabled:
-            result = await self._get_next_available_from_redis(mode, model_name)
+            result = await self._get_next_available_from_redis(mode, model_name, excluded)
             if result is not None:
                 return result
             # result 为 None: 池为空或所有候选都在冷却中，降级到 MySQL
@@ -730,18 +793,21 @@ class MySQLManager:
                             placeholders = ", ".join("%s" for _ in required_tiers)
                             tier_clause = f" AND tier IN ({placeholders})"
                             query_params.extend(required_tiers)
+                        health_clause = " AND COALESCE(health_status, 'healthy') = 'healthy'" if health_enabled else ""
                         await cur.execute(f"""
                             SELECT filename, credential_data, model_cooldowns, preview, tier
                             FROM {table_name}
                             WHERE server_name = %s AND disabled = 0
+                            {health_clause}
                             {tier_clause}
                             ORDER BY RAND()
                         """, tuple(query_params))
                         rows = await cur.fetchall()
 
                         if not model_name:
-                            if rows:
-                                filename, credential_json, _, _, _ = rows[0]
+                            available_rows = [row for row in rows if row[0] not in excluded]
+                            if available_rows:
+                                filename, credential_json, _, _, _ = available_rows[0]
                                 credential_data = json.loads(credential_json)
                                 return filename, credential_data
                             return None
@@ -752,6 +818,8 @@ class MySQLManager:
                         preview_creds = []
 
                         for filename, credential_json, model_cooldowns_json, preview, tier in rows:
+                            if filename in excluded:
+                                continue
                             if required_tiers and (tier or default_tier_for_mode(mode)) not in required_tiers:
                                 continue
                             model_cooldowns = json.loads(model_cooldowns_json or '{}')
@@ -787,12 +855,15 @@ class MySQLManager:
                         rows = await cur.fetchall()
 
                         if not model_name:
-                            if rows:
-                                filename, credential_json, _ = rows[0]
+                            available_rows = [row for row in rows if row[0] not in excluded]
+                            if available_rows:
+                                filename, credential_json, _ = available_rows[0]
                                 return filename, json.loads(credential_json)
                             return None
 
                         for filename, credential_json, model_cooldowns_json in rows:
+                            if filename in excluded:
+                                continue
                             model_cooldowns = json.loads(model_cooldowns_json or '{}')
 
                             model_cooldown = model_cooldowns.get(model_name)
@@ -829,6 +900,31 @@ class MySQLManager:
         except Exception as e:
             log.error(f"Error getting available credentials list (mode={mode}): {e}")
             return []
+
+    async def check_smart_429_capability(self) -> tuple[bool, Optional[str]]:
+        required = {
+            "health_status", "quarantine_reason", "probe_stage", "next_probe_at",
+            "last_health_check_at", "health_check_started_at", "health_state_version",
+        }
+        try:
+            self._ensure_initialized()
+            async with self._pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+                        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'gcli_credentials'"
+                    )
+                    columns = {row[0] for row in await cur.fetchall()}
+                    missing = sorted(required - columns)
+                    if missing:
+                        return False, f"missing_health_fields:{','.join(missing)}"
+                    await cur.execute(
+                        "UPDATE gcli_credentials SET health_state_version = "
+                        "COALESCE(health_state_version, 0) WHERE 1 = 0"
+                    )
+            return True, None
+        except Exception as exc:
+            return False, f"health_fields_unavailable:{exc}"
 
     # ============ StorageBackend 协议方法 ============
 
@@ -1095,7 +1191,9 @@ class MySQLManager:
                         await cur.execute(f"""
                             SELECT disabled, error_codes, last_success,
                                    user_email, model_cooldowns, preview, tier,
-                                   tier_raw_id, tier_raw_name, tier_detected_at
+                                   tier_raw_id, tier_raw_name, tier_detected_at,
+                                   health_status, quarantine_reason, probe_stage, next_probe_at,
+                                   last_health_check_at, health_check_started_at, health_state_version
                             FROM {table_name}
                             WHERE server_name = %s AND filename = %s
                         """, (self._server_name, filename))
@@ -1113,6 +1211,13 @@ class MySQLManager:
                                 "tier_raw_id": row[7],
                                 "tier_raw_name": row[8],
                                 "tier_detected_at": row[9],
+                                "health_status": row[10] or "healthy",
+                                "quarantine_reason": row[11],
+                                "probe_stage": row[12] or 0,
+                                "next_probe_at": row[13],
+                                "last_health_check_at": row[14],
+                                "health_check_started_at": row[15],
+                                "health_state_version": row[16] or 0,
                             }
 
                         return {
@@ -1123,6 +1228,13 @@ class MySQLManager:
                             "tier_raw_id": None,
                             "tier_raw_name": None,
                             "tier_detected_at": None,
+                            "health_status": "healthy",
+                            "quarantine_reason": None,
+                            "probe_stage": 0,
+                            "next_probe_at": None,
+                            "last_health_check_at": None,
+                            "health_check_started_at": None,
+                            "health_state_version": 0,
                         }
                     else:
                         await cur.execute(f"""
@@ -1166,7 +1278,9 @@ class MySQLManager:
                         await cur.execute(f"""
                             SELECT filename, disabled, error_codes, last_success,
                                    user_email, model_cooldowns, preview, tier,
-                                   tier_raw_id, tier_raw_name, tier_detected_at
+                                   tier_raw_id, tier_raw_name, tier_detected_at,
+                                   health_status, quarantine_reason, probe_stage, next_probe_at,
+                                   last_health_check_at, health_check_started_at, health_state_version
                             FROM {table_name}
                             WHERE server_name = %s
                         """, (self._server_name,))
@@ -1209,6 +1323,13 @@ class MySQLManager:
                             state["tier_raw_id"] = row[8]
                             state["tier_raw_name"] = row[9]
                             state["tier_detected_at"] = row[10]
+                            state["health_status"] = row[11] or "healthy"
+                            state["quarantine_reason"] = row[12]
+                            state["probe_stage"] = row[13] or 0
+                            state["next_probe_at"] = row[14]
+                            state["last_health_check_at"] = row[15]
+                            state["health_check_started_at"] = row[16]
+                            state["health_state_version"] = row[17] or 0
                         else:
                             state["tier"] = row[6] if row[6] is not None else "pro"
 
@@ -1280,7 +1401,9 @@ class MySQLManager:
                         query = f"""
                             SELECT filename, disabled, error_codes, last_success,
                                    user_email, rotation_order, model_cooldowns, preview, tier,
-                                   tier_raw_id, tier_raw_name, tier_detected_at
+                                   tier_raw_id, tier_raw_name, tier_detected_at,
+                                   health_status, quarantine_reason, probe_stage, next_probe_at,
+                                   last_health_check_at, health_check_started_at, health_state_version
                             FROM {table_name}
                             {where_clause}
                             ORDER BY rotation_order
@@ -1346,6 +1469,13 @@ class MySQLManager:
                             summary["tier_raw_id"] = row[9]
                             summary["tier_raw_name"] = row[10]
                             summary["tier_detected_at"] = row[11]
+                            summary["health_status"] = row[12] or "healthy"
+                            summary["quarantine_reason"] = row[13]
+                            summary["probe_stage"] = row[14] or 0
+                            summary["next_probe_at"] = row[15]
+                            summary["last_health_check_at"] = row[16]
+                            summary["health_check_started_at"] = row[17]
+                            summary["health_state_version"] = row[18] or 0
                         else:
                             summary["tier"] = row[7] if row[7] is not None else "pro"
 

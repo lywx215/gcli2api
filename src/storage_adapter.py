@@ -8,7 +8,7 @@
 import asyncio
 import json
 import os
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 
 from log import log
 
@@ -35,6 +35,19 @@ class StorageBackend(Protocol):
 
     async def list_credentials(self, mode: str = "geminicli") -> List[str]:
         """列出所有凭证文件名"""
+        ...
+
+    async def get_next_available_credential(
+        self,
+        mode: str = "geminicli",
+        model_name: Optional[str] = None,
+        excluded_credentials: Optional[Set[str]] = None,
+    ) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """Select an eligible credential, excluding request-local failures when enabled."""
+        ...
+
+    async def check_smart_429_capability(self) -> Tuple[bool, Optional[str]]:
+        """Verify SMART 429 health-state storage support."""
         ...
 
     async def delete_credential(self, filename: str, mode: str = "geminicli") -> bool:

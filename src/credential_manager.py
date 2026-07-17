@@ -56,7 +56,10 @@ class CredentialManager:
         log.debug("Credential manager closed")
 
     async def get_valid_credential(
-        self, mode: str = "geminicli", model_name: Optional[str] = None
+        self,
+        mode: str = "geminicli",
+        model_name: Optional[str] = None,
+        excluded_credentials: Optional[set[str]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
         获取有效的凭证 - 随机负载均衡版
@@ -75,9 +78,17 @@ class CredentialManager:
 
         # 最多重试3次
         max_retries = 3
+        from config import is_smart_429_protection_enabled
+        excluded = (
+            set(excluded_credentials or ())
+            if is_smart_429_protection_enabled()
+            else set()
+        )
         for attempt in range(max_retries):
             result = await self._storage_adapter._backend.get_next_available_credential(
-                mode=mode, model_name=model_name
+                mode=mode,
+                model_name=model_name,
+                excluded_credentials=excluded,
             )
 
             # 如果没有可用凭证，直接返回None
@@ -101,6 +112,7 @@ class CredentialManager:
                     # 刷新失败（_refresh_token内部已自动禁用失效凭证）
                     log.warning(f"Token刷新失败，尝试获取下一个凭证: {filename} (mode={mode}, attempt={attempt+1}/{max_retries})")
                     # 继续循环，尝试获取下一个可用凭证
+                    excluded.add(filename)
                     continue
             else:
                 # Token有效，直接返回
@@ -132,6 +144,13 @@ class CredentialManager:
         """删除一个凭证"""
         await self._ensure_initialized()
         try:
+            if mode == "geminicli":
+                state = await self._storage_adapter.get_credential_state(credential_name, mode=mode)
+                await self._storage_adapter.update_credential_state(
+                    credential_name,
+                    {"health_state_version": int(state.get("health_state_version", 0) or 0) + 1},
+                    mode=mode,
+                )
             await self._storage_adapter.delete_credential(credential_name, mode=mode)
             log.info(f"Credential removed: {credential_name} (mode={mode})")
             return True
@@ -144,6 +163,14 @@ class CredentialManager:
         log.debug(f"[CredMgr] update_credential_state 开始: credential_name={credential_name}, state_updates={state_updates}, mode={mode}")
         log.debug(f"[CredMgr] 调用 _ensure_initialized...")
         await self._ensure_initialized()
+        if (
+            mode == "geminicli"
+            and "permanent_disabled" in state_updates
+            and "health_state_version" not in state_updates
+        ):
+            current = await self._storage_adapter.get_credential_state(credential_name, mode=mode)
+            state_updates = dict(state_updates)
+            state_updates["health_state_version"] = int(current.get("health_state_version", 0) or 0) + 1
         log.debug(f"[CredMgr] _ensure_initialized 完成")
         try:
             log.debug(f"[CredMgr] 调用 storage_adapter.update_credential_state...")
@@ -167,6 +194,17 @@ class CredentialManager:
             updates = {"disabled": disabled}
             if not disabled:
                 updates["permanent_disabled"] = False
+            if mode == "geminicli":
+                await self._ensure_initialized()
+                state = await self._storage_adapter.get_credential_state(credential_name, mode=mode)
+                updates["health_state_version"] = int(state.get("health_state_version", 0) or 0) + 1
+                if not disabled:
+                    updates.update(
+                        health_status="healthy",
+                        quarantine_reason=None,
+                        probe_stage=0,
+                        next_probe_at=None,
+                    )
             success = await self.update_credential_state(
                 credential_name, updates, mode=mode
             )

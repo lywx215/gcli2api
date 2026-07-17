@@ -18,7 +18,11 @@ import json
 from typing import Any, Dict, Optional, Callable, Tuple
 
 from fastapi import Response
-from config import get_code_assist_endpoint, get_auto_ban_error_codes
+from config import (
+    get_code_assist_endpoint,
+    get_auto_ban_error_codes,
+    is_smart_429_protection_enabled,
+)
 from log import log
 
 from src.credential_manager import credential_manager
@@ -34,6 +38,12 @@ from src.api.utils import (
     parse_and_log_cooldown,
     build_error_response,
     debug_log,
+    smart_retry_delay,
+)
+from src.smart_429 import (
+    Upstream429Kind,
+    classify_upstream_429,
+    smart_429_service,
 )
 from src.utils import get_geminicli_user_agent
 
@@ -46,6 +56,66 @@ def _build_no_available_credential_response(model_name: Optional[str]) -> Respon
             503,
         )
     return build_error_response("当前无可用凭证", 500)
+
+
+async def _build_smart_pool_response(model_name: Optional[str]) -> Response:
+    if not is_smart_429_protection_enabled():
+        return _build_no_available_credential_response(model_name)
+    states = await credential_manager.get_creds_status()
+    enabled = {
+        filename: state for filename, state in states.items()
+        if not state.get("disabled") and not state.get("permanent_disabled")
+    }
+    if enabled and all(state.get("health_status", "healthy") != "healthy" for state in enabled.values()):
+        return Response(
+            content=json.dumps({"error": {"code": "credential_pool_quarantined", "type": "credential_pool_quarantined", "message": "Credential pool is temporarily quarantined"}}),
+            status_code=503,
+            media_type="application/json",
+        )
+    healthy_names = {
+        filename for filename, state in enabled.items()
+        if state.get("health_status", "healthy") == "healthy"
+    }
+    retry_after = smart_429_service.all_capacity_cooling_retry_after(
+        "geminicli", model_name or "", healthy_names
+    )
+    if retry_after:
+        await asyncio.sleep(min(8, retry_after))
+        retry_after = smart_429_service.all_capacity_cooling_retry_after(
+            "geminicli", model_name or "", healthy_names
+        ) or 1
+        return Response(
+            content=json.dumps({"error": {"code": "upstream_capacity_exhausted", "type": "upstream_capacity_exhausted", "message": "Upstream capacity is temporarily exhausted"}}),
+            status_code=503,
+            media_type="application/json",
+            headers={"Retry-After": str(retry_after)},
+        )
+    return _build_no_available_credential_response(model_name)
+
+
+def _capacity_breaker_response(model_name: str) -> Optional[Response]:
+    if not is_smart_429_protection_enabled():
+        return None
+    retry_after = smart_429_service.capacity_admission_retry_after("geminicli", model_name)
+    if not retry_after:
+        return None
+    return Response(
+        content=json.dumps({"error": {"code": "upstream_capacity_exhausted", "type": "upstream_capacity_exhausted", "message": "Upstream capacity is temporarily exhausted"}}),
+        status_code=503,
+        media_type="application/json",
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+def _upstream_capacity_response(cooldown_until: float) -> Response:
+    import time
+    retry_after = max(1, int(cooldown_until - time.time() + 0.999))
+    return Response(
+        content=json.dumps({"error": {"code": "upstream_capacity_exhausted", "type": "upstream_capacity_exhausted", "message": "Upstream capacity is temporarily exhausted"}}),
+        status_code=503,
+        media_type="application/json",
+        headers={"Retry-After": str(retry_after)},
+    )
 
 
 def _debug_log_final_response(tag: str, response) -> None:
@@ -114,6 +184,33 @@ def _is_retryable_status(status_code: int, disable_error_codes: list[int]) -> bo
     return status_code in (429, 500, 503) or status_code in disable_error_codes
 
 
+def _decode_error_payload(error_text: str) -> Dict[str, Any]:
+    try:
+        value = json.loads(error_text)
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+async def _apply_smart_429_state(
+    filename: str,
+    credential_data: Dict[str, Any],
+    model_name: str,
+    error_text: str,
+) -> tuple[Upstream429Kind, Optional[float]]:
+    """Synchronously persist the decision state before any credential prefetch."""
+    classification = classify_upstream_429(_decode_error_payload(error_text), mode="geminicli")
+    if classification.kind == Upstream429Kind.MODEL_CAPACITY_EXHAUSTED:
+        cooldown_until = smart_429_service.capacity_cooldown_until(
+            "geminicli", model_name, filename
+        )
+        return classification.kind, cooldown_until
+    if classification.kind == Upstream429Kind.RISK_CHECK_REQUIRED:
+        await smart_429_service.mark_checking(filename)
+        smart_429_service.schedule_verification(filename, credential_data)
+    return classification.kind, None
+
+
 async def _switch_credential_for_retry(
     *,
     next_cred_task: Optional[asyncio.Task],
@@ -123,18 +220,24 @@ async def _switch_credential_for_retry(
     log_prefix: str,
 ) -> Tuple[bool, Optional[asyncio.Task]]:
     """优先使用预热凭证，失败后退回同步刷新。"""
+    smart_enabled = is_smart_429_protection_enabled()
+    if smart_enabled:
+        await asyncio.sleep(retry_interval)
+
     if next_cred_task is not None:
         try:
             cred_result = await next_cred_task
             next_cred_task = None
             if cred_result and apply_cred_result(cred_result):
-                await asyncio.sleep(retry_interval)
+                if not smart_enabled:
+                    await asyncio.sleep(retry_interval)
                 return True, next_cred_task
         except Exception as e:
             log.warning(f"{log_prefix} 预热凭证任务失败: {e}")
             next_cred_task = None
 
-    await asyncio.sleep(retry_interval)
+    if not smart_enabled:
+        await asyncio.sleep(retry_interval)
     if await refresh_credential_fast():
         return True, next_cred_task
 
@@ -161,6 +264,10 @@ async def stream_request(
     """
     # 获取有效凭证
     model_name = body.get("model", "")
+    breaker_response = _capacity_breaker_response(model_name)
+    if breaker_response is not None:
+        yield breaker_response
+        return
 
     # 1. 获取有效凭证
     cred_result = await credential_manager.get_valid_credential(
@@ -168,7 +275,7 @@ async def stream_request(
     )
 
     if not cred_result:
-        err = _build_no_available_credential_response(model_name)
+        err = await _build_smart_pool_response(model_name)
         _debug_log_final_response("GEMINICLI STREAM", err)
         yield err
         return
@@ -201,12 +308,14 @@ async def stream_request(
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
     next_cred_task = None  # 预热的下一个凭证任务
+    excluded_credentials: set[str] = set()
 
     # 内部函数：快速更新凭证(只更新token和project_id,避免重建整个请求)
     async def refresh_credential_fast():
         nonlocal current_file, credential_data, auth_headers, final_payload
         cred_result = await credential_manager.get_valid_credential(
-            mode="geminicli", model_name=model_name
+            mode="geminicli", model_name=model_name,
+            excluded_credentials=excluded_credentials,
         )
         if not cred_result:
             return None
@@ -271,13 +380,13 @@ async def stream_request(
                             except Exception:
                                 pass
 
-                        # 预热下一个凭证
-                        if next_cred_task is None and attempt < max_retries:
-                            next_cred_task = asyncio.create_task(
-                                credential_manager.get_valid_credential(
-                                    mode="geminicli", model_name=model_name
-                                )
+                        smart_cooldown = None
+                        if status_code == 429 and is_smart_429_protection_enabled():
+                            _, smart_cooldown = await _apply_smart_429_state(
+                                current_file, credential_data, model_name, error_body or ""
                             )
+                            if smart_cooldown is not None:
+                                cooldown_until = smart_cooldown
 
                         # 记录错误并切换凭证
                         await record_api_call_error(
@@ -285,6 +394,16 @@ async def stream_request(
                             cooldown_until, mode="geminicli", model_name=model_name,
                             error_message=error_body
                         )
+
+                        if is_smart_429_protection_enabled():
+                            excluded_credentials.add(current_file)
+                        if next_cred_task is None and attempt < max_retries:
+                            next_cred_task = asyncio.create_task(
+                                credential_manager.get_valid_credential(
+                                    mode="geminicli", model_name=model_name,
+                                    excluded_credentials=excluded_credentials,
+                                )
+                            )
 
                         # 检查是否应该重试
                         should_retry = await handle_error_with_retry(
@@ -299,7 +418,11 @@ async def stream_request(
                         else:
                             # 不重试，返回固定429错误以便下游重试
                             log.error(f"[GEMINICLI STREAM] 达到最大重试次数或不应重试，返回429错误")
-                            err = build_error_response("Server is busy, please retry later", 503)
+                            err = (
+                                _upstream_capacity_response(smart_cooldown)
+                                if smart_cooldown is not None
+                                else build_error_response("Server is busy, please retry later", 503)
+                            )
                             _debug_log_final_response("GEMINICLI STREAM", err)
                             yield err
                             return
@@ -318,10 +441,13 @@ async def stream_request(
                         )
 
                         # 预热下一个凭证（会自动跳过preview=False的凭证）
+                        if is_smart_429_protection_enabled():
+                            excluded_credentials.add(current_file)
                         if next_cred_task is None and attempt < max_retries:
                             next_cred_task = asyncio.create_task(
                                 credential_manager.get_valid_credential(
-                                    mode="geminicli", model_name=model_name
+                                    mode="geminicli", model_name=model_name,
+                                    excluded_credentials=excluded_credentials,
                                 )
                             )
 
@@ -352,6 +478,8 @@ async def stream_request(
                         await record_api_call_success(
                             credential_manager, current_file, mode="geminicli", model_name=model_name
                         )
+                        if is_smart_429_protection_enabled():
+                            smart_429_service.record_success("geminicli", model_name, current_file)
                         success_recorded = True
                         log.debug(f"[GEMINICLI STREAM] 开始接收流式响应，模型: {model_name}")
 
@@ -381,14 +509,14 @@ async def stream_request(
 
                 switched, next_cred_task = await _switch_credential_for_retry(
                     next_cred_task=next_cred_task,
-                    retry_interval=retry_interval,
+                    retry_interval=(smart_retry_delay(attempt, retry_interval) if retry_config.get("smart_429") else retry_interval),
                     refresh_credential_fast=refresh_credential_fast,
                     apply_cred_result=apply_cred_result,
                     log_prefix="[GEMINICLI STREAM]",
                 )
                 if not switched:
                     log.error("[GEMINICLI STREAM] 重试时无可用凭证或刷新失败")
-                    err = _build_no_available_credential_response(model_name)
+                    err = await _build_smart_pool_response(model_name)
                     _debug_log_final_response("GEMINICLI STREAM", err)
                     yield err
                     return
@@ -432,6 +560,9 @@ async def non_stream_request(
     """
     # 获取有效凭证
     model_name = body.get("model", "")
+    breaker_response = _capacity_breaker_response(model_name)
+    if breaker_response is not None:
+        return breaker_response
 
     # 1. 获取有效凭证
     cred_result = await credential_manager.get_valid_credential(
@@ -439,7 +570,7 @@ async def non_stream_request(
     )
 
     if not cred_result:
-        err = _build_no_available_credential_response(model_name)
+        err = await _build_smart_pool_response(model_name)
         _debug_log_final_response("NON-STREAM", err)
         return err
 
@@ -470,12 +601,14 @@ async def non_stream_request(
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
     last_error_response = None  # 记录最后一次的错误响应
     next_cred_task = None  # 预热的下一个凭证任务
+    excluded_credentials: set[str] = set()
 
     # 内部函数：快速更新凭证(只更新token和project_id,避免重建整个请求)
     async def refresh_credential_fast():
         nonlocal current_file, credential_data, auth_headers, final_payload
         cred_result = await credential_manager.get_valid_credential(
-            mode="geminicli", model_name=model_name
+            mode="geminicli", model_name=model_name,
+            excluded_credentials=excluded_credentials,
         )
         if not cred_result:
             return None
@@ -521,6 +654,8 @@ async def non_stream_request(
                 await record_api_call_success(
                     credential_manager, current_file, mode="geminicli", model_name=model_name
                 )
+                if is_smart_429_protection_enabled():
+                    smart_429_service.record_success("geminicli", model_name, current_file)
                 # 创建响应头,移除压缩相关的header避免重复解压
                 response_headers = dict(response.headers)
                 response_headers.pop('content-encoding', None)
@@ -564,20 +699,43 @@ async def non_stream_request(
                     except Exception:
                         pass
 
+                smart_error_recorded = False
+                smart_cooldown = None
+                if status_code == 429 and is_smart_429_protection_enabled():
+                    _, smart_cooldown = await _apply_smart_429_state(
+                        current_file, credential_data, model_name, error_text
+                    )
+                    if smart_cooldown is not None:
+                        cooldown_until = smart_cooldown
+                    await record_api_call_error(
+                        credential_manager, current_file, status_code,
+                        cooldown_until, mode="geminicli", model_name=model_name,
+                        error_message=error_text,
+                    )
+                    excluded_credentials.add(current_file)
+                    smart_error_recorded = True
+
+                if is_smart_429_protection_enabled():
+                    excluded_credentials.add(current_file)
+
                 # 并行预热下一个凭证,不阻塞当前处理
                 if next_cred_task is None and attempt < max_retries:
                     next_cred_task = asyncio.create_task(
                         credential_manager.get_valid_credential(
-                            mode="geminicli", model_name=model_name
+                            mode="geminicli", model_name=model_name,
+                            excluded_credentials=excluded_credentials,
                         )
                     )
 
                 # 记录错误并切换凭证
-                await record_api_call_error(
-                    credential_manager, current_file, status_code,
-                    cooldown_until, mode="geminicli", model_name=model_name,
-                    error_message=error_text
-                )
+                if not smart_error_recorded:
+                    await record_api_call_error(
+                        credential_manager, current_file, status_code,
+                        cooldown_until, mode="geminicli", model_name=model_name,
+                        error_message=error_text
+                    )
+                    if is_smart_429_protection_enabled():
+                        excluded_credentials.add(current_file)
 
                 # 检查是否应该重试（会自动处理禁用逻辑）
                 should_retry = await handle_error_with_retry(
@@ -592,21 +750,25 @@ async def non_stream_request(
 
                     switched, next_cred_task = await _switch_credential_for_retry(
                         next_cred_task=next_cred_task,
-                        retry_interval=retry_interval,
+                        retry_interval=(smart_retry_delay(attempt, retry_interval) if retry_config.get("smart_429") else retry_interval),
                         refresh_credential_fast=refresh_credential_fast,
                         apply_cred_result=apply_cred_result,
                         log_prefix="[NON-STREAM]",
                     )
                     if not switched:
                         log.error("[NON-STREAM] 重试时无可用凭证或刷新失败")
-                        err = _build_no_available_credential_response(model_name)
+                        err = await _build_smart_pool_response(model_name)
                         _debug_log_final_response("NON-STREAM", err)
                         return err
                     continue  # 重试
                 else:
                     # 不重试，返回固定429错误以便下游重试
                     log.error(f"[NON-STREAM] 达到最大重试次数或不应重试，返回429错误")
-                    err = build_error_response("Server is busy, please retry later", 503)
+                    err = (
+                        _upstream_capacity_response(smart_cooldown)
+                        if smart_cooldown is not None
+                        else build_error_response("Server is busy, please retry later", 503)
+                    )
                     _debug_log_final_response("NON-STREAM", err)
                     return err
             elif status_code == 404 and "preview" in model_name.lower():
@@ -624,10 +786,13 @@ async def non_stream_request(
                 )
 
                 # 预热下一个凭证（会自动跳过preview=False的凭证）
+                if is_smart_429_protection_enabled():
+                    excluded_credentials.add(current_file)
                 if next_cred_task is None and attempt < max_retries:
                     next_cred_task = asyncio.create_task(
                         credential_manager.get_valid_credential(
-                            mode="geminicli", model_name=model_name
+                            mode="geminicli", model_name=model_name,
+                            excluded_credentials=excluded_credentials,
                         )
                     )
 
@@ -637,14 +802,14 @@ async def non_stream_request(
 
                     switched, next_cred_task = await _switch_credential_for_retry(
                         next_cred_task=next_cred_task,
-                        retry_interval=retry_interval,
+                        retry_interval=(smart_retry_delay(attempt, retry_interval) if retry_config.get("smart_429") else retry_interval),
                         refresh_credential_fast=refresh_credential_fast,
                         apply_cred_result=apply_cred_result,
                         log_prefix="[NON-STREAM]",
                     )
                     if not switched:
                         log.error("[NON-STREAM] 重试时无可用凭证或刷新失败")
-                        err = _build_no_available_credential_response(model_name)
+                        err = await _build_smart_pool_response(model_name)
                         _debug_log_final_response("NON-STREAM", err)
                         return err
                     continue  # 重试
@@ -869,6 +1034,8 @@ async def fetch_geminicli_quota_info(
             return {
                 "success": False,
                 "error": f"HTTP {response.status_code}: {err_str}",
+                "http_status": response.status_code,
+                "error_body": err_body,
             }
 
         data = response.json()
@@ -919,6 +1086,7 @@ async def fetch_geminicli_quota_info(
 
         return {
             "success": True,
+            "http_status": 200,
             "models": quota_info,
         }
 
@@ -927,4 +1095,5 @@ async def fetch_geminicli_quota_info(
         return {
             "success": False,
             "error": str(e),
+            "http_status": 0,
         }

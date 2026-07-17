@@ -137,6 +137,10 @@ function createCredsManager(type) {
                             tier_raw_id: item.tier_raw_id,
                             tier_raw_name: item.tier_raw_name,
                             tier_detected_at: item.tier_detected_at,
+                            health_status: item.health_status || 'healthy',
+                            quarantine_reason: item.quarantine_reason || null,
+                            probe_stage: item.probe_stage || 0,
+                            next_probe_at: item.next_probe_at || null,
                             enable_credit: !!item.enable_credit,
                             success_count: item.success_count || 0,
                             failure_count: item.failure_count || 0,
@@ -676,6 +680,17 @@ function createCredCard(credInfo, manager) {
         }
     } else {
         statusBadges += '<span class="status-badge" style="background-color: #28a745; color: white;">无错误</span>';
+    }
+
+    if (managerType !== 'antigravity') {
+        const health = credInfo.health_status || 'healthy';
+        const healthBadge = {
+            checking: ['风控检测中', '#f0ad4e'],
+            risk_quarantined: ['风控隔离', '#d9534f'],
+            manual_review: ['待人工复核', '#6f42c1'],
+            healthy: ['健康', '#28a745']
+        }[health] || [health, '#616161'];
+        statusBadges += `<span class="status-badge" style="background-color: ${healthBadge[1]}; color: white;" title="${escapeHtmlAttribute(credInfo.quarantine_reason || '')}">${healthBadge[0]}</span>`;
     }
 
     // Preview状态显示 (仅对geminicli模式显示)
@@ -3110,6 +3125,10 @@ function populateConfigForm() {
     document.getElementById('retry429Enabled').checked = Boolean(c.retry_429_enabled);
     setConfigField('retry429MaxRetries', c.retry_429_max_retries || 20);
     setConfigField('retry429Interval', c.retry_429_interval || 0.1);
+    const smart429Enabled = document.getElementById('smart429ProtectionEnabled');
+    if (smart429Enabled) smart429Enabled.checked = Boolean(c.smart_429_protection_enabled);
+    setConfigField('smart429MaxAttempts', c.smart_429_max_attempts || 3);
+    setConfigField('smart429RetryBaseInterval', c.smart_429_retry_base_interval || 0.5);
 
     document.getElementById('compatibilityModeEnabled').checked = Boolean(c.compatibility_mode_enabled);
     document.getElementById('returnThoughtsToFrontend').checked = Boolean(c.return_thoughts_to_frontend !== false);
@@ -3172,6 +3191,9 @@ async function saveConfig() {
             retry_429_enabled: getChecked('retry429Enabled'),
             retry_429_max_retries: getInt('retry429MaxRetries', 20),
             retry_429_interval: getFloat('retry429Interval', 0.1),
+            smart_429_protection_enabled: getChecked('smart429ProtectionEnabled'),
+            smart_429_max_attempts: getInt('smart429MaxAttempts', 3),
+            smart_429_retry_base_interval: getFloat('smart429RetryBaseInterval', 0.5),
             compatibility_mode_enabled: getChecked('compatibilityModeEnabled'),
             return_thoughts_to_frontend: getChecked('returnThoughtsToFrontend'),
             antigravity_stream2nostream: getChecked('antigravityStream2nostream'),

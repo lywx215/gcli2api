@@ -459,7 +459,12 @@ export MONGODB_URI="mongodb://localhost:27017/gcli2api?readPreference=secondaryP
 - `RETRY_429_ENABLED`: 启用 429 错误自动重试（默认：true）
 - `RETRY_429_MAX_RETRIES`: 429 错误最大重试次数（默认：3）
 - `RETRY_429_INTERVAL`: 429 错误重试间隔，秒（默认：1.0）
+- `SMART_429_PROTECTION_ENABLED`: 启动 429 分级保护（默认：false）
+- `SMART_429_MAX_ATTEMPTS`: 保护启动时单请求总尝试次数，包含首次调用（默认：3，范围：1-5）
+- `SMART_429_RETRY_BASE_INTERVAL`: 保护启动时退避基准秒数（默认：0.5，范围：0.1-5）
 - `ANTI_TRUNCATION_MAX_ATTEMPTS`: 抗截断最大重试次数（默认：3）
+
+> SMART 429 首版只支持 `WORKERS=1` 的单进程、单副本部署。外部多副本部署不受支持；`WORKERS != 1` 时保护会保持停止并报告 `multi_instance_unsupported`，但服务本身继续运行。
 
 **网络和代理配置**
 - `PROXY`: HTTP/HTTPS 代理地址（格式：`http://host:port`）

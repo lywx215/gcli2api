@@ -73,6 +73,13 @@ async def lifespan(app: FastAPI):
 
     # 启动保活服务（未配置URL时自动跳过，零开销）
     try:
+        from src.smart_429 import smart_429_service
+        await smart_429_service.reconfigure()
+        log.info(f"SMART 429 status: {smart_429_service.status()}")
+    except Exception as e:
+        log.error(f"SMART 429 initialization failed; protection remains stopped: {e}")
+
+    try:
         await keepalive_service.start()
     except Exception as e:
         log.error(f"保活服务启动失败: {e}")
@@ -123,6 +130,12 @@ async def lifespan(app: FastAPI):
         log.error(f"关闭保活服务时出错: {e}")
 
     # 首先关闭所有异步任务
+    try:
+        from src.smart_429 import smart_429_service
+        await smart_429_service.close()
+    except Exception as e:
+        log.error(f"Error closing SMART 429 service: {e}")
+
     try:
         await shutdown_all_tasks(timeout=10.0)
         log.info("所有异步任务已关闭")

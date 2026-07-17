@@ -61,7 +61,11 @@ async def debug_storage():
 async def get_system_status(token: str = Depends(verify_panel_token)):
     """获取系统状态（Redis 缓存状态），仅显示本服务器的内容"""
     import os
-    result = {"redis": {"enabled": False}}
+    from src.smart_429 import smart_429_service
+    result = {
+        "redis": {"enabled": False},
+        "smart_429": smart_429_service.status(),
+    }
 
     try:
         from src.storage_adapter import _storage_adapter
@@ -135,6 +139,9 @@ async def get_config(token: str = Depends(verify_panel_token)):
         current_config["retry_429_max_retries"] = await config.get_retry_429_max_retries()
         current_config["retry_429_enabled"] = await config.get_retry_429_enabled()
         current_config["retry_429_interval"] = await config.get_retry_429_interval()
+        current_config["smart_429_protection_enabled"] = await config.get_smart_429_protection_enabled()
+        current_config["smart_429_max_attempts"] = await config.get_smart_429_max_attempts()
+        current_config["smart_429_retry_base_interval"] = await config.get_smart_429_retry_base_interval()
         # 抗截断配置
         current_config["anti_truncation_max_attempts"] = await config.get_anti_truncation_max_attempts()
 
@@ -190,6 +197,22 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
     try:
 
         new_config = request.config
+
+        if "smart_429_protection_enabled" in new_config:
+            if not isinstance(new_config["smart_429_protection_enabled"], bool):
+                raise HTTPException(status_code=400, detail="SMART 429 protection switch must be boolean")
+        if "smart_429_max_attempts" in new_config:
+            value = new_config["smart_429_max_attempts"]
+            if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 5:
+                raise HTTPException(status_code=400, detail="SMART 429 attempts must be an integer from 1 to 5")
+        if "smart_429_retry_base_interval" in new_config:
+            try:
+                value = float(new_config["smart_429_retry_base_interval"])
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="SMART 429 retry interval must be numeric")
+            if not 0.1 <= value <= 5:
+                raise HTTPException(status_code=400, detail="SMART 429 retry interval must be from 0.1 to 5 seconds")
+            new_config["smart_429_retry_base_interval"] = value
 
         log.debug(f"收到的配置数据: {list(new_config.keys())}")
         log.debug(f"收到的password值: {new_config.get('password', 'NOT_FOUND')}")
@@ -296,6 +319,8 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
 
         # 重新加载配置缓存（关键！）
         await config.reload_config()
+        from src.smart_429 import smart_429_service
+        await smart_429_service.reconfigure()
 
         # 如果保活相关配置发生变化，立即重启保活服务
         keepalive_keys = {"keepalive_url", "keepalive_interval"}
@@ -317,6 +342,7 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
         response_data = {
             "message": "配置保存成功",
             "saved_config": {k: v for k, v in new_config.items() if k not in env_locked_keys},
+            "smart_429": smart_429_service.status(),
         }
 
         return JSONResponse(content=response_data)
@@ -614,4 +640,3 @@ async def _migrate_between_backends(source, target) -> dict:
              f"Config {result['config']['migrated']}/{result['config']['total']}")
 
     return result
-

@@ -25,7 +25,12 @@ from src.models import (
 from src.storage_adapter import get_storage_adapter
 from src.utils import verify_panel_token, GEMINICLI_USER_AGENT, ANTIGRAVITY_USER_AGENT
 from src.api.antigravity import fetch_quota_info
-from src.api.utils import check_should_auto_ban
+from src.api.utils import check_should_auto_ban, parse_and_log_cooldown
+from src.smart_429 import (
+    Upstream429Kind,
+    classify_upstream_429,
+    smart_429_service,
+)
 from src.google_oauth_api import (
     Credentials,
     enable_required_apis,
@@ -41,7 +46,12 @@ from src.subscription_tiers import (
     valid_tiers_for_mode,
 )
 from src.httpx_client import post_async
-from config import get_code_assist_endpoint, get_antigravity_api_url, get_oauth_proxy_url
+from config import (
+    get_code_assist_endpoint,
+    get_antigravity_api_url,
+    get_oauth_proxy_url,
+    is_smart_429_protection_enabled,
+)
 from datetime import datetime, timedelta, timezone
 from .utils import validate_mode
 
@@ -1424,12 +1434,18 @@ async def get_credential_quota(
         if mode == "antigravity":
             quota_info = await fetch_quota_info(access_token)
         else:
-            from src.api.geminicli import fetch_geminicli_quota_info
-            project_id = credential_data.get("project_id")
-            quota_info = await fetch_geminicli_quota_info(
-                access_token=access_token,
-                project_id=project_id,
-            )
+            if is_smart_429_protection_enabled():
+                health_result = await smart_429_service.verify_credential(
+                    filename, credential_data, source="quota_panel"
+                )
+                quota_info = health_result.get("quota", {})
+            else:
+                from src.api.geminicli import fetch_geminicli_quota_info
+                project_id = credential_data.get("project_id")
+                quota_info = await fetch_geminicli_quota_info(
+                    access_token=access_token,
+                    project_id=project_id,
+                )
 
         if quota_info.get("success"):
             # 自动同步 quota=0 的模型到 model_cooldowns
@@ -1475,6 +1491,14 @@ async def get_credential_quota(
                 "models": quota_info.get("models", {})
             })
         else:
+            if mode == "geminicli" and is_smart_429_protection_enabled():
+                return JSONResponse(content={
+                    "success": False,
+                    "filename": filename,
+                    "mode": mode,
+                    "health": health_result,
+                    "error": quota_info.get("error", "health_check_failed"),
+                })
             return JSONResponse(
                 status_code=400,
                 content={
@@ -1490,6 +1514,41 @@ async def get_credential_quota(
     except Exception as e:
         log.error(f"获取凭证额度失败 {filename}: {e}")
         raise HTTPException(status_code=500, detail=f"获取额度失败: {str(e)}")
+
+
+@router.post("/risk-check/{filename}")
+async def immediately_recheck_risk_control(
+    filename: str,
+    token: str = Depends(verify_panel_token),
+):
+    """Synchronously recheck one GeminiCLI credential through the quota coordinator."""
+    if not is_smart_429_protection_enabled():
+        raise HTTPException(status_code=409, detail="SMART 429 protection is stopped")
+    filename = os.path.basename(filename)
+    storage_adapter = await get_storage_adapter()
+    credential_data = await storage_adapter.get_credential(filename, mode="geminicli")
+    if not credential_data:
+        raise HTTPException(status_code=404, detail="credential not found")
+
+    # Keep immediate rechecks consistent with the quota panel path.  A stored
+    # access token may already be expired even though its refresh token is
+    # still valid; probing it directly would turn a recoverable token refresh
+    # into an indeterminate 401 health result.
+    from src.google_oauth_api import Credentials
+
+    creds = Credentials.from_dict(credential_data)
+    await creds.refresh_if_needed()
+    refreshed_data = creds.to_dict()
+    if refreshed_data != credential_data:
+        await storage_adapter.store_credential(
+            filename, refreshed_data, mode="geminicli"
+        )
+        credential_data = refreshed_data
+
+    result = await smart_429_service.verify_credential(
+        filename, credential_data, source="immediate_recheck"
+    )
+    return JSONResponse(content={"filename": filename, "health": result})
 
 
 # ---------------------------------------------------------------------------
@@ -1540,12 +1599,21 @@ async def _fetch_quota_for_credential(filename: str, mode: str) -> dict:
     if mode == "antigravity":
         info = await fetch_quota_info(access_token)
     else:
-        from src.api.geminicli import fetch_geminicli_quota_info
-        project_id = credential_data.get("project_id")
-        info = await fetch_geminicli_quota_info(
-            access_token=access_token,
-            project_id=project_id,
-        )
+        if is_smart_429_protection_enabled():
+            health_result = await smart_429_service.verify_credential(
+                filename, credential_data, source="batch_refresh"
+            )
+            info = health_result.get("quota", {})
+            info["health"] = {
+                key: value for key, value in health_result.items() if key != "quota"
+            }
+        else:
+            from src.api.geminicli import fetch_geminicli_quota_info
+            project_id = credential_data.get("project_id")
+            info = await fetch_geminicli_quota_info(
+                access_token=access_token,
+                project_id=project_id,
+            )
     return info
 
 
@@ -1580,7 +1648,9 @@ async def batch_refresh_cooldown(
         backend = getattr(storage_adapter, "_backend", None)
         can_set_cooldown = hasattr(backend, "set_model_cooldown")
 
-        semaphore = asyncio.Semaphore(5)
+        semaphore = asyncio.Semaphore(
+            2 if mode == "geminicli" and is_smart_429_protection_enabled() else 5
+        )
 
         async def run_one(filename: str) -> dict:
             async with semaphore:
@@ -2014,6 +2084,55 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
 
         # 返回实际的状态码和详细信息
         status_code = response.status_code
+
+        if (
+            status_code == 429
+            and mode == "geminicli"
+            and is_smart_429_protection_enabled()
+        ):
+            error_text = response.text if hasattr(response, "text") else ""
+            try:
+                error_payload = response.json()
+            except Exception:
+                try:
+                    error_payload = json.loads(error_text)
+                except Exception:
+                    error_payload = {}
+            classification = classify_upstream_429(error_payload, mode="geminicli")
+            if classification.kind == Upstream429Kind.MODEL_CAPACITY_EXHAUSTED:
+                return JSONResponse(content={
+                    "success": True,
+                    "status_code": 429,
+                    "classification": classification.kind.value,
+                    "message": "远端容量不足，凭证未判定失效",
+                    "filename": filename,
+                })
+            if classification.kind == Upstream429Kind.QUOTA_EXHAUSTED:
+                cooldown_until = await parse_and_log_cooldown(error_text, mode="geminicli")
+                if cooldown_until and hasattr(storage_adapter._backend, "set_model_cooldown"):
+                    await storage_adapter._backend.set_model_cooldown(
+                        filename, test_model, cooldown_until, mode=mode
+                    )
+                return JSONResponse(content={
+                    "success": True,
+                    "status_code": 429,
+                    "classification": classification.kind.value,
+                    "message": "凭证正常，当前模型额度已耗尽",
+                    "filename": filename,
+                })
+
+            await smart_429_service.mark_checking(filename)
+            health_result = await smart_429_service.verify_credential(
+                filename, credential_data, source="message_test"
+            )
+            return JSONResponse(content={
+                "success": health_result.get("status") in ("normal", "quota_exhausted"),
+                "status_code": 429,
+                "classification": classification.kind.value,
+                "health": health_result,
+                "message": "已完成额度风控检查",
+                "filename": filename,
+            })
 
         if status_code == 200 or status_code == 429:
             log.info(f"凭证测试成功: {filename} (mode={mode}, model={test_model}, status={status_code})")

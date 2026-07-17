@@ -38,6 +38,13 @@ class MongoDBManager:
         "success_count",
         "failure_count",
         "remark",
+        "health_status",
+        "quarantine_reason",
+        "probe_stage",
+        "next_probe_at",
+        "last_health_check_at",
+        "health_check_started_at",
+        "health_state_version",
     }
 
     @staticmethod
@@ -406,12 +413,16 @@ class MongoDBManager:
         model_name: Optional[str],
         required_tiers: Optional[tuple[str, ...]] = None,
         preview_only: bool = False,
+        excluded_credentials: Optional[set[str]] = None,
     ) -> Optional[tuple]:
         """
         Redis 快速路径：随机取候选凭证，跳过冷却中的，返回 (filename, credential_data)。
         失败或池为空时返回 None，由调用方降级到 MongoDB。
         """
         try:
+            from config import is_smart_429_protection_enabled
+            smart_enabled = is_smart_429_protection_enabled()
+            excluded = set(excluded_credentials or ())
             # 受限模型先从允许的 Tier 分桶取并集，再叠加 preview 条件。
             if required_tiers:
                 tier_members = set()
@@ -447,10 +458,18 @@ class MongoDBManager:
                 if not candidates:
                     return None
 
+            candidates = [candidate for candidate in candidates if candidate not in excluded]
+            if not candidates:
+                return None
+
             # 过滤冷却中的凭证
             if model_name:
                 escaped = self._escape_model_name(model_name)
                 for filename in candidates:
+                    if smart_enabled and mode == "geminicli":
+                        state = await self.get_credential_state(filename, mode)
+                        if state.get("health_status", "healthy") != "healthy":
+                            continue
                     cd_key = self._rk_cd(mode, filename, escaped)
                     if not await self._redis.exists(cd_key):
                         credential_data = await self.get_credential(filename, mode)
@@ -464,7 +483,17 @@ class MongoDBManager:
                 log.debug(f"[Redis MISS] mode={mode} model={model_name}: all {len(candidates)} candidates in cooldown, fallback to MongoDB")
                 return None
             else:
-                filename = candidates[0]
+                filename = None
+                for item in candidates:
+                    if mode != "geminicli" or not smart_enabled:
+                        filename = item
+                        break
+                    state = await self.get_credential_state(item, mode)
+                    if state.get("health_status", "healthy") == "healthy":
+                        filename = item
+                        break
+                if filename is None:
+                    return None
                 credential_data = await self.get_credential(filename, mode)
                 if mode == "antigravity":
                     state = await self.get_credential_state(filename, mode)
@@ -506,7 +535,10 @@ class MongoDBManager:
     # ============ SQL 方法 ============
 
     async def get_next_available_credential(
-        self, mode: str = "geminicli", model_name: Optional[str] = None
+        self,
+        mode: str = "geminicli",
+        model_name: Optional[str] = None,
+        excluded_credentials: Optional[set[str]] = None,
     ) -> Optional[tuple[str, Dict[str, Any]]]:
         """
         随机获取一个可用凭证（负载均衡）
@@ -524,6 +556,11 @@ class MongoDBManager:
         """
         self._ensure_initialized()
 
+        from config import is_smart_429_protection_enabled
+        smart_enabled = is_smart_429_protection_enabled()
+        health_enabled = mode == "geminicli" and smart_enabled
+        excluded = set(excluded_credentials or ()) if smart_enabled else set()
+
         # Redis 快速路径：根据模型名派生过滤标志，直接在 Redis 分桶中筛选
         required_tiers = (
             required_tiers_for_geminicli_model(model_name)
@@ -538,6 +575,7 @@ class MongoDBManager:
                 model_name,
                 required_tiers=required_tiers,
                 preview_only=preview_only,
+                excluded_credentials=excluded,
             )
             if result is not None:
                 return result
@@ -551,6 +589,11 @@ class MongoDBManager:
 
             # 构建普通查询（避免 $sample 聚合导致全集合扫描）
             match_query: Dict[str, Any] = {"disabled": False}
+
+            if health_enabled:
+                match_query["health_status"] = {"$in": ["healthy", None]}
+                if excluded:
+                    match_query["filename"] = {"$nin": list(excluded)}
 
             if required_tiers:
                 match_query["tier"] = {"$in": list(required_tiers)}
@@ -615,6 +658,20 @@ class MongoDBManager:
         except Exception as e:
             log.error(f"Error getting available credentials list (mode={mode}): {e}")
             return []
+
+    async def check_smart_429_capability(self) -> tuple[bool, Optional[str]]:
+        """MongoDB is schemaless; verify the health fields can be projected and updated."""
+        try:
+            self._ensure_initialized()
+            collection = self._db["credentials"]
+            await collection.find_one({}, {"health_status": 1, "health_state_version": 1})
+            await collection.update_many(
+                {"_id": {"$exists": False}},
+                {"$set": {"health_state_version": 0}},
+            )
+            return True, None
+        except Exception as exc:
+            return False, f"health_fields_unavailable:{exc}"
 
     # ============ StorageBackend 协议方法 ============
 
@@ -684,6 +741,13 @@ class MongoDBManager:
                             "tier_raw_id": None,
                             "tier_raw_name": None,
                             "tier_detected_at": None,
+                            "health_status": "healthy",
+                            "quarantine_reason": None,
+                            "probe_stage": 0,
+                            "next_probe_at": None,
+                            "last_health_check_at": None,
+                            "health_check_started_at": None,
+                            "health_state_version": 0,
                         })
 
                     await collection.insert_one(new_credential)
@@ -972,6 +1036,16 @@ class MongoDBManager:
                     "failure_count": doc.get("failure_count", 0),
                     "remark": doc.get("remark", ""),
                 }
+                if mode == "geminicli":
+                    state.update({
+                        "health_status": doc.get("health_status") or "healthy",
+                        "quarantine_reason": doc.get("quarantine_reason"),
+                        "probe_stage": doc.get("probe_stage", 0),
+                        "next_probe_at": doc.get("next_probe_at"),
+                        "last_health_check_at": doc.get("last_health_check_at"),
+                        "health_check_started_at": doc.get("health_check_started_at"),
+                        "health_state_version": doc.get("health_state_version", 0),
+                    })
                 if mode == "antigravity":
                     state["enable_credit"] = doc.get("enable_credit", False)
                 return state
@@ -992,6 +1066,16 @@ class MongoDBManager:
                 "failure_count": 0,
                 "remark": "",
             }
+            if mode == "geminicli":
+                default_state.update({
+                    "health_status": "healthy",
+                    "quarantine_reason": None,
+                    "probe_stage": 0,
+                    "next_probe_at": None,
+                    "last_health_check_at": None,
+                    "health_check_started_at": None,
+                    "health_state_version": 0,
+                })
             if mode == "antigravity":
                 default_state["enable_credit"] = False
             return default_state
@@ -1025,6 +1109,13 @@ class MongoDBManager:
                 "success_count": 1,
                 "failure_count": 1,
                 "remark": 1,
+                "health_status": 1,
+                "quarantine_reason": 1,
+                "probe_stage": 1,
+                "next_probe_at": 1,
+                "last_health_check_at": 1,
+                "health_check_started_at": 1,
+                "health_state_version": 1,
                 "_id": 0
             }
 
@@ -1059,6 +1150,16 @@ class MongoDBManager:
                     "failure_count": doc.get("failure_count", 0),
                     "remark": doc.get("remark", ""),
                 }
+                if mode == "geminicli":
+                    state.update({
+                        "health_status": doc.get("health_status") or "healthy",
+                        "quarantine_reason": doc.get("quarantine_reason"),
+                        "probe_stage": doc.get("probe_stage", 0),
+                        "next_probe_at": doc.get("next_probe_at"),
+                        "last_health_check_at": doc.get("last_health_check_at"),
+                        "health_check_started_at": doc.get("health_check_started_at"),
+                        "health_state_version": doc.get("health_state_version", 0),
+                    })
                 if mode == "antigravity":
                     state["enable_credit"] = doc.get("enable_credit", False)
                 states[filename] = state
@@ -1168,6 +1269,13 @@ class MongoDBManager:
                 "success_count": 1,
                 "failure_count": 1,
                 "remark": 1,
+                "health_status": 1,
+                "quarantine_reason": 1,
+                "probe_stage": 1,
+                "next_probe_at": 1,
+                "last_health_check_at": 1,
+                "health_check_started_at": 1,
+                "health_state_version": 1,
                 "_id": 0
             }
 
@@ -1204,6 +1312,17 @@ class MongoDBManager:
                     "failure_count": doc.get("failure_count", 0),
                     "remark": doc.get("remark", ""),
                 }
+
+                if mode == "geminicli":
+                    summary.update({
+                        "health_status": doc.get("health_status") or "healthy",
+                        "quarantine_reason": doc.get("quarantine_reason"),
+                        "probe_stage": doc.get("probe_stage", 0),
+                        "next_probe_at": doc.get("next_probe_at"),
+                        "last_health_check_at": doc.get("last_health_check_at"),
+                        "health_check_started_at": doc.get("health_check_started_at"),
+                        "health_state_version": doc.get("health_state_version", 0),
+                    })
 
                 if mode == "antigravity":
                     summary["enable_credit"] = bool(doc.get("enable_credit", False))

@@ -19,6 +19,12 @@ _debug_mode_cache: bool = False
 # 轮巡模式同步缓存（热路径使用）
 _routing_mode_cache: str = "normal"
 
+# SMART 429 hot-path caches. Fail-safe defaults keep the feature disabled.
+_smart_429_enabled_cache: bool = False
+_smart_429_max_attempts_cache: int = 3
+_smart_429_retry_base_interval_cache: float = 0.5
+_smart_429_runtime_blocked_reason: Optional[str] = None
+
 # Client Configuration
 
 # 需要自动封禁的错误码 (默认值，可通过环境变量或配置覆盖)
@@ -41,6 +47,9 @@ ENV_MAPPINGS = {
     "RETRY_429_MAX_RETRIES": "retry_429_max_retries",
     "RETRY_429_ENABLED": "retry_429_enabled",
     "RETRY_429_INTERVAL": "retry_429_interval",
+    "SMART_429_PROTECTION_ENABLED": "smart_429_protection_enabled",
+    "SMART_429_MAX_ATTEMPTS": "smart_429_max_attempts",
+    "SMART_429_RETRY_BASE_INTERVAL": "smart_429_retry_base_interval",
     "ANTI_TRUNCATION_MAX_ATTEMPTS": "anti_truncation_max_attempts",
     "COMPATIBILITY_MODE": "compatibility_mode_enabled",
     "RETURN_THOUGHTS_TO_FRONTEND": "return_thoughts_to_frontend",
@@ -63,6 +72,7 @@ ENV_MAPPINGS = {
 async def init_config():
     """初始化配置缓存（启动时调用一次）"""
     global _config_cache, _config_initialized, _debug_mode_cache, _routing_mode_cache
+    global _smart_429_enabled_cache, _smart_429_max_attempts_cache, _smart_429_retry_base_interval_cache
 
     if _config_initialized:
         return
@@ -80,11 +90,15 @@ async def init_config():
     # 刷新同步缓存
     _debug_mode_cache = await get_debug_mode()
     _routing_mode_cache = await get_routing_mode()
+    _smart_429_enabled_cache = await get_smart_429_protection_enabled()
+    _smart_429_max_attempts_cache = await get_smart_429_max_attempts()
+    _smart_429_retry_base_interval_cache = await get_smart_429_retry_base_interval()
 
 
 async def reload_config():
     """重新加载配置（修改配置后调用）"""
     global _config_cache, _config_initialized, _debug_mode_cache, _routing_mode_cache
+    global _smart_429_enabled_cache, _smart_429_max_attempts_cache, _smart_429_retry_base_interval_cache
 
     try:
         from src.storage_adapter import get_storage_adapter
@@ -103,6 +117,9 @@ async def reload_config():
     # 刷新同步缓存
     _debug_mode_cache = await get_debug_mode()
     _routing_mode_cache = await get_routing_mode()
+    _smart_429_enabled_cache = await get_smart_429_protection_enabled()
+    _smart_429_max_attempts_cache = await get_smart_429_max_attempts()
+    _smart_429_retry_base_interval_cache = await get_smart_429_retry_base_interval()
 
 
 def _get_cached_config(key: str, default: Any = None) -> Any:
@@ -196,6 +213,79 @@ async def get_retry_429_interval() -> float:
             pass
 
     return float(await get_config_value("retry_429_interval", 1))
+
+
+async def get_smart_429_protection_enabled() -> bool:
+    """Return the requested SMART 429 state; invalid values fail closed."""
+    raw = os.getenv("SMART_429_PROTECTION_ENABLED")
+    if raw is None:
+        raw = await get_config_value("smart_429_protection_enabled", False)
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return raw == 1
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized in ("true", "1", "yes", "on"):
+            return True
+        if normalized in ("false", "0", "no", "off", ""):
+            return False
+    return False
+
+
+async def get_smart_429_max_attempts() -> int:
+    raw = os.getenv("SMART_429_MAX_ATTEMPTS")
+    if raw is None:
+        raw = await get_config_value("smart_429_max_attempts", 3)
+    try:
+        return max(1, min(5, int(raw)))
+    except (TypeError, ValueError):
+        return 3
+
+
+async def get_smart_429_retry_base_interval() -> float:
+    raw = os.getenv("SMART_429_RETRY_BASE_INTERVAL")
+    if raw is None:
+        raw = await get_config_value("smart_429_retry_base_interval", 0.5)
+    try:
+        return max(0.1, min(5.0, float(raw)))
+    except (TypeError, ValueError):
+        return 0.5
+
+
+def is_smart_429_protection_enabled() -> bool:
+    """Synchronous hot-path check. Multi-worker mode is unsupported in v1."""
+    try:
+        workers = int(os.getenv("WORKERS", "1"))
+    except ValueError:
+        workers = 1
+    return _smart_429_enabled_cache and workers == 1 and _smart_429_runtime_blocked_reason is None
+
+
+def set_smart_429_runtime_blocked_reason(reason: Optional[str]) -> None:
+    global _smart_429_runtime_blocked_reason
+    _smart_429_runtime_blocked_reason = reason
+
+
+def get_smart_429_config_sync() -> dict[str, Any]:
+    return {
+        "enabled": is_smart_429_protection_enabled(),
+        "requested_enabled": _smart_429_enabled_cache,
+        "blocked_reason": (
+            "multi_instance_unsupported"
+            if _smart_429_enabled_cache and workers_not_supported()
+            else _smart_429_runtime_blocked_reason
+        ),
+        "max_attempts": _smart_429_max_attempts_cache,
+        "retry_base_interval": _smart_429_retry_base_interval_cache,
+    }
+
+
+def workers_not_supported() -> bool:
+    try:
+        return int(os.getenv("WORKERS", "1")) != 1
+    except ValueError:
+        return False
 
 
 async def get_anti_truncation_max_attempts() -> int:
