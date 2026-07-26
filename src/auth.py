@@ -56,6 +56,8 @@ async def _detect_geminicli_subscription(
         user_agent=get_geminicli_user_agent(""),
         api_base_url=await get_code_assist_endpoint(),
         project_id=project_id,
+        antigravity_api_base_url=await get_antigravity_api_url(),
+        antigravity_user_agent=ANTIGRAVITY_USER_AGENT,
     )
 
 

@@ -19,7 +19,11 @@ from config import (
 from log import log
 
 from src.httpx_client import get_async, post_async
-from src.subscription_tiers import GeminiCliSubscriptionInfo, normalize_geminicli_subscription
+from src.subscription_tiers import (
+    GeminiCliSubscriptionInfo,
+    TIER_UNKNOWN,
+    normalize_geminicli_subscription,
+)
 
 
 class TokenError(Exception):
@@ -538,11 +542,81 @@ def _safe_tier_log_value(value: Optional[str]) -> str:
     return " ".join(str(value).split())[:128]
 
 
+async def _fetch_antigravity_paid_tier_fallback(
+    access_token: str,
+    user_agent: str,
+    api_base_url: str,
+    project_id: Optional[str],
+) -> Optional[GeminiCliSubscriptionInfo]:
+    """Read an explicit Antigravity paidTier without guessing from currentTier."""
+    request_url = f"{api_base_url.rstrip('/')}/v1internal:loadCodeAssist"
+    try:
+        response = await post_async(
+            request_url,
+            json={"metadata": {"ideType": "ANTIGRAVITY"}},
+            headers={
+                "User-Agent": user_agent,
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+                "Accept-Encoding": "gzip",
+            },
+            timeout=30.0,
+        )
+        if response.status_code != 200:
+            log.warning(
+                f"[GeminiCLI tier fallback] Antigravity loadCodeAssist unavailable: "
+                f"HTTP {response.status_code}"
+            )
+            return None
+
+        data = response.json()
+        if not isinstance(data, dict):
+            log.warning(
+                "[GeminiCLI tier fallback] Antigravity loadCodeAssist returned "
+                "a non-object response"
+            )
+            return None
+
+        paid_tier = data.get("paidTier")
+        if not isinstance(paid_tier, dict) or not (
+            paid_tier.get("id") or paid_tier.get("name")
+        ):
+            log.info("[GeminiCLI tier fallback] Antigravity paidTier is absent")
+            return None
+
+        fallback_payload: Dict[str, Any] = {"paidTier": paid_tier}
+        if project_id:
+            fallback_payload["cloudaicompanionProject"] = project_id
+        info = normalize_geminicli_subscription(fallback_payload, int(time.time()))
+        if info.status != "detected" or info.tier == TIER_UNKNOWN:
+            log.info(
+                f"[GeminiCLI tier fallback] Antigravity paidTier is unrecognized: "
+                f"raw_id={_safe_tier_log_value(info.raw_tier_id)}, "
+                f"raw_name={_safe_tier_log_value(info.raw_tier_name)}"
+            )
+            return None
+
+        log.info(
+            f"[GeminiCLI tier fallback] detected tier={info.tier}, "
+            f"raw_id={_safe_tier_log_value(info.raw_tier_id)}, "
+            f"raw_name={_safe_tier_log_value(info.raw_tier_name)}"
+        )
+        return info
+    except Exception as exc:
+        log.warning(
+            f"[GeminiCLI tier fallback] Antigravity loadCodeAssist failed: "
+            f"error_type={type(exc).__name__}"
+        )
+        return None
+
+
 async def fetch_geminicli_subscription_info(
     access_token: str,
     user_agent: str,
     api_base_url: str,
     project_id: Optional[str] = None,
+    antigravity_api_base_url: Optional[str] = None,
+    antigravity_user_agent: Optional[str] = None,
 ) -> GeminiCliSubscriptionInfo:
     """Read Gemini CLI subscription information without onboarding the user."""
     headers = {
@@ -590,6 +664,19 @@ async def fetch_geminicli_subscription_info(
                 detected_at=info.detected_at,
                 status=info.status,
             )
+        if (
+            info.status == "unrecognized"
+            and info.tier == TIER_UNKNOWN
+            and antigravity_api_base_url
+        ):
+            fallback_info = await _fetch_antigravity_paid_tier_fallback(
+                access_token=access_token,
+                user_agent=antigravity_user_agent or user_agent,
+                api_base_url=antigravity_api_base_url,
+                project_id=info.project_id or project_id,
+            )
+            if fallback_info is not None:
+                info = fallback_info
         log.info(
             f"[GeminiCLI tier] status={info.status}, tier={info.tier}, "
             f"raw_id={_safe_tier_log_value(info.raw_tier_id)}, "
@@ -921,5 +1008,4 @@ async def _get_onboard_tier(
     else:
         log.error(f"[_get_onboard_tier] Failed to fetch tier info: HTTP {response.status_code}")
         return None
-
 

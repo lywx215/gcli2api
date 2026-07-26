@@ -43,6 +43,7 @@ class FakeCredentialsFactory:
 
 async def test_uploaded_credential_detects_and_persists_tier(monkeypatch):
     storage = FakeStorageAdapter()
+    captured_fetch_kwargs = {}
 
     async def fake_get_storage_adapter():
         return storage
@@ -50,7 +51,11 @@ async def test_uploaded_credential_detects_and_persists_tier(monkeypatch):
     async def fake_endpoint():
         return "https://example.test"
 
+    async def fake_antigravity_endpoint():
+        return "https://antigravity.test"
+
     async def fake_fetch(**kwargs):
+        captured_fetch_kwargs.update(kwargs)
         return GeminiCliSubscriptionInfo(
             project_id="detected-project",
             tier=TIER_CODE_ASSIST_ENTERPRISE,
@@ -62,6 +67,9 @@ async def test_uploaded_credential_detects_and_persists_tier(monkeypatch):
 
     monkeypatch.setattr(creds_panel, "get_storage_adapter", fake_get_storage_adapter)
     monkeypatch.setattr(creds_panel, "get_code_assist_endpoint", fake_endpoint)
+    monkeypatch.setattr(
+        creds_panel, "get_antigravity_api_url", fake_antigravity_endpoint
+    )
     monkeypatch.setattr(creds_panel, "fetch_geminicli_subscription_info", fake_fetch)
     monkeypatch.setattr(creds_panel, "Credentials", FakeCredentialsFactory)
 
@@ -71,6 +79,8 @@ async def test_uploaded_credential_detects_and_persists_tier(monkeypatch):
     )
 
     assert info.tier == TIER_CODE_ASSIST_ENTERPRISE
+    assert captured_fetch_kwargs["antigravity_api_base_url"] == "https://antigravity.test"
+    assert captured_fetch_kwargs["antigravity_user_agent"] == creds_panel.ANTIGRAVITY_USER_AGENT
     assert credential_data["project_id"] == "detected-project"
     assert storage.store_calls[0][2] == "geminicli"
     assert storage.state_calls == [
@@ -102,11 +112,17 @@ async def test_uploaded_credential_unavailable_does_not_overwrite_state(monkeypa
     async def fake_endpoint():
         return "https://example.test"
 
+    async def fake_antigravity_endpoint():
+        return "https://antigravity.test"
+
     async def fake_fetch(**kwargs):
         return GeminiCliSubscriptionInfo.unavailable("existing-project")
 
     monkeypatch.setattr(creds_panel, "get_storage_adapter", fake_get_storage_adapter)
     monkeypatch.setattr(creds_panel, "get_code_assist_endpoint", fake_endpoint)
+    monkeypatch.setattr(
+        creds_panel, "get_antigravity_api_url", fake_antigravity_endpoint
+    )
     monkeypatch.setattr(creds_panel, "fetch_geminicli_subscription_info", fake_fetch)
     monkeypatch.setattr(creds_panel, "Credentials", FakeCredentialsFactory)
 

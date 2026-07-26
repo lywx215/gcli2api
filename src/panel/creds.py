@@ -186,6 +186,8 @@ async def _detect_uploaded_geminicli_subscription(
         user_agent=GEMINICLI_USER_AGENT,
         api_base_url=await get_code_assist_endpoint(),
         project_id=project_id,
+        antigravity_api_base_url=await get_antigravity_api_url(),
+        antigravity_user_agent=ANTIGRAVITY_USER_AGENT,
     )
 
     credential_changed = token_refreshed
@@ -750,6 +752,8 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
             user_agent=GEMINICLI_USER_AGENT,
             api_base_url=await get_code_assist_endpoint(),
             project_id=project_id,
+            antigravity_api_base_url=await get_antigravity_api_url(),
+            antigravity_user_agent=ANTIGRAVITY_USER_AGENT,
         )
         project_id = subscription_info.project_id or project_id
         tier_detection_status = subscription_info.status
@@ -2589,6 +2593,8 @@ async def _add_credential_by_refresh_token(
             user_agent=GEMINICLI_USER_AGENT,
             api_base_url=await get_code_assist_endpoint(),
             project_id=pid,
+            antigravity_api_base_url=await get_antigravity_api_url(),
+            antigravity_user_agent=ANTIGRAVITY_USER_AGENT,
         )
         pid = subscription_info.project_id or pid
         subscription_tier = subscription_info.tier
