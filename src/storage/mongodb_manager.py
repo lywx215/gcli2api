@@ -559,7 +559,7 @@ class MongoDBManager:
         from config import is_smart_429_protection_enabled
         smart_enabled = is_smart_429_protection_enabled()
         health_enabled = mode == "geminicli" and smart_enabled
-        excluded = set(excluded_credentials or ()) if smart_enabled else set()
+        excluded = set(excluded_credentials or ())
 
         # Redis 快速路径：根据模型名派生过滤标志，直接在 Redis 分桶中筛选
         required_tiers = (

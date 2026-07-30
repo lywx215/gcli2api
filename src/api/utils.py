@@ -178,8 +178,6 @@ async def handle_error_with_retry(
                 f"[{mode.upper()} RETRY] Retrying with next credential after auto-ban "
                 f"(status {status_code}, attempt {attempt + 1}/{max_retries})"
             )
-            if not smart_enabled:
-                await asyncio.sleep(retry_interval)
             return True
         return False
 
@@ -190,8 +188,6 @@ async def handle_error_with_retry(
             f"[{mode.upper()} RETRY] {status_code} error encountered, retrying "
             f"(attempt {attempt + 1}/{max_retries})"
         )
-        if not smart_enabled:
-            await asyncio.sleep(retry_interval)
         return True
 
     # 其他错误不进行重试

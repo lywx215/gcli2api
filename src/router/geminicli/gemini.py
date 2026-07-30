@@ -34,23 +34,17 @@ from src.utils import (
 from src.converter.fake_stream import (
     parse_response_for_fake_stream,
     build_gemini_fake_stream_chunks,
-    create_gemini_heartbeat_chunk,
 )
 
 # 本地模块 - 基础路由工具
 from src.router.hi_check import is_health_check_request, create_health_check_response
 from src.router.stream_passthrough import (
     build_streaming_response_or_error,
-    prepend_async_item,
-    read_first_async_item,
 )
+from src.streaming_latency import StreamFailure
 
 # 本地模块 - 数据模型
 from src.models import GeminiRequest, model_to_dict
-
-# 本地模块 - 任务管理
-from src.task_manager import create_managed_task
-
 
 # ==================== 路由器初始化 ====================
 
@@ -269,27 +263,13 @@ async def stream_generate_content(
         # 首先对payload应用反截断指令
         anti_truncation_payload = apply_anti_truncation(api_request)
 
-        first_attempt_stream = stream_request(body=anti_truncation_payload, native=False)
-        try:
-            first_chunk = await read_first_async_item(first_attempt_stream)
-        except StopAsyncIteration:
-            return
-
-        if isinstance(first_chunk, Response):
-            yield first_chunk
-            return
-
-        first_attempt_pending = True
-
         async def stream_request_wrapper(payload):
-            nonlocal first_attempt_pending
-
-            if first_attempt_pending:
-                first_attempt_pending = False
-                stream_gen = prepend_async_item(first_chunk, first_attempt_stream)
-            else:
-                stream_gen = stream_request(body=payload, native=False)
-            return StreamingResponse(stream_gen, media_type="text/event-stream")
+            async def typed_stream():
+                async for chunk in stream_request(body=payload, native=False):
+                    if isinstance(chunk, Response):
+                        raise StreamFailure.from_response(chunk, stage="upstream_status")
+                    yield chunk
+            return StreamingResponse(typed_stream(), media_type="text/event-stream")
 
         # 创建反截断处理器
         processor = AntiTruncationStreamProcessor(
@@ -355,30 +335,12 @@ async def stream_generate_content(
         # 所有流式请求都使用非 native 模式（SSE格式）并展开 response 包装
         log.debug(f"[GEMINICLI] 使用非native模式，将展开response包装")
         stream_gen = stream_request(body=api_request, native=False)
-        try:
-            first_chunk = await read_first_async_item(stream_gen)
-        except StopAsyncIteration:
-            return
-
-        if isinstance(first_chunk, Response):
-            yield first_chunk
-            return
 
         # 展开 response 包装
-        async for chunk in prepend_async_item(first_chunk, stream_gen):
+        async for chunk in stream_gen:
             # 检查是否是Response对象（错误情况）
             if isinstance(chunk, Response):
-                # 将Response转换为SSE格式的错误消息
-                try:
-                    error_content = chunk.body if isinstance(chunk.body, bytes) else (chunk.body or b'').encode('utf-8')
-                    error_json = json.loads(error_content.decode('utf-8'))
-                except Exception:
-                    error_json = {"error": {"code": chunk.status_code, "message": "upstream error", "status": "ERROR"}}
-                log.error(f"[GEMINICLI STREAM] 返回错误给客户端: status={chunk.status_code}, error={str(error_json)[:200]}")
-                # 以SSE格式返回错误，并以[DONE]结束
-                yield f"data: {json.dumps(error_json)}\n\n".encode('utf-8')
-                yield b"data: [DONE]\n\n"
-                return
+                raise StreamFailure.from_response(chunk, stage="upstream_status")
 
             # 处理SSE格式的chunk
             if isinstance(chunk, (str, bytes)):
@@ -417,12 +379,18 @@ async def stream_generate_content(
 
     # ========== 根据模式选择生成器 ==========
     if use_fake_streaming:
-        return await build_streaming_response_or_error(fake_stream_generator())
+        return await build_streaming_response_or_error(
+            fake_stream_generator(), model=public_model, protocol="gemini"
+        )
     elif use_anti_truncation:
         log.info("启用流式抗截断功能")
-        return await build_streaming_response_or_error(anti_truncation_generator())
+        return await build_streaming_response_or_error(
+            anti_truncation_generator(), model=public_model, protocol="gemini"
+        )
     else:
-        return await build_streaming_response_or_error(normal_stream_generator())
+        return await build_streaming_response_or_error(
+            normal_stream_generator(), model=public_model, protocol="gemini"
+        )
 
 @router.post("/v1beta/models/{model:path}:countTokens")
 @router.post("/v1/models/{model:path}:countTokens")

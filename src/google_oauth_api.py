@@ -19,6 +19,7 @@ from config import (
 from log import log
 
 from src.httpx_client import get_async, post_async
+from src.streaming_latency import StreamLatencyConfig
 from src.subscription_tiers import (
     GeminiCliSubscriptionInfo,
     TIER_UNKNOWN,
@@ -94,6 +95,7 @@ class Credentials:
                 token_url,
                 data=data,
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=StreamLatencyConfig.from_env().oauth_refresh_timeout,
             )
             response.raise_for_status()
 
@@ -120,6 +122,12 @@ class Credentials:
             status_code = None
             if hasattr(e, 'response') and hasattr(e.response, 'status_code'):
                 status_code = e.response.status_code
+                try:
+                    response_detail = e.response.text[:500]
+                except Exception:
+                    response_detail = ""
+                if response_detail:
+                    error_msg = f"{error_msg}; body={response_detail}"
                 error_msg = f"Token刷新失败 (HTTP {status_code}): {error_msg}"
             else:
                 error_msg = f"Token刷新失败: {error_msg}"
@@ -1008,4 +1016,3 @@ async def _get_onboard_tier(
     else:
         log.error(f"[_get_onboard_tier] Failed to fetch tier info: HTTP {response.status_code}")
         return None
-

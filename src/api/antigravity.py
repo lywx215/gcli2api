@@ -471,8 +471,7 @@ async def stream_request(
                             smart_error_recorded = True
 
                         # 预热下一个凭证
-                        if is_smart_429_protection_enabled():
-                            excluded_credentials.add(current_file)
+                        excluded_credentials.add(current_file)
                         if next_cred_task is None and attempt < max_retries:
                             next_cred_task = asyncio.create_task(
                                 credential_manager.get_valid_credential(
@@ -576,13 +575,15 @@ async def stream_request(
                         log.error("[ANTIGRAVITY STREAM] 重试时无可用凭证或令牌")
                         yield build_error_response("当前无可用凭证", 500)
                         return
-                else:
-                    if not is_smart_429_protection_enabled():
-                        await asyncio.sleep(retry_interval)
                 continue  # 重试
 
         except Exception as e:
             log.error(f"[ANTIGRAVITY STREAM] 流式请求异常: {e}, 凭证: {current_file}")
+            if success_recorded:
+                # Shared transport guards may surface an idle timeout here. Once
+                # bytes were emitted, replaying the prompt would duplicate output.
+                log.error("[ANTIGRAVITY STREAM] 已输出内容，终止当前流且不重试")
+                return
             if attempt < max_retries:
                 log.info(f"[ANTIGRAVITY STREAM] 异常后重试 (attempt {attempt + 2}/{max_retries + 1})...")
                 await asyncio.sleep(retry_interval)
@@ -797,8 +798,7 @@ async def non_stream_request(
                         smart_error_recorded = True
 
                     # 并行预热下一个凭证,不阻塞当前处理
-                    if is_smart_429_protection_enabled():
-                        excluded_credentials.add(current_file)
+                    excluded_credentials.add(current_file)
                     if next_cred_task is None and attempt < max_retries:
                         next_cred_task = asyncio.create_task(
                             credential_manager.get_valid_credential(
@@ -859,9 +859,6 @@ async def non_stream_request(
                     if not switched:
                         log.error("[ANTIGRAVITY] 重试时无可用凭证或令牌")
                         return build_error_response("当前无可用凭证", 500)
-                else:
-                    if not is_smart_429_protection_enabled():
-                        await asyncio.sleep(retry_interval)
                 continue  # 重试
 
         except Exception as e:

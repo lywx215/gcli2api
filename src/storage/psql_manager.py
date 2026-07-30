@@ -362,7 +362,7 @@ class PSQLManager:
             from config import is_smart_429_protection_enabled
             smart_enabled = is_smart_429_protection_enabled()
             health_enabled = mode == "geminicli" and smart_enabled
-            excluded = set(excluded_credentials or ()) if smart_enabled else set()
+            excluded = set(excluded_credentials or ())
             table_name = self._get_table_name(mode)
             current_time = time.time()
 

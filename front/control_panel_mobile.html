@@ -2115,6 +2115,24 @@
                                     <strong>✅ 说明：</strong>默认关闭，便于连续使用同一凭证；当发生模型CD或自动禁用时仍会切换。
                                 </div>
                             </div>
+
+                            <div class="form-group">
+                                <label style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" id="streamDiagnosticsEnabled"
+                                        style="width: auto; margin: 0;" />
+                                    流式 TTFT 诊断
+                                    <span id="streamDiagnosticsEnabledEnvLock" hidden
+                                        style="color: #dc3545; margin-left: 8px;">环境变量已锁定</span>
+                                </label>
+                                <small
+                                    style="display: block; color: #666; font-size: 12px; margin-top: 5px;">记录流式请求各阶段耗时并返回 Server-Timing
+                                    <span style="color: #28a745;">✓ 支持热更新</span></small>
+                                <div
+                                    style="background-color: #e3f2fd; border: 1px solid #2196f3; border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 13px; color: #0d47a1;">
+                                    <strong>⏱️ 说明：</strong>默认关闭。开启后输出 STREAM_PERF_SUMMARY；不会记录 Token、Prompt、代理认证信息或完整请求体。
+                                    <br><strong>采样：</strong>慢请求、失败和重试全量记录，普通成功请求默认采样 1%。
+                                </div>
+                            </div>
                         </div>
 
                         <div class="card">

@@ -15,6 +15,7 @@ if __name__ == "__main__":
 
 import asyncio
 import json
+import time
 from typing import Any, Dict, Optional, Callable, Tuple
 
 from fastapi import Response
@@ -27,6 +28,13 @@ from log import log
 
 from src.credential_manager import credential_manager
 from src.httpx_client import stream_post_async, post_async
+from src.streaming_latency import (
+    StreamFailure,
+    StreamLatencyConfig,
+    StreamPhase,
+    StreamRequestTrace,
+    current_stream_trace,
+)
 from src.subscription_tiers import required_tiers_for_geminicli_model
 
 # 导入共同的基础功能
@@ -55,7 +63,7 @@ def _build_no_available_credential_response(model_name: Optional[str]) -> Respon
             "无支持 gemini-3.5-flash 的可用 Code Assist Standard/Enterprise 凭证",
             503,
         )
-    return build_error_response("当前无可用凭证", 500)
+    return build_error_response("当前无可用凭证", 503)
 
 
 async def _build_smart_pool_response(model_name: Optional[str]) -> Response:
@@ -109,6 +117,7 @@ def _capacity_breaker_response(model_name: str) -> Optional[Response]:
 
 def _upstream_capacity_response(cooldown_until: float) -> Response:
     import time
+
     retry_after = max(1, int(cooldown_until - time.time() + 0.999))
     return Response(
         content=json.dumps({"error": {"code": "upstream_capacity_exhausted", "type": "upstream_capacity_exhausted", "message": "Upstream capacity is temporarily exhausted"}}),
@@ -131,6 +140,7 @@ def _debug_log_final_response(tag: str, response) -> None:
     except Exception as e:
         debug_log(f"[{tag}] 记录最终响应失败: {e}", level="warning")
 
+
 # ==================== 全局凭证管理器 ====================
 
 # 使用全局单例 credential_manager，自动初始化
@@ -138,20 +148,21 @@ def _debug_log_final_response(tag: str, response) -> None:
 
 # ==================== 请求准备 ====================
 
+
 async def prepare_request_headers_and_payload(
     payload: dict, credential_data: dict, target_url: str
 ):
     """
     从凭证数据准备请求头和最终payload
-    
+
     Args:
         payload: 原始请求payload
         credential_data: 凭证数据字典
         target_url: 目标URL
-        
+
     Returns:
         元组: (headers, final_payload, target_url)
-        
+
     Raises:
         Exception: 如果凭证中缺少必要字段
     """
@@ -246,6 +257,7 @@ async def _switch_credential_for_retry(
 
 # ==================== 新的流式和非流式请求函数 ====================
 
+
 async def stream_request(
     body: Dict[str, Any],
     native: bool = False,
@@ -262,25 +274,54 @@ async def stream_request(
     Yields:
         Response对象（错误时）或 bytes流/str流（成功时）
     """
+    trace = current_stream_trace() or StreamRequestTrace(
+        model=body.get("model", ""), protocol="gemini"
+    )
+    latency_config = StreamLatencyConfig.from_env()
+
     # 获取有效凭证
     model_name = body.get("model", "")
+    trace.model = trace.model or model_name
     breaker_response = _capacity_breaker_response(model_name)
     if breaker_response is not None:
-        yield breaker_response
-        return
+        raise StreamFailure.from_response(
+            breaker_response,
+            stage="credential_capacity",
+            request_id=trace.request_id,
+        )
 
     # 1. 获取有效凭证
-    cred_result = await credential_manager.get_valid_credential(
-        mode="geminicli", model_name=model_name
-    )
+    credential_started = time.perf_counter()
+    trace.phase = StreamPhase.SELECTING_CREDENTIAL
+    try:
+        async with asyncio.timeout(
+            min(latency_config.credential_acquire_timeout, trace.remaining_first_content())
+        ):
+            cred_result = await credential_manager.get_valid_credential(
+                mode="geminicli", model_name=model_name
+            )
+    except TimeoutError as exc:
+        trace.duration("credential", credential_started)
+        raise StreamFailure(
+            "Credential acquisition timed out",
+            stage="credential",
+            status_code=504,
+            retryable=False,
+            request_id=trace.request_id,
+        ) from exc
+    trace.duration("credential", credential_started)
 
     if not cred_result:
         err = await _build_smart_pool_response(model_name)
         _debug_log_final_response("GEMINICLI STREAM", err)
-        yield err
-        return
+        raise StreamFailure.from_response(
+            err,
+            stage="credential",
+            request_id=trace.request_id,
+        )
 
     current_file, credential_data = cred_result
+    trace.set_credential(current_file)
 
     # 2. 构建URL和请求头
     try:
@@ -297,8 +338,11 @@ async def stream_request(
         log.error(f"准备请求失败: {e}")
         err = build_error_response(f"准备请求失败: {str(e)}", 500)
         _debug_log_final_response("GEMINICLI STREAM", err)
-        yield err
-        return
+        raise StreamFailure.from_response(
+            err,
+            stage="preparing",
+            request_id=trace.request_id,
+        ) from e
 
     # 3. 调用stream_post_async进行请求
     retry_config = await get_retry_config()
@@ -306,9 +350,10 @@ async def stream_request(
     retry_interval = retry_config["retry_interval"]
 
     DISABLE_ERROR_CODES = await get_auto_ban_error_codes()  # 禁用凭证的错误码
-    last_error_response = None  # 记录最后一次的错误响应
     next_cred_task = None  # 预热的下一个凭证任务
     excluded_credentials: set[str] = set()
+    transport_failures = 0
+    status_failures = 0
 
     # 内部函数：快速更新凭证(只更新token和project_id,避免重建整个请求)
     async def refresh_credential_fast():
@@ -345,22 +390,22 @@ async def stream_request(
         final_payload["project"] = project_id
         return True
 
-    for attempt in range(max_retries + 1):
-        success_recorded = False  # 标记是否已记录成功
+    max_total_retries = max_retries + latency_config.transport_max_attempts - 1
+    for attempt in range(max_total_retries + 1):
+        upstream_started = False
         need_retry = False  # 标记是否需要重试
+        trace.attempts += 1
 
         try:
             async for chunk in stream_post_async(
                 url=target_url,
                 body=final_payload,
                 native=native,
-                headers=auth_headers
+                headers=auth_headers,
             ):
                 # 判断是否是Response对象
                 if isinstance(chunk, Response):
                     status_code = chunk.status_code
-                    last_error_response = chunk  # 记录最后一次错误
-
                     # 缓存错误解析结果,避免重复decode
                     error_body = None
                     try:
@@ -395,9 +440,8 @@ async def stream_request(
                             error_message=error_body
                         )
 
-                        if is_smart_429_protection_enabled():
-                            excluded_credentials.add(current_file)
-                        if next_cred_task is None and attempt < max_retries:
+                        excluded_credentials.add(current_file)
+                        if next_cred_task is None and status_failures < max_retries:
                             next_cred_task = asyncio.create_task(
                                 credential_manager.get_valid_credential(
                                     mode="geminicli", model_name=model_name,
@@ -407,12 +451,18 @@ async def stream_request(
 
                         # 检查是否应该重试
                         should_retry = await handle_error_with_retry(
-                            credential_manager, status_code, current_file,
-                            retry_config["retry_enabled"], attempt, max_retries, retry_interval,
-                            mode="geminicli"
+                            credential_manager,
+                            status_code,
+                            current_file,
+                            retry_config["retry_enabled"],
+                            status_failures,
+                            max_retries,
+                            retry_interval,
+                            mode="geminicli",
                         )
 
-                        if should_retry and attempt < max_retries:
+                        if should_retry and status_failures < max_retries:
+                            status_failures += 1
                             need_retry = True
                             break  # 跳出内层循环，准备重试
                         else:
@@ -424,8 +474,11 @@ async def stream_request(
                                 else build_error_response("Server is busy, please retry later", 503)
                             )
                             _debug_log_final_response("GEMINICLI STREAM", err)
-                            yield err
-                            return
+                            raise StreamFailure.from_response(
+                                err,
+                                stage="upstream_status",
+                                request_id=trace.request_id,
+                            )
                     elif status_code == 404 and "preview" in model_name.lower():
                         # 特殊处理：preview模型返回404，说明该凭证不支持preview模型
                         log.warning(f"[GEMINICLI STREAM] Preview模型404错误，凭证不支持preview: {current_file}")
@@ -441,9 +494,8 @@ async def stream_request(
                         )
 
                         # 预热下一个凭证（会自动跳过preview=False的凭证）
-                        if is_smart_429_protection_enabled():
-                            excluded_credentials.add(current_file)
-                        if next_cred_task is None and attempt < max_retries:
+                        excluded_credentials.add(current_file)
+                        if next_cred_task is None and status_failures < max_retries:
                             next_cred_task = asyncio.create_task(
                                 credential_manager.get_valid_credential(
                                     mode="geminicli", model_name=model_name,
@@ -452,14 +504,18 @@ async def stream_request(
                             )
 
                         # 触发重试
-                        if attempt < max_retries:
+                        if status_failures < max_retries:
+                            status_failures += 1
                             need_retry = True
                             break
                         else:
                             log.error(f"[GEMINICLI STREAM] 达到最大重试次数，返回404错误")
                             _debug_log_final_response("GEMINICLI STREAM", chunk)
-                            yield chunk
-                            return
+                            raise StreamFailure.from_response(
+                                chunk,
+                                stage="upstream_status",
+                                request_id=trace.request_id,
+                            )
                     else:
                         # 错误码不在禁用码当中，直接返回，无需重试
                         log.error(f"[GEMINICLI STREAM] 流式请求失败，非重试错误码 (status={status_code}), 凭证: {current_file}, 响应: {error_body[:500] if error_body else '无'}")
@@ -469,47 +525,51 @@ async def stream_request(
                             error_message=error_body
                         )
                         _debug_log_final_response("GEMINICLI STREAM", chunk)
-                        yield chunk
-                        return
+                        raise StreamFailure.from_response(
+                            chunk,
+                            stage="upstream_status",
+                            request_id=trace.request_id,
+                        )
                 else:
                     # 不是Response，说明是真流，直接yield返回
-                    # 只在第一个chunk时记录成功
-                    if not success_recorded:
+                    # 空行不是有效上游事件，不能作为禁止重试的边界。
+                    if not chunk or not chunk.strip():
+                        yield chunk
+                        continue
+                    # 只在第一个有效事件时记录成功
+                    if not upstream_started:
                         await record_api_call_success(
                             credential_manager, current_file, mode="geminicli", model_name=model_name
                         )
                         if is_smart_429_protection_enabled():
                             smart_429_service.record_success("geminicli", model_name, current_file)
-                        success_recorded = True
+                        upstream_started = True
+                        trace.set_credential(current_file)
+                        trace.duration_since_mark("first_upstream_event", "waiting_first_event")
+                        trace.mark("first_upstream_at", phase=StreamPhase.UPSTREAM_STARTED)
                         log.debug(f"[GEMINICLI STREAM] 开始接收流式响应，模型: {model_name}")
 
                     yield chunk
 
             # 流式请求完成，检查结果
-            if success_recorded:
+            if upstream_started:
                 log.debug(f"[GEMINICLI STREAM] 流式响应完成，模型: {model_name}")
                 return
 
             # 统一处理重试
             if need_retry:
-                # 如果已经是最后一次尝试，不再重试，直接返回错误
-                if attempt >= max_retries:
-                    log.error(f"[GEMINICLI STREAM] 达到最大重试次数，返回错误")
-                    if last_error_response:
-                        yield last_error_response
-                    else:
-                        yield Response(
-                            content=json.dumps({"error": "请求失败，所有重试均已耗尽"}),
-                            status_code=429,
-                            media_type="application/json"
-                        )
-                    return
-
-                log.info(f"[GEMINICLI STREAM] 重试请求 (attempt {attempt + 2}/{max_retries + 1})...")
+                log.info(
+                    f"[GEMINICLI STREAM] 状态码重试 "
+                    f"(attempt {status_failures + 1}/{max_retries + 1})..."
+                )
 
                 switched, next_cred_task = await _switch_credential_for_retry(
                     next_cred_task=next_cred_task,
-                    retry_interval=(smart_retry_delay(attempt, retry_interval) if retry_config.get("smart_429") else retry_interval),
+                    retry_interval=(
+                        smart_retry_delay(max(0, status_failures - 1), retry_interval)
+                        if retry_config.get("smart_429")
+                        else retry_interval
+                    ),
                     refresh_credential_fast=refresh_credential_fast,
                     apply_cred_result=apply_cred_result,
                     log_prefix="[GEMINICLI STREAM]",
@@ -518,29 +578,81 @@ async def stream_request(
                     log.error("[GEMINICLI STREAM] 重试时无可用凭证或刷新失败")
                     err = await _build_smart_pool_response(model_name)
                     _debug_log_final_response("GEMINICLI STREAM", err)
-                    yield err
-                    return
+                    raise StreamFailure.from_response(
+                        err,
+                        stage="credential",
+                        request_id=trace.request_id,
+                    )
                 continue  # 重试
 
+        except asyncio.CancelledError:
+            raise
+        except StreamFailure as e:
+            log.error(
+                f"[GEMINICLI STREAM] 流阶段失败: stage={e.stage}, "
+                f"status={e.status_code}, 凭证: {current_file}"
+            )
+            if upstream_started:
+                e.retryable = False
+                e.request_id = e.request_id or trace.request_id
+                raise
+            transport_failures += 1
+            excluded_credentials.add(current_file)
+            trace.retry_reason = e.stage
+            if (
+                latency_config.guard_enabled
+                and e.retryable
+                and transport_failures < latency_config.transport_max_attempts
+                and attempt < max_total_retries
+                and trace.remaining_first_content() > 0
+            ):
+                switched = await refresh_credential_fast()
+                if switched:
+                    log.info(
+                        f"[GEMINICLI STREAM] {e.stage} 后立即切换凭证重试 "
+                        f"({transport_failures + 1}/{latency_config.transport_max_attempts})"
+                    )
+                    continue
+            e.request_id = e.request_id or trace.request_id
+            raise
         except Exception as e:
             log.error(f"[GEMINICLI STREAM] 流式请求异常: {e}, 凭证: {current_file}")
-            if attempt < max_retries:
-                log.info(f"[GEMINICLI STREAM] 异常后重试 (attempt {attempt + 2}/{max_retries + 1})...")
-                await asyncio.sleep(retry_interval)
+            if upstream_started:
+                raise StreamFailure(
+                    "Upstream stream was interrupted",
+                    stage="streaming",
+                    status_code=502,
+                    retryable=False,
+                    request_id=trace.request_id,
+                ) from e
+            transport_failures += 1
+            excluded_credentials.add(current_file)
+            trace.retry_reason = type(e).__name__
+            if (
+                latency_config.guard_enabled
+                and transport_failures < latency_config.transport_max_attempts
+                and attempt < max_total_retries
+                and trace.remaining_first_content() > 0
+                and await refresh_credential_fast()
+            ):
                 continue
-            else:
-                # 所有重试都失败，返回固定429错误以便下游重试
-                log.error(f"[GEMINICLI STREAM] 所有重试均失败，最后异常: {e}")
-                err = build_error_response("Server is busy, please retry later", 503)
-                _debug_log_final_response("GEMINICLI STREAM", err)
-                yield err
-                return
+            raise StreamFailure(
+                "Unable to start upstream stream",
+                stage="transport",
+                status_code=502,
+                retryable=False,
+                request_id=trace.request_id,
+            ) from e
 
     # 所有重试均已耗尽（for循环正常结束），返回固定429错误以便下游重试
     log.error("[GEMINICLI STREAM] 所有重试均失败")
     err = build_error_response("Server is busy, please retry later", 503)
     _debug_log_final_response("GEMINICLI STREAM", err)
-    yield err
+    raise StreamFailure.from_response(
+        err,
+        stage="upstream_status",
+        request_id=trace.request_id,
+    )
 
 
 async def non_stream_request(
@@ -715,8 +827,7 @@ async def non_stream_request(
                     excluded_credentials.add(current_file)
                     smart_error_recorded = True
 
-                if is_smart_429_protection_enabled():
-                    excluded_credentials.add(current_file)
+                excluded_credentials.add(current_file)
 
                 # 并行预热下一个凭证,不阻塞当前处理
                 if next_cred_task is None and attempt < max_retries:
@@ -734,8 +845,7 @@ async def non_stream_request(
                         cooldown_until, mode="geminicli", model_name=model_name,
                         error_message=error_text
                     )
-                    if is_smart_429_protection_enabled():
-                        excluded_credentials.add(current_file)
+                    excluded_credentials.add(current_file)
 
                 # 检查是否应该重试（会自动处理禁用逻辑）
                 should_retry = await handle_error_with_retry(
@@ -786,8 +896,7 @@ async def non_stream_request(
                 )
 
                 # 预热下一个凭证（会自动跳过preview=False的凭证）
-                if is_smart_429_protection_enabled():
-                    excluded_credentials.add(current_file)
+                excluded_credentials.add(current_file)
                 if next_cred_task is None and attempt < max_retries:
                     next_cred_task = asyncio.create_task(
                         credential_manager.get_valid_credential(
@@ -960,6 +1069,7 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"\n❌ 测试过程中出现异常: {e}")
             import traceback
+
             traceback.print_exc()
 
     # 运行测试
@@ -967,6 +1077,7 @@ if __name__ == "__main__":
 
 
 # ==================== Quota / 模型额度查询 ====================
+
 
 async def fetch_geminicli_quota_info(
     access_token: str,

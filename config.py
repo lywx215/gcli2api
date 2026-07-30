@@ -16,6 +16,9 @@ _config_initialized = False
 # 调试模式同步缓存（热路径使用，避免 async 开销）
 _debug_mode_cache: bool = False
 
+# 流式 TTFT 诊断同步缓存（独立于 DEBUG_MODE）
+_stream_diagnostics_enabled_cache: bool = False
+
 # 轮巡模式同步缓存（热路径使用）
 _routing_mode_cache: str = "normal"
 
@@ -63,6 +66,7 @@ ENV_MAPPINGS = {
     "KEEPALIVE_URL": "keepalive_url",
     "KEEPALIVE_INTERVAL": "keepalive_interval",
     "DEBUG_MODE": "debug_mode",
+    "STREAM_DIAGNOSTICS_ENABLED": "stream_diagnostics_enabled",
     "ROUTING_MODE": "routing_mode",
 }
 
@@ -72,6 +76,7 @@ ENV_MAPPINGS = {
 async def init_config():
     """初始化配置缓存（启动时调用一次）"""
     global _config_cache, _config_initialized, _debug_mode_cache, _routing_mode_cache
+    global _stream_diagnostics_enabled_cache
     global _smart_429_enabled_cache, _smart_429_max_attempts_cache, _smart_429_retry_base_interval_cache
 
     if _config_initialized:
@@ -89,15 +94,17 @@ async def init_config():
 
     # 刷新同步缓存
     _debug_mode_cache = await get_debug_mode()
+    _stream_diagnostics_enabled_cache = await get_stream_diagnostics_enabled()
     _routing_mode_cache = await get_routing_mode()
     _smart_429_enabled_cache = await get_smart_429_protection_enabled()
     _smart_429_max_attempts_cache = await get_smart_429_max_attempts()
     _smart_429_retry_base_interval_cache = await get_smart_429_retry_base_interval()
 
 
-async def reload_config():
+async def reload_config(*, reload_stream_diagnostics: bool = True):
     """重新加载配置（修改配置后调用）"""
     global _config_cache, _config_initialized, _debug_mode_cache, _routing_mode_cache
+    global _stream_diagnostics_enabled_cache
     global _smart_429_enabled_cache, _smart_429_max_attempts_cache, _smart_429_retry_base_interval_cache
 
     try:
@@ -116,6 +123,8 @@ async def reload_config():
 
     # 刷新同步缓存
     _debug_mode_cache = await get_debug_mode()
+    if reload_stream_diagnostics:
+        _stream_diagnostics_enabled_cache = await get_stream_diagnostics_enabled()
     _routing_mode_cache = await get_routing_mode()
     _smart_429_enabled_cache = await get_smart_429_protection_enabled()
     _smart_429_max_attempts_cache = await get_smart_429_max_attempts()
@@ -629,6 +638,29 @@ def is_debug_mode() -> bool:
     缓存在 init_config() 和 reload_config() 时自动刷新。
     """
     return _debug_mode_cache
+
+
+# Streaming TTFT diagnostics (independent from DEBUG_MODE)
+async def get_stream_diagnostics_enabled() -> bool:
+    """Return the persisted TTFT diagnostics switch with ENV precedence."""
+    env_value = os.getenv("STREAM_DIAGNOSTICS_ENABLED")
+    if env_value:
+        return env_value.strip().lower() in ("true", "1", "yes", "on")
+
+    value = await get_config_value("stream_diagnostics_enabled", False)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return False
+
+
+def is_stream_diagnostics_enabled() -> bool:
+    """Synchronous hot-path getter; an explicit ENV value always wins."""
+    env_value = os.getenv("STREAM_DIAGNOSTICS_ENABLED")
+    if env_value:
+        return env_value.strip().lower() in ("true", "1", "yes", "on")
+    return _stream_diagnostics_enabled_cache
 
 
 # Routing Mode（轮巡模式）

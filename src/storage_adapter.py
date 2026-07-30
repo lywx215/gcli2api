@@ -379,6 +379,7 @@ class StorageAdapter:
 
 # 全局存储适配器实例
 _storage_adapter: Optional[StorageAdapter] = None
+_storage_adapter_lock = asyncio.Lock()
 
 
 async def get_storage_adapter() -> StorageAdapter:
@@ -386,8 +387,11 @@ async def get_storage_adapter() -> StorageAdapter:
     global _storage_adapter
 
     if _storage_adapter is None:
-        _storage_adapter = StorageAdapter()
-        await _storage_adapter.initialize()
+        async with _storage_adapter_lock:
+            if _storage_adapter is None:
+                candidate = StorageAdapter()
+                await candidate.initialize()
+                _storage_adapter = candidate
 
     return _storage_adapter
 
@@ -396,6 +400,8 @@ async def close_storage_adapter():
     """关闭全局存储适配器"""
     global _storage_adapter
 
-    if _storage_adapter:
-        await _storage_adapter.close()
-        _storage_adapter = None
+    async with _storage_adapter_lock:
+        if _storage_adapter:
+            adapter = _storage_adapter
+            _storage_adapter = None
+            await adapter.close()

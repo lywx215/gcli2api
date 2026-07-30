@@ -521,7 +521,7 @@ class SQLiteManager:
 
             smart_enabled = is_smart_429_protection_enabled()
             health_enabled = mode == "geminicli" and smart_enabled
-            excluded = set(excluded_credentials or ()) if smart_enabled else set()
+            excluded = set(excluded_credentials or ())
             table_name = self._get_table_name(mode)
             async with aiosqlite.connect(self._db_path) as db:
                 current_time = time.time()

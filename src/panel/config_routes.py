@@ -2,6 +2,8 @@
 配置路由模块 - 处理 /config/* 相关的HTTP请求
 """
 
+import os
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
@@ -157,6 +159,9 @@ async def get_config(token: str = Depends(verify_panel_token)):
 
         # 调试模式
         current_config["debug_mode"] = await config.get_debug_mode()
+        current_config["stream_diagnostics_enabled"] = (
+            await config.get_stream_diagnostics_enabled()
+        )
 
         # 轮巡模式
         current_config["routing_mode"] = await config.get_routing_mode()
@@ -268,6 +273,10 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
             if not isinstance(new_config["debug_mode"], bool):
                 raise HTTPException(status_code=400, detail="调试模式开关必须是布尔值")
 
+        if "stream_diagnostics_enabled" in new_config:
+            if not isinstance(new_config["stream_diagnostics_enabled"], bool):
+                raise HTTPException(status_code=400, detail="流式 TTFT 诊断开关必须是布尔值")
+
         # 验证保活配置
         if "keepalive_url" in new_config:
             if not isinstance(new_config["keepalive_url"], str):
@@ -308,6 +317,14 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
 
         # 获取环境变量锁定的配置键
         env_locked_keys = get_env_locked_keys()
+        diagnostics_saved = (
+            "stream_diagnostics_enabled" in new_config
+            and "stream_diagnostics_enabled" not in env_locked_keys
+        )
+        try:
+            workers = int(os.getenv("WORKERS", "1"))
+        except (TypeError, ValueError):
+            workers = 1
 
         # 直接使用存储适配器保存配置
         storage_adapter = await get_storage_adapter()
@@ -318,7 +335,9 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
                     log.debug(f"设置{key}字段为: {value}")
 
         # 重新加载配置缓存（关键！）
-        await config.reload_config()
+        await config.reload_config(
+            reload_stream_diagnostics=workers == 1
+        )
         from src.smart_429 import smart_429_service
         await smart_429_service.reconfigure()
 
@@ -343,7 +362,21 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
             "message": "配置保存成功",
             "saved_config": {k: v for k, v in new_config.items() if k not in env_locked_keys},
             "smart_429": smart_429_service.status(),
+            "hot_updated": (
+                ["stream_diagnostics_enabled"]
+                if diagnostics_saved and workers == 1
+                else []
+            ),
+            "restart_required": (
+                ["stream_diagnostics_enabled"]
+                if diagnostics_saved and workers > 1
+                else []
+            ),
         }
+        if diagnostics_saved and workers > 1:
+            response_data["restart_notice"] = (
+                "当前为多 Worker 模式，请重启全部 Worker 以统一应用流式 TTFT 诊断开关。"
+            )
 
         return JSONResponse(content=response_data)
 

@@ -3118,23 +3118,31 @@ function populateConfigForm() {
     setConfigField('serviceUsageApiUrl', c.service_usage_api_url || '');
     setConfigField('antigravityApiUrl', c.antigravity_api_url || '');
 
-    document.getElementById('autoBanEnabled').checked = Boolean(c.auto_ban_enabled);
+    setConfigCheckbox('autoBanEnabled', 'auto_ban_enabled', c.auto_ban_enabled);
     setConfigField('autoBanErrorCodes', (c.auto_ban_error_codes || []).join(','));
     setConfigField('callsPerRotation', c.calls_per_rotation || 10);
 
-    document.getElementById('retry429Enabled').checked = Boolean(c.retry_429_enabled);
+    setConfigCheckbox('retry429Enabled', 'retry_429_enabled', c.retry_429_enabled);
     setConfigField('retry429MaxRetries', c.retry_429_max_retries || 20);
     setConfigField('retry429Interval', c.retry_429_interval || 0.1);
-    const smart429Enabled = document.getElementById('smart429ProtectionEnabled');
-    if (smart429Enabled) smart429Enabled.checked = Boolean(c.smart_429_protection_enabled);
+    setConfigCheckbox(
+        'smart429ProtectionEnabled',
+        'smart_429_protection_enabled',
+        c.smart_429_protection_enabled
+    );
     setConfigField('smart429MaxAttempts', c.smart_429_max_attempts || 3);
     setConfigField('smart429RetryBaseInterval', c.smart_429_retry_base_interval || 0.5);
 
-    document.getElementById('compatibilityModeEnabled').checked = Boolean(c.compatibility_mode_enabled);
-    document.getElementById('returnThoughtsToFrontend').checked = Boolean(c.return_thoughts_to_frontend !== false);
-    document.getElementById('antigravityStream2nostream').checked = Boolean(c.antigravity_stream2nostream !== false);
-    document.getElementById('antigravitySwitchCredentialEnabled').checked = Boolean(c.antigravity_switch_credential_enabled);
-    document.getElementById('debugMode').checked = Boolean(c.debug_mode);
+    setConfigCheckbox('compatibilityModeEnabled', 'compatibility_mode_enabled', c.compatibility_mode_enabled);
+    setConfigCheckbox('returnThoughtsToFrontend', 'return_thoughts_to_frontend', c.return_thoughts_to_frontend !== false);
+    setConfigCheckbox('antigravityStream2nostream', 'antigravity_stream2nostream', c.antigravity_stream2nostream !== false);
+    setConfigCheckbox('antigravitySwitchCredentialEnabled', 'antigravity_switch_credential_enabled', c.antigravity_switch_credential_enabled);
+    setConfigCheckbox('debugMode', 'debug_mode', c.debug_mode);
+    setConfigCheckbox(
+        'streamDiagnosticsEnabled',
+        'stream_diagnostics_enabled',
+        c.stream_diagnostics_enabled
+    );
 
     // 轮巡模式
     const routingModeSelect = document.getElementById('routingMode');
@@ -3161,6 +3169,19 @@ function setConfigField(fieldId, value) {
             field.classList.remove('env-locked');
         }
     }
+}
+
+function setConfigCheckbox(fieldId, configKey, value) {
+    const field = document.getElementById(fieldId);
+    if (!field) return;
+
+    field.checked = Boolean(value);
+    const locked = AppState.envLockedFields.has(configKey);
+    field.disabled = locked;
+    field.classList.toggle('env-locked', locked);
+    field.title = locked ? '此配置由环境变量锁定，无法在控制面板修改' : '';
+    const lockNote = document.getElementById(`${fieldId}EnvLock`);
+    if (lockNote) lockNote.hidden = !locked;
 }
 
 async function saveConfig() {
@@ -3199,6 +3220,7 @@ async function saveConfig() {
             antigravity_stream2nostream: getChecked('antigravityStream2nostream'),
             antigravity_switch_credential_enabled: getChecked('antigravitySwitchCredentialEnabled'),
             debug_mode: getChecked('debugMode'),
+            stream_diagnostics_enabled: getChecked('streamDiagnosticsEnabled'),
             routing_mode: (document.getElementById('routingMode') || {}).value || 'normal',
             anti_truncation_max_attempts: getInt('antiTruncationMaxAttempts', 3),
             keepalive_url: getValue('keepaliveUrl'),

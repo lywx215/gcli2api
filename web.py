@@ -115,14 +115,6 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-    # 关闭 httpx 持久化连接池
-    try:
-        from src.httpx_client import http_client
-        await http_client.close()
-        log.info("HTTP连接池已关闭")
-    except Exception as e:
-        log.error(f"关闭HTTP连接池时出错: {e}")
-
     # 停止保活服务
     try:
         await keepalive_service.stop()
@@ -149,6 +141,21 @@ async def lifespan(app: FastAPI):
             log.info("凭证管理器已关闭")
         except Exception as e:
             log.error(f"关闭凭证管理器时出错: {e}")
+
+    try:
+        from src.storage_adapter import close_storage_adapter
+        await close_storage_adapter()
+        log.info("存储适配器已关闭")
+    except Exception as e:
+        log.error(f"关闭存储适配器时出错: {e}")
+
+    # 所有使用 HTTP 的任务停止后，最后关闭共享连接池。
+    try:
+        from src.httpx_client import http_client
+        await http_client.close()
+        log.info("HTTP连接池已关闭")
+    except Exception as e:
+        log.error(f"关闭HTTP连接池时出错: {e}")
 
     log.info("GCLI2API 主服务已停止")
 

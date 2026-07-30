@@ -92,14 +92,11 @@ async def test_no_eligible_credential_returns_503_without_upstream_call(monkeypa
     assert "Code Assist Standard/Enterprise" in response.body.decode("utf-8")
     assert upstream_called is False
 
-    chunks = [
-        chunk
-        async for chunk in geminicli.stream_request(
-            {"model": "gemini-3.5-flash-high", "request": {}}
-        )
-    ]
-    assert len(chunks) == 1
-    assert chunks[0].status_code == 503
+    with pytest.raises(geminicli.StreamFailure) as caught:
+        async for _ in geminicli.stream_request({"model": "gemini-3.5-flash-high", "request": {}}):
+            pass
+    assert caught.value.status_code == 503
+    assert caught.value.stage == "credential"
     assert upstream_called is False
 
 
@@ -127,9 +124,7 @@ async def test_mysql_redis_selection_uses_only_supported_tier(monkeypatch):
     assert selected[0] == "standard.json"
 
     manager._redis.sets[manager._rk_tier("geminicli", TIER_CODE_ASSIST_STANDARD)].clear()
-    assert await manager._get_next_available_from_redis(
-        "geminicli", "gemini-3-flash"
-    ) is None
+    assert await manager._get_next_available_from_redis("geminicli", "gemini-3-flash") is None
 
 
 @pytest.mark.asyncio
