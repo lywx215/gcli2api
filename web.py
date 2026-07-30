@@ -5,6 +5,7 @@ Main Web Integration - Integrates all routers and modules
 
 import asyncio
 import os
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Response
@@ -73,8 +74,9 @@ async def lifespan(app: FastAPI):
 
     # 启动保活服务（未配置URL时自动跳过，零开销）
     try:
-        from src.smart_429 import smart_429_service
+        from src.smart_429 import model_capacity_guard, smart_429_service
         await smart_429_service.reconfigure()
+        model_capacity_guard.reconfigure()
         log.info(f"SMART 429 status: {smart_429_service.status()}")
     except Exception as e:
         log.error(f"SMART 429 initialization failed; protection remains stopped: {e}")
@@ -167,6 +169,15 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def ensure_request_id_header(request, call_next):
+    """Return a server correlation ID even for non-stream and panel responses."""
+    response = await call_next(request)
+    if "X-Request-ID" not in response.headers:
+        response.headers["X-Request-ID"] = uuid.uuid4().hex
+    return response
 
 # CORS中间件
 app.add_middleware(

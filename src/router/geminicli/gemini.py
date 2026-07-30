@@ -40,6 +40,7 @@ from src.converter.fake_stream import (
 from src.router.hi_check import is_health_check_request, create_health_check_response
 from src.router.stream_passthrough import (
     build_streaming_response_or_error,
+    client_request_id_from_headers,
 )
 from src.streaming_latency import StreamFailure
 
@@ -126,6 +127,7 @@ async def generate_content(
 @router.post("/v1/models/{model:path}:streamGenerateContent")
 async def stream_generate_content(
     gemini_request: GeminiRequest,
+    request: Request = None,
     model: str = Path(..., description="Model name"),
     api_key: str = Depends(authenticate_gemini_flexible),
 ):
@@ -215,7 +217,7 @@ async def stream_generate_content(
 
             # 检查是否是错误响应（有些错误可能status_code是200但包含error字段）
             if "error" in response_data:
-                log.error(f"Fake streaming got error in response body: {response_data['error']}")
+                log.error("Fake streaming received an upstream error response")
                 yield f"data: {json.dumps(response_data)}\n\n".encode()
                 yield "data: [DONE]\n\n".encode()
                 return
@@ -380,16 +382,19 @@ async def stream_generate_content(
     # ========== 根据模式选择生成器 ==========
     if use_fake_streaming:
         return await build_streaming_response_or_error(
-            fake_stream_generator(), model=public_model, protocol="gemini"
+            fake_stream_generator(), model=public_model, protocol="gemini",
+            client_request_id=client_request_id_from_headers(getattr(request, "headers", None)),
         )
     elif use_anti_truncation:
         log.info("启用流式抗截断功能")
         return await build_streaming_response_or_error(
-            anti_truncation_generator(), model=public_model, protocol="gemini"
+            anti_truncation_generator(), model=public_model, protocol="gemini",
+            client_request_id=client_request_id_from_headers(getattr(request, "headers", None)),
         )
     else:
         return await build_streaming_response_or_error(
-            normal_stream_generator(), model=public_model, protocol="gemini"
+            normal_stream_generator(), model=public_model, protocol="gemini",
+            client_request_id=client_request_id_from_headers(getattr(request, "headers", None)),
         )
 
 @router.post("/v1beta/models/{model:path}:countTokens")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Dict, Optional
@@ -175,21 +176,87 @@ def _http_timeout(config: StreamLatencyConfig) -> httpx.Timeout:
 def _transport_failure(exc: Exception, stage: str) -> StreamFailure:
     trace = current_stream_trace()
     request_id = trace.request_id if trace else None
-    if isinstance(exc, (httpx.TimeoutException, TimeoutError)):
-        return StreamFailure(
-            "Upstream timed out before producing content",
-            stage=stage,
-            status_code=504,
-            retryable=True,
-            request_id=request_id,
-        )
-    return StreamFailure(
-        "Unable to connect to upstream",
+    error_type = type(exc).__name__
+    status_code = 502
+    message = "Unable to connect to upstream"
+    if isinstance(exc, httpx.PoolTimeout):
+        stage, status_code, message = "pool", 504, "Upstream connection pool timed out"
+    elif isinstance(exc, httpx.ConnectTimeout):
+        stage, status_code, message = "connect", 504, "Upstream connection timed out"
+    elif isinstance(exc, (httpx.ProxyError, httpx.ConnectError)):
+        stage, status_code = "connect", 502
+    elif isinstance(exc, httpx.WriteTimeout):
+        stage, status_code, message = "write", 504, "Upstream request write timed out"
+    elif isinstance(exc, httpx.WriteError):
+        stage, status_code, message = "write", 502, "Unable to write upstream request"
+    elif isinstance(exc, httpx.RemoteProtocolError):
+        stage = "response_headers" if stage in {"response_headers", "first_event"} else "streaming"
+        message = "Upstream protocol was interrupted"
+    elif isinstance(exc, (httpx.ReadTimeout, httpx.TimeoutException, TimeoutError)):
+        status_code, message = 504, "Upstream timed out before producing content"
+    failure = StreamFailure(
+        message,
         stage=stage,
-        status_code=502,
+        status_code=status_code,
         retryable=True,
         request_id=request_id,
+        error_type=error_type,
     )
+    if trace:
+        trace.record_failure(
+            stage=stage,
+            error_type=error_type,
+            status_code=status_code,
+            retryable=True,
+        )
+    return failure
+
+
+class _HttpcoreTrace:
+    """Best-effort transport phase timings for a single request."""
+
+    def __init__(self) -> None:
+        self.started_at = time.perf_counter()
+        self.first_event_at: Optional[float] = None
+        self.starts: Dict[str, float] = {}
+        self.values: Dict[str, float] = {}
+        self.connected = False
+        self.request_body_complete_at: Optional[float] = None
+
+    async def __call__(self, name: str, info: Dict[str, Any]) -> None:
+        del info
+        now = time.perf_counter()
+        if self.first_event_at is None:
+            self.first_event_at = now
+        if name.endswith(".started"):
+            self.starts[name[:-8]] = now
+            if "connect_tcp" in name or "connect_unix_socket" in name:
+                self.connected = True
+            return
+        if not name.endswith(".complete"):
+            return
+        base = name[:-9]
+        started = self.starts.get(base)
+        duration_ms = (now - started) * 1000 if started is not None else 0.0
+        if "connect_tcp" in name or "connect_unix_socket" in name:
+            self.values["connect"] = self.values.get("connect", 0.0) + duration_ms
+        elif "start_tls" in name:
+            self.values["tls"] = self.values.get("tls", 0.0) + duration_ms
+        elif "send_request_headers" in name or "send_request_body" in name:
+            self.values["write"] = self.values.get("write", 0.0) + duration_ms
+            if "send_request_body" in name:
+                self.request_body_complete_at = now
+        elif "receive_response_headers" in name:
+            wait_started = self.request_body_complete_at or started
+            if wait_started is not None:
+                self.values["response_header_wait"] = (now - wait_started) * 1000
+
+    def finish(self) -> Dict[str, float]:
+        values = dict(self.values)
+        first = self.first_event_at or time.perf_counter()
+        values["pool_wait_estimate"] = max(0.0, (first - self.started_at) * 1000)
+        values["reused_connection"] = 0.0 if self.connected else 1.0
+        return values
 
 
 @asynccontextmanager
@@ -207,6 +274,7 @@ async def open_stream_post(
     if trace:
         trace.mark("waiting_headers", phase=StreamPhase.WAITING_HEADERS)
     async with http_client.get_streaming_client() as client:
+        transport_trace = _HttpcoreTrace() if trace and trace.diagnostics_enabled else None
         request = client.build_request(
             "POST",
             url,
@@ -214,19 +282,36 @@ async def open_stream_post(
             headers=headers,
             timeout=_http_timeout(config),
         )
+        if transport_trace is not None:
+            request.extensions["trace"] = transport_trace
         response: Optional[httpx.Response] = None
         try:
             async with asyncio.timeout(config.response_header_timeout):
                 response = await client.send(request, stream=True)
         except Exception as exc:
+            if trace:
+                trace.duration_since_mark("response_headers", "waiting_headers")
+                trace.add_duration_ms(
+                    "response_headers_total",
+                    trace.timings_ms.get("response_headers", 0.0),
+                )
+                if transport_trace is not None:
+                    trace.add_attempt_transport(transport_trace.finish())
             raise _transport_failure(exc, "response_headers") from exc
 
         try:
             if trace:
                 trace.duration_since_mark("response_headers", "waiting_headers")
+                trace.add_duration_ms(
+                    "response_headers_total",
+                    trace.timings_ms.get("response_headers", 0.0),
+                )
+                if transport_trace is not None:
+                    trace.add_attempt_transport(transport_trace.finish())
                 trace.upstream_request_id = (
                     response.headers.get("x-request-id")
                     or response.headers.get("x-goog-request-id")
+                    or response.headers.get("x-guploader-uploadid")
                     or response.headers.get("traceparent")
                 )
             yield UpstreamStream(response=response, native=native)
@@ -299,6 +384,8 @@ async def stream_post_async(
                     raise _transport_failure(exc, stage) from exc
                 if first and chunk and chunk.strip():
                     first = False
+                if trace and chunk and chunk.strip():
+                    trace.mark_upstream_event()
                 yield chunk
 
     # Error responses are surfaced only after the upstream context has closed,

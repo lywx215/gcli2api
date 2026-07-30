@@ -16,6 +16,14 @@ from src.streaming_latency import (
 )
 
 
+def client_request_id_from_headers(headers: Any) -> str | None:
+    """Read an optional downstream correlation ID without trusting it as our ID."""
+    if headers is None:
+        return None
+    value = headers.get("x-client-request-id") or headers.get("x-request-id")
+    return value if isinstance(value, str) else None
+
+
 async def prepend_async_item(first_item: Any, iterator: AsyncIterator[Any]):
     """Yield a prefetched item before continuing the original iterator."""
     yield first_item
@@ -106,6 +114,7 @@ async def build_streaming_response_or_error(
     *,
     model: str = "",
     protocol: str = "gemini",
+    client_request_id: str | None = None,
 ):
     """
     Prefetch the first async item so router code can return an upstream error
@@ -114,6 +123,7 @@ async def build_streaming_response_or_error(
     trace = current_stream_trace() or StreamRequestTrace(model=model, protocol=protocol)
     trace.model = trace.model or model
     trace.protocol = protocol
+    trace.set_client_request_id(client_request_id)
     token = bind_stream_trace(trace)
     config = StreamLatencyConfig.from_env()
     try:
@@ -128,10 +138,22 @@ async def build_streaming_response_or_error(
     except StopAsyncIteration:
         trace.finish("empty_stream", force_log=True)
         return Response(status_code=204, headers={"X-Request-ID": trace.request_id})
+    except asyncio.CancelledError:
+        await close_async_iterator(iterator)
+        trace.record_cancellation()
+        trace.finish("client_cancelled", force_log=True)
+        raise
     except StreamFailure as exc:
         await close_async_iterator(iterator)
         exc.request_id = exc.request_id or trace.request_id
         trace.retry_reason = exc.stage
+        if not trace.last_failure or trace.last_failure.get("stage") != exc.stage:
+            trace.record_failure(
+                stage=exc.stage,
+                error_type=exc.error_type or type(exc).__name__,
+                status_code=exc.status_code,
+                retryable=exc.retryable,
+            )
         trace.finish(f"error_{exc.stage}", force_log=True)
         response = _protocol_failure(exc, protocol=protocol, model=model).to_response()
         response.headers["X-Request-ID"] = trace.request_id
@@ -146,6 +168,12 @@ async def build_streaming_response_or_error(
             request_id=trace.request_id,
         )
         trace.retry_reason = failure.stage
+        trace.record_failure(
+            stage=failure.stage,
+            error_type="TimeoutError",
+            status_code=504,
+            retryable=False,
+        )
         trace.finish("error_first_content", force_log=True)
         response = failure.to_response()
         response.headers["X-Request-ID"] = trace.request_id
@@ -160,6 +188,12 @@ async def build_streaming_response_or_error(
             request_id=trace.request_id,
         )
         trace.retry_reason = f"preparing:{type(exc).__name__}"
+        trace.record_failure(
+            stage="preparing",
+            error_type=type(exc).__name__,
+            status_code=502,
+            retryable=False,
+        )
         trace.finish("error_preparing", force_log=True)
         response = failure.to_response()
         response.headers["X-Request-ID"] = trace.request_id
@@ -222,20 +256,37 @@ async def build_streaming_response_or_error(
         stream_token = bind_stream_trace(trace)
         result = "success"
         try:
+            trace.record_output(first_item)
             yield first_item
             async for item in iterator:
+                trace.record_output(item)
                 yield item
         except asyncio.CancelledError:
             result = "client_cancelled"
+            trace.record_cancellation()
             raise
         except StreamFailure as exc:
             result = f"error_{exc.stage}"
             trace.retry_reason = exc.stage
+            if not trace.last_failure or trace.last_failure.get("stage") != exc.stage:
+                trace.record_failure(
+                    stage=exc.stage,
+                    error_type=exc.error_type or type(exc).__name__,
+                    status_code=exc.status_code,
+                    retryable=False,
+                )
             async for error_item in _terminal_error(exc):
+                trace.record_output(error_item)
                 yield error_item
         except Exception as exc:
             result = "error_streaming"
             trace.retry_reason = f"streaming:{type(exc).__name__}"
+            trace.record_failure(
+                stage="streaming",
+                error_type=type(exc).__name__,
+                status_code=502,
+                retryable=False,
+            )
             failure = StreamFailure(
                 "Upstream stream was interrupted",
                 stage="streaming",
@@ -243,6 +294,7 @@ async def build_streaming_response_or_error(
                 request_id=trace.request_id,
             )
             async for error_item in _terminal_error(failure):
+                trace.record_output(error_item)
                 yield error_item
         finally:
             trace.finish(result, force_log=result != "success")
@@ -258,6 +310,12 @@ async def build_streaming_response_or_error(
                 "credential",
                 "oauth_refresh",
                 "response_headers",
+                "response_headers_total",
+                "pool_wait_estimate",
+                "connect",
+                "tls",
+                "write",
+                "response_header_wait",
                 "first_upstream_event",
                 "conversion",
                 "first_content",

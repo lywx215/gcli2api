@@ -500,7 +500,7 @@ async def get_user_projects(credentials: Credentials) -> List[Dict[str, Any]]:
 
         log.info(f"API响应状态码: {response.status_code}")
         if response.status_code != 200:
-            log.error(f"API响应内容: {response.text}")
+            log.error("Resource Manager API returned an error response")
 
         if response.status_code == 200:
             data = response.json()
@@ -512,7 +512,7 @@ async def get_user_projects(credentials: Credentials) -> List[Dict[str, Any]]:
             log.info(f"获取到 {len(active_projects)} 个活跃项目")
             return active_projects
         else:
-            log.warning(f"获取项目列表失败: {response.status_code} - {response.text}")
+            log.warning(f"获取项目列表失败: HTTP {response.status_code}")
             return []
 
     except Exception as e:
@@ -819,7 +819,7 @@ async def _try_load_code_assist(
     }
 
     log.debug(f"[loadCodeAssist] Fetching project_id from: {request_url}")
-    log.debug(f"[loadCodeAssist] Request body: {request_body}")
+    log.debug("[loadCodeAssist] Request metadata prepared")
 
     response = await post_async(
         request_url,
@@ -831,9 +831,6 @@ async def _try_load_code_assist(
     log.debug(f"[loadCodeAssist] Response status: {response.status_code}")
 
     if response.status_code == 200:
-        response_text = response.text
-        log.debug(f"[loadCodeAssist] Response body: {response_text}")
-
         data = response.json()
         log.debug(f"[loadCodeAssist] Response JSON keys: {list(data.keys())}")
 
@@ -877,8 +874,7 @@ async def _try_load_code_assist(
             return None, None, credit_amount
     else:
         log.warning(f"[loadCodeAssist] Failed: HTTP {response.status_code}")
-        log.warning(f"[loadCodeAssist] Response body: {response.text[:500]}")
-        raise Exception(f"HTTP {response.status_code}: {response.text[:200]}")
+        raise Exception(f"HTTP {response.status_code}")
 
 
 async def _try_onboard_user(
@@ -913,7 +909,7 @@ async def _try_onboard_user(
     }
 
     log.debug(f"[onboardUser] Request URL: {request_url}")
-    log.debug(f"[onboardUser] Request body: {request_body}")
+    log.debug("[onboardUser] Request metadata prepared")
 
     # onboardUser 是长时间运行操作，需要轮询
     # 最多等待 10 秒（5 次 * 2 秒）
@@ -935,7 +931,7 @@ async def _try_onboard_user(
 
         if response.status_code == 200:
             data = response.json()
-            log.debug(f"[onboardUser] Response data: {data}")
+            log.debug(f"[onboardUser] Response keys: {list(data.keys())}")
 
             # 检查长时间运行操作是否完成
             if data.get("done"):
@@ -963,8 +959,7 @@ async def _try_onboard_user(
                 await asyncio.sleep(2)
         else:
             log.warning(f"[onboardUser] Failed: HTTP {response.status_code}")
-            log.warning(f"[onboardUser] Response body: {response.text[:500]}")
-            raise Exception(f"HTTP {response.status_code}: {response.text[:200]}")
+            raise Exception(f"HTTP {response.status_code}")
 
     log.error("[onboardUser] Timeout: Operation did not complete within 10 seconds")
     return None

@@ -16,7 +16,9 @@ from src.api.utils import handle_error_with_retry
 from src.credential_manager import CredentialManager, _CredentialManagerSingleton
 from src.google_oauth_api import Credentials, TokenError
 from src.httpx_client import HttpxClientManager, stream_post_async
+from src.log_safety import credential_log_id, safe_exception
 from src.router.stream_passthrough import build_streaming_response_or_error
+from src.smart_429 import ModelCapacityGuard
 from src.storage.sqlite_manager import SQLiteManager
 from src.streaming_latency import StreamFailure, StreamLatencyConfig, StreamRequestTrace
 
@@ -53,6 +55,18 @@ async def test_server_timing_follows_diagnostics_switch(monkeypatch, enabled):
         one_chunk(), model="test", protocol="gemini"
     )
     assert bool(response.headers.get("server-timing")) is enabled
+    assert response.headers.get("x-request-id")
+
+
+@pytest.mark.asyncio
+async def test_request_id_middleware_covers_nonstream_response():
+    from web import ensure_request_id_header
+
+    async def call_next(request):
+        del request
+        return geminicli_module.Response(content=b"ok", status_code=200)
+
+    response = await ensure_request_id_header(object(), call_next)
     assert response.headers.get("x-request-id")
 
 
@@ -697,3 +711,361 @@ async def test_geminicli_does_not_retry_after_upstream_started(monkeypatch):
         await stream.__anext__()
     assert caught.value.retryable is False
     assert upstream_calls == 1
+
+
+def test_trace_schema_v2_separates_retry_kinds_and_redacts_credential(monkeypatch):
+    monkeypatch.setenv("STREAM_DIAGNOSTICS_ENABLED", "true")
+    messages = []
+    monkeypatch.setattr("src.streaming_latency.log.info", messages.append)
+    trace = StreamRequestTrace(model="test", protocol="openai")
+    trace.set_client_request_id("new-api:request-1")
+    trace.begin_attempt("person@example.com.json")
+    trace.record_failure(
+        stage="connect",
+        error_type="ConnectTimeout",
+        status_code=504,
+        retryable=True,
+    )
+    trace.record_retry("transport", "connect")
+    trace.finish("error_connect", force_log=True)
+
+    payload = json.loads(messages[0].split(" ", 1)[1])
+    assert payload["schema_version"] == 2
+    assert payload["client_request_id"] == "new-api:request-1"
+    assert payload["retries"]["transport"] == 1
+    assert payload["retries"]["status"] == 0
+    assert payload["last_failure"]["error_type"] == "ConnectTimeout"
+    assert "person@example.com.json" not in messages[0]
+    assert payload["attempt_details"][0]["credential"]
+
+
+def test_log_safety_redacts_tokens_email_and_proxy_auth():
+    raw = (
+        "access_token=secret person@example.com "
+        "https://proxy-user:proxy-pass@proxy.example/path?api_key=key"
+    )
+    rendered = safe_exception(RuntimeError(raw))
+    assert "secret" not in rendered
+    assert "person@example.com" not in rendered
+    assert "proxy-user" not in rendered
+    assert "proxy-pass" not in rendered
+    assert "api_key=key" not in rendered
+    assert credential_log_id("/tmp/person@example.com.json") == credential_log_id(
+        "person@example.com.json"
+    )
+
+
+@pytest.mark.asyncio
+async def test_client_cancel_records_output_phase(monkeypatch):
+    monkeypatch.setenv("STREAM_DIAGNOSTICS_ENABLED", "true")
+    messages = []
+    monkeypatch.setattr("src.streaming_latency.log.info", messages.append)
+
+    async def stream():
+        yield b"data: first\n\n"
+        raise asyncio.CancelledError
+
+    response = await build_streaming_response_or_error(
+        stream(), model="test", protocol="openai"
+    )
+    iterator = response.body_iterator
+    assert await iterator.__anext__() == b"data: first\n\n"
+    with pytest.raises(asyncio.CancelledError):
+        await iterator.__anext__()
+
+    payload = json.loads(messages[-1].split(" ", 1)[1])
+    assert payload["result"] == "client_cancelled"
+    assert payload["stream"]["first_content_emitted"] is True
+    assert payload["stream"]["events_out"] == 1
+    assert payload["stream"]["bytes_out"] == len(b"data: first\n\n")
+    assert payload["stream"]["cancel_phase"] == "after_first_content"
+
+
+def test_capacity_guard_opens_and_allows_one_half_open_probe(monkeypatch):
+    monkeypatch.setattr(
+        config, "_geminicli_capacity_fast_fail_enabled_cache", True
+    )
+    monkeypatch.delenv("GEMINICLI_CAPACITY_FAST_FAIL_ENABLED", raising=False)
+    guard = ModelCapacityGuard()
+    assert guard.admission_retry_after("geminicli", "MODEL") == 0
+    assert guard.record_failure("geminicli", "model") == 0
+    assert guard.record_failure("geminicli", "MODEL") == 5
+    assert guard.admission_retry_after("geminicli", "model") >= 1
+    guard._open_until[("geminicli", "model")] = 0
+    assert guard.admission_retry_after("geminicli", "model") == 0
+    assert guard.admission_retry_after("geminicli", "model") == 1
+    assert guard.record_failure("geminicli", "model") == 10
+    guard.record_success("geminicli", "model")
+    assert guard.admission_retry_after("geminicli", "model") == 0
+
+
+@pytest.mark.parametrize(
+    ("exc", "stage", "status"),
+    [
+        (httpx.PoolTimeout("pool"), "pool", 504),
+        (httpx.ConnectTimeout("connect"), "connect", 504),
+        (httpx.ConnectError("connect"), "connect", 502),
+        (httpx.WriteTimeout("write"), "write", 504),
+        (httpx.WriteError("write"), "write", 502),
+        (httpx.ReadTimeout("read"), "response_headers", 504),
+        (httpx.RemoteProtocolError("protocol"), "response_headers", 502),
+    ],
+)
+def test_transport_failures_preserve_stage_and_exception_type(exc, stage, status):
+    failure = http_module._transport_failure(exc, "response_headers")
+    assert failure.stage == stage
+    assert failure.status_code == status
+    assert failure.error_type == type(exc).__name__
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("smart_enabled", [False, True])
+async def test_capacity_fast_fail_limits_stream_to_two_upstream_calls(
+    monkeypatch, smart_enabled
+):
+    capacity_body = json.dumps(
+        {
+            "error": {
+                "code": 429,
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [{"reason": "MODEL_CAPACITY_EXHAUSTED"}],
+            }
+        }
+    ).encode()
+    upstream_calls = 0
+    recorded_errors = 0
+    smart_capacity_records = 0
+    sleeps = []
+
+    async def get_credential(mode="geminicli", model_name=None, excluded_credentials=None):
+        del mode, model_name
+        excluded = set(excluded_credentials or ())
+        name = "two.json" if "one.json" in excluded else "one.json"
+        return name, {"token": name, "project_id": name}
+
+    async def endpoint():
+        return "https://upstream.test"
+
+    async def failed_stream(**kwargs):
+        nonlocal upstream_calls
+        del kwargs
+        upstream_calls += 1
+        yield geminicli_module.Response(content=capacity_body, status_code=429)
+
+    async def retry_config():
+        return {
+            "max_retries": 5,
+            "retry_interval": 0.01,
+            "retry_enabled": True,
+            "smart_429": False,
+        }
+
+    async def auto_ban_codes():
+        return [403]
+
+    async def record_error(*args, **kwargs):
+        nonlocal recorded_errors
+        del args, kwargs
+        recorded_errors += 1
+
+    async def no_sleep(delay):
+        sleeps.append(delay)
+
+    async def apply_smart(*args, **kwargs):
+        nonlocal smart_capacity_records
+        del args, kwargs
+        smart_capacity_records += 1
+        return geminicli_module.Upstream429Kind.MODEL_CAPACITY_EXHAUSTED, None
+
+    monkeypatch.setattr(config, "_geminicli_capacity_fast_fail_enabled_cache", True)
+    monkeypatch.delenv("GEMINICLI_CAPACITY_FAST_FAIL_ENABLED", raising=False)
+    geminicli_module.model_capacity_guard.reset()
+    geminicli_module.smart_429_service._reset_runtime_guards()
+    monkeypatch.setattr(
+        geminicli_module.credential_manager,
+        "get_valid_credential",
+        get_credential,
+        raising=False,
+    )
+    monkeypatch.setattr(geminicli_module, "get_code_assist_endpoint", endpoint)
+    monkeypatch.setattr(geminicli_module, "stream_post_async", failed_stream)
+    monkeypatch.setattr(geminicli_module, "get_retry_config", retry_config)
+    monkeypatch.setattr(geminicli_module, "get_auto_ban_error_codes", auto_ban_codes)
+    monkeypatch.setattr(geminicli_module, "record_api_call_error", record_error)
+    monkeypatch.setattr(geminicli_module.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(
+        geminicli_module,
+        "is_smart_429_protection_enabled",
+        lambda: smart_enabled,
+    )
+    monkeypatch.setattr(geminicli_module, "_apply_smart_429_state", apply_smart)
+
+    stream = geminicli_module.stream_request(
+        {"model": "gemini-test", "request": {}}
+    )
+    with pytest.raises(StreamFailure) as caught:
+        await stream.__anext__()
+    assert caught.value.status_code == 503
+    assert caught.value.headers["retry-after"] == "5"
+    assert upstream_calls == 2
+    assert recorded_errors == 0
+    assert smart_capacity_records == 0
+    assert len(sleeps) == 1
+
+
+@pytest.mark.asyncio
+async def test_capacity_fast_fail_limits_nonstream_to_two_upstream_calls(monkeypatch):
+    capacity_payload = {
+        "error": {
+            "code": 429,
+            "status": "RESOURCE_EXHAUSTED",
+            "details": [{"reason": "MODEL_CAPACITY_EXHAUSTED"}],
+        }
+    }
+    upstream_calls = 0
+    recorded_errors = 0
+
+    async def get_credential(mode="geminicli", model_name=None, excluded_credentials=None):
+        del mode, model_name
+        excluded = set(excluded_credentials or ())
+        name = "two.json" if "one.json" in excluded else "one.json"
+        return name, {"token": name, "project_id": name}
+
+    async def endpoint():
+        return "https://upstream.test"
+
+    async def failed_post(**kwargs):
+        nonlocal upstream_calls
+        del kwargs
+        upstream_calls += 1
+        return httpx.Response(
+            429,
+            json=capacity_payload,
+            request=httpx.Request("POST", "https://upstream.test"),
+        )
+
+    async def retry_config():
+        return {
+            "max_retries": 5,
+            "retry_interval": 0.01,
+            "retry_enabled": True,
+            "smart_429": False,
+        }
+
+    async def auto_ban_codes():
+        return [403]
+
+    async def record_error(*args, **kwargs):
+        nonlocal recorded_errors
+        del args, kwargs
+        recorded_errors += 1
+
+    async def no_sleep(delay):
+        del delay
+
+    monkeypatch.setattr(config, "_geminicli_capacity_fast_fail_enabled_cache", True)
+    monkeypatch.delenv("GEMINICLI_CAPACITY_FAST_FAIL_ENABLED", raising=False)
+    geminicli_module.model_capacity_guard.reset()
+    monkeypatch.setattr(
+        geminicli_module.credential_manager,
+        "get_valid_credential",
+        get_credential,
+        raising=False,
+    )
+    monkeypatch.setattr(geminicli_module, "get_code_assist_endpoint", endpoint)
+    monkeypatch.setattr(geminicli_module, "post_async", failed_post)
+    monkeypatch.setattr(geminicli_module, "get_retry_config", retry_config)
+    monkeypatch.setattr(geminicli_module, "get_auto_ban_error_codes", auto_ban_codes)
+    monkeypatch.setattr(geminicli_module, "record_api_call_error", record_error)
+    monkeypatch.setattr(geminicli_module.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(
+        geminicli_module, "is_smart_429_protection_enabled", lambda: False
+    )
+
+    response = await geminicli_module.non_stream_request(
+        {"model": "gemini-test", "request": {}}
+    )
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "5"
+    assert upstream_calls == 2
+    assert recorded_errors == 0
+
+
+@pytest.mark.asyncio
+async def test_capacity_fast_fail_disabled_preserves_legacy_retry_count(monkeypatch):
+    upstream_calls = 0
+    recorded_errors = 0
+    payload = {
+        "error": {
+            "code": 429,
+            "status": "RESOURCE_EXHAUSTED",
+            "details": [{"reason": "MODEL_CAPACITY_EXHAUSTED"}],
+        }
+    }
+
+    async def get_credential(**kwargs):
+        excluded = set(kwargs.get("excluded_credentials") or ())
+        name = f"{len(excluded) + 1}.json"
+        return name, {"token": name, "project_id": name}
+
+    async def endpoint():
+        return "https://upstream.test"
+
+    async def failed_post(**kwargs):
+        nonlocal upstream_calls
+        del kwargs
+        upstream_calls += 1
+        return httpx.Response(
+            429,
+            json=payload,
+            request=httpx.Request("POST", "https://upstream.test"),
+        )
+
+    async def retry_config():
+        return {
+            "max_retries": 2,
+            "retry_interval": 0.01,
+            "retry_enabled": True,
+            "smart_429": False,
+        }
+
+    async def record_error(*args, **kwargs):
+        nonlocal recorded_errors
+        del args, kwargs
+        recorded_errors += 1
+
+    async def auto_ban_codes():
+        return [403]
+
+    async def yes_retry(*args, **kwargs):
+        del args, kwargs
+        return True
+
+    async def no_sleep(delay):
+        del delay
+
+    monkeypatch.setattr(config, "_geminicli_capacity_fast_fail_enabled_cache", False)
+    monkeypatch.delenv("GEMINICLI_CAPACITY_FAST_FAIL_ENABLED", raising=False)
+    monkeypatch.setattr(
+        geminicli_module.credential_manager,
+        "get_valid_credential",
+        get_credential,
+        raising=False,
+    )
+    monkeypatch.setattr(geminicli_module, "get_code_assist_endpoint", endpoint)
+    monkeypatch.setattr(geminicli_module, "post_async", failed_post)
+    monkeypatch.setattr(geminicli_module, "get_retry_config", retry_config)
+    monkeypatch.setattr(geminicli_module, "get_auto_ban_error_codes", auto_ban_codes)
+    monkeypatch.setattr(geminicli_module, "record_api_call_error", record_error)
+    monkeypatch.setattr(geminicli_module, "handle_error_with_retry", yes_retry)
+    monkeypatch.setattr(geminicli_module.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(
+        geminicli_module, "is_smart_429_protection_enabled", lambda: False
+    )
+
+    response = await geminicli_module.non_stream_request(
+        {"model": "gemini-test", "request": {}}
+    )
+    assert response.status_code == 503
+    assert upstream_calls == 3
+    assert recorded_errors == 3

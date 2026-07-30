@@ -8,7 +8,8 @@
 
 ## 1. 审计基线
 
-审计日期：2026-07-30（Asia/Shanghai）。远端 SHA 已通过 `git ls-remote` 核对。
+审计日期：2026-07-30（Asia/Shanghai）。以下以当前本地远端跟踪引用和提交图为准；
+审计结束时网络 DNS 不可用，未再次执行远端在线核验。
 
 | 项目 | 值 |
 | --- | --- |
@@ -18,16 +19,27 @@
 | dev6 的提交基座 | `origin/dev5`，`5a85e5892a679445e77125d1567f6699d845fa76` |
 | 上游比较基线 | `upstream/master`，`4f5e3432e1d5fc5ba41cf56c99981ba89d1987f7` |
 | 共同祖先 | `78f391acee42cc2b2b39bf55577c8eed80aab7e3` |
-| dev5 提交分叉 | 上游独有 13 个提交；dev5 独有 127 个提交 |
-| dev5 对上游直接树差异 | 60 个文件，约 `+12877/-1011` |
-| dev5 三方分类 | 51 个仅 dev5 修改；8 个双方修改；1 个仅上游新增 |
+| dev6 提交分叉 | 上游独有 13 个提交；dev6 独有 128 个提交 |
+| dev6 对上游直接树差异 | 67 个文件，约 `+16366/-1421` |
+| dev6 三方分类 | 58 个仅 dev6 修改；8 个双方修改；1 个仅上游新增 |
 | dev6 初始实施对 dev5 增量 | 31 个文件，约 `+3564/-485` |
 | 当前文本冲突 | 4 个文件：`.gitignore`、`src/utils.py`、`version.txt`、`web.py` |
 
 基线只描述审计时的事实。以后同步前必须重新获取远端并更新 SHA、数量和冲突清单，
 不能假定本节永久有效。`master` 是历史发布分支，不再作为自定义修改审计基线。
 
-### 1.1 复核命令
+### 1.1 dev6 不可变标识
+
+| 内容 | 标识 |
+| --- | --- |
+| dev6 初始实施提交 | `3c73782efee69076e3dd440f1e07ab2f4902971a` |
+| dev6 Git tree | `739e611b66bb700464df5d7b6eba2ac3005de2fd` |
+| `origin/dev5..origin/dev6` binary patch SHA-256 | `6cb210aea066ccc10c4e53bdef9997afea3438f6adbc6bb8a6bfa7a1bf0d7a01` |
+
+当前文档正在补充 dev6 审计说明，因此提交后的最终 dev6 SHA/tree 可能变化；完成提交时应追加新 SHA，
+不要覆盖本表的初始实施锚点。
+
+### 1.2 复核命令
 
 以下命令都是同步前的只读检查；输出应随每次同步记录到新的冲突报告中。
 
@@ -47,10 +59,10 @@ git merge-tree "$(git merge-base origin/dev6 upstream/master)" origin/dev6 upstr
 文件三分类可用以下方式复核：
 
 ```bash
-base="$(git merge-base origin/dev5 upstream/master)"
-comm -12 <(git diff --name-only "$base"..origin/dev5 | sort) <(git diff --name-only "$base"..upstream/master | sort)
-comm -23 <(git diff --name-only "$base"..origin/dev5 | sort) <(git diff --name-only "$base"..upstream/master | sort)
-comm -13 <(git diff --name-only "$base"..origin/dev5 | sort) <(git diff --name-only "$base"..upstream/master | sort)
+base="$(git merge-base origin/dev6 upstream/master)"
+comm -12 <(git diff --name-only "$base"..origin/dev6 | sort) <(git diff --name-only "$base"..upstream/master | sort)
+comm -23 <(git diff --name-only "$base"..origin/dev6 | sort) <(git diff --name-only "$base"..upstream/master | sort)
+comm -13 <(git diff --name-only "$base"..origin/dev6 | sort) <(git diff --name-only "$base"..upstream/master | sort)
 ```
 
 ## 2. 保护与判定规则
@@ -363,8 +375,8 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 - `src/utils.py` 的后续更新。
 - 对应的版本元数据提交。
 
-`tests/test_gemini_fix.py` 是当前三方分类中唯一“仅上游新增”的文件。直接树差异显示它在 dev5
-一侧缺失，不代表 dev5 有意删除；同步时应作为上游测试引入并与 dev5 的顶层测试共同运行。
+`tests/test_gemini_fix.py` 是当前三方分类中唯一“仅上游新增”的文件。直接树差异显示它在 dev6
+一侧缺失，不代表 dev6 有意删除；同步时应作为上游测试引入并与 dev6 的顶层测试共同运行。
 
 上游“移除请求 timeout”与 dev6 的 TTFT 分阶段上限属于高风险语义冲突：可以吸收上游修复的动机，
 但不得直接删除 `pool/connect/write/header/first-event/first-content/idle` 各阶段预算，也不得恢复无界等待。
@@ -385,19 +397,19 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 | dev6 提交锚点 | 初始 TTFT 实施已提交并推送为 `3c73782efee69076e3dd440f1e07ab2f4902971a` | 后续同步必须从 `origin/dev6` 创建独立分支，不得直接修改 dev6/dev5 |
 | dev6 测试证据来源 | 2026-07-30 在项目 `.venv` 中执行全量 pytest，结果为 `112 passed, 7 warnings` | 后续提交/同步仍需重新运行并保存当次结果，不得直接复用历史结论 |
 
-## 12. 文件覆盖矩阵（60/60）
+## 12. 文件覆盖矩阵（67/67）
 
 本节用于机械核对，防止功能说明完整但漏掉文件。路径按共同祖先三方分类。
 
-### 12.1 仅 dev5 修改（51）
+### 12.1 仅 dev6 修改（58）
 
 | 分组 | 文件 | 对应保护项 |
 | --- | --- | --- |
-| 配置/文档/部署（12） | `.agent/workflows/debug-log.md`、`.env.example`、`.github/workflows/docker-publish.yml`、`README.md`、`config.py`、`docker-compose.yml`、`docs/http_status_codes.md`、`requirements.txt`、`review/GEMINI_CLI_TIER_REVIEW.md`、`review/SMART_429_PROTECTION_AUDIT.md`、`review/SMART_429_PROTECTION_REVIEW.md`、`scripts/migrate_sqlite_to_mysql.py` | S429、TIER、OPS、STORE |
+| 配置/文档/部署（14） | `.agent/workflows/debug-log.md`、`.env.example`、`.github/workflows/docker-publish.yml`、`README.md`、`config.py`、`docker-compose.yml`、`docs/CUSTOM_MODIFICATIONS.md`、`docs/STREAMING_TTFT_LATENCY_REVIEW.md`、`docs/http_status_codes.md`、`requirements.txt`、`review/GEMINI_CLI_TIER_REVIEW.md`、`review/SMART_429_PROTECTION_AUDIT.md`、`review/SMART_429_PROTECTION_REVIEW.md`、`scripts/migrate_sqlite_to_mysql.py` | S429、TIER、OPS、STORE、API-05/API-06 |
 | 前端（3） | `front/common.js`、`front/control_panel.html`、`front/control_panel_mobile.html` | UI-01、UI-02、CRED、STAT |
-| API/认证/转换/面板/路由（22） | `src/api/utils.py`、`src/auth.py`、`src/converter/anthropic2gemini.py`、`src/converter/openai2gemini.py`、`src/credential_manager.py`、`src/google_oauth_api.py`、`src/httpx_client.py`、`src/models.py`、`src/panel/auth.py`、`src/panel/config_routes.py`、`src/panel/creds.py`、`src/panel/root.py`、`src/panel/version.py`、`src/router/antigravity/gemini.py`、`src/router/antigravity/openai.py`、`src/router/geminicli/anthropic.py`、`src/router/geminicli/gemini.py`、`src/router/geminicli/openai.py`、`src/smart_429.py`、`src/subscription_tiers.py`、`src/usage_stats.py`、`src/versioning.py` | CRED、ROUTE、S429、TIER、MODEL、API、CONV、OPS |
+| API/认证/转换/面板/路由（25） | `src/api/utils.py`、`src/auth.py`、`src/converter/anthropic2gemini.py`、`src/converter/anti_truncation.py`、`src/converter/openai2gemini.py`、`src/credential_manager.py`、`src/google_oauth_api.py`、`src/httpx_client.py`、`src/models.py`、`src/panel/auth.py`、`src/panel/config_routes.py`、`src/panel/creds.py`、`src/panel/root.py`、`src/panel/version.py`、`src/router/antigravity/gemini.py`、`src/router/antigravity/openai.py`、`src/router/geminicli/anthropic.py`、`src/router/geminicli/gemini.py`、`src/router/geminicli/openai.py`、`src/router/stream_passthrough.py`、`src/smart_429.py`、`src/streaming_latency.py`、`src/subscription_tiers.py`、`src/usage_stats.py`、`src/versioning.py` | CRED、ROUTE、S429、TIER、MODEL、API、AUTH、CORE、CONV、OPS |
 | 存储（6） | `src/storage/_stats_common.py`、`src/storage/mongodb_manager.py`、`src/storage/mysql_manager.py`、`src/storage/psql_manager.py`、`src/storage/sqlite_manager.py`、`src/storage_adapter.py` | STORE、STAT、S429、TIER |
-| 测试（8） | `test_frontend_static.py`、`test_gemini35_tier_routing.py`、`test_geminicli_subscription_api.py`、`test_smart_429.py`、`test_sqlite_tier_storage.py`、`test_subscription_tiers.py`、`test_upload_tier_detection.py`、`test_versioning.py` | 第 9.2 节 |
+| 测试（10） | `test_frontend_static.py`、`test_gemini35_tier_routing.py`、`test_geminicli_subscription_api.py`、`test_smart_429.py`、`test_sqlite_tier_storage.py`、`test_stream_diagnostics_config.py`、`test_streaming_latency.py`、`test_subscription_tiers.py`、`test_upload_tier_detection.py`、`test_versioning.py` | 第 9.2 节 |
 
 ### 12.2 双方修改（8）
 
@@ -408,11 +420,11 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 
 ### 12.3 仅上游新增（1）
 
-`tests/test_gemini_fix.py`。它属于待同步测试资产，不是 dev5 的自定义删除项。
+`tests/test_gemini_fix.py`。它属于待同步测试资产，不是 dev6 的自定义删除项。
 
 ### 12.4 dev6 初始实施相对 dev5 的增量文件（30/30，不含本文档）
 
-这一矩阵叠加在 12.1–12.3 的 dev5/上游矩阵之上。`M` 表示相对 `origin/dev5` 修改，
+这一矩阵是对 12.1–12.3 的 dev6/上游全量矩阵所做的增量解释。`M` 表示相对 `origin/dev5` 修改，
 `A` 表示由 dev6 新增；初始实施提交已将 4 个新增项目文件全部纳入版本控制。
 
 | 分组 | 状态与文件 | 对应保护项 |
@@ -434,7 +446,7 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 2. 执行 `git fetch origin upstream`，记录 `origin/dev6`、`origin/dev5`、`upstream/master` 和 merge-base。
 3. 从 `origin/dev6` 创建独立分支，例如 `codex/sync-upstream-YYYYMMDD`；禁止直接在 dev6、dev5 或 master 操作。
 4. 重新生成三类文件清单、提交清单和 `git merge-tree` 预演结果。
-5. 将预演结果与本文功能 ID、接口表、字段表、60 文件矩阵及 dev6 的 30 文件增量比较。
+5. 将预演结果与本文功能 ID、接口表、字段表、67 文件矩阵及 dev6 的 30 个项目文件增量比较。
 
 ### 13.2 冲突报告格式
 
@@ -598,7 +610,24 @@ dev6 v1 明确没有实现以下行为，同步时不能以“优化”为名私
 
 如需采用其中任何一项，必须独立设计、评估计费/重复工具调用/隐私风险并取得用户明确批准。
 
-### 16.9 测试与验收证据
+### 16.9 TTFT 诊断 schema v2 与容量快速失败
+
+- `STREAM_PERF_SUMMARY` 增加 `schema_version=2`、状态/传输/容量重试计数、
+  `last_failure`、最多 8 条 `attempt_details` 及事件数/字节数/取消阶段；旧字段继续保留。
+- 诊断开启时尽力拆分连接池等待估算、TCP、TLS、写入和响应头等待；诊断关闭时不注册传输 trace。
+- 下游合法的 `X-Client-Request-ID` 或入站 `X-Request-ID` 作为 `client_request_id`，
+  不替代服务端始终返回的 `X-Request-ID`。
+- 新增默认关闭的 `GEMINICLI_CAPACITY_FAST_FAIL_ENABLED` /
+  `geminicli_capacity_fast_fail_enabled`。开启后模型容量不足单请求最多调用上游两次，
+  之后由进程内模型保护器快速返回带 `Retry-After` 的 503。
+- 容量保护器初始冷却 5 秒，half-open 失败后按 10/20/30 秒重新打开；模型容量事件不得污染
+  凭证额度、风险、OAuth 或永久禁用状态。
+- 桌面和移动控制面板共同提供开关。环境变量锁定优先；单 Worker 热更新，多 Worker 需重启，
+  且保护器状态不跨 Worker 同步。
+- 所有凭证运行日志使用 SHA-256 前 12 位 `diagnostic_id`；凭证状态接口提供同一字段用于映射，
+  日志禁止记录完整文件名、邮箱、Token、Prompt、代理认证信息和完整上游错误正文。
+
+### 16.10 测试与验收证据
 
 - 新增 `test_streaming_latency.py`，覆盖阶段超时、协议终止错误、共享池复用与关闭、代理 generation、
   `trust_env=False`、并发 OAuth、单例竞态、单次 sleep、凭证排除、首事件前重试及首事件后禁重试。
@@ -607,5 +636,5 @@ dev6 v1 明确没有实现以下行为，同步时不能以“优化”为名私
 - `test_frontend_static.py` 增加双端控件和 common.js load/save/lock 静态检查；
   `test_gemini35_tier_routing.py` 更新为断言 credential 阶段的 typed 503 failure。
 - `docs/STREAMING_TTFT_LATENCY_REVIEW.md` 记录实现完成时的测试结果；推送前已在项目 `.venv`
-  中重新执行全量 pytest，结果为 `112 passed, 7 warnings`，compileall 和 diff-check 也已通过。
+  中重新执行全量 pytest，增强后的结果为 `135 passed, 7 warnings`，compileall 和 diff-check 也已通过。
   以后每次同步仍须重新验证，不能直接复用本次结果。

@@ -178,7 +178,7 @@ async def messages(
 
             # 检查是否是错误响应（有些错误可能status_code是200但包含error字段）
             if "error" in gemini_response:
-                log.error(f"Fake streaming got error in response body: {gemini_response['error']}")
+                log.error("Fake streaming received an upstream error response")
                 # 转换错误为 Anthropic 格式
                 from src.converter.anthropic2gemini import gemini_to_anthropic_response
                 anthropic_error = gemini_to_anthropic_response(

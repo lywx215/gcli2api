@@ -3143,6 +3143,11 @@ function populateConfigForm() {
         'stream_diagnostics_enabled',
         c.stream_diagnostics_enabled
     );
+    setConfigCheckbox(
+        'geminicliCapacityFastFailEnabled',
+        'geminicli_capacity_fast_fail_enabled',
+        c.geminicli_capacity_fast_fail_enabled
+    );
 
     // 轮巡模式
     const routingModeSelect = document.getElementById('routingMode');
@@ -3221,6 +3226,7 @@ async function saveConfig() {
             antigravity_switch_credential_enabled: getChecked('antigravitySwitchCredentialEnabled'),
             debug_mode: getChecked('debugMode'),
             stream_diagnostics_enabled: getChecked('streamDiagnosticsEnabled'),
+            geminicli_capacity_fast_fail_enabled: getChecked('geminicliCapacityFastFailEnabled'),
             routing_mode: (document.getElementById('routingMode') || {}).value || 'normal',
             anti_truncation_max_attempts: getInt('antiTruncationMaxAttempts', 3),
             keepalive_url: getValue('keepaliveUrl'),

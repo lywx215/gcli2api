@@ -21,6 +21,7 @@ from config import (
     is_smart_429_protection_enabled,
 )
 from log import log
+from src.log_safety import credential_log_id, safe_exception, safe_text
 
 from src.credential_manager import credential_manager
 from src.httpx_client import stream_post_async, post_async
@@ -363,7 +364,7 @@ async def stream_request(
     project_id = credential_data.get("project_id", "")
 
     if not access_token:
-        log.error(f"[ANTIGRAVITY STREAM] No access token in credential: {current_file}")
+        log.error(f"[ANTIGRAVITY STREAM] No access token: credential={credential_log_id(current_file)}")
         yield build_error_response("凭证中没有访问令牌", 500)
         return
 
@@ -446,7 +447,7 @@ async def stream_request(
 
                     # 如果错误码是429、503或者在禁用码当中，做好记录后进行重试
                     if _is_retryable_status(status_code, DISABLE_ERROR_CODES):
-                        log.warning(f"[ANTIGRAVITY STREAM] 流式请求失败 (status={status_code}), 凭证: {current_file}, 响应: {error_body[:500] if error_body else '无'}")
+                        log.warning(f"[ANTIGRAVITY STREAM] 流式请求失败 (status={status_code}), credential={credential_log_id(current_file)}, upstream={safe_text(error_body, limit=240) or 'empty'}")
 
                         # 解析冷却时间
                         cooldown_until = None
@@ -505,7 +506,7 @@ async def stream_request(
                             return
                     else:
                         # 错误码不在禁用码当中，直接返回，无需重试
-                        log.error(f"[ANTIGRAVITY STREAM] 流式请求失败，非重试错误码 (status={status_code}), 凭证: {current_file}, 响应: {error_body[:500] if error_body else '无'}")
+                        log.error(f"[ANTIGRAVITY STREAM] 非重试错误 (status={status_code}), credential={credential_log_id(current_file)}, upstream={safe_text(error_body, limit=240) or 'empty'}")
                         await record_api_call_error(
                             credential_manager, current_file, status_code,
                             None, mode="antigravity", model_name=model_name,
@@ -539,7 +540,7 @@ async def stream_request(
                 return
             elif not need_retry:
                 # 没有收到任何数据（空回复），需要重试
-                log.warning(f"[ANTIGRAVITY STREAM] 收到空回复，无任何内容，凭证: {current_file}")
+                log.warning(f"[ANTIGRAVITY STREAM] 收到空回复, credential={credential_log_id(current_file)}")
                 await record_api_call_error(
                     credential_manager, current_file, 200,
                     None, mode="antigravity", model_name=model_name,
@@ -578,7 +579,7 @@ async def stream_request(
                 continue  # 重试
 
         except Exception as e:
-            log.error(f"[ANTIGRAVITY STREAM] 流式请求异常: {e}, 凭证: {current_file}")
+            log.error(f"[ANTIGRAVITY STREAM] 流式请求异常: {safe_exception(e)}, credential={credential_log_id(current_file)}")
             if success_recorded:
                 # Shared transport guards may surface an idle timeout here. Once
                 # bytes were emitted, replaying the prompt would duplicate output.
@@ -655,7 +656,7 @@ async def non_stream_request(
     project_id = credential_data.get("project_id", "")
 
     if not access_token:
-        log.error(f"[ANTIGRAVITY] No access token in credential: {current_file}")
+        log.error(f"[ANTIGRAVITY] No access token: credential={credential_log_id(current_file)}")
         return build_error_response("凭证中没有访问令牌", 500)
 
     # 2. 构建URL和请求头
@@ -729,7 +730,7 @@ async def non_stream_request(
             if status_code == 200:
                 # 检查是否为空回复
                 if not response.content or len(response.content) == 0:
-                    log.warning(f"[ANTIGRAVITY] 收到200响应但内容为空，凭证: {current_file}")
+                    log.warning(f"[ANTIGRAVITY] 收到200响应但内容为空, credential={credential_log_id(current_file)}")
                     
                     # 记录错误
                     await record_api_call_error(
@@ -773,7 +774,7 @@ async def non_stream_request(
                     pass
 
                 if _is_retryable_status(status_code, DISABLE_ERROR_CODES):
-                    log.warning(f"[ANTIGRAVITY] 非流式请求失败 (status={status_code}), 凭证: {current_file}, 响应: {error_text[:500] if error_text else '无'}")
+                    log.warning(f"[ANTIGRAVITY] 非流式请求失败 (status={status_code}), credential={credential_log_id(current_file)}, upstream={safe_text(error_text, limit=240) or 'empty'}")
 
                     # 解析冷却时间
                     cooldown_until = None
@@ -830,7 +831,7 @@ async def non_stream_request(
                         return last_error_response
                 else:
                     # 错误码不在禁用码当中，直接返回，无需重试
-                    log.error(f"[ANTIGRAVITY] 非流式请求失败，非重试错误码 (status={status_code}), 凭证: {current_file}, 响应: {error_text[:500] if error_text else '无'}")
+                    log.error(f"[ANTIGRAVITY] 非重试错误 (status={status_code}), credential={credential_log_id(current_file)}, upstream={safe_text(error_text, limit=240) or 'empty'}")
                     await record_api_call_error(
                         credential_manager, current_file, status_code,
                         None, mode="antigravity", model_name=model_name,
@@ -862,7 +863,7 @@ async def non_stream_request(
                 continue  # 重试
 
         except Exception as e:
-            log.error(f"[ANTIGRAVITY] 非流式请求异常: {e}, 凭证: {current_file}")
+            log.error(f"[ANTIGRAVITY] 非流式请求异常: {safe_exception(e)}, credential={credential_log_id(current_file)}")
             if attempt < max_retries:
                 log.info(f"[ANTIGRAVITY] 异常后重试 (attempt {attempt + 2}/{max_retries + 1})...")
                 await asyncio.sleep(retry_interval)
@@ -905,7 +906,7 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
     access_token = credential_data.get("access_token") or credential_data.get("token")
 
     if not access_token:
-        log.error(f"[ANTIGRAVITY] No access token in credential: {current_file}")
+        log.error(f"[ANTIGRAVITY] No access token: credential={credential_log_id(current_file)}")
         return []
 
     # 构建请求头

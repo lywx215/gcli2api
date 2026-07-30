@@ -808,3 +808,28 @@ Worker 保存后提示重启全部 Worker。若设置 `STREAM_DIAGNOSTICS_ENABLE
 - `python -m compileall` 与 `git diff --check` 通过。
 
 首版按决策不实现 heartbeat、收到响应头后提前提交 200 或并行 hedge；如后续诊断证明主要问题位于反向代理空闲链路，再单独设计。
+
+## 17. 生产日志复核后的诊断增强
+
+2026-07-30 对实际运行日志复核后，确认主要长尾来自 Google
+`MODEL_CAPACITY_EXHAUSTED` 和等待上游响应头；凭证获取、OAuth 刷新和协议转换不是本批日志中的
+主要瓶颈。原诊断把连接池、TCP、TLS、写入和响应头等待合并为 `response_headers`，同时缺少异常类、
+状态/传输重试拆分以及下游取消后的输出量，因此升级为兼容旧字段的
+`STREAM_PERF_SUMMARY schema_version=2`。
+
+新版记录 `retries`、`last_failure`、限长 `attempt_details` 和不含内容的 `stream` 统计。
+诊断开启时以 httpcore trace callback 尽力采集 pool/connect/TLS/write/header 阶段；采集不可用时
+回退旧聚合耗时，诊断关闭时不安装 callback。服务端 `X-Request-ID` 仍为权威 ID，合法的下游
+`X-Client-Request-ID` 或入站 `X-Request-ID` 另存为 `client_request_id`。
+
+新增独立配置 `GEMINICLI_CAPACITY_FAST_FAIL_ENABLED` /
+`geminicli_capacity_fast_fail_enabled`，默认关闭。开启后单请求遇到模型容量不足最多切换一次凭证，
+第二次立即返回带 `Retry-After` 的 503；10 秒内两次容量失败打开进程内模型保护器，按
+5/10/20/30 秒冷却并只允许一个 half-open 探测。容量事件不写入凭证额度、风控或永久禁用状态。
+环境变量锁定前端开关；单 Worker 支持热更新，多 Worker 保存后需重启且保护状态彼此独立。
+
+凭证日志统一使用 SHA-256 前 12 位诊断 ID，凭证状态接口同时返回 `diagnostic_id` 供管理员映射。
+运行日志不得包含完整凭证文件名、邮箱、Token、Prompt、代理认证信息或完整上游错误正文。
+
+增强实现完成后在项目 `.venv` 运行全量测试：`135 passed, 7 warnings`；同时通过
+`compileall` 和 `git diff --check`。

@@ -16,7 +16,7 @@ import asyncio
 import json
 
 # 第三方库
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 # 本地模块 - 配置和日志
@@ -42,6 +42,7 @@ from src.converter.fake_stream import (
 from src.router.hi_check import is_health_check_request, create_health_check_response
 from src.router.stream_passthrough import (
     build_streaming_response_or_error,
+    client_request_id_from_headers,
 )
 from src.streaming_latency import StreamFailure
 
@@ -58,6 +59,7 @@ router = APIRouter()
 @router.post("/v1/chat/completions")
 async def chat_completions(
     openai_request: OpenAIChatCompletionRequest,
+    request: Request = None,
     token: str = Depends(authenticate_bearer)
 ):
     """
@@ -172,7 +174,7 @@ async def chat_completions(
 
             # 检查是否是错误响应（有些错误可能status_code是200但包含error字段）
             if "error" in gemini_response:
-                log.error(f"Fake streaming got error in response body: {gemini_response['error']}")
+                log.error("Fake streaming received an upstream error response")
                 # 转换错误为 OpenAI 格式
                 from src.converter.openai2gemini import convert_gemini_to_openai_response
                 openai_error = convert_gemini_to_openai_response(
@@ -338,16 +340,19 @@ async def chat_completions(
     # ========== 根据模式选择生成器 ==========
     if use_fake_streaming:
         return await build_streaming_response_or_error(
-            fake_stream_generator(), model=public_model, protocol="openai"
+            fake_stream_generator(), model=public_model, protocol="openai",
+            client_request_id=client_request_id_from_headers(getattr(request, "headers", None)),
         )
     elif use_anti_truncation:
         log.info("启用流式抗截断功能")
         return await build_streaming_response_or_error(
-            anti_truncation_generator(), model=public_model, protocol="openai"
+            anti_truncation_generator(), model=public_model, protocol="openai",
+            client_request_id=client_request_id_from_headers(getattr(request, "headers", None)),
         )
     else:
         return await build_streaming_response_or_error(
-            normal_stream_generator(), model=public_model, protocol="openai"
+            normal_stream_generator(), model=public_model, protocol="openai",
+            client_request_id=client_request_id_from_headers(getattr(request, "headers", None)),
         )
 
 

@@ -162,6 +162,9 @@ async def get_config(token: str = Depends(verify_panel_token)):
         current_config["stream_diagnostics_enabled"] = (
             await config.get_stream_diagnostics_enabled()
         )
+        current_config["geminicli_capacity_fast_fail_enabled"] = (
+            await config.get_geminicli_capacity_fast_fail_enabled()
+        )
 
         # 轮巡模式
         current_config["routing_mode"] = await config.get_routing_mode()
@@ -220,7 +223,6 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
             new_config["smart_429_retry_base_interval"] = value
 
         log.debug(f"收到的配置数据: {list(new_config.keys())}")
-        log.debug(f"收到的password值: {new_config.get('password', 'NOT_FOUND')}")
 
         # 验证配置项
         if "retry_429_max_retries" in new_config:
@@ -276,6 +278,12 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
         if "stream_diagnostics_enabled" in new_config:
             if not isinstance(new_config["stream_diagnostics_enabled"], bool):
                 raise HTTPException(status_code=400, detail="流式 TTFT 诊断开关必须是布尔值")
+        if "geminicli_capacity_fast_fail_enabled" in new_config:
+            if not isinstance(new_config["geminicli_capacity_fast_fail_enabled"], bool):
+                raise HTTPException(
+                    status_code=400,
+                    detail="GeminiCLI 模型容量快速失败开关必须是布尔值",
+                )
 
         # 验证保活配置
         if "keepalive_url" in new_config:
@@ -321,6 +329,10 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
             "stream_diagnostics_enabled" in new_config
             and "stream_diagnostics_enabled" not in env_locked_keys
         )
+        capacity_fast_fail_saved = (
+            "geminicli_capacity_fast_fail_enabled" in new_config
+            and "geminicli_capacity_fast_fail_enabled" not in env_locked_keys
+        )
         try:
             workers = int(os.getenv("WORKERS", "1"))
         except (TypeError, ValueError):
@@ -332,14 +344,16 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
             if key not in env_locked_keys:
                 await storage_adapter.set_config(key, value)
                 if key in ("password", "api_password", "panel_password"):
-                    log.debug(f"设置{key}字段为: {value}")
+                    log.debug(f"已更新敏感配置字段: {key}")
 
         # 重新加载配置缓存（关键！）
         await config.reload_config(
-            reload_stream_diagnostics=workers == 1
+            reload_stream_diagnostics=workers == 1,
+            reload_capacity_fast_fail=workers == 1,
         )
-        from src.smart_429 import smart_429_service
+        from src.smart_429 import model_capacity_guard, smart_429_service
         await smart_429_service.reconfigure()
+        model_capacity_guard.reconfigure()
 
         # 如果保活相关配置发生变化，立即重启保活服务
         keepalive_keys = {"keepalive_url", "keepalive_interval"}
@@ -350,32 +364,42 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
                 log.warning(f"重启保活服务失败: {e}")
 
         # 验证保存后的结果
-        test_api_password = await config.get_api_password()
-        test_panel_password = await config.get_panel_password()
-        test_password = await config.get_server_password()
-        log.debug(f"保存后立即读取的API密码: {test_api_password}")
-        log.debug(f"保存后立即读取的面板密码: {test_panel_password}")
-        log.debug(f"保存后立即读取的通用密码: {test_password}")
+        await config.get_api_password()
+        await config.get_panel_password()
+        await config.get_server_password()
+        log.debug("配置保存后敏感字段读取验证完成")
 
         # 构建响应消息
         response_data = {
             "message": "配置保存成功",
             "saved_config": {k: v for k, v in new_config.items() if k not in env_locked_keys},
             "smart_429": smart_429_service.status(),
-            "hot_updated": (
-                ["stream_diagnostics_enabled"]
-                if diagnostics_saved and workers == 1
-                else []
-            ),
-            "restart_required": (
-                ["stream_diagnostics_enabled"]
-                if diagnostics_saved and workers > 1
-                else []
-            ),
+            "hot_updated": [
+                key
+                for key, saved in (
+                    ("stream_diagnostics_enabled", diagnostics_saved),
+                    (
+                        "geminicli_capacity_fast_fail_enabled",
+                        capacity_fast_fail_saved,
+                    ),
+                )
+                if saved and workers == 1
+            ],
+            "restart_required": [
+                key
+                for key, saved in (
+                    ("stream_diagnostics_enabled", diagnostics_saved),
+                    (
+                        "geminicli_capacity_fast_fail_enabled",
+                        capacity_fast_fail_saved,
+                    ),
+                )
+                if saved and workers > 1
+            ],
         }
-        if diagnostics_saved and workers > 1:
+        if (diagnostics_saved or capacity_fast_fail_saved) and workers > 1:
             response_data["restart_notice"] = (
-                "当前为多 Worker 模式，请重启全部 Worker 以统一应用流式 TTFT 诊断开关。"
+                "当前为多 Worker 模式，请重启全部 Worker 以统一应用诊断和容量保护配置。"
             )
 
         return JSONResponse(content=response_data)

@@ -376,7 +376,9 @@ def _build_variables(model: str, gemini_payload: Dict[str, Any]) -> Dict[str, An
         gemini_payload["contents"] = _drop_invalid_tool_turns(gemini_payload["contents"])
         gemini_payload["contents"] = _fix_thought_signatures(gemini_payload["contents"])
         gemini_payload["contents"] = _fix_function_response_names(gemini_payload["contents"])
-    log.debug(f"[VERTEX] contents to upstream: {json.dumps(gemini_payload.get('contents', []), ensure_ascii=False)}")
+    log.debug(
+        f"[VERTEX] prepared {len(gemini_payload.get('contents', []))} content item(s)"
+    )
     vars_: Dict[str, Any] = {"model": model}
     for field in _SUPPORTED_VAR_FIELDS:
         if field in gemini_payload:
@@ -670,7 +672,7 @@ async def stream_request(
                 err_body = await resp.text()
             except Exception:
                 err_body = ""
-            log.error(f"[VERTEX STREAM] HTTP {resp.status}: {err_body[:300]}")
+            log.error(f"[VERTEX STREAM] upstream HTTP {resp.status}")
 
             if _is_auth_error(err_body):
                 if is_first_auth:

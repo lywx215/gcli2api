@@ -145,10 +145,16 @@ async def test_panel_get_exposes_diagnostics_switch(monkeypatch):
         "get_stream_diagnostics_enabled",
         enabled,
     )
+    monkeypatch.setattr(
+        config_routes.config,
+        "get_geminicli_capacity_fast_fail_enabled",
+        enabled,
+    )
 
     response = await config_routes.get_config(token="test")
     payload = json.loads(response.body)
     assert payload["config"]["stream_diagnostics_enabled"] is True
+    assert payload["config"]["geminicli_capacity_fast_fail_enabled"] is True
 
 
 @pytest.mark.asyncio
@@ -195,7 +201,10 @@ async def test_panel_reports_single_or_multi_worker_activation(
 
     assert stored == {"stream_diagnostics_enabled": True}
     assert reload_calls == [
-        {"reload_stream_diagnostics": reload_diagnostics}
+        {
+            "reload_stream_diagnostics": reload_diagnostics,
+            "reload_capacity_fast_fail": reload_diagnostics,
+        }
     ]
     assert payload[result_key] == ["stream_diagnostics_enabled"]
     if workers == "2":
@@ -237,3 +246,86 @@ async def test_panel_ignores_environment_locked_diagnostics_save(monkeypatch):
     assert stored == {}
     assert payload["saved_config"] == {}
     assert payload["hot_updated"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("env_value", "expected"), [("true", True), ("false", False)])
+async def test_capacity_fast_fail_environment_value_wins_and_locks(
+    monkeypatch, env_value, expected
+):
+    monkeypatch.setattr(config, "_config_initialized", True)
+    monkeypatch.setattr(
+        config,
+        "_config_cache",
+        {"geminicli_capacity_fast_fail_enabled": not expected},
+    )
+    monkeypatch.setattr(
+        config,
+        "_geminicli_capacity_fast_fail_enabled_cache",
+        not expected,
+    )
+    monkeypatch.setenv("GEMINICLI_CAPACITY_FAST_FAIL_ENABLED", env_value)
+
+    assert await config.get_geminicli_capacity_fast_fail_enabled() is expected
+    assert config.is_geminicli_capacity_fast_fail_enabled() is expected
+    assert "geminicli_capacity_fast_fail_enabled" in get_env_locked_keys()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["true", 1, None])
+async def test_panel_rejects_non_boolean_capacity_fast_fail(invalid):
+    with pytest.raises(HTTPException) as caught:
+        await config_routes.save_config(
+            ConfigSaveRequest(
+                config={"geminicli_capacity_fast_fail_enabled": invalid}
+            ),
+            token="test",
+        )
+    assert caught.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_panel_hot_updates_capacity_fast_fail(monkeypatch):
+    stored = {}
+    reload_calls = []
+
+    class Adapter:
+        async def set_config(self, key, value):
+            stored[key] = value
+
+    async def get_adapter():
+        return Adapter()
+
+    async def reload_config(**kwargs):
+        reload_calls.append(kwargs)
+
+    async def password():
+        return "pwd"
+
+    async def reconfigure():
+        return None
+
+    monkeypatch.delenv("GEMINICLI_CAPACITY_FAST_FAIL_ENABLED", raising=False)
+    monkeypatch.setenv("WORKERS", "1")
+    monkeypatch.setattr(config_routes, "get_storage_adapter", get_adapter)
+    monkeypatch.setattr(config_routes.config, "reload_config", reload_config)
+    monkeypatch.setattr(config_routes.config, "get_api_password", password)
+    monkeypatch.setattr(config_routes.config, "get_panel_password", password)
+    monkeypatch.setattr(config_routes.config, "get_server_password", password)
+    monkeypatch.setattr(smart_429_service, "reconfigure", reconfigure)
+
+    response = await config_routes.save_config(
+        ConfigSaveRequest(
+            config={"geminicli_capacity_fast_fail_enabled": True}
+        ),
+        token="test",
+    )
+    payload = json.loads(response.body)
+    assert stored == {"geminicli_capacity_fast_fail_enabled": True}
+    assert reload_calls == [
+        {
+            "reload_stream_diagnostics": True,
+            "reload_capacity_fast_fail": True,
+        }
+    ]
+    assert payload["hot_updated"] == ["geminicli_capacity_fast_fail_enabled"]

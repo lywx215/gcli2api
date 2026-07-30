@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 from config import (
     get_smart_429_config_sync,
+    is_geminicli_capacity_fast_fail_enabled,
     is_smart_429_protection_enabled,
     set_smart_429_runtime_blocked_reason,
     workers_not_supported,
@@ -37,6 +38,95 @@ class RiskCheckStatus(str, Enum):
     RISK_CONTROLLED = "risk_controlled"
     QUOTA_EXHAUSTED = "quota_exhausted"
     INDETERMINATE = "indeterminate"
+
+
+class ModelCapacityGuard:
+    """Aggressive, process-local fast-fail guard independent from SMART 429."""
+
+    _REOPEN_DELAYS = (10, 20, 30)
+
+    def __init__(self) -> None:
+        self._events: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+        self._open_until: dict[tuple[str, str], float] = {}
+        self._half_open_inflight: set[tuple[str, str]] = set()
+        self._reopen_stage: dict[tuple[str, str], int] = defaultdict(int)
+        self._configured_enabled = is_geminicli_capacity_fast_fail_enabled()
+
+    @staticmethod
+    def _key(mode: str, model: str) -> tuple[str, str]:
+        return mode, model.strip().lower()
+
+    def reset(self) -> None:
+        self._events.clear()
+        self._open_until.clear()
+        self._half_open_inflight.clear()
+        self._reopen_stage.clear()
+
+    def reconfigure(self) -> None:
+        enabled = is_geminicli_capacity_fast_fail_enabled()
+        if enabled != self._configured_enabled:
+            self.reset()
+            self._configured_enabled = enabled
+
+    def admission_retry_after(
+        self, mode: str, model: str, *, enabled: Optional[bool] = None
+    ) -> int:
+        if enabled is None:
+            enabled = is_geminicli_capacity_fast_fail_enabled()
+        if not enabled:
+            return 0
+        key = self._key(mode, model)
+        until = self._open_until.get(key)
+        if until is None:
+            return 0
+        remaining = until - time.time()
+        if remaining > 0:
+            return max(1, int(remaining + 0.999))
+        if key in self._half_open_inflight:
+            return 1
+        self._half_open_inflight.add(key)
+        return 0
+
+    def record_failure(
+        self, mode: str, model: str, *, enabled: Optional[bool] = None
+    ) -> int:
+        """Record one capacity event and return current Retry-After, if opened."""
+        if enabled is None:
+            enabled = is_geminicli_capacity_fast_fail_enabled()
+        if not enabled:
+            return 0
+        key = self._key(mode, model)
+        now_monotonic = time.monotonic()
+        if key in self._half_open_inflight:
+            self._half_open_inflight.discard(key)
+            stage = min(self._reopen_stage[key], len(self._REOPEN_DELAYS) - 1)
+            delay = self._REOPEN_DELAYS[stage]
+            self._reopen_stage[key] = min(stage + 1, len(self._REOPEN_DELAYS) - 1)
+            self._open_until[key] = time.time() + delay
+            return delay
+
+        events = self._events[key]
+        events.append(now_monotonic)
+        while events and events[0] < now_monotonic - 10:
+            events.popleft()
+        if len(events) >= 2:
+            self._open_until[key] = time.time() + 5
+            self._reopen_stage[key] = 0
+            return 5
+        return 0
+
+    def record_success(
+        self, mode: str, model: str, *, enabled: Optional[bool] = None
+    ) -> None:
+        if enabled is None:
+            enabled = is_geminicli_capacity_fast_fail_enabled()
+        if not enabled:
+            return
+        key = self._key(mode, model)
+        self._events.pop(key, None)
+        self._open_until.pop(key, None)
+        self._half_open_inflight.discard(key)
+        self._reopen_stage.pop(key, None)
 
 
 @dataclass(frozen=True)
@@ -501,6 +591,7 @@ class Smart429Service:
 
 
 smart_429_service = Smart429Service()
+model_capacity_guard = ModelCapacityGuard()
 
 
 async def verify_geminicli_risk_control(

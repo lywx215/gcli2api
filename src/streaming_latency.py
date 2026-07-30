@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
 import random
+import re
 import time
 import uuid
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import Response
 
 from log import log
+from src.log_safety import credential_log_id
 
 
 def _env_float(name: str, default: float, minimum: float = 0.01) -> float:
@@ -122,6 +123,7 @@ class StreamFailure(Exception):
         body: Optional[bytes] = None,
         headers: Optional[Dict[str, str]] = None,
         request_id: Optional[str] = None,
+        error_type: Optional[str] = None,
     ) -> None:
         super().__init__(message)
         self.message = message
@@ -131,6 +133,7 @@ class StreamFailure(Exception):
         self.body = body
         self.headers = headers or {}
         self.request_id = request_id
+        self.error_type = error_type
 
     @classmethod
     def from_response(
@@ -152,6 +155,7 @@ class StreamFailure(Exception):
             body=body,
             headers=dict(response.headers),
             request_id=request_id,
+            error_type=f"http_{response.status_code}",
         )
 
     def to_response(self) -> Response:
@@ -187,6 +191,7 @@ class StreamRequestTrace:
     retry_reason: Optional[str] = None
     result: Optional[str] = None
     upstream_request_id: Optional[str] = None
+    client_request_id: Optional[str] = None
     credential_hash: Optional[str] = None
     diagnostics_enabled: bool = field(
         default_factory=lambda: StreamLatencyConfig.from_env().diagnostics_enabled
@@ -195,7 +200,29 @@ class StreamRequestTrace:
         default_factory=lambda: StreamLatencyConfig.from_env().perf_log_sample_rate
     )
     timings_ms: Dict[str, float] = field(default_factory=dict)
+    retries: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "status": 0,
+            "transport": 0,
+            "capacity": 0,
+            "reasons": [],
+        }
+    )
+    last_failure: Optional[Dict[str, Any]] = None
+    attempt_details: list[Dict[str, Any]] = field(default_factory=list)
+    stream: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "first_content_emitted": False,
+            "events_out": 0,
+            "bytes_out": 0,
+            "duration_after_first_content_ms": None,
+            "last_upstream_event_age_ms": None,
+            "cancel_phase": None,
+        }
+    )
     _marks: Dict[str, float] = field(default_factory=dict, repr=False)
+    _attempt_started_at: Optional[float] = field(default=None, repr=False)
+    _last_upstream_event_at: Optional[float] = field(default=None, repr=False)
     _logged: bool = field(default=False, repr=False)
 
     def mark(self, name: str, *, phase: Optional[StreamPhase] = None) -> None:
@@ -211,8 +238,112 @@ class StreamRequestTrace:
     def duration_since_mark(self, name: str, mark: str) -> None:
         self.duration(name, self._marks.get(mark, self.started_at))
 
+    def add_duration_ms(self, name: str, value: float) -> None:
+        self.timings_ms[name] = round(self.timings_ms.get(name, 0.0) + max(0.0, value), 2)
+
     def set_credential(self, filename: str) -> None:
-        self.credential_hash = hashlib.sha256(filename.encode("utf-8")).hexdigest()[:12]
+        self.credential_hash = credential_log_id(filename)
+
+    def set_client_request_id(self, value: Optional[str]) -> None:
+        if value and re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value):
+            self.client_request_id = value
+
+    def begin_attempt(self, filename: Optional[str] = None) -> None:
+        self.attempts += 1
+        self._attempt_started_at = time.perf_counter()
+        if len(self.attempt_details) < 8:
+            self.attempt_details.append(
+                {
+                    "attempt": self.attempts,
+                    "credential": credential_log_id(filename),
+                    "started_ms": round(
+                        (self._attempt_started_at - self.started_at) * 1000, 2
+                    ),
+                    "duration_ms": None,
+                    "transport_ms": {},
+                }
+            )
+
+    def finish_attempt(self) -> None:
+        if self._attempt_started_at is None or not self.attempt_details:
+            return
+        detail = self.attempt_details[-1]
+        if detail.get("attempt") == self.attempts and detail.get("duration_ms") is None:
+            detail["duration_ms"] = round(
+                (time.perf_counter() - self._attempt_started_at) * 1000, 2
+            )
+
+    def add_attempt_transport(self, values: Dict[str, float]) -> None:
+        if self.attempt_details and self.attempt_details[-1].get("attempt") == self.attempts:
+            target = self.attempt_details[-1]["transport_ms"]
+            target.update({key: round(value, 2) for key, value in values.items()})
+        for key, value in values.items():
+            self.add_duration_ms(key, value)
+
+    def record_retry(self, kind: str, reason: str, *, capacity: bool = False) -> None:
+        if kind in {"status", "transport"}:
+            self.retries[kind] += 1
+        if capacity:
+            self.retries["capacity"] += 1
+        reasons = self.retries["reasons"]
+        if len(reasons) < 8:
+            reasons.append(reason)
+        if self.attempt_details and self.attempt_details[-1].get("attempt") == self.attempts:
+            self.attempt_details[-1]["retry_kind"] = kind
+            self.attempt_details[-1]["retry_reason"] = reason
+            self.attempt_details[-1]["capacity"] = capacity
+        self.retry_reason = reason
+
+    def record_failure(
+        self,
+        *,
+        stage: str,
+        error_type: str,
+        status_code: Optional[int],
+        retryable: bool,
+    ) -> None:
+        failure = {
+            "stage": stage,
+            "error_type": error_type,
+            "status_code": status_code,
+            "retryable": retryable,
+        }
+        self.last_failure = failure
+        if self.attempt_details and self.attempt_details[-1].get("attempt") == self.attempts:
+            self.attempt_details[-1].update(failure)
+        self.finish_attempt()
+
+    def mark_upstream_event(self) -> None:
+        self._last_upstream_event_at = time.perf_counter()
+
+    def record_output(self, item: Any) -> None:
+        if isinstance(item, str):
+            size = len(item.encode("utf-8"))
+        elif isinstance(item, (bytes, bytearray, memoryview)):
+            size = len(item)
+        else:
+            size = len(str(item).encode("utf-8"))
+        now = time.perf_counter()
+        self.stream["events_out"] += 1
+        self.stream["bytes_out"] += size
+        if not self.stream["first_content_emitted"]:
+            self.stream["first_content_emitted"] = True
+            self._marks.setdefault("first_content_emitted", now)
+
+    def record_cancellation(self) -> None:
+        now = time.perf_counter()
+        self.stream["cancel_phase"] = (
+            "after_first_content"
+            if self.stream["first_content_emitted"]
+            else "before_first_content"
+        )
+        first = self._marks.get("first_content_emitted")
+        if first is not None:
+            self.stream["duration_after_first_content_ms"] = round((now - first) * 1000, 2)
+        if self._last_upstream_event_at is not None:
+            self.stream["last_upstream_event_age_ms"] = round(
+                (now - self._last_upstream_event_at) * 1000, 2
+            )
 
     def remaining_first_content(self) -> float:
         configured = StreamLatencyConfig.from_env().first_content_timeout
@@ -225,6 +356,7 @@ class StreamRequestTrace:
         self.phase = StreamPhase.FINISHED if result == "success" else StreamPhase.FAILED
         total_ms = round((time.perf_counter() - self.started_at) * 1000, 2)
         self.timings_ms["total"] = total_ms
+        self.finish_attempt()
         if not self.diagnostics_enabled:
             self._logged = True
             return
@@ -233,7 +365,9 @@ class StreamRequestTrace:
         should_log = should_log or random.random() < self.perf_log_sample_rate
         if should_log:
             payload = {
+                "schema_version": 2,
                 "request_id": self.request_id,
+                "client_request_id": self.client_request_id,
                 "model": self.model,
                 "protocol": self.protocol,
                 "phase": self.phase.value,
@@ -243,6 +377,11 @@ class StreamRequestTrace:
                 "credential": self.credential_hash,
                 "upstream_request_id": self.upstream_request_id,
                 "timings_ms": self.timings_ms,
+                "retries": self.retries,
+                "last_failure": self.last_failure,
+                "attempt_details": self.attempt_details,
+                "attempt_details_truncated": self.attempts > len(self.attempt_details),
+                "stream": self.stream,
             }
             log.info(
                 f"STREAM_PERF_SUMMARY {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"

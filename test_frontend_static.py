@@ -37,3 +37,19 @@ def test_stream_diagnostics_common_script_loads_saves_and_locks():
     assert "AppState.envLockedFields.has(configKey)" in common_js
     assert "c.stream_diagnostics_enabled" in common_js
     assert "stream_diagnostics_enabled: getChecked('streamDiagnosticsEnabled')" in common_js
+
+
+def test_capacity_fast_fail_control_exists_and_uses_common_locking():
+    front_dir = Path(__file__).parent / "front"
+    for filename in ("control_panel.html", "control_panel_mobile.html"):
+        html = (front_dir / filename).read_text(encoding="utf-8")
+        assert html.count('id="geminicliCapacityFastFailEnabled"') == 1
+        assert html.count('id="geminicliCapacityFastFailEnabledEnvLock"') == 1
+        assert "GeminiCLI 模型容量快速失败" in html
+
+    common_js = (front_dir / "common.js").read_text(encoding="utf-8")
+    assert "c.geminicli_capacity_fast_fail_enabled" in common_js
+    assert (
+        "geminicli_capacity_fast_fail_enabled: "
+        "getChecked('geminicliCapacityFastFailEnabled')"
+    ) in common_js
