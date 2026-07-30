@@ -1,9 +1,9 @@
-# dev5 自定义修改与上游同步保护清单
+# dev6（基于 dev5）自定义修改与上游同步保护清单
 
 > **用途**：本文档是 `lywx215/gcli2api` 的自定义行为契约和以后同步
 > `su-kaka/gcli2api` 时的人工保护清单。它不是普通的变更日志。
 >
-> **最高优先级规则**：dev5 已有行为、接口和数据兼容性优先。发现文本冲突或语义冲突时，
+> **最高优先级规则**：dev6/dev5 已有行为、接口和数据兼容性优先。发现文本冲突或语义冲突时，
 > 必须先报告，不得自行选择 `ours`/`theirs`、不得整文件覆盖、不得在未确认的情况下改写代码。
 
 ## 1. 审计基线
@@ -14,12 +14,14 @@
 | --- | --- |
 | Fork 远端 | `origin = https://github.com/lywx215/gcli2api.git` |
 | 上游远端 | `upstream = https://github.com/su-kaka/gcli2api.git` |
-| 受保护主基线 | `origin/dev5`，`5a85e5892a679445e77125d1567f6699d845fa76` |
+| 当前开发基线 | `origin/dev6`；初始 TTFT 实施提交 `3c73782efee69076e3dd440f1e07ab2f4902971a` |
+| dev6 的提交基座 | `origin/dev5`，`5a85e5892a679445e77125d1567f6699d845fa76` |
 | 上游比较基线 | `upstream/master`，`4f5e3432e1d5fc5ba41cf56c99981ba89d1987f7` |
 | 共同祖先 | `78f391acee42cc2b2b39bf55577c8eed80aab7e3` |
-| 提交分叉 | 上游独有 13 个提交；dev5 独有 127 个提交 |
-| 直接树差异 | 60 个文件，约 `+12877/-1011` |
-| 三方分类 | 51 个仅 dev5 修改；8 个双方修改；1 个仅上游新增 |
+| dev5 提交分叉 | 上游独有 13 个提交；dev5 独有 127 个提交 |
+| dev5 对上游直接树差异 | 60 个文件，约 `+12877/-1011` |
+| dev5 三方分类 | 51 个仅 dev5 修改；8 个双方修改；1 个仅上游新增 |
+| dev6 初始实施对 dev5 增量 | 31 个文件，约 `+3564/-485` |
 | 当前文本冲突 | 4 个文件：`.gitignore`、`src/utils.py`、`version.txt`、`web.py` |
 
 基线只描述审计时的事实。以后同步前必须重新获取远端并更新 SHA、数量和冲突清单，
@@ -32,12 +34,14 @@
 ```bash
 git fetch origin upstream
 git status --short --branch
-git rev-parse origin/dev5 upstream/master
-git merge-base origin/dev5 upstream/master
-git rev-list --left-right --count upstream/master...origin/dev5
-git diff --stat upstream/master..origin/dev5
-git diff --name-status upstream/master..origin/dev5
-git merge-tree "$(git merge-base origin/dev5 upstream/master)" origin/dev5 upstream/master
+git rev-parse origin/dev6 origin/dev5 upstream/master
+git diff --stat origin/dev5..origin/dev6
+git diff --name-status origin/dev5..origin/dev6
+git merge-base origin/dev6 upstream/master
+git rev-list --left-right --count upstream/master...origin/dev6
+git diff --stat upstream/master..origin/dev6
+git diff --name-status upstream/master..origin/dev6
+git merge-tree "$(git merge-base origin/dev6 upstream/master)" origin/dev6 upstream/master
 ```
 
 文件三分类可用以下方式复核：
@@ -59,7 +63,7 @@ comm -13 <(git diff --name-only "$base"..origin/dev5 | sort) <(git diff --name-o
    但具体方案必须先获确认。
 5. **数据兼容高于实现形式**：允许重构文件和函数，但不得丢失已有数据库列、配置键、API 字段或迁移能力。
 6. **自动合并不等于安全**：第 10 节列出的双方修改文件，即使没有冲突标记，也必须人工逐项复核。
-7. **未知来源按受保护处理**：只要行为已经存在于 dev5，除非明确确认可废弃，否则不得因提交来源不明而删除。
+7. **未知来源按受保护处理**：只要行为已经存在于 dev6/dev5，除非明确确认可废弃，否则不得因提交来源不明而删除。
 
 ## 3. 受保护功能总览
 
@@ -87,6 +91,9 @@ comm -13 <(git diff --name-only "$base"..origin/dev5 | sort) <(git diff --name-o
 | API-03 | 流式类型一致性 | `stream_post_async` 输出 bytes，路由包装不得混合 str/bytes | `src/httpx_client.py`、各流式路由 | `a891cf7` |
 | API-04 | 连接与任务生命周期 | 复用持久 HTTP 连接池；fire-and-forget 任务必须消费异常并在退出时关闭资源 | `src/httpx_client.py`、`src/api/utils.py`、`web.py` | `f99df8d` |
 | API-05 | 流式 TTFT 保护 | 分阶段超时、首事件后禁止重放、OAuth single-flight、单层预读；诊断默认关闭 | 流式传输、凭证管理和三种 GeminiCLI 路由 | `dev6` |
+| API-06 | 流式错误边界 | 提交 HTTP 前返回协议原生 502/503/504；提交后只发对应流协议的终止错误，不得换凭证或重放 | 三种 GeminiCLI 路由、converter、anti-truncation | `dev6` |
+| AUTH-01 | OAuth 刷新合并 | 同一 `(mode, filename)` 只允许一个刷新任务；1–10 分钟余量后台刷新，≤1 分钟阻塞刷新；临时错误不封禁 | `src/credential_manager.py`、`src/google_oauth_api.py` | `dev6` |
+| CORE-01 | 单例安全发布 | CredentialManager/StorageAdapter 必须先完成候选初始化，再在锁内发布；不得暴露部分初始化对象 | `src/credential_manager.py`、`src/storage_adapter.py` | `dev6` |
 | CONV-01 | 图像配置优先级 | 客户端原生 `generationConfig.imageConfig` 优先，其次自定义层，最后默认层 | 模型与 Gemini 转换/API | `a82e54a` |
 | CONV-02 | 工具与多轮内容 | 保留工具 schema 兼容、Claude 参数转换、thought signature 和多轮内容防嵌套扩散 | converter 目录 | `579da69`、`8e1be8d` 及后续修复 |
 | STORE-01 | MySQL 后端 | 双凭证表、配置表、等级/健康字段、Redis 可选缓存和 `server_name` 隔离 | `src/storage/mysql_manager.py` | `5249bea`、`b66ccff` |
@@ -100,6 +107,7 @@ comm -13 <(git diff --name-only "$base"..origin/dev5 | sort) <(git diff --name-o
 | UI-02 | 系统状态 | 显示本服务器 Redis 池、key 数量、内存和 SMART 429 状态 | 面板与 `/config/system-status` | `5249bea`、`3137e6f` |
 | OPS-01 | 版本元数据 | 发布构建优先使用注入的版本/修订/日期；源码运行回退到 `version.txt`；静态资源带摘要缓存键 | `src/versioning.py`、`src/panel/version.py` | `6fa3375` 相关提交 |
 | OPS-02 | 部署与 CI | Redis Compose、健康检查、MySQL 依赖、分支 SHA 镜像标签和构建元数据 | Docker/CI/requirements | `b80c23d`、`5249bea` |
+| OPS-03 | dev6 关闭顺序 | 先停业务后台任务，再关闭凭证/存储，最后关闭共享 HTTP 池；旧代理池要等活动流排空 | `web.py`、`src/httpx_client.py`、`src/storage_adapter.py` | `dev6` |
 
 ### 3.1 自定义配置与运行环境
 
@@ -117,9 +125,22 @@ comm -13 <(git diff --name-only "$base"..origin/dev5 | sort) <(git diff --name-o
 | `STORAGE_ENGINE` | 仅在 `.env.example` 中声明的引擎选择项 | 文档默认 `sqlite` | 当前 adapter 未读取，属于已知不一致，不得假定已生效 |
 | `STREAM_DIAGNOSTICS_ENABLED` | `stream_diagnostics_enabled`；TTFT 结构化日志与 `Server-Timing` | `false` | 环境变量锁定优先；单 Worker 可从控制面板热更新，多 Worker 保存后需重启 |
 | `STREAM_LATENCY_GUARD_ENABLED` | 首事件、首内容、idle 超时及安全切换 | `true` | 关闭后仍保留基础连接/OAuth 上限和首事件后禁止重试 |
+| `STREAM_PERF_LOG_SAMPLE_RATE` | 正常成功流的性能摘要采样率 | `0.01`，范围 0–1 | 慢请求、失败和重试不受采样率限制；不得记录请求体、token 或代理凭证 |
+| `CREDENTIAL_ACQUIRE_TIMEOUT` | 获取可用凭证的总时限 | `10` 秒，正数 | 超时必须转为有阶段信息的 504；没有合格凭证则保持 503，不能无限等待 |
+| `OAUTH_REFRESH_TIMEOUT` | 阻塞式 OAuth 刷新上限 | `20` 秒，正数 | 超时属于临时失败，不得据此永久禁用凭证 |
+| `UPSTREAM_POOL_TIMEOUT` | 从共享 HTTP 池获取连接的上限 | `5` 秒，正数 | 与 connect/read 阶段分开记录 |
+| `UPSTREAM_CONNECT_TIMEOUT` | 上游 TCP/TLS 连接上限 | `10` 秒，正数 | 仅首个有效事件前允许按预算切换凭证 |
+| `UPSTREAM_WRITE_TIMEOUT` | 向上游写请求的上限 | `30` 秒，正数 | 不得恢复旧的 900 秒通用等待 |
+| `UPSTREAM_RESPONSE_HEADER_TIMEOUT` | 等待上游响应头上限 | `20` 秒，正数 | 到期返回 504；不得收到 200 响应头就提前向客户端提交成功 |
+| `UPSTREAM_FIRST_EVENT_TIMEOUT` | 收到首个有效上游事件上限 | `45` 秒，正数 | 首事件前才可重试；首事件后禁止重放 |
+| `STREAM_FIRST_CONTENT_TIMEOUT` | 从请求开始到首个下游内容的总预算 | `75` 秒，正数 | 跨凭证尝试共享预算，不得每次重试重置计时 |
+| `UPSTREAM_STREAM_IDLE_TIMEOUT` | 已开始流的相邻事件空闲上限 | `90` 秒，正数 | HTTP 已提交时只能发送协议原生终止错误并关闭 |
+| `STREAM_TRANSPORT_MAX_ATTEMPTS` | 流式传输最大尝试次数 | `2`，范围 1–5 | 每次必须使用不同凭证；不包含内容开始后的重试 |
 
 配置读取顺序是：命中的环境变量先锁定对应键，存储后端配置只补充未锁定键；
 `config.init_config()`/`reload_config()` 再把 debug、TTFT diagnostics、routing 和 SMART 429 值刷新到同步热路径缓存。
+除 `STREAM_DIAGNOSTICS_ENABLED` 外，dev6 的 TTFT 数值参数当前主要由环境变量构造请求级配置快照；
+同步时不得擅自把它们改成数据库配置或改变默认值、单位和范围。
 
 ## 4. 智能 429 保护契约
 
@@ -235,15 +256,18 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 
 ### 7.1 既有接口上的扩展
 
-这些不是全新路径，但 dev5 扩展了其契约，同样必须保护：
+这些不是全新路径，但 dev6/dev5 扩展了其契约，同样必须保护：
 
-- `GET /config/get`：新增 SMART 429、debug、routing 等配置，并返回 `env_locked`。
-- `POST /config/save`：验证 SMART 429 数值范围，保存后刷新同步缓存并重配服务。
+- `GET /config/get`：新增 SMART 429、debug、routing 和 `stream_diagnostics_enabled`，并返回 `env_locked`。
+- `POST /config/save`：验证 SMART 429 数值范围和 TTFT 诊断布尔值，保存后刷新同步缓存并重配服务；
+  单 Worker 热更新诊断开关，多 Worker 仅持久化并返回 `restart_required`，响应还要区分 `reloaded`。
 - `GET /creds/status`：新增永久禁用、冷却、Preview、等级、备注和健康状态筛选/字段。
 - `GET /creds/quota/{filename}`：增加 GeminiCLI 额度、原始模型 ID、显示名、测试模型和健康分类。
 - `POST /creds/action`、`POST /creds/batch-action`：支持永久禁用及相关状态保持。
 - OAuth、上传和凭证检验响应：携带标准化等级及原始等级证据。
 - `/version/info`：使用构建元数据或 `version.txt`，并可检查上游版本。
+- 所有 GeminiCLI 流式 OpenAI/Gemini/Anthropic 入口：响应始终带 `X-Request-ID`；启用诊断时可带
+  `Server-Timing`。这些路径没有新增 URL，但错误码、重试边界和流内终止格式已成为 dev6 公共契约。
 
 ## 8. 前端保护清单
 
@@ -254,7 +278,7 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 - 永久禁用、批量消息测试、额度检测/双向冷却、状态/等级/Preview/冷却/备注筛选。
 - 凭证备注 badge、当前/上一循环统计、模型冷却倒计时、额度详情和单模型测试。
 - 存储引擎状态、server_name 选择、迁移预览与切换。
-- SMART 429、debug、routing 配置及风险说明。
+- SMART 429、debug、routing、独立“流式 TTFT 诊断”开关及环境变量锁定提示。
 - 系统状态页中的 Redis 和 SMART 429 状态。
 
 ### 8.2 移动端 `front/control_panel_mobile.html`
@@ -264,7 +288,7 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 - 两种 mode 的统计卡片和模型表格。
 - Refresh Token 导入及高级选项。
 - 永久禁用、批量测试、额度/冷却同步和全部筛选项。
-- SMART 429、debug、routing 配置。
+- SMART 429、debug、routing、独立“流式 TTFT 诊断”开关及环境变量锁定提示。
 - 系统状态页。
 
 ### 8.3 共用逻辑 `front/common.js`
@@ -273,7 +297,8 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 - 凭证卡片状态、等级/健康/冷却/备注/循环统计渲染。
 - 额度、模型测试、批量测试、冷却同步、Refresh Token 导入和统计刷新。
 - `loadSystemStatus()`、`loadStorageEngine()`、`switchStorageEngine()`。
-- 配置加载/保存时 SMART 429、debug、routing 的默认值必须与后端一致。
+- 配置加载/保存时 SMART 429、debug、routing、TTFT diagnostics 的默认值必须与后端一致。
+- `setConfigCheckbox()` 必须让环境变量锁定的复选框只读；多 Worker 保存 TTFT 诊断设置后要提示重启。
 - 冷却和统计定时器只能有一个有效实例；`test_frontend_static.py` 防止重复 ID 和计时器声明丢失。
 
 ## 9. 部署、版本和测试资产
@@ -287,21 +312,22 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 - `src/versioning.py` 决定展示版本和静态资源缓存键；不能退回只读 `version.txt` 的实现。
 - `scripts/migrate_sqlite_to_mysql.py` 支持 dry-run、server_name、建表、凭证/配置迁移和校验。
 
-### 9.2 受保护测试
+### 9.2 受保护测试（dev6 共 10 个顶层文件）
 
 | 文件 | 覆盖重点 |
 | --- | --- |
-| `test_frontend_static.py` | 统计刷新 timer 声明、桌面/移动页面重复 ID |
+| `test_frontend_static.py` | 统计刷新 timer、桌面/移动页面重复 ID、TTFT 诊断控件及 common.js 加载/保存/锁定逻辑 |
 | `test_gemini35_tier_routing.py` | 无合格凭证 503、MySQL/MongoDB Redis tier 池、别名与原始额度模型 |
 | `test_geminicli_subscription_api.py` | Code Assist 请求、失败回退、Antigravity 付费等级回退与请求体兼容 |
 | `test_smart_429.py` | 429 互斥分类、精确风控、multi-worker fail-closed、健康迁移、singleflight、状态版本 |
+| `test_stream_diagnostics_config.py` | 持久化热更新、环境变量优先/锁定、请求快照、面板校验及单/多 Worker 保存语义 |
 | `test_streaming_latency.py` | TTFT 分阶段超时、终止错误、连接复用、OAuth/初始化 single-flight、凭证排除和禁止内容后重试 |
 | `test_sqlite_tier_storage.py` | 原始 tier 字段迁移、Gemini 3.5 等级路由 |
 | `test_subscription_tiers.py` | tier 映射优先级、unknown、项目 ID 形式、模型资格 |
 | `test_upload_tier_detection.py` | 上传后等级持久化、检测失败保持旧状态、响应字段 |
 | `test_versioning.py` | version.txt 回退、发布元数据优先、分支构建与资源缓存键 |
 
-同步后不得只跑测试文件是否可导入；至少应执行上述 8 个文件，并按冲突范围补跑上游测试。
+同步后不得只跑测试文件是否可导入；至少应执行上述 10 个文件，并按冲突范围补跑上游测试。
 
 ## 10. 当前上游同步冲突与语义热点
 
@@ -312,20 +338,20 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 | `.gitignore` | 保留 `zeaburcli/`、`sshcli/`、`deploy/`、`tests/`、`参考项目/` 等本地忽略项 | 上游保留/调整 `aicode/`、`streamchat/` | 不得二选一；先确认 `tests/` 策略，并合并双方仍需要的规则 |
 | `src/utils.py` | dev5 的 GeminiCLI 用户代理、模型/等级相关适配 | 上游后续用户代理/工具兼容更新 | 按函数逐项比较；不得整文件覆盖 |
 | `version.txt` | dev5 构建/分支版本元数据 | 上游最新提交元数据 | 这是元数据冲突，但仍需报告；最终值由同步结果和发布策略决定 |
-| `web.py` | SMART 429 生命周期、分钟统计清理、HTTP 池和服务关闭 | 上游 GC/`malloc_trim` 内存回收和凭证管理器关闭修复 | 最终必须同时保留本地任务和上游内存/关闭修复，方案需先确认 |
+| `web.py` | SMART 429、分钟统计清理、dev6 流式资源关闭顺序及共享 HTTP 池关闭 | 上游 GC/`malloc_trim` 内存回收和凭证管理器关闭修复 | 最终必须同时保留本地任务、dev6“HTTP 池最后关闭”顺序及上游内存/关闭修复，方案需先确认 |
 
 ### 10.2 双方修改但可能自动合并的文件
 
 | 文件 | 语义风险与必查项 |
 | --- | --- |
 | `Dockerfile` | dev5 构建元数据与上游 jemalloc 安装/`LD_PRELOAD`/`MALLOC_CONF` 必须共存；不能因自动合并遗漏任一侧 |
-| `src/api/antigravity.py` | 上游移除显式 timeout；dev5 保留凭证切换、统一错误和 SMART 429 相关重试语义 |
-| `src/api/geminicli.py` | 上游移除 timeout；dev5 有订阅等级、风险分类、容量保护、503 和原始模型处理 |
+| `src/api/antigravity.py` | 上游移除显式 timeout；dev6/dev5 保留凭证切换、统一错误和 SMART 429 相关重试语义；还要复核共享客户端接口变化 |
+| `src/api/geminicli.py` | 上游移除 timeout；dev6 增加分阶段流超时、首事件前双凭证尝试、首事件后禁重试和 typed failure；同时保留 dev5 等级/风险/容量/503 语义 |
 | `src/converter/gemini_fix.py` | 上游最新 Claude 工具 schema 修复与 dev5 thinking、tier 模型、图像和多轮工具修复可能重叠 |
 | `.gitignore` | 见文本冲突 |
 | `src/utils.py` | 见文本冲突 |
 | `version.txt` | 见文本冲突 |
-| `web.py` | 见文本冲突 |
+| `web.py` | 见文本冲突；上游回收任务不得在仍有活动流时提前关闭 dev6 共享池或代理池 generation |
 
 ### 10.3 上游待引入内容
 
@@ -340,6 +366,9 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 `tests/test_gemini_fix.py` 是当前三方分类中唯一“仅上游新增”的文件。直接树差异显示它在 dev5
 一侧缺失，不代表 dev5 有意删除；同步时应作为上游测试引入并与 dev5 的顶层测试共同运行。
 
+上游“移除请求 timeout”与 dev6 的 TTFT 分阶段上限属于高风险语义冲突：可以吸收上游修复的动机，
+但不得直接删除 `pool/connect/write/header/first-event/first-content/idle` 各阶段预算，也不得恢复无界等待。
+
 ## 11. 已知实现风险（只记录，不在本次修复）
 
 | 风险 | 当前事实 | 同步/后续处理要求 |
@@ -353,6 +382,8 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 | `tests/` 被忽略 | `.gitignore` 忽略 `tests/`，而上游新增测试位于该目录 | 同步时明确保留并跟踪上游测试，不得因 ignore 误删 |
 | 生命周期关闭路径 | `web.py` 初始化使用 `credential_manager` 单例，但关闭仍受 `global_credential_manager` 是否赋值影响；同时将与上游关闭修复冲突 | 必须作为 `web.py` 冲突的一部分报告，不在文档任务中修复 |
 | jemalloc 当前缺失 | dev5 Dockerfile 有构建元数据，但相对当前上游缺少 jemalloc 配置 | 这是待同步上游能力，不应误记为本地要求删除 jemalloc |
+| dev6 提交锚点 | 初始 TTFT 实施已提交并推送为 `3c73782efee69076e3dd440f1e07ab2f4902971a` | 后续同步必须从 `origin/dev6` 创建独立分支，不得直接修改 dev6/dev5 |
+| dev6 测试证据来源 | 2026-07-30 在项目 `.venv` 中执行全量 pytest，结果为 `112 passed, 7 warnings` | 后续提交/同步仍需重新运行并保存当次结果，不得直接复用历史结论 |
 
 ## 12. 文件覆盖矩阵（60/60）
 
@@ -379,15 +410,31 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 
 `tests/test_gemini_fix.py`。它属于待同步测试资产，不是 dev5 的自定义删除项。
 
+### 12.4 dev6 初始实施相对 dev5 的增量文件（30/30，不含本文档）
+
+这一矩阵叠加在 12.1–12.3 的 dev5/上游矩阵之上。`M` 表示相对 `origin/dev5` 修改，
+`A` 表示由 dev6 新增；初始实施提交已将 4 个新增项目文件全部纳入版本控制。
+
+| 分组 | 状态与文件 | 对应保护项 |
+| --- | --- | --- |
+| 配置与双端 UI（5） | `M .env.example`、`M config.py`、`M front/common.js`、`M front/control_panel.html`、`M front/control_panel_mobile.html` | API-05、UI-01、TTFT 配置 |
+| 流式 API、认证与转换（14） | `M src/api/antigravity.py`、`M src/api/geminicli.py`、`M src/api/utils.py`、`M src/converter/anthropic2gemini.py`、`M src/converter/anti_truncation.py`、`M src/credential_manager.py`、`M src/google_oauth_api.py`、`M src/httpx_client.py`、`M src/panel/config_routes.py`、`M src/router/geminicli/anthropic.py`、`M src/router/geminicli/gemini.py`、`M src/router/geminicli/openai.py`、`M src/router/stream_passthrough.py`、`A src/streaming_latency.py` | API-05、API-06、AUTH-01、CORE-01 |
+| 存储与生命周期（6） | `M src/storage/mongodb_manager.py`、`M src/storage/mysql_manager.py`、`M src/storage/psql_manager.py`、`M src/storage/sqlite_manager.py`、`M src/storage_adapter.py`、`M web.py` | 凭证排除、CORE-01、OPS-03 |
+| 顶层测试（4） | `M test_frontend_static.py`、`M test_gemini35_tier_routing.py`、`A test_stream_diagnostics_config.py`、`A test_streaming_latency.py` | 第 9.2 节 |
+| 设计/验收资料（1） | `A docs/STREAMING_TTFT_LATENCY_REVIEW.md` | dev6 设计依据与既有测试记录 |
+
+30 个文件中没有新增公开 URL；公共变化集中在既有配置接口、所有 GeminiCLI 流式响应、错误状态、
+响应头和内部存储选择能力。4 个新增项目文件现已全部由 Git 跟踪。
+
 ## 13. 标准同步流程
 
 ### 13.1 同步前
 
-1. 确认 `git status --short` 为空；如有用户改动，先停止，不得清理或覆盖。
-2. 执行 `git fetch origin upstream`，记录 `origin/dev5`、`upstream/master` 和 merge-base。
-3. 从 `origin/dev5` 创建独立分支，例如 `sync/upstream-YYYYMMDD`；禁止直接在 dev5 或 master 操作。
+1. 确认 `git status --short` 为空；如有用户改动，先停止，不得清理、stash、提交或覆盖。
+2. 执行 `git fetch origin upstream`，记录 `origin/dev6`、`origin/dev5`、`upstream/master` 和 merge-base。
+3. 从 `origin/dev6` 创建独立分支，例如 `codex/sync-upstream-YYYYMMDD`；禁止直接在 dev6、dev5 或 master 操作。
 4. 重新生成三类文件清单、提交清单和 `git merge-tree` 预演结果。
-5. 将预演结果与本文功能 ID、接口表、字段表和 60 文件矩阵比较。
+5. 将预演结果与本文功能 ID、接口表、字段表、60 文件矩阵及 dev6 的 30 文件增量比较。
 
 ### 13.2 冲突报告格式
 
@@ -396,10 +443,10 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 ```text
 文件/符号：
 冲突类型：文本 / 自动合并语义 / 数据契约 / API 契约
-dev5 当前行为：
+dev6/dev5 当前行为：
 上游变化：
 如果采用上游的影响：
-如果只保留 dev5 的影响：
+如果只保留 dev6/dev5 的影响：
 候选合并方案：
 需要用户决定的问题：
 建议回归测试：
@@ -413,14 +460,14 @@ dev5 当前行为：
 1. 按功能 ID 而非整文件解决冲突。
 2. 先保护数据列、配置键和 API 响应，再处理内部重构。
 3. 同时检查 8 个双方修改文件的自动合并结果。
-4. 执行 dev5 的 8 个测试文件、上游新增测试及冲突涉及的其他测试。
+4. 执行 dev6 的 10 个顶层测试文件、上游新增测试及冲突涉及的其他测试。
 5. 检查桌面和移动面板，不能只验证一端。
 6. 对存储变化至少验证 SQLite；远程后端无法实测时必须明确标记未验证。
 7. 成功同步后更新本文的 SHA、差异数量、冲突状态和文件矩阵。
 
 ## 14. 同步验收清单
 
-- [ ] dev5 受保护功能 ID 均能在新代码中定位。
+- [ ] dev6/dev5 受保护功能 ID 均能在新代码中定位。
 - [ ] 15 个自定义管理接口仍存在，方法、认证、参数和响应语义未静默变化。
 - [ ] 既有扩展接口仍返回等级、健康、备注、冷却和统计字段。
 - [ ] SMART 429 默认关闭、单 worker 限制、能力检查和 503 语义仍有效。
@@ -428,7 +475,9 @@ dev5 当前行为：
 - [ ] 七个健康状态字段在 SQLite/MySQL/PostgreSQL/MongoDB 中等价可读写。
 - [ ] 永久禁用、循环统计、精确冷却和备注不会在迁移后丢失。
 - [ ] 桌面端与移动端的统计、导入、筛选和 SMART 429 设置均可用。
-- [ ] dev5 的 8 个测试文件全部通过。
+- [ ] TTFT 诊断默认关闭；开启后 `X-Request-ID`、采样日志和可选 `Server-Timing` 符合第 16 节。
+- [ ] 首个有效事件后不切换凭证、不重放；提交响应后的错误使用对应流协议终止。
+- [ ] dev6 的 10 个顶层测试文件全部通过。
 - [ ] 上游新增 `tests/test_gemini_fix.py` 已保留并通过。
 - [ ] `Dockerfile` 同时包含版本元数据和已批准的上游内存优化。
 - [ ] `web.py` 同时保留本地生命周期任务和已批准的上游关闭/内存处理。
@@ -445,7 +494,118 @@ dev5 当前行为：
 
 ### 同步记录
 
-| 日期 | dev5/后继基线 | 上游基线 | 结果 |
+| 日期 | dev6/dev5 基线 | 上游基线 | 结果 |
 | --- | --- | --- | --- |
 | 2026-07-30 | `5a85e58` | `4f5e343` | 建立首份保护清单；只读预演发现 4 个文本冲突、8 个双方修改文件；未执行同步 |
-| 2026-07-30 | `dev6` 基于 `5a85e58` | 未同步上游 | 新增 API-05 流式 TTFT 保护及控制面板独立诊断开关；直连模式不读取宿主代理环境；全量测试 112 项通过 |
+| 2026-07-30 | `origin/dev6@3c73782`，基于 `5a85e58` | 未同步上游 | 登记 30 个项目文件的 dev6 增量、API-05/API-06/AUTH-01/CORE-01/OPS-03；全量测试 `112 passed, 7 warnings` |
+
+## 16. dev6 最新修改明细（相对 `origin/dev5`）
+
+### 16.1 版本性质与范围
+
+- dev6 已推送到 `origin/dev6`；初始 TTFT 实施提交为
+  `3c73782efee69076e3dd440f1e07ab2f4902971a`，提交基座为 dev5 的 `5a85e58`。
+- 初始实施提交共涉及 31 个文件、约 `+3564/-485`；其中除本文档外的业务、测试和设计资料
+  共 30 个文件，新增项目文件均已纳入 Git。
+- 本次变更没有增加新的公开 URL，主要改变 GeminiCLI 流式请求的时间边界、重试资格、错误输出、
+  请求诊断、连接池生命周期，以及现有 `/config/get`、`/config/save` 的字段和保存语义。
+- 完整文件列表见第 12.4 节；`docs/STREAMING_TTFT_LATENCY_REVIEW.md` 是设计和历史验收资料，
+  `src/streaming_latency.py` 是运行时契约实现，两者都不得在提交或同步时遗漏。
+
+### 16.2 流式请求状态机与总预算
+
+`StreamRequestTrace` 为每个请求生成 request ID，并按以下阶段记录时间和失败位置：
+
+| 阶段 | 含义 | 必须保留的边界 |
+| --- | --- | --- |
+| `preparing` | 解析请求、创建追踪并快照诊断开关 | 同一在途请求不受控制面板随后切换诊断开关影响 |
+| `selecting_credential` | 获取未被本次请求排除的凭证 | 默认最多等 10 秒；等待超时为 504，没有合格凭证为 503 |
+| `refreshing_token` | 获取/刷新 OAuth token | 阻塞刷新默认最多 20 秒；临时错误不永久封禁 |
+| `waiting_headers` | 建连、写请求并等待响应头 | pool/connect/write/header 分别计时；不得把收到 200 响应头当成首事件 |
+| `waiting_first_event` | 等第一个有效上游流事件 | 默认 45 秒；此阶段失败才可能切换凭证 |
+| `upstream_started` | 已观察到首个有效上游事件 | 从此不可切换凭证或重放请求，即使尚未产生用户可见文本 |
+| `content_emitted` | 已向客户端发送首个有效内容 | 继续受 90 秒 idle 上限保护；错误只能在当前协议内终止 |
+| `finished` / `failed` | 正常结束或带阶段失败 | 输出一次汇总，释放活动流和代理 generation 引用 |
+
+首个下游内容的默认总预算是 75 秒，跨凭证尝试共享，不能在重试时重新起算。传输最多尝试 2 次，
+且必须排除已经失败的凭证；此排除能力在 SMART 429 关闭时也要生效，并由 SQLite、MySQL、
+PostgreSQL、MongoDB/Redis 选择路径一致支持。
+
+### 16.3 错误与重试契约
+
+- `StreamFailure` 必须携带 HTTP 状态、stage、`retryable`、协议错误体/响应头和 request ID；
+  `StreamRequestTrace` 另行记录可选 upstream request ID。converter 与 anti-truncation 必须原样向外传播，
+  不能转成普通内容导致隐式重放。
+- HTTP 尚未提交时：连接类失败返回 502；阶段/总预算超时返回 504；无可用凭证、全体容量冷却或
+  429 尝试耗尽返回 503。响应体要符合调用方选择的 OpenAI、Gemini 或 Anthropic 格式。
+- HTTP 已提交后：OpenAI/Gemini 流发送 SSE error 并以 `[DONE]` 收尾；Anthropic 发送
+  `event: error` 后关闭。此时不得改 HTTP 状态、切换凭证或从头重放。
+- dev6 移除了 GeminiCLI 三种路由和 anti-truncation 内层的重复预读，只允许最终响应边界完成一次
+  首事件预读。重试等待也只在凭证切换路径发生一次，`handle_error_with_retry` 不再额外 sleep。
+- 首事件前的重试只处理允许切换的传输/容量失败；首事件之后无论是 idle timeout、协议错误还是
+  网络中断，都只能终止当前流。
+
+### 16.4 诊断与隐私边界
+
+- `STREAM_DIAGNOSTICS_ENABLED` 默认 `false`，与 `DEBUG_MODE` 独立。关闭时超时和阶段保护仍生效，
+  但不输出性能摘要和 `Server-Timing`。
+- `X-Request-ID` 始终返回。启用诊断后可返回 `Server-Timing`，并输出 `STREAM_PERF_SUMMARY`：
+  慢请求、失败、重试必须记录；普通成功按默认 1% 采样。
+- 日志只记录阶段耗时、状态、模型、上游 request ID 和凭证文件名的 SHA-256 摘要；不得记录
+  access/refresh token、prompt、响应正文、完整凭证文件名、代理 URL 中的用户名或密码。
+- 请求开始时快照诊断设置，所以热切换只影响新请求。环境变量命中时控制面板只读；单 Worker
+  保存后热更新，多 Worker 只持久化并明确返回/提示需要重启。
+
+### 16.5 HTTP 连接池与代理轮换
+
+- `src/httpx_client.py` 从“每次创建 client 的工厂”改为真实共享 HTTPX 池：
+  `max_connections=100`、`max_keepalive_connections=20`、keepalive 30 秒，并显式
+  `trust_env=False`，直连模式不得意外读取宿主机 `HTTP_PROXY`/`HTTPS_PROXY`。
+- 通用 POST 默认超时从 900 秒收紧为 30 秒；流式路径使用第 3.1 节各阶段的独立上限，不能把两者
+  混成单一 read timeout。
+- 代理配置变化时按配置指纹创建新 generation；旧 generation 在活动流归零后再关闭，不能因面板
+  改代理而中断已有长流。应用关闭时共享 HTTP 池必须最后关闭。
+- `open_stream_post()`/`UpstreamStream` 负责显式打开和释放响应流，并对等待响应头设置边界。
+  生产路径中的 `_MOCK_STREAM_429` 已移除，不得在同步时恢复测试后门。
+
+### 16.6 OAuth、凭证和单例并发
+
+- token 刷新按 `(mode, filename)` singleflight：200 个并发请求也只能共享一个实际刷新任务；
+  等待者使用 `asyncio.shield`，单个请求取消不能取消全局刷新。
+- token 剩余 1–10 分钟时启动后台刷新但允许当前 token 继续服务；剩余不超过 1 分钟时阻塞等待。
+  `invalid_grant` 等永久错误仍可禁用凭证，超时/网络等临时失败不得永久禁用。
+- CredentialManager 和 StorageAdapter 使用锁保护的“候选对象完整初始化后再发布”流程，避免并发
+  首次访问拿到半初始化单例。关闭 StorageAdapter 同样在锁内完成状态切换。
+- 无 SMART 429 时也要尊重当前请求的 `excluded_credentials`，防止同一坏凭证在两次尝试中被重复选中。
+
+### 16.7 前端与配置变更
+
+- 桌面和移动控制面板均新增“流式 TTFT 诊断”复选框、说明和环境变量锁定提示；只能两端一起保留。
+- `front/common.js` 的通用 checkbox 装载逻辑会禁用 `env_locked` 字段；保存结果根据
+  `reloaded`/`restart_required` 给出单 Worker 热更新或多 Worker 重启提示。
+- `/config/get` 返回 `stream_diagnostics_enabled`；`/config/save` 只接受布尔值，环境变量锁定时忽略
+  数据库覆盖。其余 TTFT 数值参数当前保持环境变量配置，默认值见第 3.1 节。
+
+### 16.8 明确未采用的行为
+
+dev6 v1 明确没有实现以下行为，同步时不能以“优化”为名私自加入，因为它们会改变客户端可观察语义：
+
+- 不发送伪 heartbeat 来掩盖上游首事件延迟。
+- 不在只收到上游 200 响应头时提前向下游提交 200。
+- 不做 hedged request/并行竞速请求。
+- 不在首个有效上游事件之后切换凭证或重放。
+- 不让 `DEBUG_MODE` 隐式开启 TTFT 诊断，不让代理直连模式继承宿主环境代理。
+
+如需采用其中任何一项，必须独立设计、评估计费/重复工具调用/隐私风险并取得用户明确批准。
+
+### 16.9 测试与验收证据
+
+- 新增 `test_streaming_latency.py`，覆盖阶段超时、协议终止错误、共享池复用与关闭、代理 generation、
+  `trust_env=False`、并发 OAuth、单例竞态、单次 sleep、凭证排除、首事件前重试及首事件后禁重试。
+- 新增 `test_stream_diagnostics_config.py`，覆盖默认值、持久化热更新、环境变量优先/锁定、请求快照、
+  面板校验，以及单/多 Worker 保存行为。
+- `test_frontend_static.py` 增加双端控件和 common.js load/save/lock 静态检查；
+  `test_gemini35_tier_routing.py` 更新为断言 credential 阶段的 typed 503 failure。
+- `docs/STREAMING_TTFT_LATENCY_REVIEW.md` 记录实现完成时的测试结果；推送前已在项目 `.venv`
+  中重新执行全量 pytest，结果为 `112 passed, 7 warnings`，compileall 和 diff-check 也已通过。
+  以后每次同步仍须重新验证，不能直接复用本次结果。
