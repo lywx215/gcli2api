@@ -160,6 +160,68 @@ async def clear_all_model_cooldowns_for_credential(
         log.warning(f"清空模型CD时出错: {credential_log_id(filename)} (mode={mode})")
 
 
+async def sync_model_cooldowns_from_quota(
+    storage_adapter: Any,
+    filename: str,
+    mode: str,
+    models: dict,
+) -> dict:
+    """按实时模型额度双向同步冷却，返回本次变更摘要。"""
+    backend = getattr(storage_adapter, "_backend", None)
+    if not hasattr(backend, "set_model_cooldown"):
+        return {"cleared": [], "added": []}
+
+    state = await storage_adapter.get_credential_state(filename, mode=mode)
+    cooldowns = (state or {}).get("model_cooldowns", {}) or {}
+    now = time.time()
+    cleared = []
+    added = []
+
+    for model_name, info in models.items():
+        remaining = info.get("remaining")
+        if remaining is None:
+            continue
+
+        existing = cooldowns.get(model_name)
+        try:
+            existing_until = float(existing) if existing is not None else None
+        except (TypeError, ValueError):
+            existing_until = None
+
+        if remaining > 0:
+            # 实时额度是权威恢复信号；清除旧 429 留下的误冷却。
+            if existing is not None and await backend.set_model_cooldown(
+                filename, model_name, None, mode=mode
+            ):
+                cleared.append(model_name)
+            continue
+
+        # 已有仍生效的冷却时保持原截止时间，避免每次查看额度都续期。
+        if existing_until is not None and existing_until > now:
+            continue
+
+        cooldown_until = None
+        raw_reset_time = info.get("resetTimeRaw") or ""
+        if raw_reset_time:
+            try:
+                cooldown_until = datetime.fromisoformat(
+                    raw_reset_time.replace("Z", "+00:00")
+                ).timestamp()
+                if cooldown_until < now + 60:
+                    cooldown_until = None
+            except (TypeError, ValueError):
+                cooldown_until = None
+        if cooldown_until is None:
+            cooldown_until = now + 4 * 3600
+
+        if await backend.set_model_cooldown(
+            filename, model_name, cooldown_until, mode=mode
+        ):
+            added.append(model_name)
+
+    return {"cleared": cleared, "added": added}
+
+
 async def _detect_uploaded_geminicli_subscription(
     filename: str, credential_data: dict
 ) -> GeminiCliSubscriptionInfo:
@@ -1483,40 +1545,19 @@ async def get_credential_quota(
                 )
 
         if quota_info.get("success"):
-            # 自动同步 quota=0 的模型到 model_cooldowns
+            # 实时额度与模型冷却双向同步：0% 加冷，正额度解除旧误冷。
             try:
-                import time
-                from datetime import datetime as _dt
                 models = quota_info.get("models", {}) or {}
-                synced = []
-                for model_name, info in models.items():
-                    remaining = info.get("remaining")
-                    if remaining is None or remaining > 0:
-                        continue
-                    # quota 为 0：尝试用 resetTimeRaw 解析 cooldown 时间
-                    cooldown_until = None
-                    raw = info.get("resetTimeRaw") or ""
-                    if raw:
-                        try:
-                            iso = raw.replace("Z", "+00:00")
-                            ts = _dt.fromisoformat(iso).timestamp()
-                            # 1970-01-01（epoch 0）或已过期，用 4h 兜底
-                            if ts < time.time() + 60:
-                                ts = None
-                            cooldown_until = ts
-                        except Exception:
-                            cooldown_until = None
-                    if cooldown_until is None:
-                        cooldown_until = time.time() + 4 * 3600
-
-                    if hasattr(storage_adapter._backend, "set_model_cooldown"):
-                        await storage_adapter._backend.set_model_cooldown(
-                            filename, model_name, cooldown_until, mode=mode
-                        )
-                        synced.append(model_name)
-                if synced:
-                    log.info(f"[QUOTA SYNC] {credential_log_id(filename)}: 自动写入冷却模型")
-            except Exception as sync_err:
+                sync_result = await sync_model_cooldowns_from_quota(
+                    storage_adapter, filename, mode, models
+                )
+                if sync_result["cleared"] or sync_result["added"]:
+                    log.info(
+                        f"[QUOTA SYNC] {credential_log_id(filename)}: "
+                        f"解除 {len(sync_result['cleared'])} 个，"
+                        f"写入 {len(sync_result['added'])} 个模型冷却"
+                    )
+            except Exception:
                 log.warning(f"[QUOTA SYNC] {credential_log_id(filename)}: 同步冷却失败")
 
             return JSONResponse(content={
@@ -2093,7 +2134,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         if mode == "antigravity":
             api_base_url = await get_antigravity_api_url()
             from src.api.antigravity import build_antigravity_headers
-            headers = build_antigravity_headers(access_token, test_model)
+            headers = build_antigravity_headers(access_token)
         else:
             api_base_url = await get_code_assist_endpoint()
             headers = {

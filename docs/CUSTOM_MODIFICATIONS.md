@@ -123,6 +123,7 @@ comm -13 <(git diff --name-only "$base"..origin/dev6 | sort) <(git diff --name-o
 | OPS-01 | 版本元数据 | 发布构建优先使用注入的版本/修订/日期；源码运行回退到 `version.txt`；静态资源带摘要缓存键 | `src/versioning.py`、`src/panel/version.py` | `6fa3375` 相关提交 |
 | OPS-02 | 部署与 CI | Redis Compose、健康检查、MySQL 依赖、分支 SHA 镜像标签和构建元数据 | Docker/CI/requirements | `b80c23d`、`5249bea` |
 | OPS-03 | dev6 关闭顺序 | 先停业务后台任务，再关闭凭证/存储，最后关闭共享 HTTP 池；旧代理池要等活动流排空 | `web.py`、`src/httpx_client.py`、`src/storage_adapter.py` | `dev6` |
+| OPS-04 | 实际服务器全基础模型测试 | 两种模式的全部基础模型必须逐一产生真实非空响应；失败或缺少凭证不得表述为通过；保留脱敏 JSON 报告 | `scripts/test_all_base_models.py`、`docs/REAL_SERVER_TEST_STANDARD.md`、`test_real_server_model_test.py` | `codex/sync-upstream-20260731` 待提交 |
 
 ### 3.1 自定义配置与运行环境
 
@@ -351,6 +352,16 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 
 同步后不得只跑测试文件是否可导入；至少应执行上述 11 个文件，并按冲突范围补跑上游测试。
 上游 `tests/test_gemini_fix.py` 是第 12 个受保护测试文件。
+
+### 9.3 实际服务器测试（OPS-04）
+
+- “实际服务器测试”与接口冒烟必须分开判定；端口、鉴权和模型列表通过不能替代真实推理。
+- GeminiCLI 以 `BASE_MODELS` 为完整清单；Antigravity 从运行中服务动态发现原生基础模型。
+- 默认同时测试两种模式，逐模型串行发送一次最小非流式请求，验证 2xx、响应结构和非空内容。
+- 429、503、超时、空内容和无凭证均导致整体不通过，不得跳过后降低验收标准。
+- `.test-results/*.json` 只保存脱敏结果，不提交密钥或完整上游响应。
+- 规范和标准命令见 `docs/REAL_SERVER_TEST_STANDARD.md`；脚本解析/筛选契约由
+  `test_real_server_model_test.py` 保护。
 
 ## 10. 2026-07-31 上游同步冲突与语义热点
 

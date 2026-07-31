@@ -849,6 +849,19 @@ export COMPATIBILITY_MODE=true
 
 ---
 
+## 🧪 实际服务器测试
+
+启动服务后的正式验证必须逐一请求 GeminiCLI 与 Antigravity 的全部基础模型，不能只用健康检查或模型列表代替。标准命令：
+
+```bash
+GCLI2API_TEST_API_KEY='<API 密钥>' \
+  .venv/bin/python scripts/test_all_base_models.py
+```
+
+完整的前置条件、通过标准、报告格式和后续回归步骤见 [`docs/REAL_SERVER_TEST_STANDARD.md`](docs/REAL_SERVER_TEST_STANDARD.md)。任一基础模型失败或任一模式因缺少凭证而阻塞时，均不得表述为“实际服务器测试通过”。
+
+---
+
 ## 💬 交流群
 
 欢迎加入 QQ 群交流讨论！
