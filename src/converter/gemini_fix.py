@@ -298,14 +298,6 @@ def _ensure_empty_tool_schema_for_claude(tools: Any, model_name: str, mode: str 
     is_claude = "claude" in (model_name or "").lower()
 
     if is_claude:
-        # antigravity 通道的 Claude 模型内部会把
-        # functionDeclarations 转换回 Anthropic 原生的 custom.input_schema，
-        # 但只有使用 parametersJsonSchema 字段时该转换才能正确带上 schema；
-        # 使用 parameters 字段会导致转换后 input_schema 缺失，报
-        # "tools.0.custom.input_schema: Field required" 错误。
-        # geminicli 则需要使用 parameters 字段。
-        schema_field = "parametersJsonSchema" if mode == "antigravity" else "parameters"
-
         normalized_tools = []
         for tool in tools:
             if not isinstance(tool, dict):
@@ -336,11 +328,13 @@ def _ensure_empty_tool_schema_for_claude(tools: Any, model_name: str, mode: str 
                     name = decl.get("name", "")
                     description = decl.get("description", "")
 
+            # Antigravity's internal Claude conversion only propagates
+            # functionDeclarations.parameters into custom.input_schema.
             normalized_tools.append({
                 "functionDeclarations": [{
                     "name": name,
                     "description": description,
-                    schema_field: schema
+                    "parameters": schema
                 }]
             })
 

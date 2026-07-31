@@ -8,22 +8,23 @@
 
 ## 1. 审计基线
 
-审计日期：2026-07-30（Asia/Shanghai）。以下以当前本地远端跟踪引用和提交图为准；
-审计结束时网络 DNS 不可用，未再次执行远端在线核验。
+审计日期：2026-07-31（Asia/Shanghai）。已执行 `git fetch --all --prune`，并通过远端
+HEAD 确认上游默认分支仍为 `master`。
 
 | 项目 | 值 |
 | --- | --- |
 | Fork 远端 | `origin = https://github.com/lywx215/gcli2api.git` |
 | 上游远端 | `upstream = https://github.com/su-kaka/gcli2api.git` |
-| 当前开发基线 | `origin/dev6`；初始 TTFT 实施提交 `3c73782efee69076e3dd440f1e07ab2f4902971a` |
+| 当前开发基线 | `origin/dev6@7e7675be19714efa2af135117b6fbbc805c1994b` |
+| 当前同步分支 | `codex/sync-upstream-20260731`；从 `origin/dev6` 创建 |
 | dev6 的提交基座 | `origin/dev5`，`5a85e5892a679445e77125d1567f6699d845fa76` |
 | 上游比较基线 | `upstream/master`，`4f5e3432e1d5fc5ba41cf56c99981ba89d1987f7` |
 | 共同祖先 | `78f391acee42cc2b2b39bf55577c8eed80aab7e3` |
-| dev6 提交分叉 | 上游独有 13 个提交；dev6 独有 128 个提交 |
-| dev6 对上游直接树差异 | 67 个文件，约 `+16366/-1421` |
-| dev6 三方分类 | 58 个仅 dev6 修改；8 个双方修改；1 个仅上游新增 |
+| 同步前提交分叉 | 上游独有 13 个提交；dev6 独有 131 个提交 |
+| 同步前直接树差异 | 74 个文件，约 `+21680/-1566` |
+| 同步前三方分类 | 65 个仅 dev6 修改；8 个双方修改；1 个仅上游新增 |
 | dev6 初始实施对 dev5 增量 | 31 个文件，约 `+3564/-485` |
-| 当前文本冲突 | 4 个文件：`.gitignore`、`src/utils.py`、`version.txt`、`web.py` |
+| 本次文本冲突 | 4 个文件：`.gitignore`、`src/utils.py`、`version.txt`、`web.py`；均按批准方案人工解决 |
 
 基线只描述审计时的事实。以后同步前必须重新获取远端并更新 SHA、数量和冲突清单，
 不能假定本节永久有效。`master` 是历史发布分支，不再作为自定义修改审计基线。
@@ -330,13 +331,14 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 - `src/versioning.py` 决定展示版本和静态资源缓存键；不能退回只读 `version.txt` 的实现。
 - `scripts/migrate_sqlite_to_mysql.py` 支持 dry-run、server_name、建表、凭证/配置迁移和校验。
 
-### 9.2 受保护测试（dev6 共 10 个顶层文件）
+### 9.2 受保护测试（dev6 共 11 个顶层文件）
 
 | 文件 | 覆盖重点 |
 | --- | --- |
 | `test_frontend_static.py` | 统计刷新 timer、桌面/移动页面重复 ID、TTFT 诊断控件及 common.js 加载/保存/锁定逻辑 |
 | `test_gemini35_tier_routing.py` | 无合格凭证 503、MySQL/MongoDB Redis tier 池、别名与原始额度模型 |
 | `test_geminicli_subscription_api.py` | Code Assist 请求、失败回退、Antigravity 付费等级回退与请求体兼容 |
+| `test_hedge_stats.py` | 对冲预算原子预留、结果统计、跨日期/凭证/模型族隔离 |
 | `test_smart_429.py` | 429 互斥分类、精确风控、multi-worker fail-closed、健康迁移、singleflight、状态版本 |
 | `test_stream_diagnostics_config.py` | 持久化热更新、环境变量优先/锁定、请求快照、面板校验及单/多 Worker 保存语义 |
 | `test_streaming_latency.py` | TTFT 分阶段超时、终止错误、连接复用、OAuth/初始化 single-flight、凭证排除和禁止内容后重试 |
@@ -345,44 +347,44 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 | `test_upload_tier_detection.py` | 上传后等级持久化、检测失败保持旧状态、响应字段 |
 | `test_versioning.py` | version.txt 回退、发布元数据优先、分支构建与资源缓存键 |
 
-同步后不得只跑测试文件是否可导入；至少应执行上述 10 个文件，并按冲突范围补跑上游测试。
+同步后不得只跑测试文件是否可导入；至少应执行上述 11 个文件，并按冲突范围补跑上游测试。
+上游 `tests/test_gemini_fix.py` 是第 12 个受保护测试文件。
 
-## 10. 当前上游同步冲突与语义热点
+## 10. 2026-07-31 上游同步冲突与语义热点
 
-### 10.1 已确认的文本冲突（必须停止）
+### 10.1 已确认并解决的文本冲突
 
-| 文件 | 本地内容 | 上游内容 | 处理要求 |
+| 文件 | 本地内容 | 上游内容 | 已批准并执行的处理 |
 | --- | --- | --- | --- |
-| `.gitignore` | 保留 `zeaburcli/`、`sshcli/`、`deploy/`、`tests/`、`参考项目/` 等本地忽略项 | 上游保留/调整 `aicode/`、`streamchat/` | 不得二选一；先确认 `tests/` 策略，并合并双方仍需要的规则 |
-| `src/utils.py` | dev5 的 GeminiCLI 用户代理、模型/等级相关适配 | 上游后续用户代理/工具兼容更新 | 按函数逐项比较；不得整文件覆盖 |
-| `version.txt` | dev5 构建/分支版本元数据 | 上游最新提交元数据 | 这是元数据冲突，但仍需报告；最终值由同步结果和发布策略决定 |
-| `web.py` | SMART 429、分钟统计清理、dev6 流式资源关闭顺序及共享 HTTP 池关闭 | 上游 GC/`malloc_trim` 内存回收和凭证管理器关闭修复 | 最终必须同时保留本地任务、dev6“HTTP 池最后关闭”顺序及上游内存/关闭修复，方案需先确认 |
+| `.gitignore` | 保留 `zeaburcli/`、`sshcli/`、`deploy/`、`tests/`、`参考项目/` 等本地忽略项 | 新增 `streamchat/` | 合并双方全部规则 |
+| `src/utils.py` | Gemini 3.5 Flash/Preview 模型、别名和等级路由 | 删除 `gemini-3.5-flash` | 完整保留 dev6 模型与路由 |
+| `version.txt` | fork 源码元数据 | 更新到上游 `18033ab` | 采用上游元数据作为已同步基线；镜像继续使用注入的 fork SHA |
+| `web.py` | SMART 429、分钟统计、hedge、存储和 HTTP 池生命周期 | GC/`malloc_trim` 和凭证关闭修复 | 同时保留双方任务；直接关闭 credential singleton；HTTP 池最后关闭 |
 
 ### 10.2 双方修改但可能自动合并的文件
 
 | 文件 | 语义风险与必查项 |
 | --- | --- |
-| `Dockerfile` | dev5 构建元数据与上游 jemalloc 安装/`LD_PRELOAD`/`MALLOC_CONF` 必须共存；不能因自动合并遗漏任一侧 |
-| `src/api/antigravity.py` | 上游移除显式 timeout；dev6/dev5 保留凭证切换、统一错误和 SMART 429 相关重试语义；还要复核共享客户端接口变化 |
-| `src/api/geminicli.py` | 上游移除 timeout；dev6 增加分阶段流超时、首事件前双凭证尝试、首事件后禁重试和 typed failure；同时保留 dev5 等级/风险/容量/503 语义 |
-| `src/converter/gemini_fix.py` | 上游最新 Claude 工具 schema 修复与 dev5 thinking、tier 模型、图像和多轮工具修复可能重叠 |
+| `Dockerfile` | 已吸收 jemalloc/MALLOC_CONF，保留构建元数据；`LD_PRELOAD=libjemalloc.so.2` 避免写死 x86_64 路径 |
+| `src/api/antigravity.py` | 拒绝自动删除非流式 `timeout=300.0`，避免落到共享客户端 30 秒默认值 |
+| `src/api/geminicli.py` | 同样保留 300 秒；TTFT、容量快速失败、对冲和 503 语义不变 |
+| `src/converter/gemini_fix.py` | Claude 工具统一输出 `parameters`；保留 dev6 thinking、tier、图像和多轮工具修复 |
 | `.gitignore` | 见文本冲突 |
 | `src/utils.py` | 见文本冲突 |
 | `version.txt` | 见文本冲突 |
 | `web.py` | 见文本冲突；上游回收任务不得在仍有活动流时提前关闭 dev6 共享池或代理池 generation |
 
-### 10.3 上游待引入内容
+### 10.3 本次已引入的上游内容
 
 共同祖先之后的上游功能重点包括：
 
 - Claude/Antigravity 工具 schema 修复及其后续回退/调整。
 - jemalloc 和运行时内存回收。
-- 请求 timeout 移除。
+- 非流式 timeout 移除提案（本次因会把 dev6 的 300 秒静默缩短为 30 秒而明确拒绝）。
 - `src/utils.py` 的后续更新。
 - 对应的版本元数据提交。
 
-`tests/test_gemini_fix.py` 是当前三方分类中唯一“仅上游新增”的文件。直接树差异显示它在 dev6
-一侧缺失，不代表 dev6 有意删除；同步时应作为上游测试引入并与 dev6 的顶层测试共同运行。
+`tests/test_gemini_fix.py` 是同步前唯一“仅上游新增”的文件，现已引入并扩充为 3 个用例。
 
 上游“移除请求 timeout”与 dev6 的 TTFT 分阶段上限属于高风险语义冲突：可以吸收上游修复的动机，
 但不得直接删除 `pool/connect/write/header/first-event/first-content/idle` 各阶段预算，也不得恢复无界等待。
@@ -398,35 +400,35 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 | SMART 429 部署限制 | 只支持 `WORKERS=1` 的单副本；外部多副本无法共享内存熔断状态 | 多实例前不得开启 |
 | SMART 429 人工验收状态未知 | 自动化测试存在，但 review 文档还要求小号池人工验证后才启用 | 默认保持关闭 |
 | `tests/` 被忽略 | `.gitignore` 忽略 `tests/`，而上游新增测试位于该目录 | 同步时明确保留并跟踪上游测试，不得因 ignore 误删 |
-| 生命周期关闭路径 | `web.py` 初始化使用 `credential_manager` 单例，但关闭仍受 `global_credential_manager` 是否赋值影响；同时将与上游关闭修复冲突 | 必须作为 `web.py` 冲突的一部分报告，不在文档任务中修复 |
-| jemalloc 当前缺失 | dev5 Dockerfile 有构建元数据，但相对当前上游缺少 jemalloc 配置 | 这是待同步上游能力，不应误记为本地要求删除 jemalloc |
+| 生命周期关闭路径 | 本次已改为直接关闭 `credential_manager` singleton，并通过启停烟测确认 credential→hedge→storage→HTTP 顺序 | 后续修改 `web.py` 必须继续保证 HTTP 池最后关闭 |
+| jemalloc 多架构验证 | 已采用跨架构动态库名；本机 Docker daemon 未运行，无法完成实际 amd64/arm64 build | 推送前由现有 buildx CI 验证两种架构，不得改回 x86_64 硬编码路径 |
 | dev6 提交锚点 | 初始 TTFT 实施已提交并推送为 `3c73782efee69076e3dd440f1e07ab2f4902971a` | 后续同步必须从 `origin/dev6` 创建独立分支，不得直接修改 dev6/dev5 |
-| dev6 测试证据来源 | 2026-07-30 在项目 `.venv` 中执行全量 pytest，结果为 `112 passed, 7 warnings` | 后续提交/同步仍需重新运行并保存当次结果，不得直接复用历史结论 |
+| dev6 测试证据来源 | 同步前 `182 passed, 7 warnings`；本次解决后 `185 passed, 7 warnings` | 后续提交/同步仍需重新运行并保存当次结果，不得直接复用历史结论 |
 
-## 12. 文件覆盖矩阵（67/67）
+## 12. 同步前文件覆盖矩阵（74/74）
 
 本节用于机械核对，防止功能说明完整但漏掉文件。路径按共同祖先三方分类。
 
-### 12.1 仅 dev6 修改（58）
+### 12.1 仅 dev6 修改（65）
 
 | 分组 | 文件 | 对应保护项 |
 | --- | --- | --- |
-| 配置/文档/部署（14） | `.agent/workflows/debug-log.md`、`.env.example`、`.github/workflows/docker-publish.yml`、`README.md`、`config.py`、`docker-compose.yml`、`docs/CUSTOM_MODIFICATIONS.md`、`docs/STREAMING_TTFT_LATENCY_REVIEW.md`、`docs/http_status_codes.md`、`requirements.txt`、`review/GEMINI_CLI_TIER_REVIEW.md`、`review/SMART_429_PROTECTION_AUDIT.md`、`review/SMART_429_PROTECTION_REVIEW.md`、`scripts/migrate_sqlite_to_mysql.py` | S429、TIER、OPS、STORE、API-05/API-06 |
+| 配置/文档/部署（16） | `.agent/workflows/debug-log.md`、`.env.example`、`.github/workflows/docker-publish.yml`、`README.md`、`config.py`、`docker-compose.yml`、`docs/CUSTOM_MODIFICATIONS.md`、`docs/STREAMING_TTFT_LATENCY_REVIEW.md`、`docs/http_status_codes.md`、`log.py`、`pyproject.toml`、`requirements.txt`、`review/GEMINI_CLI_TIER_REVIEW.md`、`review/SMART_429_PROTECTION_AUDIT.md`、`review/SMART_429_PROTECTION_REVIEW.md`、`scripts/migrate_sqlite_to_mysql.py` | S429、TIER、OPS、STORE、API-05/API-06 |
 | 前端（3） | `front/common.js`、`front/control_panel.html`、`front/control_panel_mobile.html` | UI-01、UI-02、CRED、STAT |
-| API/认证/转换/面板/路由（25） | `src/api/utils.py`、`src/auth.py`、`src/converter/anthropic2gemini.py`、`src/converter/anti_truncation.py`、`src/converter/openai2gemini.py`、`src/credential_manager.py`、`src/google_oauth_api.py`、`src/httpx_client.py`、`src/models.py`、`src/panel/auth.py`、`src/panel/config_routes.py`、`src/panel/creds.py`、`src/panel/root.py`、`src/panel/version.py`、`src/router/antigravity/gemini.py`、`src/router/antigravity/openai.py`、`src/router/geminicli/anthropic.py`、`src/router/geminicli/gemini.py`、`src/router/geminicli/openai.py`、`src/router/stream_passthrough.py`、`src/smart_429.py`、`src/streaming_latency.py`、`src/subscription_tiers.py`、`src/usage_stats.py`、`src/versioning.py` | CRED、ROUTE、S429、TIER、MODEL、API、AUTH、CORE、CONV、OPS |
+| API/认证/转换/面板/路由（29） | `src/api/utils.py`、`src/api/vertex.py`、`src/auth.py`、`src/converter/anthropic2gemini.py`、`src/converter/anti_truncation.py`、`src/converter/openai2gemini.py`、`src/credential_manager.py`、`src/google_oauth_api.py`、`src/hedge_stats.py`、`src/httpx_client.py`、`src/log_safety.py`、`src/models.py`、`src/panel/auth.py`、`src/panel/config_routes.py`、`src/panel/creds.py`、`src/panel/root.py`、`src/panel/version.py`、`src/router/antigravity/anthropic.py`、`src/router/antigravity/gemini.py`、`src/router/antigravity/openai.py`、`src/router/geminicli/anthropic.py`、`src/router/geminicli/gemini.py`、`src/router/geminicli/openai.py`、`src/router/stream_passthrough.py`、`src/smart_429.py`、`src/streaming_latency.py`、`src/subscription_tiers.py`、`src/usage_stats.py`、`src/versioning.py` | CRED、ROUTE、S429、TIER、MODEL、API、AUTH、CORE、CONV、OPS |
 | 存储（6） | `src/storage/_stats_common.py`、`src/storage/mongodb_manager.py`、`src/storage/mysql_manager.py`、`src/storage/psql_manager.py`、`src/storage/sqlite_manager.py`、`src/storage_adapter.py` | STORE、STAT、S429、TIER |
-| 测试（10） | `test_frontend_static.py`、`test_gemini35_tier_routing.py`、`test_geminicli_subscription_api.py`、`test_smart_429.py`、`test_sqlite_tier_storage.py`、`test_stream_diagnostics_config.py`、`test_streaming_latency.py`、`test_subscription_tiers.py`、`test_upload_tier_detection.py`、`test_versioning.py` | 第 9.2 节 |
+| 测试（11） | `test_frontend_static.py`、`test_gemini35_tier_routing.py`、`test_geminicli_subscription_api.py`、`test_hedge_stats.py`、`test_smart_429.py`、`test_sqlite_tier_storage.py`、`test_stream_diagnostics_config.py`、`test_streaming_latency.py`、`test_subscription_tiers.py`、`test_upload_tier_detection.py`、`test_versioning.py` | 第 9.2 节 |
 
 ### 12.2 双方修改（8）
 
 `.gitignore`、`Dockerfile`、`src/api/antigravity.py`、`src/api/geminicli.py`、
 `src/converter/gemini_fix.py`、`src/utils.py`、`version.txt`、`web.py`。
 
-这 8 个文件全部需要强制人工复核；其中 4 个当前产生文本冲突，详见第 10 节。
+这 8 个文件已全部人工复核；其中 4 个产生文本冲突，解决结果见第 10 节和同步报告。
 
 ### 12.3 仅上游新增（1）
 
-`tests/test_gemini_fix.py`。它属于待同步测试资产，不是 dev6 的自定义删除项。
+`tests/test_gemini_fix.py`。本次已引入并纳入全量 pytest。
 
 ### 12.4 dev6 初始实施相对 dev5 的增量文件（30/30，不含本文档）
 
@@ -444,6 +446,15 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 30 个文件中没有新增公开 URL；公共变化集中在既有配置接口、所有 GeminiCLI 流式响应、错误状态、
 响应头和内部存储选择能力。4 个新增项目文件现已全部由 Git 跟踪。
 
+### 12.5 2026-07-31 上游同步净变化（9）
+
+| 状态 | 文件 | 结果 |
+| --- | --- | --- |
+| 修改（7） | `.gitignore`、`Dockerfile`、`src/api/antigravity.py`、`src/api/geminicli.py`、`src/converter/gemini_fix.py`、`version.txt`、`web.py` | 冲突与语义处理见第 10 节 |
+| 新增（2） | `docs/UPSTREAM_SYNC_20260731.md`、`tests/test_gemini_fix.py` | 同步报告及 3 个 Claude schema 回归测试 |
+
+`src/utils.py` 虽产生文本冲突，但最终完整保留 dev6 内容，因此相对同步前 HEAD 没有净变化。
+
 ## 13. 标准同步流程
 
 ### 13.1 同步前
@@ -452,7 +463,7 @@ API 返回的原始模型 ID 也必须保留，额度面板不得把不同 Googl
 2. 执行 `git fetch origin upstream`，记录 `origin/dev6`、`origin/dev5`、`upstream/master` 和 merge-base。
 3. 从 `origin/dev6` 创建独立分支，例如 `codex/sync-upstream-YYYYMMDD`；禁止直接在 dev6、dev5 或 master 操作。
 4. 重新生成三类文件清单、提交清单和 `git merge-tree` 预演结果。
-5. 将预演结果与本文功能 ID、接口表、字段表、67 文件矩阵及 dev6 的 30 个项目文件增量比较。
+5. 将预演结果与本文功能 ID、接口表、字段表、最新文件矩阵及 dev6 的自定义增量比较。
 
 ### 13.2 冲突报告格式
 
@@ -478,7 +489,7 @@ dev6/dev5 当前行为：
 1. 按功能 ID 而非整文件解决冲突。
 2. 先保护数据列、配置键和 API 响应，再处理内部重构。
 3. 同时检查 8 个双方修改文件的自动合并结果。
-4. 执行 dev6 的 10 个顶层测试文件、上游新增测试及冲突涉及的其他测试。
+4. 执行 dev6 的 11 个顶层测试文件、上游新增测试及冲突涉及的其他测试。
 5. 检查桌面和移动面板，不能只验证一端。
 6. 对存储变化至少验证 SQLite；远程后端无法实测时必须明确标记未验证。
 7. 成功同步后更新本文的 SHA、差异数量、冲突状态和文件矩阵。
@@ -495,7 +506,7 @@ dev6/dev5 当前行为：
 - [ ] 桌面端与移动端的统计、导入、筛选和 SMART 429 设置均可用。
 - [ ] TTFT 诊断默认关闭；开启后 `X-Request-ID`、采样日志和可选 `Server-Timing` 符合第 16 节。
 - [ ] 首个有效事件后不切换凭证、不重放；提交响应后的错误使用对应流协议终止。
-- [ ] dev6 的 10 个顶层测试文件全部通过。
+- [ ] dev6 的 11 个顶层测试文件全部通过。
 - [ ] 上游新增 `tests/test_gemini_fix.py` 已保留并通过。
 - [ ] `Dockerfile` 同时包含版本元数据和已批准的上游内存优化。
 - [ ] `web.py` 同时保留本地生命周期任务和已批准的上游关闭/内存处理。
@@ -516,6 +527,7 @@ dev6/dev5 当前行为：
 | --- | --- | --- | --- |
 | 2026-07-30 | `5a85e58` | `4f5e343` | 建立首份保护清单；只读预演发现 4 个文本冲突、8 个双方修改文件；未执行同步 |
 | 2026-07-30 | `origin/dev6@3c73782`，基于 `5a85e58` | 未同步上游 | 登记 30 个项目文件的 dev6 增量、API-05/API-06/AUTH-01/CORE-01/OPS-03；全量测试 `112 passed, 7 warnings` |
+| 2026-07-31 | `origin/dev6@7e7675b` | `upstream/master@4f5e343` | 在 `codex/sync-upstream-20260731` 人工解决 4 个文本冲突并复核 8 个双方修改文件；`185 passed, 7 warnings`；merge SHA 见同步报告 |
 
 ## 16. dev6 最新修改明细（相对 `origin/dev5`）
 
@@ -688,3 +700,21 @@ dev6 v1 明确没有实现以下行为，同步时不能以“优化”为名私
   预算通过主存储跨 Worker 原子共享，不使用 Redis 协调。
 - 加入对冲成本预算后全量回归为 `182 passed, 7 warnings`，并通过 `compileall`、
   JavaScript 语法检查和 `git diff --check`。
+
+## 17. 2026-07-31 上游同步新增保护决策
+
+- Antigravity Claude 工具必须将输入的 `parametersJsonSchema`、`parameters_json_schema`、
+  `parameters` 或 `custom.input_schema` 归一化为 `functionDeclarations.parameters`，
+  避免内部转换丢失 `custom.input_schema`。
+- GeminiCLI Claude 工具继续接受相同的输入变体，并输出唯一的 `parameters` 字段；
+  不得同时发送多个 schema 字段。
+- Antigravity 和 GeminiCLI 非流式主请求继续显式使用 `timeout=300.0`。上游若再次移除，
+  必须结合共享客户端默认值重新评估，不能自动接受。
+- Docker 必须同时保留构建元数据、`libjemalloc2`、`MALLOC_CONF`，且不得将
+  `LD_PRELOAD` 写死为 x86_64 路径；现有 CI 的 amd64/arm64 构建均为验收门槛。
+- `web.py` 必须启动并在退出时取消内存回收任务；关闭顺序至少满足：
+  SMART 429/后台任务 → credential manager → hedge stats → storage adapter → HTTP pool。
+- `version.txt` 在本次同步中记录上游 `18033ab`，表示已吸收的上游版本；发布镜像的实际
+  fork 版本仍由 `GCLI2API_VERSION`、`GCLI2API_REVISION`、`GCLI2API_BUILD_DATE` 提供。
+- 本次完整决策、冲突证据、测试和未完成的 Docker CI 验证记录在
+  `docs/UPSTREAM_SYNC_20260731.md`。

@@ -1492,7 +1492,7 @@ async def non_stream_request(
                 url=target_url,
                 json=final_payload,
                 headers=auth_headers,
-                timeout=300.0
+                timeout=300.0,
             )
 
             status_code = response.status_code
