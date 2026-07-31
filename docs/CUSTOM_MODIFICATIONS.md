@@ -136,6 +136,12 @@ comm -13 <(git diff --name-only "$base"..origin/dev6 | sort) <(git diff --name-o
 | `STORAGE_STRICT` | 远程存储初始化失败策略 | 默认视为 `1` | 为 `1` 时 fail-fast；只有显式 `0/false/no/off` 才允许回退 |
 | `STORAGE_ENGINE` | 仅在 `.env.example` 中声明的引擎选择项 | 文档默认 `sqlite` | 当前 adapter 未读取，属于已知不一致，不得假定已生效 |
 | `STREAM_DIAGNOSTICS_ENABLED` | `stream_diagnostics_enabled`；TTFT 结构化日志与 `Server-Timing` | `false` | 环境变量锁定优先；单 Worker 可从控制面板热更新，多 Worker 保存后需重启 |
+| `GEMINICLI_STREAM_HEADER_HEDGE_ENABLED` | `geminicli_stream_header_hedge_enabled`；GeminiCLI 真流响应头对冲 | `false` | 环境变量锁定优先；单 Worker 热更新，多 Worker 保存后需重启 |
+| `GEMINICLI_STREAM_HEADER_HEDGE_DELAY` | 首请求无响应头后启动备用请求的延迟 | `15` 秒，正数 | 仅无响应头时触发；已收到响应头不得对冲 |
+| `GEMINICLI_STREAM_HEADER_HEDGE_MAX_INFLIGHT` | 单 Worker 同时存在的备用请求上限 | `20`，范围 1–100 | 非阻塞获取；达到上限时回退原串行策略 |
+| `GEMINICLI_STREAM_HEADER_HEDGE_SAMPLE_RATE` | 满足条件的对冲采样率 | `0.05`，范围 0–1 | 控制面板显示 0–100%；环境变量锁定，单 Worker 热更新 |
+| `GEMINICLI_STREAM_HEADER_HEDGE_DAILY_BUDGET` | 每个备用凭证、每个模型族的北京时间每日预算 | `10`，范围 0–1000 | `0` 禁止备用请求；环境变量锁定，单 Worker 热更新 |
+| `UPSTREAM_HTTP2_ENABLED` | 上游 HTTP/2 连接复用 | `false` | 仅环境变量控制；修改后重启；HTTPX 可自动回退 HTTP/1.1 |
 | `STREAM_LATENCY_GUARD_ENABLED` | 首事件、首内容、idle 超时及安全切换 | `true` | 关闭后仍保留基础连接/OAuth 上限和首事件后禁止重试 |
 | `STREAM_PERF_LOG_SAMPLE_RATE` | 正常成功流的性能摘要采样率 | `0.01`，范围 0–1 | 慢请求、失败和重试不受采样率限制；不得记录请求体、token 或代理凭证 |
 | `CREDENTIAL_ACQUIRE_TIMEOUT` | 获取可用凭证的总时限 | `10` 秒，正数 | 超时必须转为有阶段信息的 504；没有合格凭证则保持 503，不能无限等待 |
@@ -151,7 +157,7 @@ comm -13 <(git diff --name-only "$base"..origin/dev6 | sort) <(git diff --name-o
 
 配置读取顺序是：命中的环境变量先锁定对应键，存储后端配置只补充未锁定键；
 `config.init_config()`/`reload_config()` 再把 debug、TTFT diagnostics、routing 和 SMART 429 值刷新到同步热路径缓存。
-除 `STREAM_DIAGNOSTICS_ENABLED` 外，dev6 的 TTFT 数值参数当前主要由环境变量构造请求级配置快照；
+除诊断、容量快速失败和响应头对冲三个布尔开关外，dev6 的 TTFT 数值参数当前主要由环境变量构造请求级配置快照；
 同步时不得擅自把它们改成数据库配置或改变默认值、单位和范围。
 
 ## 4. 智能 429 保护契约
@@ -604,7 +610,8 @@ dev6 v1 明确没有实现以下行为，同步时不能以“优化”为名私
 
 - 不发送伪 heartbeat 来掩盖上游首事件延迟。
 - 不在只收到上游 200 响应头时提前向下游提交 200。
-- 不做 hedged request/并行竞速请求。
+- 不做无延迟、无并发上限或超过两次上游调用的通用 hedged request；唯一例外是第 16.11 节
+  明确定义且默认关闭的 GeminiCLI 真流响应头对冲。
 - 不在首个有效上游事件之后切换凭证或重放。
 - 不让 `DEBUG_MODE` 隐式开启 TTFT 诊断，不让代理直连模式继承宿主环境代理。
 
@@ -638,3 +645,46 @@ dev6 v1 明确没有实现以下行为，同步时不能以“优化”为名私
 - `docs/STREAMING_TTFT_LATENCY_REVIEW.md` 记录实现完成时的测试结果；推送前已在项目 `.venv`
   中重新执行全量 pytest，增强后的结果为 `135 passed, 7 warnings`，compileall 和 diff-check 也已通过。
   以后每次同步仍须重新验证，不能直接复用本次结果。
+
+### 16.11 HTTP/2 与 GeminiCLI 真流响应头对冲
+
+- `UPSTREAM_HTTP2_ENABLED` 默认关闭且只读环境变量。共享 HTTPX client 创建时显式传入
+  `http2`，transport generation 指纹同时包含代理配置和 HTTP/2 状态；旧 generation
+  继续等待活动流释放后关闭。依赖显式声明为 `httpx[http2,socks]`，协商失败时仍允许
+  HTTPX 使用 HTTP/1.1。
+- `GEMINICLI_STREAM_HEADER_HEDGE_ENABLED` /
+  `geminicli_stream_header_hedge_enabled` 是独立且默认关闭的布尔开关。首请求 15 秒内没有
+  响应头、命中采样、存在不同备用凭证并取得单 Worker 信号量时才启动第二请求。
+- 首请求已经收到响应头时不启动对冲。对冲启动后以首个非空有效上游事件为胜者，先取消并关闭
+  败方，再向下游交付胜者首事件；败方标记为 `superseded`，不得处罚凭证或写入 SMART/容量状态。
+- 对冲启动后首内容前上游调用总数最多为 2，不再追加第三次串行尝试。明确的 400 立即终止另一
+  请求；401/403 只处理对应凭证；单侧容量失败继续等待另一侧，双容量失败返回带
+  `Retry-After` 的 503，并只更新一次模型容量状态。
+- 每个尝试使用独立 attempt 句柄记录阶段、耗时、凭证诊断 ID 和实际 `http_version`。
+  schema v2 的 `retries.hedge`、`retries.reasons` 和顶层 `hedge` 记录采样、启动、延迟、胜者、
+  败方结果及跳过原因；诊断开启时 `Server-Timing` 增加已确定的 `hedge` 时间点。
+
+### 16.12 对冲成本统计与每日预算
+
+- 新增独立 `daily_hedge_stats` 存储，SQLite、MySQL、PostgreSQL 和 MongoDB
+  均在启动时自动创建表或集合。预算桶以北京时间日期、备用凭证和规范化模型族为键，
+  多 Worker 通过存储原子更新共享预算。
+- 每个真正获准启动的备用上游请求立即计入 `extra_upstream_requests` 和
+  `outcome_pending`，取消请求不退回，属于保守的“预计额度消耗”，不等同于 Google
+  最终计费记录。
+- 默认每个凭证、每个模型族每日 10 次。预算检查最多等待 500ms；预算耗尽、
+  存储超时或异常只会跳过对冲并继续主请求，分别记录
+  `daily_budget_exhausted` 或 `budget_check_failed`。
+- 对冲完成后异步记录 `primary_wins`、`backup_wins`、`confirmed_rescues`、
+  `both_failed` 或 `client_cancelled`；统计写入失败不改变响应和凭证状态。
+- `GET /creds/hedge-stats?days=7` 返回最近 1–90 天的日期、模型族和凭证诊断 ID
+  汇总。控制面板展示今日预计消耗、剩余额度、胜负、挽救和每次备用获胜成本，
+  不返回完整凭证文件名。
+- 采样率改为持久化热配置，初始建议 5%。首版由管理员根据备用获胜率手动调整，
+  不实现自动反馈控制。
+- 控制面板桌面版和移动版均提供“GeminiCLI 流式响应头对冲”、采样率、每日预算和
+  “今日对冲成本”。环境变量存在时对应控件只读；单 Worker 保存后热更新，多 Worker
+  保存后提示重启。延迟和并发上限仍只通过环境变量配置，对冲信号量按 Worker 独立，
+  预算通过主存储跨 Worker 原子共享，不使用 Redis 协调。
+- 加入对冲成本预算后全量回归为 `182 passed, 7 warnings`，并通过 `compileall`、
+  JavaScript 语法检查和 `git diff --check`。

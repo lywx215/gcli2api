@@ -833,3 +833,104 @@ Worker 保存后提示重启全部 Worker。若设置 `STREAM_DIAGNOSTICS_ENABLE
 
 增强实现完成后在项目 `.venv` 运行全量测试：`135 passed, 7 warnings`；同时通过
 `compileall` 和 `git diff --check`。
+
+## 18. 参照 CLIProxyAPI 的响应头长尾优化
+
+### 18.1 原因和借鉴边界
+
+生产日志复核显示，剩余长尾主要集中在 Google 响应头等待及其后的串行第二次尝试。
+CLIProxyAPI 的可取之处是共享 transport、HTTP/2 连接复用，以及在首个有效 payload 前集中完成
+上游选择；本项目保留自身已经建立的分阶段超时、类型化失败和首事件后禁止重放边界。
+
+本轮不采用 CLIProxyAPI 的响应头无界等待，也不提前向下游提交 HTTP 200。当前单次响应头上限
+仍是 20 秒；对冲默认关闭，开启后首请求等待 15 秒仍无响应头才会启动一次备用请求，因此双侧
+响应头最迟约在 35 秒完成决策，另允许 2 秒事件循环调度容差。
+
+### 18.2 HTTP/2 灰度
+
+新增仅由环境变量控制的 `UPSTREAM_HTTP2_ENABLED=false`。HTTPX 共享连接池创建时显式传入
+`http2`，连接池 generation 指纹包含代理配置和 HTTP/2 状态，变更后旧 generation 等待活动流
+结束再关闭。项目直接依赖 `httpx[http2,socks]`，不再依靠 Hypercorn 间接提供 `h2`。
+
+HTTP/2 开启表示“允许协商”，不是强制协议；ALPN 未协商成功时 HTTPX 自动使用 HTTP/1.1。
+诊断 schema v2 的每条 `attempt_details` 增加 `http_version`，以实际响应为准验证协商结果。
+
+### 18.3 GeminiCLI 真流响应头对冲
+
+新增以下配置：
+
+| 配置 | 默认值 | 作用 |
+| --- | ---: | --- |
+| `GEMINICLI_STREAM_HEADER_HEDGE_ENABLED` / `geminicli_stream_header_hedge_enabled` | `false` | 独立布尔开关，支持控制面板热更新和环境变量锁定 |
+| `GEMINICLI_STREAM_HEADER_HEDGE_DELAY` | 15 秒 | 首请求仍无响应头时才考虑启动备用请求 |
+| `GEMINICLI_STREAM_HEADER_HEDGE_MAX_INFLIGHT` | 20 | 单 Worker 备用请求的非阻塞并发上限 |
+| `GEMINICLI_STREAM_HEADER_HEDGE_SAMPLE_RATE` | 0.05 | 满足条件请求的采样率；控制面板按百分比热更新 |
+| `GEMINICLI_STREAM_HEADER_HEDGE_DAILY_BUDGET` | 10 | 每个备用凭证、每个规范化模型族的北京时间每日预算 |
+
+请求开始时预取一个不同凭证，但只有延迟到期、仍无响应头、命中采样并取得信号量时才发起第二个
+上游调用。已经收到响应头但尚无首事件时继续等待原请求，不启动对冲。对冲开始后首个非空有效
+上游事件获胜；实现必须先取消和关闭败方，再把胜者首事件交给下游，避免下游暂停读取时败方仍
+占用连接或消耗容量。
+
+败方主动取消记录为 `superseded`，不计失败、不处罚凭证，也不写入 SMART 或容量保护器。对冲
+开始后首内容前最多两次上游调用，不允许第三次串行补偿。明确的请求参数 400 优先终止两侧并
+返回 400；401/403 只淘汰对应凭证；单侧容量失败等待另一侧，双容量失败返回带
+`Retry-After` 的 503，并只更新一次模型容量状态。胜者产生首事件后继续遵守“不可重试”边界。
+
+### 18.4 诊断和发布
+
+`STREAM_PERF_SUMMARY schema_version=2` 保留旧字段并新增 `retries.hedge` 以及：
+
+```json
+{
+  "upstream_http2_enabled": true,
+  "hedge": {
+    "enabled": true,
+    "sampled": true,
+    "launched": true,
+    "delay_ms": 15000,
+    "max_inflight": 20,
+    "sample_rate": 0.05,
+    "daily_budget": 10,
+    "winner_attempt": 2,
+    "loser_outcome": "superseded",
+    "skipped_reason": null
+  }
+}
+```
+
+每个 attempt 独立记录 `http_version` 和 transport 阶段，避免并行任务覆盖“最后一次尝试”。
+诊断开启时，HTTP 响应提交前已经确定的对冲时间点加入 `Server-Timing`。启动日志始终输出
+HTTP/2、对冲开关、延迟、上限和采样率的有效值，便于确认部署配置。
+
+发布时先保持两项关闭验证基线，再单独开启 HTTP/2 并重启观察，最后从控制面板热开启对冲。
+关闭对冲可热回滚；关闭 HTTP/2 后需要重启。多 Worker 不共享对冲信号量，配置保存后也需要
+重启全部 Worker 才能统一生效。
+
+本轮实现完成后，全量测试结果为 `157 passed, 7 warnings`。新增用例覆盖 HTTP/2 generation、
+实际协议诊断、主/备用请求分别获胜、败方先关闭、收到响应头不启动、采样/无备用/并发上限回退、
+对冲中客户端取消、400 优先、双容量单次状态更新、双传输失败不发起第三次尝试，以及双端前端和
+单/多 Worker 配置行为。
+
+### 18.5 每日预计消耗和预算保护
+
+对冲备用请求可能消耗 GeminiCLI 的按次额度，因此新增独立持久化统计，不把败方混入原有
+“逻辑请求成功率”。每次备用请求在真正创建前，必须先按北京时间日期、备用凭证和规范化
+模型族完成原子预算预留；默认每个桶每日 10 次，最多等待 500ms。预算耗尽或存储检查失败
+时不启动备用请求，主请求继续正常等待。
+
+预留成功立即保守计为一次 `extra_upstream_requests`，即使之后被取消也不退回。完成结果异步
+归入主胜、备胜、确认挽救、双失败或客户端取消；进程异常退出留下的记录保留在
+`outcome_pending`。Google 是否对已取消请求实际扣次无法从服务端确认，因此控制面板明确标为
+“预计额度消耗”。
+
+采样率默认由 100% 调整为 5%，并与每日预算一起支持控制面板热更新和环境变量锁定。
+`GET /creds/hedge-stats?days=7` 返回最近 1–90 天总计、按日期、模型族和凭证诊断 ID 的汇总，
+不泄露凭证文件名或邮箱。首版不自动调节采样率，管理员应优先启用 HTTP/2，再根据备胜率和
+预算使用情况手动调整。
+
+本轮完成后的全量回归结果为 `182 passed, 7 warnings`。专项测试包含 SQLite 200 并发预留
+仅成功 10 次、模型别名共享预算、独立凭证/模型族、跨北京时间日期、预算检查失败降级、
+主胜/备胜/确认挽救/双失败/客户端取消、管理接口、双端面板和配置校验。MySQL、PostgreSQL
+和 MongoDB 的原子实现通过统一存储契约检查；生产部署仍应在实际所用数据库版本上执行并发
+冒烟验证。

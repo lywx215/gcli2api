@@ -24,7 +24,7 @@ from src.streaming_latency import (
 @dataclass
 class _ClientEntry:
     client: httpx.AsyncClient
-    proxy_fingerprint: str
+    transport_fingerprint: str
     active: int = 0
     retiring: bool = False
 
@@ -38,12 +38,14 @@ class HttpxClientManager:
         self._entries: list[_ClientEntry] = []
 
     @staticmethod
-    def _proxy_fingerprint(proxy: Optional[str]) -> str:
-        return hashlib.sha256((proxy or "direct").encode("utf-8")).hexdigest()[:12]
+    def _transport_fingerprint(proxy: Optional[str], http2: bool) -> str:
+        value = f"{proxy or 'direct'}|http2={int(http2)}"
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
 
-    async def _new_entry(self, proxy: Optional[str]) -> _ClientEntry:
+    async def _new_entry(self, proxy: Optional[str], http2: bool) -> _ClientEntry:
         kwargs: Dict[str, Any] = {
             "timeout": None,
+            "http2": http2,
             # Proxying is controlled exclusively by the application's PROXY
             # setting.  Reading the host environment here makes "direct"
             # mode depend on HTTP_PROXY/NO_PROXY values injected by the
@@ -60,7 +62,7 @@ class HttpxClientManager:
             kwargs["proxy"] = proxy
         return _ClientEntry(
             client=httpx.AsyncClient(**kwargs),
-            proxy_fingerprint=self._proxy_fingerprint(proxy),
+            transport_fingerprint=self._transport_fingerprint(proxy, http2),
         )
 
     @asynccontextmanager
@@ -69,10 +71,12 @@ class HttpxClientManager:
     ) -> AsyncGenerator[httpx.AsyncClient, None]:
         """Lease a shared client; uncommon custom client kwargs use an isolated client."""
         proxy = await get_proxy_config()
+        http2 = StreamLatencyConfig.from_env().upstream_http2_enabled
         if kwargs:
             client_kwargs: Dict[str, Any] = {
                 "timeout": timeout,
                 "trust_env": False,
+                "http2": http2,
                 **kwargs,
             }
             if proxy:
@@ -81,17 +85,21 @@ class HttpxClientManager:
                 yield client
             return
 
-        fingerprint = self._proxy_fingerprint(proxy)
+        fingerprint = self._transport_fingerprint(proxy, http2)
         close_after: list[httpx.AsyncClient] = []
         async with self._lock:
             entry = self._current
-            if entry is None or entry.proxy_fingerprint != fingerprint or entry.retiring:
+            if (
+                entry is None
+                or entry.transport_fingerprint != fingerprint
+                or entry.retiring
+            ):
                 if entry is not None:
                     entry.retiring = True
                     if entry.active == 0:
                         close_after.append(entry.client)
                         self._entries.remove(entry)
-                entry = await self._new_entry(proxy)
+                entry = await self._new_entry(proxy, http2)
                 self._current = entry
                 self._entries.append(entry)
             entry.active += 1
@@ -173,7 +181,9 @@ def _http_timeout(config: StreamLatencyConfig) -> httpx.Timeout:
     )
 
 
-def _transport_failure(exc: Exception, stage: str) -> StreamFailure:
+def _transport_failure(
+    exc: Exception, stage: str, *, attempt: Optional[int] = None
+) -> StreamFailure:
     trace = current_stream_trace()
     request_id = trace.request_id if trace else None
     error_type = type(exc).__name__
@@ -208,6 +218,7 @@ def _transport_failure(exc: Exception, stage: str) -> StreamFailure:
             error_type=error_type,
             status_code=status_code,
             retryable=True,
+            attempt=attempt,
         )
     return failure
 
@@ -267,11 +278,14 @@ async def open_stream_post(
     native: bool = False,
     headers: Optional[Dict[str, str]] = None,
     trace=None,
+    attempt: Optional[int] = None,
+    headers_received_event: Optional[asyncio.Event] = None,
 ) -> AsyncGenerator[UpstreamStream, None]:
     """Open a streaming response with a bounded response-header phase."""
     config = StreamLatencyConfig.from_env()
     trace = trace or current_stream_trace()
-    if trace:
+    headers_started_at = time.perf_counter()
+    if trace and "waiting_headers" not in trace.timings_ms:
         trace.mark("waiting_headers", phase=StreamPhase.WAITING_HEADERS)
     async with http_client.get_streaming_client() as client:
         transport_trace = _HttpcoreTrace() if trace and trace.diagnostics_enabled else None
@@ -290,29 +304,41 @@ async def open_stream_post(
                 response = await client.send(request, stream=True)
         except Exception as exc:
             if trace:
-                trace.duration_since_mark("response_headers", "waiting_headers")
+                trace.duration("response_headers", headers_started_at)
                 trace.add_duration_ms(
                     "response_headers_total",
                     trace.timings_ms.get("response_headers", 0.0),
                 )
                 if transport_trace is not None:
-                    trace.add_attempt_transport(transport_trace.finish())
-            raise _transport_failure(exc, "response_headers") from exc
+                    trace.add_attempt_transport(
+                        transport_trace.finish(), attempt=attempt
+                    )
+            raise _transport_failure(
+                exc, "response_headers", attempt=attempt
+            ) from exc
 
         try:
+            if headers_received_event is not None:
+                headers_received_event.set()
             if trace:
-                trace.duration_since_mark("response_headers", "waiting_headers")
+                trace.duration("response_headers", headers_started_at)
                 trace.add_duration_ms(
                     "response_headers_total",
                     trace.timings_ms.get("response_headers", 0.0),
                 )
                 if transport_trace is not None:
-                    trace.add_attempt_transport(transport_trace.finish())
-                trace.upstream_request_id = (
+                    trace.add_attempt_transport(
+                        transport_trace.finish(), attempt=attempt
+                    )
+                trace.set_attempt_http_version(
+                    response.http_version, attempt=attempt
+                )
+                trace.set_attempt_upstream_request_id(
                     response.headers.get("x-request-id")
                     or response.headers.get("x-goog-request-id")
                     or response.headers.get("x-guploader-uploadid")
-                    or response.headers.get("traceparent")
+                    or response.headers.get("traceparent"),
+                    attempt=attempt,
                 )
             yield UpstreamStream(response=response, native=native)
         finally:
@@ -344,13 +370,22 @@ async def stream_post_async(
     native: bool = False,
     headers: Optional[Dict[str, str]] = None,
     typed_errors: bool = False,
+    attempt: Optional[int] = None,
+    headers_received_event: Optional[asyncio.Event] = None,
     **kwargs: Any,
 ):
     """Compatibility iterator used by both upstream API clients."""
     del kwargs
     config = StreamLatencyConfig.from_env()
     error_response: Optional[Response] = None
-    async with open_stream_post(url, body, native=native, headers=headers) as stream:
+    async with open_stream_post(
+        url,
+        body,
+        native=native,
+        headers=headers,
+        attempt=attempt,
+        headers_received_event=headers_received_event,
+    ) as stream:
         if stream.status_code != 200:
             error_response = Response(
                 await stream.read_error_body(),
@@ -381,7 +416,7 @@ async def stream_post_async(
                     break
                 except Exception as exc:
                     stage = "first_event" if first else "stream_idle"
-                    raise _transport_failure(exc, stage) from exc
+                    raise _transport_failure(exc, stage, attempt=attempt) from exc
                 if first and chunk and chunk.strip():
                     first = False
                 if trace and chunk and chunk.strip():

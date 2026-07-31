@@ -214,6 +214,24 @@ class PSQLManager:
             CREATE INDEX IF NOT EXISTS idx_minute_model_stats_ts ON minute_model_stats(minute_ts)
         """)
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS daily_hedge_stats (
+                date TEXT NOT NULL,
+                credential_name TEXT NOT NULL,
+                model_family TEXT NOT NULL,
+                extra_upstream_requests BIGINT NOT NULL DEFAULT 0,
+                primary_wins BIGINT NOT NULL DEFAULT 0,
+                backup_wins BIGINT NOT NULL DEFAULT 0,
+                confirmed_rescues BIGINT NOT NULL DEFAULT 0,
+                both_failed BIGINT NOT NULL DEFAULT 0,
+                client_cancelled BIGINT NOT NULL DEFAULT 0,
+                budget_skips BIGINT NOT NULL DEFAULT 0,
+                outcome_pending BIGINT NOT NULL DEFAULT 0,
+                updated_at DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW()),
+                PRIMARY KEY (date, credential_name, model_family)
+            )
+        """)
+
         # 索引
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_disabled ON credentials(disabled)
@@ -1620,6 +1638,140 @@ class PSQLManager:
         except Exception as e:
             log.error(f"get_recent_daily_stats failed: {e}")
             return []
+
+    async def reserve_hedge_budget(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        daily_budget: int,
+    ) -> bool:
+        """Atomically reserve one conservative hedge quota unit."""
+        self._ensure_initialized()
+        if daily_budget <= 0:
+            return False
+        now = time.time()
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO daily_hedge_stats
+                        (date, credential_name, model_family, updated_at)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (date, credential_name, model_family) DO NOTHING
+                    """,
+                    date,
+                    credential_name,
+                    model_family,
+                    now,
+                )
+                row = await conn.fetchrow(
+                    """
+                    UPDATE daily_hedge_stats
+                    SET extra_upstream_requests = extra_upstream_requests + 1,
+                        outcome_pending = outcome_pending + 1,
+                        updated_at = $5
+                    WHERE date = $1
+                      AND credential_name = $2
+                      AND model_family = $3
+                      AND extra_upstream_requests < $4
+                    RETURNING extra_upstream_requests
+                    """,
+                    date,
+                    credential_name,
+                    model_family,
+                    daily_budget,
+                    now,
+                )
+                return row is not None
+
+    async def record_hedge_metric(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        metric: str,
+    ) -> None:
+        """Increment a non-terminal hedge metric."""
+        self._ensure_initialized()
+        if metric != "budget_skips":
+            raise ValueError(f"unsupported hedge metric: {metric}")
+        await self._pool.execute(
+            """
+            INSERT INTO daily_hedge_stats
+                (date, credential_name, model_family, budget_skips, updated_at)
+            VALUES ($1, $2, $3, 1, $4)
+            ON CONFLICT (date, credential_name, model_family)
+            DO UPDATE SET budget_skips = daily_hedge_stats.budget_skips + 1,
+                          updated_at = EXCLUDED.updated_at
+            """,
+            date,
+            credential_name,
+            model_family,
+            time.time(),
+        )
+
+    async def record_hedge_outcome(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        outcome: str,
+        confirmed_rescue: bool = False,
+    ) -> None:
+        """Finalize a previously reserved hedge without refunding quota."""
+        self._ensure_initialized()
+        allowed = {
+            "primary_wins",
+            "backup_wins",
+            "both_failed",
+            "client_cancelled",
+        }
+        if outcome not in allowed:
+            raise ValueError(f"unsupported hedge outcome: {outcome}")
+        rescue_increment = 1 if confirmed_rescue else 0
+        query = f"""
+            UPDATE daily_hedge_stats
+            SET {outcome} = {outcome} + 1,
+                confirmed_rescues = confirmed_rescues + $4,
+                outcome_pending = GREATEST(0, outcome_pending - 1),
+                updated_at = $5
+            WHERE date = $1
+              AND credential_name = $2
+              AND model_family = $3
+        """
+        await self._pool.execute(
+            query,
+            date,
+            credential_name,
+            model_family,
+            rescue_increment,
+            time.time(),
+        )
+
+    async def get_hedge_stats(self, days: int = 7) -> List[Dict[str, Any]]:
+        """Return raw hedge buckets for the latest Beijing dates."""
+        self._ensure_initialized()
+        days = max(1, min(int(days or 7), 90))
+        rows = await self._pool.fetch(
+            """
+            SELECT date, credential_name, model_family,
+                   extra_upstream_requests, primary_wins, backup_wins,
+                   confirmed_rescues, both_failed, client_cancelled,
+                   budget_skips, outcome_pending
+            FROM daily_hedge_stats
+            WHERE date IN (
+                SELECT date
+                FROM daily_hedge_stats
+                GROUP BY date
+                ORDER BY date DESC
+                LIMIT $1
+            )
+            ORDER BY date DESC, model_family, credential_name
+            """,
+            days,
+        )
+        return [dict(row) for row in rows]
 
 
     @staticmethod

@@ -236,6 +236,27 @@ class MySQLManager:
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """)
 
+                await cur.execute("""
+                    CREATE TABLE IF NOT EXISTS gcli_daily_hedge_stats (
+                        server_name VARCHAR(64) NOT NULL DEFAULT 'default',
+                        date VARCHAR(10) NOT NULL,
+                        credential_name VARCHAR(255) NOT NULL,
+                        model_family VARCHAR(128) NOT NULL,
+                        extra_upstream_requests BIGINT NOT NULL DEFAULT 0,
+                        primary_wins BIGINT NOT NULL DEFAULT 0,
+                        backup_wins BIGINT NOT NULL DEFAULT 0,
+                        confirmed_rescues BIGINT NOT NULL DEFAULT 0,
+                        both_failed BIGINT NOT NULL DEFAULT 0,
+                        client_cancelled BIGINT NOT NULL DEFAULT 0,
+                        budget_skips BIGINT NOT NULL DEFAULT 0,
+                        outcome_pending BIGINT NOT NULL DEFAULT 0,
+                        updated_at DOUBLE,
+                        PRIMARY KEY
+                            (server_name, date, credential_name, model_family),
+                        KEY idx_hedge_server_date (server_name, date)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+
             await conn.commit()
 
             # 自动添加缺失的 tier 列（兼容旧表结构）
@@ -1789,3 +1810,164 @@ class MySQLManager:
 
         except Exception as e:
             log.error(f"Error recording success for {filename}: {e}")
+
+    async def reserve_hedge_budget(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        daily_budget: int,
+    ) -> bool:
+        """Atomically reserve one hedge unit within this server namespace."""
+        self._ensure_initialized()
+        if daily_budget <= 0:
+            return False
+        now = time.time()
+        async with self._pool.acquire() as conn:
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        """
+                        INSERT IGNORE INTO gcli_daily_hedge_stats
+                            (server_name, date, credential_name, model_family, updated_at)
+                        VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (
+                            self._server_name,
+                            date,
+                            credential_name,
+                            model_family,
+                            now,
+                        ),
+                    )
+                    await cur.execute(
+                        """
+                        UPDATE gcli_daily_hedge_stats
+                        SET extra_upstream_requests = extra_upstream_requests + 1,
+                            outcome_pending = outcome_pending + 1,
+                            updated_at = %s
+                        WHERE server_name = %s
+                          AND date = %s
+                          AND credential_name = %s
+                          AND model_family = %s
+                          AND extra_upstream_requests < %s
+                        """,
+                        (
+                            now,
+                            self._server_name,
+                            date,
+                            credential_name,
+                            model_family,
+                            daily_budget,
+                        ),
+                    )
+                    reserved = cur.rowcount == 1
+                await conn.commit()
+                return reserved
+            except BaseException:
+                await conn.rollback()
+                raise
+
+    async def record_hedge_metric(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        metric: str,
+    ) -> None:
+        self._ensure_initialized()
+        if metric != "budget_skips":
+            raise ValueError(f"unsupported hedge metric: {metric}")
+        async with self._pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO gcli_daily_hedge_stats
+                        (server_name, date, credential_name, model_family,
+                         budget_skips, updated_at)
+                    VALUES (%s, %s, %s, %s, 1, %s)
+                    ON DUPLICATE KEY UPDATE
+                        budget_skips = budget_skips + 1,
+                        updated_at = VALUES(updated_at)
+                    """,
+                    (
+                        self._server_name,
+                        date,
+                        credential_name,
+                        model_family,
+                        time.time(),
+                    ),
+                )
+            await conn.commit()
+
+    async def record_hedge_outcome(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        outcome: str,
+        confirmed_rescue: bool = False,
+    ) -> None:
+        self._ensure_initialized()
+        allowed = {
+            "primary_wins",
+            "backup_wins",
+            "both_failed",
+            "client_cancelled",
+        }
+        if outcome not in allowed:
+            raise ValueError(f"unsupported hedge outcome: {outcome}")
+        query = f"""
+            UPDATE gcli_daily_hedge_stats
+            SET {outcome} = {outcome} + 1,
+                confirmed_rescues = confirmed_rescues + %s,
+                outcome_pending = GREATEST(0, outcome_pending - 1),
+                updated_at = %s
+            WHERE server_name = %s
+              AND date = %s
+              AND credential_name = %s
+              AND model_family = %s
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    query,
+                    (
+                        1 if confirmed_rescue else 0,
+                        time.time(),
+                        self._server_name,
+                        date,
+                        credential_name,
+                        model_family,
+                    ),
+                )
+            await conn.commit()
+
+    async def get_hedge_stats(self, days: int = 7) -> List[Dict[str, Any]]:
+        self._ensure_initialized()
+        days = max(1, min(int(days or 7), 90))
+        async with self._pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    """
+                    SELECT date, credential_name, model_family,
+                           extra_upstream_requests, primary_wins, backup_wins,
+                           confirmed_rescues, both_failed, client_cancelled,
+                           budget_skips, outcome_pending
+                    FROM gcli_daily_hedge_stats
+                    WHERE server_name = %s
+                      AND date IN (
+                          SELECT date FROM (
+                              SELECT DISTINCT date
+                              FROM gcli_daily_hedge_stats
+                              WHERE server_name = %s
+                              ORDER BY date DESC
+                              LIMIT %s
+                          ) AS recent_hedge_dates
+                      )
+                    ORDER BY date DESC, model_family, credential_name
+                    """,
+                    (self._server_name, self._server_name, days),
+                )
+                rows = await cur.fetchall()
+        return [dict(row) for row in rows]

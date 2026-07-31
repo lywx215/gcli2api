@@ -15,8 +15,10 @@ if __name__ == "__main__":
 
 import asyncio
 import json
+import random
 import time
-from typing import Any, Dict, Optional, Callable, Tuple
+from dataclasses import dataclass
+from typing import Any, AsyncIterator, Dict, Optional, Callable, Tuple
 
 from fastapi import Response
 from config import (
@@ -27,6 +29,7 @@ from config import (
 )
 from log import log
 from src.log_safety import credential_log_id, safe_exception, safe_text
+from src.hedge_stats import HedgeReservation, hedge_stats_service
 
 from src.credential_manager import credential_manager
 from src.httpx_client import stream_post_async, post_async
@@ -227,6 +230,467 @@ def _status_retry_reason(
     return f"http_{status_code}"
 
 
+@dataclass
+class _HedgeSelection:
+    filename: str
+    credential_data: Dict[str, Any]
+    attempt: int
+    launched: bool
+    discarded_responses: list[Tuple[str, Dict[str, Any], int, Response]]
+
+
+@dataclass
+class _BootstrapResult:
+    filename: str
+    credential_data: Dict[str, Any]
+    attempt: int
+    iterator: AsyncIterator[Any]
+    first_item: Any
+    completed_at: float
+
+
+class _HedgeLimiter:
+    """Per-worker non-blocking limit for additional hedge requests."""
+
+    def __init__(self) -> None:
+        self._active = 0
+        self._lock = asyncio.Lock()
+
+    async def try_acquire(self, maximum: int) -> bool:
+        async with self._lock:
+            if self._active >= maximum:
+                return False
+            self._active += 1
+            return True
+
+    async def release(self) -> None:
+        async with self._lock:
+            self._active = max(0, self._active - 1)
+
+
+_stream_header_hedge_limiter = _HedgeLimiter()
+
+
+async def _close_stream_iterator(iterator: AsyncIterator[Any]) -> None:
+    close = getattr(iterator, "aclose", None)
+    if close is None:
+        return
+    try:
+        await close()
+    except Exception:
+        pass
+
+
+async def _read_bootstrap_item(
+    iterator: AsyncIterator[Any],
+    *,
+    filename: str,
+    credential_data: Dict[str, Any],
+    attempt: int,
+) -> _BootstrapResult:
+    while True:
+        item = await iterator.__anext__()
+        if isinstance(item, Response) or (item and item.strip()):
+            return _BootstrapResult(
+                filename=filename,
+                credential_data=credential_data,
+                attempt=attempt,
+                iterator=iterator,
+                first_item=item,
+                completed_at=time.perf_counter(),
+            )
+
+
+def _response_priority(response: Response) -> int:
+    if response.status_code == 400:
+        return 0
+    if response.status_code == 429:
+        return 1
+    if response.status_code in (500, 503):
+        return 2
+    if response.status_code not in (401, 403):
+        return 3
+    return 4
+
+
+async def _hedged_stream_post_async(
+    *,
+    url: str,
+    body: Dict[str, Any],
+    native: bool,
+    headers: Dict[str, str],
+    model_name: str,
+    primary_file: str,
+    primary_credential: Dict[str, Any],
+    primary_attempt: int,
+    excluded_credentials: set[str],
+    trace: StreamRequestTrace,
+    config: StreamLatencyConfig,
+) -> AsyncIterator[Any]:
+    """Race one delayed backup request without committing downstream output."""
+    trace.hedge.update(
+        {
+            "enabled": config.header_hedge_enabled,
+            "delay_ms": round(config.header_hedge_delay * 1000, 2),
+            "max_inflight": config.header_hedge_max_inflight,
+            "sample_rate": config.header_hedge_sample_rate,
+            "daily_budget": config.header_hedge_daily_budget,
+        }
+    )
+    sampled = (
+        config.header_hedge_enabled
+        and random.random() < config.header_hedge_sample_rate
+    )
+    trace.hedge["sampled"] = sampled
+    if not config.header_hedge_enabled:
+        trace.hedge["skipped_reason"] = "disabled"
+    elif not sampled:
+        trace.hedge["skipped_reason"] = "sampled_out"
+
+    primary_headers_received = asyncio.Event()
+    primary_iterator = stream_post_async(
+        url=url,
+        body=body,
+        native=native,
+        headers=headers,
+        attempt=primary_attempt,
+        headers_received_event=primary_headers_received,
+    )
+    if not sampled:
+        try:
+            async for item in primary_iterator:
+                yield item
+        finally:
+            await _close_stream_iterator(primary_iterator)
+        return
+
+    secondary_credential_task = asyncio.create_task(
+        credential_manager.get_valid_credential(
+            mode="geminicli",
+            model_name=model_name,
+            excluded_credentials=set(excluded_credentials) | {primary_file},
+        )
+    )
+    primary_task = asyncio.create_task(
+        _read_bootstrap_item(
+            primary_iterator,
+            filename=primary_file,
+            credential_data=primary_credential,
+            attempt=primary_attempt,
+        )
+    )
+    delay_task = asyncio.create_task(asyncio.sleep(config.header_hedge_delay))
+    headers_task = asyncio.create_task(primary_headers_received.wait())
+    secondary_iterator: Optional[AsyncIterator[Any]] = None
+    secondary_task: Optional[asyncio.Task] = None
+    secondary_attempt: Optional[int] = None
+    limiter_acquired = False
+    winner: Optional[_BootstrapResult] = None
+    completed: list[_BootstrapResult] = []
+    failures: list[tuple[int, BaseException]] = []
+    hedge_reservation: Optional[HedgeReservation] = None
+    hedge_outcome_recorded = False
+    primary_explicit_failure = False
+
+    def record_hedge_outcome(
+        outcome: str, *, confirmed_rescue: bool = False
+    ) -> None:
+        nonlocal hedge_outcome_recorded
+        if hedge_reservation is None or hedge_outcome_recorded:
+            return
+        hedge_outcome_recorded = True
+        hedge_stats_service.record_outcome(
+            hedge_reservation,
+            outcome,
+            confirmed_rescue=confirmed_rescue,
+        )
+
+    try:
+        done, _ = await asyncio.wait(
+            {primary_task, delay_task, headers_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if primary_task in done:
+            trace.hedge["skipped_reason"] = "completed_before_delay"
+            winner = await primary_task
+        elif headers_task in done and primary_headers_received.is_set():
+            trace.hedge["skipped_reason"] = "headers_received"
+            winner = await primary_task
+        else:
+            limiter_acquired = await _stream_header_hedge_limiter.try_acquire(
+                config.header_hedge_max_inflight
+            )
+            if not limiter_acquired:
+                trace.hedge["skipped_reason"] = "concurrency_limit"
+                winner = await primary_task
+            else:
+                if not secondary_credential_task.done():
+                    credential_done, _ = await asyncio.wait(
+                        {
+                            secondary_credential_task,
+                            primary_task,
+                            headers_task,
+                        },
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if primary_task in credential_done:
+                        trace.hedge["skipped_reason"] = "completed_before_backup"
+                        await _stream_header_hedge_limiter.release()
+                        limiter_acquired = False
+                        winner = await primary_task
+                    elif headers_task in credential_done and primary_headers_received.is_set():
+                        trace.hedge["skipped_reason"] = "headers_received"
+                        await _stream_header_hedge_limiter.release()
+                        limiter_acquired = False
+                        winner = await primary_task
+                try:
+                    secondary_credential = (
+                        await secondary_credential_task
+                        if winner is None
+                        else None
+                    )
+                except Exception:
+                    trace.hedge["skipped_reason"] = "backup_credential_error"
+                    await _stream_header_hedge_limiter.release()
+                    limiter_acquired = False
+                    winner = await primary_task
+                    secondary_credential = None
+                if winner is None and (
+                    primary_task.done() or primary_headers_received.is_set()
+                ):
+                    trace.hedge["skipped_reason"] = (
+                        "completed_before_backup"
+                        if primary_task.done()
+                        else "headers_received"
+                    )
+                    await _stream_header_hedge_limiter.release()
+                    limiter_acquired = False
+                    winner = await primary_task
+                    secondary_credential = None
+                if not secondary_credential:
+                    if winner is None:
+                        trace.hedge["skipped_reason"] = "no_backup_credential"
+                        await _stream_header_hedge_limiter.release()
+                        limiter_acquired = False
+                        winner = await primary_task
+                else:
+                    secondary_file, secondary_data = secondary_credential
+                    token = secondary_data.get("token") or secondary_data.get(
+                        "access_token", ""
+                    )
+                    project_id = secondary_data.get("project_id", "")
+                    if not token or not project_id:
+                        trace.hedge["skipped_reason"] = "invalid_backup_credential"
+                        await _stream_header_hedge_limiter.release()
+                        limiter_acquired = False
+                        winner = await primary_task
+                    else:
+                        hedge_reservation, budget_skip_reason = (
+                            await hedge_stats_service.reserve(
+                                secondary_file,
+                                model_name,
+                                config.header_hedge_daily_budget,
+                            )
+                        )
+                        if hedge_reservation is None:
+                            trace.hedge["skipped_reason"] = budget_skip_reason
+                            await _stream_header_hedge_limiter.release()
+                            limiter_acquired = False
+                            winner = await primary_task
+                        else:
+                            secondary_headers = dict(headers)
+                            secondary_headers["Authorization"] = f"Bearer {token}"
+                            secondary_body = dict(body)
+                            secondary_body["project"] = project_id
+                            secondary_attempt = trace.begin_attempt(secondary_file)
+                            secondary_headers_received = asyncio.Event()
+                            secondary_iterator = stream_post_async(
+                                url=url,
+                                body=secondary_body,
+                                native=native,
+                                headers=secondary_headers,
+                                attempt=secondary_attempt,
+                                headers_received_event=secondary_headers_received,
+                            )
+                            secondary_task = asyncio.create_task(
+                                _read_bootstrap_item(
+                                    secondary_iterator,
+                                    filename=secondary_file,
+                                    credential_data=secondary_data,
+                                    attempt=secondary_attempt,
+                                )
+                            )
+                            trace.hedge.update(
+                                {
+                                    "launched": True,
+                                    "skipped_reason": None,
+                                }
+                            )
+                            trace.record_retry(
+                                "hedge",
+                                "response_headers_slow",
+                                attempt=primary_attempt,
+                            )
+                            trace.mark("hedge")
+
+        if winner is None:
+            pending_tasks = {
+                task
+                for task in (primary_task, secondary_task)
+                if task is not None
+            }
+            while pending_tasks and winner is None:
+                done, pending_tasks = await asyncio.wait(
+                    pending_tasks,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                batch: list[_BootstrapResult] = []
+                for task in done:
+                    task_attempt = (
+                        primary_attempt if task is primary_task else secondary_attempt
+                    )
+                    try:
+                        result = await task
+                    except BaseException as exc:
+                        if task_attempt is not None:
+                            failures.append((task_attempt, exc))
+                            if task_attempt == primary_attempt:
+                                primary_explicit_failure = True
+                        continue
+                    if isinstance(result.first_item, Response):
+                        completed.append(result)
+                        if result.attempt == primary_attempt:
+                            primary_explicit_failure = True
+                    batch.append(result)
+                invalid_request = next(
+                    (
+                        result
+                        for result in batch
+                        if isinstance(result.first_item, Response)
+                        and result.first_item.status_code == 400
+                    ),
+                    None,
+                )
+                if invalid_request is not None:
+                    winner = invalid_request
+                    break
+                valid_events = [
+                    result
+                    for result in batch
+                    if not isinstance(result.first_item, Response)
+                ]
+                if valid_events:
+                    winner = min(valid_events, key=lambda result: result.completed_at)
+                    break
+
+        if winner is None:
+            if completed:
+                winner = min(
+                    completed,
+                    key=lambda item: _response_priority(item.first_item),
+                )
+            elif failures:
+                failure = failures[-1][1]
+                if trace.hedge["launched"] and isinstance(failure, StreamFailure):
+                    failure.retryable = False
+                raise failure
+            else:
+                raise StreamFailure(
+                    "Upstream streams ended before producing content",
+                    stage="first_event",
+                    status_code=502,
+                    retryable=False,
+                    request_id=trace.request_id,
+                )
+
+        discarded_responses = [
+            (
+                result.filename,
+                result.credential_data,
+                result.attempt,
+                result.first_item,
+            )
+            for result in completed
+            if result is not winner and isinstance(result.first_item, Response)
+        ]
+        trace.hedge["winner_attempt"] = winner.attempt
+        if isinstance(winner.first_item, Response):
+            record_hedge_outcome("both_failed")
+        elif winner.attempt == primary_attempt:
+            record_hedge_outcome("primary_wins")
+        else:
+            record_hedge_outcome(
+                "backup_wins",
+                confirmed_rescue=primary_explicit_failure,
+            )
+        loser_task = secondary_task if winner.attempt == primary_attempt else primary_task
+        loser_iterator = (
+            secondary_iterator
+            if winner.attempt == primary_attempt
+            else primary_iterator
+        )
+        loser_attempt = (
+            secondary_attempt
+            if winner.attempt == primary_attempt
+            else primary_attempt
+        )
+        if loser_task is not None and not loser_task.done():
+            loser_task.cancel()
+            await asyncio.gather(loser_task, return_exceptions=True)
+            if loser_attempt is not None:
+                trace.record_attempt_outcome(loser_attempt, "superseded")
+            trace.hedge["loser_outcome"] = "superseded"
+        elif loser_task is not None:
+            trace.hedge["loser_outcome"] = "discarded_error"
+        if loser_iterator is not None:
+            await _close_stream_iterator(loser_iterator)
+        trace.select_attempt(winner.attempt)
+        if limiter_acquired:
+            await _stream_header_hedge_limiter.release()
+            limiter_acquired = False
+
+        # 首个有效上游事件决定胜者后，先回收败方，再把任何内容交给下游。
+        # 这样即使下游暂停读取，也不会让败方继续占用连接或消耗上游容量。
+        yield _HedgeSelection(
+            filename=winner.filename,
+            credential_data=winner.credential_data,
+            attempt=winner.attempt,
+            launched=bool(trace.hedge["launched"]),
+            discarded_responses=discarded_responses,
+        )
+        yield winner.first_item
+
+        async for item in winner.iterator:
+            yield item
+    except asyncio.CancelledError:
+        record_hedge_outcome("client_cancelled")
+        raise
+    except BaseException:
+        record_hedge_outcome("both_failed")
+        raise
+    finally:
+        for task in (delay_task, headers_task, secondary_credential_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(
+            delay_task,
+            headers_task,
+            secondary_credential_task,
+            return_exceptions=True,
+        )
+        if primary_task is not None and not primary_task.done():
+            primary_task.cancel()
+            await asyncio.gather(primary_task, return_exceptions=True)
+        if secondary_task is not None and not secondary_task.done():
+            secondary_task.cancel()
+            await asyncio.gather(secondary_task, return_exceptions=True)
+        await _close_stream_iterator(primary_iterator)
+        if secondary_iterator is not None:
+            await _close_stream_iterator(secondary_iterator)
+        if limiter_acquired:
+            await _stream_header_hedge_limiter.release()
+
+
 async def _apply_smart_429_state(
     filename: str,
     credential_data: Dict[str, Any],
@@ -382,6 +846,58 @@ async def stream_request(
     transport_failures = 0
     status_failures = 0
     capacity_failures = 0
+    hedge_launched_for_request = False
+
+    async def record_discarded_hedge_response(
+        filename: str,
+        discarded_credential: Dict[str, Any],
+        discarded_attempt: int,
+        response: Response,
+    ) -> None:
+        nonlocal capacity_failures
+        status_code = response.status_code
+        try:
+            error_body = (
+                response.body.decode("utf-8")
+                if isinstance(response.body, bytes)
+                else str(response.body or "")
+            )
+        except Exception:
+            error_body = ""
+        classification = (
+            classify_upstream_429(
+                _decode_error_payload(error_body),
+                mode="geminicli",
+            ).kind
+            if status_code == 429
+            else None
+        )
+        reason = _status_retry_reason(status_code, classification)
+        trace.record_failure(
+            stage="upstream_status",
+            error_type=reason,
+            status_code=status_code,
+            retryable=True,
+            attempt=discarded_attempt,
+            update_last=False,
+        )
+        trace.record_attempt_outcome(discarded_attempt, "discarded_error")
+        excluded_credentials.add(filename)
+        is_capacity = classification == Upstream429Kind.MODEL_CAPACITY_EXHAUSTED
+        if is_capacity and capacity_fast_fail:
+            capacity_failures += 1
+            # 同一对冲对只有最终判定为“双容量失败”时才更新一次模型保护器。
+            # 单个败方容量错误随后由另一凭证成功时不应打开全局容量状态。
+            return
+        await record_api_call_error(
+            credential_manager,
+            filename,
+            status_code,
+            None,
+            mode="geminicli",
+            model_name=model_name,
+            error_message=error_body,
+        )
 
     # 内部函数：快速更新凭证(只更新token和project_id,避免重建整个请求)
     async def refresh_credential_fast():
@@ -422,15 +938,52 @@ async def stream_request(
     for attempt in range(max_total_retries + 1):
         upstream_started = False
         need_retry = False  # 标记是否需要重试
-        trace.begin_attempt(current_file)
+        attempt_id = trace.begin_attempt(current_file)
+        active_attempt_id = attempt_id
 
         try:
-            async for chunk in stream_post_async(
-                url=target_url,
-                body=final_payload,
-                native=native,
-                headers=auth_headers,
-            ):
+            stream_source = (
+                _hedged_stream_post_async(
+                    url=target_url,
+                    body=final_payload,
+                    native=native,
+                    headers=auth_headers,
+                    model_name=model_name,
+                    primary_file=current_file,
+                    primary_credential=credential_data,
+                    primary_attempt=attempt_id,
+                    excluded_credentials=excluded_credentials,
+                    trace=trace,
+                    config=latency_config,
+                )
+                if attempt == 0 and latency_config.header_hedge_enabled
+                else stream_post_async(
+                    url=target_url,
+                    body=final_payload,
+                    native=native,
+                    headers=auth_headers,
+                    attempt=attempt_id,
+                )
+            )
+            async for chunk in stream_source:
+                if isinstance(chunk, _HedgeSelection):
+                    hedge_launched_for_request = chunk.launched
+                    active_attempt_id = chunk.attempt
+                    if chunk.filename != current_file:
+                        apply_cred_result((chunk.filename, chunk.credential_data))
+                    for (
+                        discarded_file,
+                        discarded_credential,
+                        discarded_attempt,
+                        discarded_response,
+                    ) in chunk.discarded_responses:
+                        await record_discarded_hedge_response(
+                            discarded_file,
+                            discarded_credential,
+                            discarded_attempt,
+                            discarded_response,
+                        )
+                    continue
                 # 判断是否是Response对象
                 if isinstance(chunk, Response):
                     status_code = chunk.status_code
@@ -441,6 +994,20 @@ async def stream_request(
                     except Exception:
                         error_body = ""
 
+                    # 明确的请求参数错误与凭证无关；对冲期间也必须立即终止另一请求。
+                    if status_code == 400:
+                        trace.record_failure(
+                            stage="upstream_status",
+                            error_type="http_400",
+                            status_code=400,
+                            retryable=False,
+                            attempt=active_attempt_id,
+                        )
+                        raise StreamFailure.from_response(
+                            chunk,
+                            stage="upstream_status",
+                            request_id=trace.request_id,
+                        )
                     # 如果错误码是429、503或者在禁用码当中，做好记录后进行重试
                     if _is_retryable_status(status_code, DISABLE_ERROR_CODES):
                         classification = (
@@ -457,6 +1024,7 @@ async def stream_request(
                             error_type=retry_reason,
                             status_code=status_code,
                             retryable=True,
+                            attempt=active_attempt_id,
                         )
                         log.warning(
                             f"[GEMINICLI STREAM] 流式请求失败 "
@@ -546,12 +1114,17 @@ async def stream_request(
                                 mode="geminicli",
                             )
 
-                        if should_retry and status_failures < max_retries:
+                        if (
+                            should_retry
+                            and status_failures < max_retries
+                            and not hedge_launched_for_request
+                        ):
                             status_failures += 1
                             trace.record_retry(
                                 "status",
                                 retry_reason,
                                 capacity=is_capacity,
+                                attempt=active_attempt_id,
                             )
                             need_retry = True
                             break  # 跳出内层循环，准备重试
@@ -590,6 +1163,7 @@ async def stream_request(
                             error_type="http_404",
                             status_code=404,
                             retryable=status_failures < max_retries,
+                            attempt=active_attempt_id,
                         )
 
                         # 不再因为单次 404 自动关闭 preview。
@@ -613,9 +1187,16 @@ async def stream_request(
                             )
 
                         # 触发重试
-                        if status_failures < max_retries:
+                        if (
+                            status_failures < max_retries
+                            and not hedge_launched_for_request
+                        ):
                             status_failures += 1
-                            trace.record_retry("status", "http_404")
+                            trace.record_retry(
+                                "status",
+                                "http_404",
+                                attempt=active_attempt_id,
+                            )
                             need_retry = True
                             break
                         else:
@@ -639,6 +1220,7 @@ async def stream_request(
                             error_type=f"http_{status_code}",
                             status_code=status_code,
                             retryable=False,
+                            attempt=active_attempt_id,
                         )
                         await record_api_call_error(
                             credential_manager, current_file, status_code,
@@ -730,13 +1312,17 @@ async def stream_request(
             if (
                 latency_config.guard_enabled
                 and e.retryable
+                and not hedge_launched_for_request
+                and not trace.hedge.get("launched")
                 and transport_failures < latency_config.transport_max_attempts
                 and attempt < max_total_retries
                 and trace.remaining_first_content() > 0
             ):
                 switched = await refresh_credential_fast()
                 if switched:
-                    trace.record_retry("transport", e.stage)
+                    trace.record_retry(
+                        "transport", e.stage, attempt=active_attempt_id
+                    )
                     log.info(
                         f"[GEMINICLI STREAM] {e.stage} 后立即切换凭证重试 "
                         f"({transport_failures + 1}/{latency_config.transport_max_attempts})"
@@ -763,17 +1349,24 @@ async def stream_request(
             if (
                 latency_config.guard_enabled
                 and transport_failures < latency_config.transport_max_attempts
+                and not hedge_launched_for_request
+                and not trace.hedge.get("launched")
                 and attempt < max_total_retries
                 and trace.remaining_first_content() > 0
                 and await refresh_credential_fast()
             ):
-                trace.record_retry("transport", type(e).__name__)
+                trace.record_retry(
+                    "transport",
+                    type(e).__name__,
+                    attempt=active_attempt_id,
+                )
                 continue
             trace.record_failure(
                 stage="transport",
                 error_type=type(e).__name__,
                 status_code=502,
                 retryable=False,
+                attempt=active_attempt_id,
             )
             raise StreamFailure(
                 "Unable to start upstream stream",

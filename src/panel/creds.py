@@ -47,9 +47,12 @@ from src.subscription_tiers import (
     valid_tiers_for_mode,
 )
 from src.httpx_client import post_async
+from src.hedge_stats import hedge_stats_service
 from config import (
     get_code_assist_endpoint,
     get_antigravity_api_url,
+    get_geminicli_stream_header_hedge_daily_budget,
+    get_geminicli_stream_header_hedge_sample_rate,
     get_oauth_proxy_url,
     is_smart_429_protection_enabled,
 )
@@ -59,6 +62,31 @@ from .utils import validate_mode
 
 # 创建路由器
 router = APIRouter(prefix="/creds", tags=["credentials"])
+
+
+@router.get("/hedge-stats")
+async def get_hedge_stats(
+    days: int = 7,
+    token: str = Depends(verify_panel_token),
+):
+    """Return conservative GeminiCLI hedge cost statistics."""
+    if not 1 <= days <= 90:
+        raise HTTPException(status_code=400, detail="days 必须在 1–90 之间")
+    try:
+        return JSONResponse(
+            content=await hedge_stats_service.get_stats(
+                days=days,
+                daily_budget=(
+                    await get_geminicli_stream_header_hedge_daily_budget()
+                ),
+                sample_rate=(
+                    await get_geminicli_stream_header_hedge_sample_rate()
+                ),
+            )
+        )
+    except Exception as exc:
+        log.error(f"获取对冲统计失败: {type(exc).__name__}")
+        raise HTTPException(status_code=500, detail="获取对冲统计失败")
 
 
 # =============================================================================

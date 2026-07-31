@@ -9,6 +9,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from pymongo.errors import DuplicateKeyError
 from src.subscription_tiers import (
     default_tier_for_mode,
     required_tiers_for_geminicli_model,
@@ -115,6 +116,7 @@ class MongoDBManager:
 
         credentials_collection = self._db["credentials"]
         antigravity_credentials_collection = self._db["antigravity_credentials"]
+        hedge_stats_collection = self._db["daily_hedge_stats"]
 
         # ===== Geminicli 凭证索引 =====
         geminicli_indexes = [
@@ -158,6 +160,20 @@ class MongoDBManager:
         try:
             await credentials_collection.create_indexes(geminicli_indexes)
             await antigravity_credentials_collection.create_indexes(antigravity_indexes)
+            await hedge_stats_collection.create_indexes(
+                [
+                    IndexModel(
+                        [
+                            ("date", ASCENDING),
+                            ("credential_name", ASCENDING),
+                            ("model_family", ASCENDING),
+                        ],
+                        unique=True,
+                        name="idx_hedge_bucket_unique",
+                    ),
+                    IndexModel([("date", ASCENDING)], name="idx_hedge_date"),
+                ]
+            )
             log.debug("MongoDB indexes created successfully")
         except Exception as e:
             # 如果索引已存在，忽略错误
@@ -1784,6 +1800,151 @@ class MongoDBManager:
 
     async def get_recent_daily_stats(self, days: int = 7, mode: Optional[str] = None) -> List[Dict[str, Any]]:
         return []
+
+    async def reserve_hedge_budget(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        daily_budget: int,
+    ) -> bool:
+        """Atomically reserve a MongoDB hedge budget unit."""
+        self._ensure_initialized()
+        if daily_budget <= 0:
+            return False
+        collection = self._db["daily_hedge_stats"]
+        key = {
+            "date": date,
+            "credential_name": credential_name,
+            "model_family": model_family,
+        }
+        now = time.time()
+        initial = {
+            **key,
+            "extra_upstream_requests": 1,
+            "primary_wins": 0,
+            "backup_wins": 0,
+            "confirmed_rescues": 0,
+            "both_failed": 0,
+            "client_cancelled": 0,
+            "budget_skips": 0,
+            "outcome_pending": 1,
+            "updated_at": now,
+        }
+        try:
+            await collection.insert_one(initial)
+            return True
+        except DuplicateKeyError:
+            result = await collection.update_one(
+                {**key, "extra_upstream_requests": {"$lt": daily_budget}},
+                {
+                    "$inc": {
+                        "extra_upstream_requests": 1,
+                        "outcome_pending": 1,
+                    },
+                    "$set": {"updated_at": now},
+                },
+            )
+            return result.modified_count == 1
+
+    async def record_hedge_metric(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        metric: str,
+    ) -> None:
+        self._ensure_initialized()
+        if metric != "budget_skips":
+            raise ValueError(f"unsupported hedge metric: {metric}")
+        key = {
+            "date": date,
+            "credential_name": credential_name,
+            "model_family": model_family,
+        }
+        await self._db["daily_hedge_stats"].update_one(
+            key,
+            {
+                "$setOnInsert": {
+                    "extra_upstream_requests": 0,
+                    "primary_wins": 0,
+                    "backup_wins": 0,
+                    "confirmed_rescues": 0,
+                    "both_failed": 0,
+                    "client_cancelled": 0,
+                    "outcome_pending": 0,
+                },
+                "$inc": {"budget_skips": 1},
+                "$set": {"updated_at": time.time()},
+            },
+            upsert=True,
+        )
+
+    async def record_hedge_outcome(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        outcome: str,
+        confirmed_rescue: bool = False,
+    ) -> None:
+        self._ensure_initialized()
+        allowed = {
+            "primary_wins",
+            "backup_wins",
+            "both_failed",
+            "client_cancelled",
+        }
+        if outcome not in allowed:
+            raise ValueError(f"unsupported hedge outcome: {outcome}")
+        key = {
+            "date": date,
+            "credential_name": credential_name,
+            "model_family": model_family,
+        }
+        await self._db["daily_hedge_stats"].update_one(
+            key,
+            [
+                {
+                    "$set": {
+                        outcome: {
+                            "$add": [{"$ifNull": [f"${outcome}", 0]}, 1]
+                        },
+                        "confirmed_rescues": {
+                            "$add": [
+                                {"$ifNull": ["$confirmed_rescues", 0]},
+                                1 if confirmed_rescue else 0,
+                            ]
+                        },
+                        "outcome_pending": {
+                            "$max": [
+                                0,
+                                {
+                                    "$subtract": [
+                                        {"$ifNull": ["$outcome_pending", 0]},
+                                        1,
+                                    ]
+                                },
+                            ]
+                        },
+                        "updated_at": time.time(),
+                    }
+                }
+            ],
+        )
+
+    async def get_hedge_stats(self, days: int = 7) -> List[Dict[str, Any]]:
+        self._ensure_initialized()
+        days = max(1, min(int(days or 7), 90))
+        collection = self._db["daily_hedge_stats"]
+        dates = sorted(await collection.distinct("date"), reverse=True)[:days]
+        if not dates:
+            return []
+        cursor = collection.find(
+            {"date": {"$in": dates}},
+            {"_id": 0},
+        ).sort([("date", -1), ("model_family", 1), ("credential_name", 1)])
+        return [dict(row) async for row in cursor]
 
     async def get_today_stats_by_model(self, mode: Optional[str] = None) -> Dict[str, Any]:
         from datetime import datetime, timedelta, timezone

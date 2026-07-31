@@ -76,10 +76,21 @@ class StreamLatencyConfig:
     perf_log_sample_rate: float = 0.01
     guard_enabled: bool = True
     diagnostics_enabled: bool = False
+    upstream_http2_enabled: bool = False
+    header_hedge_enabled: bool = False
+    header_hedge_delay: float = 15.0
+    header_hedge_max_inflight: int = 20
+    header_hedge_sample_rate: float = 0.05
+    header_hedge_daily_budget: int = 10
 
     @classmethod
     def from_env(cls) -> "StreamLatencyConfig":
-        from config import is_stream_diagnostics_enabled
+        from config import (
+            get_cached_geminicli_stream_header_hedge_daily_budget,
+            get_cached_geminicli_stream_header_hedge_sample_rate,
+            is_geminicli_stream_header_hedge_enabled,
+            is_stream_diagnostics_enabled,
+        )
 
         return cls(
             credential_acquire_timeout=_env_float("CREDENTIAL_ACQUIRE_TIMEOUT", 10.0),
@@ -95,6 +106,23 @@ class StreamLatencyConfig:
             perf_log_sample_rate=min(1.0, _env_float("STREAM_PERF_LOG_SAMPLE_RATE", 0.01, 0.0)),
             guard_enabled=_env_bool("STREAM_LATENCY_GUARD_ENABLED", True),
             diagnostics_enabled=is_stream_diagnostics_enabled(),
+            upstream_http2_enabled=_env_bool("UPSTREAM_HTTP2_ENABLED", False),
+            header_hedge_enabled=is_geminicli_stream_header_hedge_enabled(),
+            header_hedge_delay=_env_float(
+                "GEMINICLI_STREAM_HEADER_HEDGE_DELAY", 15.0
+            ),
+            header_hedge_max_inflight=_env_int(
+                "GEMINICLI_STREAM_HEADER_HEDGE_MAX_INFLIGHT",
+                20,
+                1,
+                100,
+            ),
+            header_hedge_sample_rate=(
+                get_cached_geminicli_stream_header_hedge_sample_rate()
+            ),
+            header_hedge_daily_budget=(
+                get_cached_geminicli_stream_header_hedge_daily_budget()
+            ),
         )
 
 
@@ -180,6 +208,22 @@ class StreamFailure(Exception):
         return Response(content=body, status_code=self.status_code, headers=safe_headers)
 
 
+def _default_hedge_trace() -> Dict[str, Any]:
+    config = StreamLatencyConfig.from_env()
+    return {
+        "enabled": config.header_hedge_enabled,
+        "sampled": False,
+        "launched": False,
+        "delay_ms": round(config.header_hedge_delay * 1000, 2),
+        "max_inflight": config.header_hedge_max_inflight,
+        "sample_rate": config.header_hedge_sample_rate,
+        "daily_budget": config.header_hedge_daily_budget,
+        "winner_attempt": None,
+        "loser_outcome": None,
+        "skipped_reason": None if config.header_hedge_enabled else "disabled",
+    }
+
+
 @dataclass
 class StreamRequestTrace:
     model: str = ""
@@ -205,9 +249,14 @@ class StreamRequestTrace:
             "status": 0,
             "transport": 0,
             "capacity": 0,
+            "hedge": 0,
             "reasons": [],
         }
     )
+    upstream_http2_enabled: bool = field(
+        default_factory=lambda: StreamLatencyConfig.from_env().upstream_http2_enabled
+    )
+    hedge: Dict[str, Any] = field(default_factory=_default_hedge_trace)
     last_failure: Optional[Dict[str, Any]] = None
     attempt_details: list[Dict[str, Any]] = field(default_factory=list)
     stream: Dict[str, Any] = field(
@@ -222,6 +271,7 @@ class StreamRequestTrace:
     )
     _marks: Dict[str, float] = field(default_factory=dict, repr=False)
     _attempt_started_at: Optional[float] = field(default=None, repr=False)
+    _attempt_started_at_by_id: Dict[int, float] = field(default_factory=dict, repr=False)
     _last_upstream_event_at: Optional[float] = field(default=None, repr=False)
     _logged: bool = field(default=False, repr=False)
 
@@ -248,50 +298,96 @@ class StreamRequestTrace:
         if value and re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value):
             self.client_request_id = value
 
-    def begin_attempt(self, filename: Optional[str] = None) -> None:
+    def _attempt_detail(self, attempt: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        target = self.attempts if attempt is None else attempt
+        for detail in reversed(self.attempt_details):
+            if detail.get("attempt") == target:
+                return detail
+        return None
+
+    def begin_attempt(self, filename: Optional[str] = None) -> int:
         self.attempts += 1
         self._attempt_started_at = time.perf_counter()
+        attempt = self.attempts
+        self._attempt_started_at_by_id[attempt] = self._attempt_started_at
         if len(self.attempt_details) < 8:
             self.attempt_details.append(
                 {
-                    "attempt": self.attempts,
+                    "attempt": attempt,
                     "credential": credential_log_id(filename),
                     "started_ms": round(
                         (self._attempt_started_at - self.started_at) * 1000, 2
                     ),
                     "duration_ms": None,
                     "transport_ms": {},
+                    "http_version": None,
+                    "upstream_request_id": None,
                 }
             )
+        return attempt
 
-    def finish_attempt(self) -> None:
-        if self._attempt_started_at is None or not self.attempt_details:
+    def finish_attempt(self, attempt: Optional[int] = None) -> None:
+        target = self.attempts if attempt is None else attempt
+        started_at = self._attempt_started_at_by_id.get(target)
+        detail = self._attempt_detail(target)
+        if started_at is None or detail is None:
             return
-        detail = self.attempt_details[-1]
-        if detail.get("attempt") == self.attempts and detail.get("duration_ms") is None:
+        if detail.get("duration_ms") is None:
             detail["duration_ms"] = round(
-                (time.perf_counter() - self._attempt_started_at) * 1000, 2
+                (time.perf_counter() - started_at) * 1000, 2
             )
 
-    def add_attempt_transport(self, values: Dict[str, float]) -> None:
-        if self.attempt_details and self.attempt_details[-1].get("attempt") == self.attempts:
-            target = self.attempt_details[-1]["transport_ms"]
+    def add_attempt_transport(
+        self, values: Dict[str, float], *, attempt: Optional[int] = None
+    ) -> None:
+        detail = self._attempt_detail(attempt)
+        if detail is not None:
+            target = detail["transport_ms"]
             target.update({key: round(value, 2) for key, value in values.items()})
         for key, value in values.items():
             self.add_duration_ms(key, value)
 
-    def record_retry(self, kind: str, reason: str, *, capacity: bool = False) -> None:
-        if kind in {"status", "transport"}:
+    def set_attempt_http_version(self, value: str, *, attempt: Optional[int] = None) -> None:
+        detail = self._attempt_detail(attempt)
+        if detail is not None:
+            detail["http_version"] = value
+
+    def set_attempt_upstream_request_id(
+        self, value: Optional[str], *, attempt: Optional[int] = None
+    ) -> None:
+        if not value:
+            return
+        detail = self._attempt_detail(attempt)
+        if detail is not None:
+            detail["upstream_request_id"] = value
+        self.upstream_request_id = value
+
+    def select_attempt(self, attempt: int) -> None:
+        """Promote request-scoped fields from the selected parallel attempt."""
+        detail = self._attempt_detail(attempt)
+        if detail is not None and detail.get("upstream_request_id"):
+            self.upstream_request_id = detail["upstream_request_id"]
+
+    def record_retry(
+        self,
+        kind: str,
+        reason: str,
+        *,
+        capacity: bool = False,
+        attempt: Optional[int] = None,
+    ) -> None:
+        if kind in {"status", "transport", "hedge"}:
             self.retries[kind] += 1
         if capacity:
             self.retries["capacity"] += 1
         reasons = self.retries["reasons"]
         if len(reasons) < 8:
             reasons.append(reason)
-        if self.attempt_details and self.attempt_details[-1].get("attempt") == self.attempts:
-            self.attempt_details[-1]["retry_kind"] = kind
-            self.attempt_details[-1]["retry_reason"] = reason
-            self.attempt_details[-1]["capacity"] = capacity
+        detail = self._attempt_detail(attempt)
+        if detail is not None:
+            detail["retry_kind"] = kind
+            detail["retry_reason"] = reason
+            detail["capacity"] = capacity
         self.retry_reason = reason
 
     def record_failure(
@@ -301,6 +397,8 @@ class StreamRequestTrace:
         error_type: str,
         status_code: Optional[int],
         retryable: bool,
+        attempt: Optional[int] = None,
+        update_last: bool = True,
     ) -> None:
         failure = {
             "stage": stage,
@@ -308,10 +406,18 @@ class StreamRequestTrace:
             "status_code": status_code,
             "retryable": retryable,
         }
-        self.last_failure = failure
-        if self.attempt_details and self.attempt_details[-1].get("attempt") == self.attempts:
-            self.attempt_details[-1].update(failure)
-        self.finish_attempt()
+        if update_last:
+            self.last_failure = failure
+        detail = self._attempt_detail(attempt)
+        if detail is not None:
+            detail.update(failure)
+        self.finish_attempt(attempt)
+
+    def record_attempt_outcome(self, attempt: int, outcome: str) -> None:
+        detail = self._attempt_detail(attempt)
+        if detail is not None:
+            detail["outcome"] = outcome
+        self.finish_attempt(attempt)
 
     def mark_upstream_event(self) -> None:
         self._last_upstream_event_at = time.perf_counter()
@@ -356,7 +462,20 @@ class StreamRequestTrace:
         self.phase = StreamPhase.FINISHED if result == "success" else StreamPhase.FAILED
         total_ms = round((time.perf_counter() - self.started_at) * 1000, 2)
         self.timings_ms["total"] = total_ms
-        self.finish_attempt()
+        for attempt in tuple(self._attempt_started_at_by_id):
+            self.finish_attempt(attempt)
+        first = self._marks.get("first_content_emitted")
+        if first is not None and self.stream["duration_after_first_content_ms"] is None:
+            self.stream["duration_after_first_content_ms"] = round(
+                (time.perf_counter() - first) * 1000, 2
+            )
+        if (
+            self._last_upstream_event_at is not None
+            and self.stream["last_upstream_event_age_ms"] is None
+        ):
+            self.stream["last_upstream_event_age_ms"] = round(
+                (time.perf_counter() - self._last_upstream_event_at) * 1000, 2
+            )
         if not self.diagnostics_enabled:
             self._logged = True
             return
@@ -376,8 +495,10 @@ class StreamRequestTrace:
                 "retry_reason": self.retry_reason,
                 "credential": self.credential_hash,
                 "upstream_request_id": self.upstream_request_id,
+                "upstream_http2_enabled": self.upstream_http2_enabled,
                 "timings_ms": self.timings_ms,
                 "retries": self.retries,
+                "hedge": self.hedge,
                 "last_failure": self.last_failure,
                 "attempt_details": self.attempt_details,
                 "attempt_details_truncated": self.attempts > len(self.attempt_details),

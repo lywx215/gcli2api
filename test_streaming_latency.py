@@ -15,12 +15,44 @@ import config
 from src.api.utils import handle_error_with_retry
 from src.credential_manager import CredentialManager, _CredentialManagerSingleton
 from src.google_oauth_api import Credentials, TokenError
+from src.hedge_stats import HedgeReservation
 from src.httpx_client import HttpxClientManager, stream_post_async
 from src.log_safety import credential_log_id, safe_exception
 from src.router.stream_passthrough import build_streaming_response_or_error
 from src.smart_429 import ModelCapacityGuard
 from src.storage.sqlite_manager import SQLiteManager
-from src.streaming_latency import StreamFailure, StreamLatencyConfig, StreamRequestTrace
+from src.streaming_latency import (
+    StreamFailure,
+    StreamLatencyConfig,
+    StreamRequestTrace,
+    bind_stream_trace,
+    reset_stream_trace,
+)
+
+
+@pytest.fixture(autouse=True)
+def isolate_hedge_budget_storage(monkeypatch):
+    """Keep stream unit tests independent from the developer's local database."""
+
+    async def reserve(credential_name, model_name, daily_budget):
+        del model_name
+        if daily_budget <= 0:
+            return None, "daily_budget_exhausted"
+        return (
+            HedgeReservation(
+                "2099-01-01",
+                credential_name,
+                "test-family",
+            ),
+            None,
+        )
+
+    monkeypatch.setattr(geminicli_module.hedge_stats_service, "reserve", reserve)
+    monkeypatch.setattr(
+        geminicli_module.hedge_stats_service,
+        "record_outcome",
+        lambda *args, **kwargs: None,
+    )
 
 
 def test_diagnostics_are_disabled_by_default(monkeypatch):
@@ -32,6 +64,17 @@ def test_diagnostics_are_disabled_by_default(monkeypatch):
     monkeypatch.setattr("src.streaming_latency.log.info", messages.append)
     StreamRequestTrace(model="test").finish("error", force_log=True)
     assert messages == []
+
+
+def test_http2_and_header_hedge_are_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("UPSTREAM_HTTP2_ENABLED", raising=False)
+    monkeypatch.delenv("GEMINICLI_STREAM_HEADER_HEDGE_ENABLED", raising=False)
+    monkeypatch.setattr(
+        config, "_geminicli_stream_header_hedge_enabled_cache", False
+    )
+    value = StreamLatencyConfig.from_env()
+    assert value.upstream_http2_enabled is False
+    assert value.header_hedge_enabled is False
 
 
 def test_diagnostics_can_be_enabled(monkeypatch):
@@ -56,6 +99,26 @@ async def test_server_timing_follows_diagnostics_switch(monkeypatch, enabled):
     )
     assert bool(response.headers.get("server-timing")) is enabled
     assert response.headers.get("x-request-id")
+
+
+@pytest.mark.asyncio
+async def test_server_timing_includes_hedge_when_decided_before_response(monkeypatch):
+    monkeypatch.setenv("STREAM_DIAGNOSTICS_ENABLED", "true")
+    trace = StreamRequestTrace(model="test")
+    trace.timings_ms["hedge"] = 15000.0
+
+    async def one_chunk():
+        yield b"data: ok\n\n"
+
+    token = bind_stream_trace(trace)
+    try:
+        response = await build_streaming_response_or_error(
+            one_chunk(), model="test", protocol="gemini"
+        )
+    finally:
+        reset_stream_trace(token)
+
+    assert "hedge;dur=15000.0" in response.headers["server-timing"]
 
 
 @pytest.mark.asyncio
@@ -426,6 +489,65 @@ async def test_proxy_change_drains_old_client_after_active_stream(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_http2_change_creates_new_transport_generation(monkeypatch):
+    async def no_proxy():
+        return None
+
+    monkeypatch.setattr(http_module, "get_proxy_config", no_proxy)
+    monkeypatch.setenv("UPSTREAM_HTTP2_ENABLED", "false")
+    manager = HttpxClientManager()
+    async with manager.get_client() as http1_client:
+        assert http1_client._transport._pool._http2 is False
+        monkeypatch.setenv("UPSTREAM_HTTP2_ENABLED", "true")
+        async with manager.get_client() as http2_client:
+            assert http2_client is not http1_client
+            assert http2_client._transport._pool._http2 is True
+            assert http2_client._transport._pool._http1 is True
+            assert not http1_client.is_closed
+        assert not http1_client.is_closed
+    assert http1_client.is_closed
+    await manager.close()
+    assert http2_client.is_closed
+
+
+@pytest.mark.asyncio
+async def test_attempt_trace_records_negotiated_http_version(monkeypatch):
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            content=b"data: ok\n\n",
+            extensions={"http_version": b"HTTP/2"},
+        )
+    )
+    client = httpx.AsyncClient(transport=transport)
+
+    @asynccontextmanager
+    async def fake_streaming_client(**kwargs):
+        del kwargs
+        yield client
+
+    monkeypatch.setattr(
+        http_module.http_client, "get_streaming_client", fake_streaming_client
+    )
+    trace = StreamRequestTrace(model="test", diagnostics_enabled=True)
+    attempt = trace.begin_attempt("one.json")
+    token = bind_stream_trace(trace)
+    try:
+        chunks = [
+            chunk
+            async for chunk in stream_post_async(
+                "https://upstream.test/stream", {}, attempt=attempt
+            )
+        ]
+    finally:
+        reset_stream_trace(token)
+        await client.aclose()
+
+    assert chunks == [b"data: ok", b""]
+    assert trace.attempt_details[0]["http_version"] == "HTTP/2"
+
+
+@pytest.mark.asyncio
 async def test_oauth_refresh_singleflight_for_200_waiters(monkeypatch):
     manager = CredentialManager()
     manager._initialized = True
@@ -713,6 +835,676 @@ async def test_geminicli_does_not_retry_after_upstream_started(monkeypatch):
     assert upstream_calls == 1
 
 
+@pytest.mark.asyncio
+async def test_header_hedge_backup_wins_and_primary_is_closed_before_delivery(
+    monkeypatch,
+):
+    calls = []
+    closed = []
+
+    async def get_credential(**kwargs):
+        assert kwargs["excluded_credentials"] == {"primary.json"}
+        return "backup.json", {"token": "backup", "project_id": "backup"}
+
+    async def fake_stream_post_async(**kwargs):
+        project = kwargs["body"]["project"]
+        calls.append(project)
+        try:
+            if project == "primary":
+                await asyncio.sleep(0.05)
+                yield b"data: primary\n\n"
+            else:
+                await asyncio.sleep(0.002)
+                yield b"data: backup\n\n"
+                yield b"data: backup-done\n\n"
+        finally:
+            closed.append(project)
+
+    monkeypatch.setattr(
+        geminicli_module.credential_manager,
+        "get_valid_credential",
+        get_credential,
+        raising=False,
+    )
+    monkeypatch.setattr(geminicli_module, "stream_post_async", fake_stream_post_async)
+    trace = StreamRequestTrace(model="gemini-test")
+    trace.hedge["enabled"] = True
+    primary_attempt = trace.begin_attempt("primary.json")
+    config_value = StreamLatencyConfig(
+        header_hedge_enabled=True,
+        header_hedge_delay=0.005,
+        header_hedge_max_inflight=20,
+        header_hedge_sample_rate=1.0,
+    )
+
+    stream = geminicli_module._hedged_stream_post_async(
+        url="https://upstream.test",
+        body={"project": "primary"},
+        native=False,
+        headers={"Authorization": "Bearer primary"},
+        model_name="gemini-test",
+        primary_file="primary.json",
+        primary_credential={"token": "primary", "project_id": "primary"},
+        primary_attempt=primary_attempt,
+        excluded_credentials=set(),
+        trace=trace,
+        config=config_value,
+    )
+    selection = await stream.__anext__()
+    assert isinstance(selection, geminicli_module._HedgeSelection)
+    assert selection.filename == "backup.json"
+    assert "primary" in closed
+    chunks = [chunk async for chunk in stream]
+
+    assert calls == ["primary", "backup"]
+    assert chunks == [b"data: backup\n\n", b"data: backup-done\n\n"]
+    assert trace.retries["hedge"] == 1
+    assert trace.hedge["winner_attempt"] == 2
+    assert trace.hedge["loser_outcome"] == "superseded"
+    assert trace.attempt_details[0]["outcome"] == "superseded"
+
+
+@pytest.mark.asyncio
+async def test_header_hedge_primary_can_win_after_backup_launch(monkeypatch):
+    closed = []
+
+    async def get_credential(**kwargs):
+        del kwargs
+        return "backup.json", {"token": "backup", "project_id": "backup"}
+
+    async def fake_stream_post_async(**kwargs):
+        project = kwargs["body"]["project"]
+        try:
+            await asyncio.sleep(0.015 if project == "primary" else 0.04)
+            yield f"data: {project}\n\n".encode()
+        finally:
+            closed.append(project)
+
+    monkeypatch.setattr(
+        geminicli_module.credential_manager,
+        "get_valid_credential",
+        get_credential,
+        raising=False,
+    )
+    monkeypatch.setattr(geminicli_module, "stream_post_async", fake_stream_post_async)
+    trace = StreamRequestTrace(model="gemini-test")
+    trace.hedge["enabled"] = True
+    primary_attempt = trace.begin_attempt("primary.json")
+
+    items = [
+        item
+        async for item in geminicli_module._hedged_stream_post_async(
+            url="https://upstream.test",
+            body={"project": "primary"},
+            native=False,
+            headers={},
+            model_name="gemini-test",
+            primary_file="primary.json",
+            primary_credential={"token": "primary", "project_id": "primary"},
+            primary_attempt=primary_attempt,
+            excluded_credentials=set(),
+            trace=trace,
+            config=StreamLatencyConfig(
+                header_hedge_enabled=True,
+                header_hedge_delay=0.005,
+                header_hedge_sample_rate=1.0,
+            ),
+        )
+    ]
+
+    assert items[0].filename == "primary.json"
+    assert items[1] == b"data: primary\n\n"
+    assert "backup" in closed
+    assert trace.hedge["launched"] is True
+    assert trace.hedge["winner_attempt"] == 1
+    assert trace.hedge["loser_outcome"] == "superseded"
+
+
+@pytest.mark.asyncio
+async def test_header_hedge_is_not_launched_after_primary_headers(monkeypatch):
+    calls = []
+
+    async def get_credential(**kwargs):
+        del kwargs
+        return "backup.json", {"token": "backup", "project_id": "backup"}
+
+    async def fake_stream_post_async(**kwargs):
+        calls.append(kwargs["body"]["project"])
+        kwargs["headers_received_event"].set()
+        await asyncio.sleep(0.03)
+        yield b"data: primary\n\n"
+
+    monkeypatch.setattr(
+        geminicli_module.credential_manager,
+        "get_valid_credential",
+        get_credential,
+        raising=False,
+    )
+    monkeypatch.setattr(geminicli_module, "stream_post_async", fake_stream_post_async)
+    trace = StreamRequestTrace(model="gemini-test")
+    trace.hedge["enabled"] = True
+    primary_attempt = trace.begin_attempt("primary.json")
+    config_value = StreamLatencyConfig(
+        header_hedge_enabled=True,
+        header_hedge_delay=0.005,
+        header_hedge_sample_rate=1.0,
+    )
+
+    items = [
+        item
+        async for item in geminicli_module._hedged_stream_post_async(
+            url="https://upstream.test",
+            body={"project": "primary"},
+            native=False,
+            headers={},
+            model_name="gemini-test",
+            primary_file="primary.json",
+            primary_credential={"token": "primary", "project_id": "primary"},
+            primary_attempt=primary_attempt,
+            excluded_credentials=set(),
+            trace=trace,
+            config=config_value,
+        )
+    ]
+
+    assert calls == ["primary"]
+    assert items[1:] == [b"data: primary\n\n"]
+    assert trace.hedge["launched"] is False
+    assert trace.hedge["skipped_reason"] == "headers_received"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sample_rate", "backup_available", "limited", "expected_reason"),
+    [
+        (0.0, True, False, "sampled_out"),
+        (1.0, False, False, "no_backup_credential"),
+        (1.0, True, True, "concurrency_limit"),
+    ],
+)
+async def test_header_hedge_skip_paths_keep_single_upstream_call(
+    monkeypatch, sample_rate, backup_available, limited, expected_reason
+):
+    calls = 0
+
+    async def get_credential(**kwargs):
+        del kwargs
+        if not backup_available:
+            return None
+        return "backup.json", {"token": "backup", "project_id": "backup"}
+
+    async def fake_stream_post_async(**kwargs):
+        nonlocal calls
+        del kwargs
+        calls += 1
+        await asyncio.sleep(0.01)
+        yield b"data: primary\n\n"
+
+    limiter = geminicli_module._HedgeLimiter()
+    if limited:
+        limiter._active = 1
+    monkeypatch.setattr(geminicli_module, "_stream_header_hedge_limiter", limiter)
+    monkeypatch.setattr(
+        geminicli_module.credential_manager,
+        "get_valid_credential",
+        get_credential,
+        raising=False,
+    )
+    monkeypatch.setattr(geminicli_module, "stream_post_async", fake_stream_post_async)
+    trace = StreamRequestTrace(model="gemini-test")
+    trace.hedge["enabled"] = True
+    primary_attempt = trace.begin_attempt("primary.json")
+    config_value = StreamLatencyConfig(
+        header_hedge_enabled=True,
+        header_hedge_delay=0.001,
+        header_hedge_max_inflight=1,
+        header_hedge_sample_rate=sample_rate,
+    )
+
+    items = [
+        item
+        async for item in geminicli_module._hedged_stream_post_async(
+            url="https://upstream.test",
+            body={"project": "primary"},
+            native=False,
+            headers={},
+            model_name="gemini-test",
+            primary_file="primary.json",
+            primary_credential={"token": "primary", "project_id": "primary"},
+            primary_attempt=primary_attempt,
+            excluded_credentials=set(),
+            trace=trace,
+            config=config_value,
+        )
+    ]
+
+    assert calls == 1
+    assert items[-1] == b"data: primary\n\n"
+    assert trace.hedge["launched"] is False
+    assert trace.hedge["skipped_reason"] == expected_reason
+
+
+@pytest.mark.asyncio
+async def test_header_hedge_cancellation_reclaims_both_upstreams(monkeypatch):
+    started = asyncio.Event()
+    closed = []
+    outcomes = []
+
+    async def get_credential(**kwargs):
+        del kwargs
+        return "backup.json", {"token": "backup", "project_id": "backup"}
+
+    async def fake_stream_post_async(**kwargs):
+        project = kwargs["body"]["project"]
+        if project == "backup":
+            started.set()
+        try:
+            await asyncio.sleep(10)
+            yield b"unreachable"
+        finally:
+            closed.append(project)
+
+    limiter = geminicli_module._HedgeLimiter()
+    monkeypatch.setattr(geminicli_module, "_stream_header_hedge_limiter", limiter)
+    monkeypatch.setattr(
+        geminicli_module.credential_manager,
+        "get_valid_credential",
+        get_credential,
+        raising=False,
+    )
+    monkeypatch.setattr(geminicli_module, "stream_post_async", fake_stream_post_async)
+    monkeypatch.setattr(
+        geminicli_module.hedge_stats_service,
+        "record_outcome",
+        lambda reservation, outcome, **kwargs: outcomes.append(outcome),
+    )
+    trace = StreamRequestTrace(model="gemini-test")
+    trace.hedge["enabled"] = True
+    primary_attempt = trace.begin_attempt("primary.json")
+    stream = geminicli_module._hedged_stream_post_async(
+        url="https://upstream.test",
+        body={"project": "primary"},
+        native=False,
+        headers={},
+        model_name="gemini-test",
+        primary_file="primary.json",
+        primary_credential={"token": "primary", "project_id": "primary"},
+        primary_attempt=primary_attempt,
+        excluded_credentials=set(),
+        trace=trace,
+        config=StreamLatencyConfig(
+            header_hedge_enabled=True,
+            header_hedge_delay=0.01,
+            header_hedge_max_inflight=1,
+            header_hedge_sample_rate=1.0,
+        ),
+    )
+
+    read_task = asyncio.create_task(stream.__anext__())
+    await asyncio.wait_for(started.wait(), timeout=0.2)
+    read_task.cancel()
+    await asyncio.gather(read_task, return_exceptions=True)
+    await stream.aclose()
+
+    assert sorted(closed) == ["backup", "primary"]
+    assert limiter._active == 0
+    assert outcomes == ["client_cancelled"]
+
+
+@pytest.mark.asyncio
+async def test_header_hedge_daily_budget_zero_keeps_primary_only(monkeypatch):
+    upstream_calls = []
+
+    async def get_credential(**kwargs):
+        del kwargs
+        return "backup.json", {"token": "backup", "project_id": "backup"}
+
+    async def fake_stream_post_async(**kwargs):
+        upstream_calls.append(kwargs["body"]["project"])
+        await asyncio.sleep(0.015)
+        yield b"data: primary\n\n"
+
+    monkeypatch.setattr(
+        geminicli_module.credential_manager,
+        "get_valid_credential",
+        get_credential,
+        raising=False,
+    )
+    monkeypatch.setattr(geminicli_module, "stream_post_async", fake_stream_post_async)
+    trace = StreamRequestTrace(model="gemini-2.5-pro")
+    primary_attempt = trace.begin_attempt("primary.json")
+    stream = geminicli_module._hedged_stream_post_async(
+        url="https://upstream.test",
+        body={"project": "primary"},
+        native=False,
+        headers={},
+        model_name="gemini-2.5-pro",
+        primary_file="primary.json",
+        primary_credential={"token": "primary", "project_id": "primary"},
+        primary_attempt=primary_attempt,
+        excluded_credentials=set(),
+        trace=trace,
+        config=StreamLatencyConfig(
+            header_hedge_enabled=True,
+            header_hedge_delay=0.001,
+            header_hedge_max_inflight=1,
+            header_hedge_sample_rate=1.0,
+            header_hedge_daily_budget=0,
+        ),
+    )
+    selection = await stream.__anext__()
+    assert selection.launched is False
+    assert await stream.__anext__() == b"data: primary\n\n"
+    await stream.aclose()
+
+    assert upstream_calls == ["primary"]
+    assert trace.hedge["skipped_reason"] == "daily_budget_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_header_hedge_records_backup_win_and_confirmed_rescue(monkeypatch):
+    outcomes = []
+
+    async def get_credential(**kwargs):
+        del kwargs
+        return "backup.json", {"token": "backup", "project_id": "backup"}
+
+    async def fake_stream_post_async(**kwargs):
+        project = kwargs["body"]["project"]
+        if project == "primary":
+            await asyncio.sleep(0.003)
+            yield geminicli_module.Response(content=b"failed", status_code=503)
+            return
+        await asyncio.sleep(0.006)
+        yield b"data: rescued\n\n"
+
+    monkeypatch.setattr(
+        geminicli_module.credential_manager,
+        "get_valid_credential",
+        get_credential,
+        raising=False,
+    )
+    monkeypatch.setattr(geminicli_module, "stream_post_async", fake_stream_post_async)
+    monkeypatch.setattr(
+        geminicli_module.hedge_stats_service,
+        "record_outcome",
+        lambda reservation, outcome, **kwargs: outcomes.append(
+            (reservation.credential_name, outcome, kwargs)
+        ),
+    )
+    trace = StreamRequestTrace(model="gemini-2.5-pro")
+    primary_attempt = trace.begin_attempt("primary.json")
+    stream = geminicli_module._hedged_stream_post_async(
+        url="https://upstream.test",
+        body={"project": "primary"},
+        native=False,
+        headers={},
+        model_name="gemini-2.5-pro",
+        primary_file="primary.json",
+        primary_credential={"token": "primary", "project_id": "primary"},
+        primary_attempt=primary_attempt,
+        excluded_credentials=set(),
+        trace=trace,
+        config=StreamLatencyConfig(
+            header_hedge_enabled=True,
+            header_hedge_delay=0.001,
+            header_hedge_max_inflight=1,
+            header_hedge_sample_rate=1.0,
+        ),
+    )
+    selection = await stream.__anext__()
+    assert selection.launched is True
+    assert await stream.__anext__() == b"data: rescued\n\n"
+    await stream.aclose()
+
+    assert outcomes == [
+        (
+            "backup.json",
+            "backup_wins",
+            {"confirmed_rescue": True},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_header_hedge_http_400_aborts_other_without_credential_penalty(
+    monkeypatch,
+):
+    upstream_calls = 0
+    recorded_errors = 0
+    primary_closed = False
+
+    async def get_credential(mode="geminicli", model_name=None, excluded_credentials=None):
+        del mode, model_name
+        excluded = set(excluded_credentials or ())
+        name = "backup.json" if "primary.json" in excluded else "primary.json"
+        return name, {"token": name, "project_id": name}
+
+    async def endpoint():
+        return "https://upstream.test"
+
+    async def fake_stream(**kwargs):
+        nonlocal upstream_calls, primary_closed
+        upstream_calls += 1
+        project = kwargs["body"]["project"]
+        if project == "backup.json":
+            await asyncio.sleep(0.002)
+            yield geminicli_module.Response(
+                content=b'{"error":{"message":"invalid request"}}',
+                status_code=400,
+            )
+            return
+        try:
+            await asyncio.sleep(1)
+            yield b"data: primary\n\n"
+        finally:
+            primary_closed = True
+
+    async def retry_config():
+        return {
+            "max_retries": 5,
+            "retry_interval": 0.001,
+            "retry_enabled": True,
+            "smart_429": False,
+        }
+
+    async def auto_ban_codes():
+        return [400, 403]
+
+    async def record_error(*args, **kwargs):
+        nonlocal recorded_errors
+        del args, kwargs
+        recorded_errors += 1
+
+    monkeypatch.setenv("GEMINICLI_STREAM_HEADER_HEDGE_ENABLED", "true")
+    monkeypatch.setenv("GEMINICLI_STREAM_HEADER_HEDGE_DELAY", "0.01")
+    monkeypatch.setenv("GEMINICLI_STREAM_HEADER_HEDGE_SAMPLE_RATE", "1")
+    monkeypatch.setattr(
+        geminicli_module.credential_manager,
+        "get_valid_credential",
+        get_credential,
+        raising=False,
+    )
+    monkeypatch.setattr(geminicli_module, "get_code_assist_endpoint", endpoint)
+    monkeypatch.setattr(geminicli_module, "stream_post_async", fake_stream)
+    monkeypatch.setattr(geminicli_module, "get_retry_config", retry_config)
+    monkeypatch.setattr(geminicli_module, "get_auto_ban_error_codes", auto_ban_codes)
+    monkeypatch.setattr(geminicli_module, "record_api_call_error", record_error)
+
+    stream = geminicli_module.stream_request(
+        {"model": "gemini-test", "request": {}}
+    )
+    with pytest.raises(StreamFailure) as caught:
+        await stream.__anext__()
+
+    assert caught.value.status_code == 400
+    assert upstream_calls == 2
+    assert primary_closed is True
+    assert recorded_errors == 0
+
+
+@pytest.mark.asyncio
+async def test_header_hedge_two_transport_failures_do_not_start_third_attempt(
+    monkeypatch,
+):
+    upstream_calls = 0
+
+    async def get_credential(mode="geminicli", model_name=None, excluded_credentials=None):
+        del mode, model_name
+        excluded = set(excluded_credentials or ())
+        name = "backup.json" if "primary.json" in excluded else "primary.json"
+        return name, {"token": name, "project_id": name}
+
+    async def endpoint():
+        return "https://upstream.test"
+
+    async def failed_stream(**kwargs):
+        nonlocal upstream_calls
+        del kwargs
+        upstream_calls += 1
+        await asyncio.sleep(0.015)
+        raise StreamFailure(
+            "response header timeout",
+            stage="response_headers",
+            status_code=504,
+            retryable=True,
+        )
+        yield b"unreachable"
+
+    async def retry_config():
+        return {
+            "max_retries": 5,
+            "retry_interval": 0.001,
+            "retry_enabled": True,
+            "smart_429": False,
+        }
+
+    async def auto_ban_codes():
+        return [403]
+
+    monkeypatch.setenv("GEMINICLI_STREAM_HEADER_HEDGE_ENABLED", "true")
+    monkeypatch.setenv("GEMINICLI_STREAM_HEADER_HEDGE_DELAY", "0.01")
+    monkeypatch.setenv("GEMINICLI_STREAM_HEADER_HEDGE_SAMPLE_RATE", "1")
+    monkeypatch.setenv("STREAM_TRANSPORT_MAX_ATTEMPTS", "2")
+    monkeypatch.setattr(
+        geminicli_module.credential_manager,
+        "get_valid_credential",
+        get_credential,
+        raising=False,
+    )
+    monkeypatch.setattr(geminicli_module, "get_code_assist_endpoint", endpoint)
+    monkeypatch.setattr(geminicli_module, "stream_post_async", failed_stream)
+    monkeypatch.setattr(geminicli_module, "get_retry_config", retry_config)
+    monkeypatch.setattr(geminicli_module, "get_auto_ban_error_codes", auto_ban_codes)
+
+    trace = StreamRequestTrace(model="gemini-test")
+    token = bind_stream_trace(trace)
+    try:
+        stream = geminicli_module.stream_request(
+            {"model": "gemini-test", "request": {}}
+        )
+        with pytest.raises(StreamFailure) as caught:
+            await stream.__anext__()
+    finally:
+        reset_stream_trace(token)
+
+    assert caught.value.status_code == 504
+    assert upstream_calls == 2
+    assert trace.attempts == 2
+    assert trace.retries["hedge"] == 1
+    assert trace.hedge["launched"] is True
+
+
+@pytest.mark.asyncio
+async def test_header_hedge_double_capacity_updates_model_guard_once(monkeypatch):
+    capacity_body = json.dumps(
+        {
+            "error": {
+                "code": 429,
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [{"reason": "MODEL_CAPACITY_EXHAUSTED"}],
+            }
+        }
+    ).encode()
+    upstream_calls = 0
+    guard_calls = 0
+    recorded_errors = 0
+
+    async def get_credential(mode="geminicli", model_name=None, excluded_credentials=None):
+        del mode, model_name
+        excluded = set(excluded_credentials or ())
+        name = "backup.json" if "primary.json" in excluded else "primary.json"
+        return name, {"token": name, "project_id": name}
+
+    async def endpoint():
+        return "https://upstream.test"
+
+    async def capacity_stream(**kwargs):
+        nonlocal upstream_calls
+        upstream_calls += 1
+        project = kwargs["body"]["project"]
+        await asyncio.sleep(0.025 if project == "primary.json" else 0.01)
+        yield geminicli_module.Response(content=capacity_body, status_code=429)
+
+    async def retry_config():
+        return {
+            "max_retries": 5,
+            "retry_interval": 0.001,
+            "retry_enabled": True,
+            "smart_429": False,
+        }
+
+    async def auto_ban_codes():
+        return [403]
+
+    async def record_error(*args, **kwargs):
+        nonlocal recorded_errors
+        del args, kwargs
+        recorded_errors += 1
+
+    def record_guard(*args, **kwargs):
+        nonlocal guard_calls
+        del args, kwargs
+        guard_calls += 1
+        return 5
+
+    monkeypatch.setenv("GEMINICLI_STREAM_HEADER_HEDGE_ENABLED", "true")
+    monkeypatch.setenv("GEMINICLI_STREAM_HEADER_HEDGE_DELAY", "0.01")
+    monkeypatch.setenv("GEMINICLI_STREAM_HEADER_HEDGE_SAMPLE_RATE", "1")
+    monkeypatch.setattr(config, "_geminicli_capacity_fast_fail_enabled_cache", True)
+    monkeypatch.delenv("GEMINICLI_CAPACITY_FAST_FAIL_ENABLED", raising=False)
+    geminicli_module.model_capacity_guard.reset()
+    monkeypatch.setattr(
+        geminicli_module.credential_manager,
+        "get_valid_credential",
+        get_credential,
+        raising=False,
+    )
+    monkeypatch.setattr(geminicli_module, "get_code_assist_endpoint", endpoint)
+    monkeypatch.setattr(geminicli_module, "stream_post_async", capacity_stream)
+    monkeypatch.setattr(geminicli_module, "get_retry_config", retry_config)
+    monkeypatch.setattr(geminicli_module, "get_auto_ban_error_codes", auto_ban_codes)
+    monkeypatch.setattr(geminicli_module, "record_api_call_error", record_error)
+    monkeypatch.setattr(
+        geminicli_module, "is_smart_429_protection_enabled", lambda: False
+    )
+    monkeypatch.setattr(
+        geminicli_module.model_capacity_guard, "record_failure", record_guard
+    )
+
+    stream = geminicli_module.stream_request(
+        {"model": "gemini-test", "request": {}}
+    )
+    with pytest.raises(StreamFailure) as caught:
+        await stream.__anext__()
+
+    assert caught.value.status_code == 503
+    assert caught.value.headers["retry-after"] == "5"
+    assert upstream_calls == 2
+    assert guard_calls == 1
+    assert recorded_errors == 0
+
+
 def test_trace_schema_v2_separates_retry_kinds_and_redacts_credential(monkeypatch):
     monkeypatch.setenv("STREAM_DIAGNOSTICS_ENABLED", "true")
     messages = []
@@ -878,7 +1670,11 @@ async def test_capacity_fast_fail_limits_stream_to_two_upstream_calls(
         return geminicli_module.Upstream429Kind.MODEL_CAPACITY_EXHAUSTED, None
 
     monkeypatch.setattr(config, "_geminicli_capacity_fast_fail_enabled_cache", True)
+    monkeypatch.setattr(
+        config, "_geminicli_stream_header_hedge_enabled_cache", False
+    )
     monkeypatch.delenv("GEMINICLI_CAPACITY_FAST_FAIL_ENABLED", raising=False)
+    monkeypatch.delenv("GEMINICLI_STREAM_HEADER_HEDGE_ENABLED", raising=False)
     geminicli_module.model_capacity_guard.reset()
     geminicli_module.smart_429_service._reset_runtime_guards()
     monkeypatch.setattr(

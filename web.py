@@ -55,6 +55,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.error(f"配置缓存初始化失败: {e}")
 
+    try:
+        from src.streaming_latency import StreamLatencyConfig
+
+        stream_config = StreamLatencyConfig.from_env()
+        log.info(
+            "GeminiCLI upstream transport: "
+            f"http2_enabled={stream_config.upstream_http2_enabled}, "
+            f"header_hedge_enabled={stream_config.header_hedge_enabled}, "
+            f"header_hedge_delay={stream_config.header_hedge_delay}s, "
+            f"header_hedge_max_inflight={stream_config.header_hedge_max_inflight}, "
+            f"header_hedge_sample_rate={stream_config.header_hedge_sample_rate}, "
+            f"header_hedge_daily_budget={stream_config.header_hedge_daily_budget}"
+        )
+    except Exception as e:
+        log.warning(f"读取 GeminiCLI 上游传输配置失败: {type(e).__name__}")
+
     # 初始化全局凭证管理器（带超时，避免 MySQL 连接阻塞整个启动）
     try:
         await asyncio.wait_for(
@@ -143,6 +159,12 @@ async def lifespan(app: FastAPI):
             log.info("凭证管理器已关闭")
         except Exception as e:
             log.error(f"关闭凭证管理器时出错: {e}")
+
+    try:
+        from src.hedge_stats import hedge_stats_service
+        await hedge_stats_service.drain(timeout=1.0)
+    except Exception as e:
+        log.error(f"刷新对冲统计时出错: {type(e).__name__}")
 
     try:
         from src.storage_adapter import close_storage_adapter

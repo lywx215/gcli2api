@@ -165,6 +165,15 @@ async def get_config(token: str = Depends(verify_panel_token)):
         current_config["geminicli_capacity_fast_fail_enabled"] = (
             await config.get_geminicli_capacity_fast_fail_enabled()
         )
+        current_config["geminicli_stream_header_hedge_enabled"] = (
+            await config.get_geminicli_stream_header_hedge_enabled()
+        )
+        current_config["geminicli_stream_header_hedge_sample_rate"] = (
+            await config.get_geminicli_stream_header_hedge_sample_rate()
+        )
+        current_config["geminicli_stream_header_hedge_daily_budget"] = (
+            await config.get_geminicli_stream_header_hedge_daily_budget()
+        )
 
         # 轮巡模式
         current_config["routing_mode"] = await config.get_routing_mode()
@@ -284,6 +293,37 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
                     status_code=400,
                     detail="GeminiCLI 模型容量快速失败开关必须是布尔值",
                 )
+        if "geminicli_stream_header_hedge_enabled" in new_config:
+            if not isinstance(new_config["geminicli_stream_header_hedge_enabled"], bool):
+                raise HTTPException(
+                    status_code=400,
+                    detail="GeminiCLI 流式响应头对冲开关必须是布尔值",
+                )
+        if "geminicli_stream_header_hedge_sample_rate" in new_config:
+            value = new_config["geminicli_stream_header_hedge_sample_rate"]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise HTTPException(
+                    status_code=400,
+                    detail="GeminiCLI 对冲采样率必须是 0.0–1.0 的数字",
+                )
+            value = float(value)
+            if not 0.0 <= value <= 1.0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="GeminiCLI 对冲采样率必须在 0.0–1.0 之间",
+                )
+            new_config["geminicli_stream_header_hedge_sample_rate"] = value
+        if "geminicli_stream_header_hedge_daily_budget" in new_config:
+            value = new_config["geminicli_stream_header_hedge_daily_budget"]
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not 0 <= value <= 1000
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="GeminiCLI 每日对冲预算必须是 0–1000 的整数",
+                )
 
         # 验证保活配置
         if "keepalive_url" in new_config:
@@ -333,6 +373,18 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
             "geminicli_capacity_fast_fail_enabled" in new_config
             and "geminicli_capacity_fast_fail_enabled" not in env_locked_keys
         )
+        stream_header_hedge_saved = (
+            "geminicli_stream_header_hedge_enabled" in new_config
+            and "geminicli_stream_header_hedge_enabled" not in env_locked_keys
+        )
+        stream_header_hedge_sample_rate_saved = (
+            "geminicli_stream_header_hedge_sample_rate" in new_config
+            and "geminicli_stream_header_hedge_sample_rate" not in env_locked_keys
+        )
+        stream_header_hedge_daily_budget_saved = (
+            "geminicli_stream_header_hedge_daily_budget" in new_config
+            and "geminicli_stream_header_hedge_daily_budget" not in env_locked_keys
+        )
         try:
             workers = int(os.getenv("WORKERS", "1"))
         except (TypeError, ValueError):
@@ -350,6 +402,7 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
         await config.reload_config(
             reload_stream_diagnostics=workers == 1,
             reload_capacity_fast_fail=workers == 1,
+            reload_stream_header_hedge=workers == 1,
         )
         from src.smart_429 import model_capacity_guard, smart_429_service
         await smart_429_service.reconfigure()
@@ -382,6 +435,18 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
                         "geminicli_capacity_fast_fail_enabled",
                         capacity_fast_fail_saved,
                     ),
+                    (
+                        "geminicli_stream_header_hedge_enabled",
+                        stream_header_hedge_saved,
+                    ),
+                    (
+                        "geminicli_stream_header_hedge_sample_rate",
+                        stream_header_hedge_sample_rate_saved,
+                    ),
+                    (
+                        "geminicli_stream_header_hedge_daily_budget",
+                        stream_header_hedge_daily_budget_saved,
+                    ),
                 )
                 if saved and workers == 1
             ],
@@ -393,13 +458,31 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
                         "geminicli_capacity_fast_fail_enabled",
                         capacity_fast_fail_saved,
                     ),
+                    (
+                        "geminicli_stream_header_hedge_enabled",
+                        stream_header_hedge_saved,
+                    ),
+                    (
+                        "geminicli_stream_header_hedge_sample_rate",
+                        stream_header_hedge_sample_rate_saved,
+                    ),
+                    (
+                        "geminicli_stream_header_hedge_daily_budget",
+                        stream_header_hedge_daily_budget_saved,
+                    ),
                 )
                 if saved and workers > 1
             ],
         }
-        if (diagnostics_saved or capacity_fast_fail_saved) and workers > 1:
+        if (
+            diagnostics_saved
+            or capacity_fast_fail_saved
+            or stream_header_hedge_saved
+            or stream_header_hedge_sample_rate_saved
+            or stream_header_hedge_daily_budget_saved
+        ) and workers > 1:
             response_data["restart_notice"] = (
-                "当前为多 Worker 模式，请重启全部 Worker 以统一应用诊断和容量保护配置。"
+                "当前为多 Worker 模式，请重启全部 Worker 以统一应用诊断、容量保护和响应头对冲配置。"
             )
 
         return JSONResponse(content=response_data)

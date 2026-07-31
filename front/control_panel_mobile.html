@@ -1422,6 +1422,27 @@
                     </div>
                 </div>
 
+                <div id="hedgeStatsCard"
+                    style="background:#fff8e1;border:1px solid #ffca28;border-radius:8px;padding:12px;margin:8px 0;font-size:12px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <strong>🏁 今日对冲成本 <span id="hedgeStatsDate"></span></strong>
+                        <button onclick="refreshHedgeStats()">↻</button>
+                    </div>
+                    <div>采样 <span id="hedgeStatsSampleRate">-</span>；
+                        预算 <span id="hedgeStatsDailyBudget">-</span></div>
+                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px;">
+                        <div>额外 <b id="hedgeStatsExtra">-</b></div>
+                        <div>剩余 <b id="hedgeStatsRemaining">-</b></div>
+                        <div>主胜 <b id="hedgeStatsPrimaryWins">-</b></div>
+                        <div>备胜 <b id="hedgeStatsBackupWins">-</b></div>
+                        <div>挽救 <b id="hedgeStatsRescues">-</b></div>
+                        <div>双败 <b id="hedgeStatsBothFailed">-</b></div>
+                    </div>
+                    <div>每次备胜成本：<b id="hedgeStatsCostPerWin">-</b></div>
+                    <div id="hedgeStatsByModel" style="margin-top:6px;"></div>
+                    <small>预计消耗为保守统计，最终以 Google 配额为准。</small>
+                </div>
+
                 <div
                     style="background:#f0f7ff;border:1px solid #b8d4f0;border-radius:6px;padding:10px 14px;margin:8px 0;font-size:13px;">
                     <strong>📡 API地址（点击复制）：</strong>
@@ -2150,6 +2171,36 @@
                                     <strong>⚡ 说明：</strong>默认关闭。开启后 MODEL_CAPACITY_EXHAUSTED
                                     单请求最多调用上游两次，并使用进程内模型保护器返回 Retry-After。
                                     多 Worker 的保护状态彼此独立。
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" id="geminicliStreamHeaderHedgeEnabled"
+                                        style="width: auto; margin: 0;" />
+                                    GeminiCLI 流式响应头对冲
+                                    <span id="geminicliStreamHeaderHedgeEnabledEnvLock" hidden
+                                        style="color: #dc3545; margin-left: 8px;">环境变量已锁定</span>
+                                </label>
+                                <small
+                                    style="display: block; color: #666; font-size: 12px; margin-top: 5px;">响应头等待 15 秒后并行探测一个备用凭证
+                                    <span style="color: #28a745;">✓ 支持热更新</span></small>
+                                <label style="display:block;margin-top:8px;">采样率（%）
+                                    <input type="number" id="geminicliStreamHeaderHedgeSampleRate"
+                                        min="0" max="100" step="1" />
+                                    <span id="geminicliStreamHeaderHedgeSampleRateEnvLock" hidden
+                                        style="color:#dc3545;">环境变量已锁定</span>
+                                </label>
+                                <label style="display:block;margin-top:8px;">每日预算（每凭证/模型族）
+                                    <input type="number" id="geminicliStreamHeaderHedgeDailyBudget"
+                                        min="0" max="1000" step="1" />
+                                    <span id="geminicliStreamHeaderHedgeDailyBudgetEnvLock" hidden
+                                        style="color:#dc3545;">环境变量已锁定</span>
+                                </label>
+                                <div
+                                    style="background-color: #e3f2fd; border: 1px solid #2196f3; border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 13px; color: #0d47a1;">
+                                    <strong>🏁 说明：</strong>默认关闭。开启后首个有效上游事件获胜并关闭另一请求；
+                                    单 Worker 默认最多 20 个并发对冲，不会在首内容后重试。
                                 </div>
                             </div>
                         </div>

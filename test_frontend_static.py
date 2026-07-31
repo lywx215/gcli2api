@@ -53,3 +53,36 @@ def test_capacity_fast_fail_control_exists_and_uses_common_locking():
         "geminicli_capacity_fast_fail_enabled: "
         "getChecked('geminicliCapacityFastFailEnabled')"
     ) in common_js
+
+
+def test_stream_header_hedge_control_exists_and_uses_common_locking():
+    front_dir = Path(__file__).parent / "front"
+    for filename in ("control_panel.html", "control_panel_mobile.html"):
+        html = (front_dir / filename).read_text(encoding="utf-8")
+        assert html.count('id="geminicliStreamHeaderHedgeEnabled"') == 1
+        assert html.count('id="geminicliStreamHeaderHedgeEnabledEnvLock"') == 1
+        assert "GeminiCLI 流式响应头对冲" in html
+
+    common_js = (front_dir / "common.js").read_text(encoding="utf-8")
+    assert "c.geminicli_stream_header_hedge_enabled" in common_js
+    assert (
+        "geminicli_stream_header_hedge_enabled: "
+        "getChecked('geminicliStreamHeaderHedgeEnabled')"
+    ) in common_js
+
+
+def test_hedge_cost_controls_and_card_exist_on_both_panels():
+    front_dir = Path(__file__).parent / "front"
+    for filename in ("control_panel.html", "control_panel_mobile.html"):
+        html = (front_dir / filename).read_text(encoding="utf-8")
+        assert html.count('id="geminicliStreamHeaderHedgeSampleRate"') == 1
+        assert html.count('id="geminicliStreamHeaderHedgeDailyBudget"') == 1
+        assert html.count('id="hedgeStatsCard"') == 1
+        assert "今日对冲成本" in html
+        assert "预计" in html
+
+    common_js = (front_dir / "common.js").read_text(encoding="utf-8")
+    assert "async function refreshHedgeStats()" in common_js
+    assert "./creds/hedge-stats?days=7" in common_js
+    assert "geminicli_stream_header_hedge_sample_rate:" in common_js
+    assert "geminicli_stream_header_hedge_daily_budget:" in common_js

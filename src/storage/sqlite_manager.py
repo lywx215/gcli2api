@@ -364,6 +364,24 @@ class SQLiteManager:
             )
         """)
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS daily_hedge_stats (
+                date TEXT NOT NULL,
+                credential_name TEXT NOT NULL,
+                model_family TEXT NOT NULL,
+                extra_upstream_requests INTEGER NOT NULL DEFAULT 0,
+                primary_wins INTEGER NOT NULL DEFAULT 0,
+                backup_wins INTEGER NOT NULL DEFAULT 0,
+                confirmed_rescues INTEGER NOT NULL DEFAULT 0,
+                both_failed INTEGER NOT NULL DEFAULT 0,
+                client_cancelled INTEGER NOT NULL DEFAULT 0,
+                budget_skips INTEGER NOT NULL DEFAULT 0,
+                outcome_pending INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL,
+                PRIMARY KEY (date, credential_name, model_family)
+            )
+        """)
+
         log.debug("SQLite tables and indexes created")
 
     async def _repair_credential_filenames(self, db: aiosqlite.Connection):
@@ -1971,6 +1989,133 @@ class SQLiteManager:
                 "total_count": 0,
                 "error": str(e),
             }
+
+    async def reserve_hedge_budget(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        daily_budget: int,
+    ) -> bool:
+        """Atomically reserve one conservative hedge-cost unit."""
+        self._ensure_initialized()
+        if daily_budget <= 0:
+            return False
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            await db.execute(
+                """
+                INSERT OR IGNORE INTO daily_hedge_stats
+                    (date, credential_name, model_family, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (date, credential_name, model_family, time.time()),
+            )
+            cursor = await db.execute(
+                """
+                UPDATE daily_hedge_stats
+                SET extra_upstream_requests = extra_upstream_requests + 1,
+                    outcome_pending = outcome_pending + 1,
+                    updated_at = ?
+                WHERE date = ? AND credential_name = ? AND model_family = ?
+                  AND extra_upstream_requests < ?
+                """,
+                (
+                    time.time(),
+                    date,
+                    credential_name,
+                    model_family,
+                    daily_budget,
+                ),
+            )
+            accepted = cursor.rowcount == 1
+            await db.commit()
+            return accepted
+
+    async def record_hedge_metric(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        metric: str,
+    ) -> None:
+        if metric != "budget_skips":
+            return
+        self._ensure_initialized()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO daily_hedge_stats
+                    (date, credential_name, model_family, budget_skips, updated_at)
+                VALUES (?, ?, ?, 1, ?)
+                ON CONFLICT(date, credential_name, model_family) DO UPDATE SET
+                    budget_skips = budget_skips + 1,
+                    updated_at = excluded.updated_at
+                """,
+                (date, credential_name, model_family, time.time()),
+            )
+            await db.commit()
+
+    async def record_hedge_outcome(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        outcome: str,
+        confirmed_rescue: bool = False,
+    ) -> None:
+        if outcome not in {
+            "primary_wins",
+            "backup_wins",
+            "both_failed",
+            "client_cancelled",
+        }:
+            return
+        self._ensure_initialized()
+        rescue = 1 if confirmed_rescue and outcome == "backup_wins" else 0
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                f"""
+                UPDATE daily_hedge_stats
+                SET {outcome} = {outcome} + 1,
+                    confirmed_rescues = confirmed_rescues + ?,
+                    outcome_pending = CASE
+                        WHEN outcome_pending > 0 THEN outcome_pending - 1
+                        ELSE 0
+                    END,
+                    updated_at = ?
+                WHERE date = ? AND credential_name = ? AND model_family = ?
+                """,
+                (
+                    rescue,
+                    time.time(),
+                    date,
+                    credential_name,
+                    model_family,
+                ),
+            )
+            await db.commit()
+
+    async def get_hedge_stats(self, days: int = 7) -> List[Dict[str, Any]]:
+        self._ensure_initialized()
+        days = max(1, min(int(days or 7), 90))
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT *
+                FROM daily_hedge_stats
+                WHERE date IN (
+                    SELECT DISTINCT date
+                    FROM daily_hedge_stats
+                    ORDER BY date DESC
+                    LIMIT ?
+                )
+                ORDER BY date DESC, model_family, credential_name
+                """,
+                (days,),
+            ) as cursor:
+                return [dict(row) for row in await cursor.fetchall()]
 
     async def get_recent_daily_stats(self, days: int = 7, mode: Optional[str] = None) -> List[Dict[str, Any]]:
         """获取最近 N 天的每日调用统计（按北京日期）。"""

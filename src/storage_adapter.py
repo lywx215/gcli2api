@@ -84,6 +84,42 @@ class StorageBackend(Protocol):
         """删除配置项"""
         ...
 
+    # GeminiCLI hedge cost statistics
+    async def reserve_hedge_budget(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        daily_budget: int,
+    ) -> bool:
+        """Atomically reserve one daily hedge budget unit."""
+        ...
+
+    async def record_hedge_metric(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        metric: str,
+    ) -> None:
+        """Increment a hedge metric."""
+        ...
+
+    async def record_hedge_outcome(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        outcome: str,
+        confirmed_rescue: bool = False,
+    ) -> None:
+        """Finalize one reserved hedge."""
+        ...
+
+    async def get_hedge_stats(self, days: int = 7) -> List[Dict[str, Any]]:
+        """Return raw hedge statistic buckets."""
+        ...
+
 
 class StorageAdapter:
     """存储适配器，根据配置选择存储后端"""

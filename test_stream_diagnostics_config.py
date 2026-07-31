@@ -150,11 +150,17 @@ async def test_panel_get_exposes_diagnostics_switch(monkeypatch):
         "get_geminicli_capacity_fast_fail_enabled",
         enabled,
     )
+    monkeypatch.setattr(
+        config_routes.config,
+        "get_geminicli_stream_header_hedge_enabled",
+        enabled,
+    )
 
     response = await config_routes.get_config(token="test")
     payload = json.loads(response.body)
     assert payload["config"]["stream_diagnostics_enabled"] is True
     assert payload["config"]["geminicli_capacity_fast_fail_enabled"] is True
+    assert payload["config"]["geminicli_stream_header_hedge_enabled"] is True
 
 
 @pytest.mark.asyncio
@@ -204,6 +210,7 @@ async def test_panel_reports_single_or_multi_worker_activation(
         {
             "reload_stream_diagnostics": reload_diagnostics,
             "reload_capacity_fast_fail": reload_diagnostics,
+            "reload_stream_header_hedge": reload_diagnostics,
         }
     ]
     assert payload[result_key] == ["stream_diagnostics_enabled"]
@@ -326,6 +333,259 @@ async def test_panel_hot_updates_capacity_fast_fail(monkeypatch):
         {
             "reload_stream_diagnostics": True,
             "reload_capacity_fast_fail": True,
+            "reload_stream_header_hedge": True,
         }
     ]
     assert payload["hot_updated"] == ["geminicli_capacity_fast_fail_enabled"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("env_value", "expected"), [("true", True), ("false", False)])
+async def test_stream_header_hedge_environment_value_wins_and_locks(
+    monkeypatch, env_value, expected
+):
+    monkeypatch.setattr(config, "_config_initialized", True)
+    monkeypatch.setattr(
+        config,
+        "_config_cache",
+        {"geminicli_stream_header_hedge_enabled": not expected},
+    )
+    monkeypatch.setattr(
+        config,
+        "_geminicli_stream_header_hedge_enabled_cache",
+        not expected,
+    )
+    monkeypatch.setenv("GEMINICLI_STREAM_HEADER_HEDGE_ENABLED", env_value)
+
+    assert await config.get_geminicli_stream_header_hedge_enabled() is expected
+    assert config.is_geminicli_stream_header_hedge_enabled() is expected
+    assert "geminicli_stream_header_hedge_enabled" in get_env_locked_keys()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["true", 1, None])
+async def test_panel_rejects_non_boolean_stream_header_hedge(invalid):
+    with pytest.raises(HTTPException) as caught:
+        await config_routes.save_config(
+            ConfigSaveRequest(
+                config={"geminicli_stream_header_hedge_enabled": invalid}
+            ),
+            token="test",
+        )
+    assert caught.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_panel_hot_updates_stream_header_hedge(monkeypatch):
+    stored = {}
+    reload_calls = []
+
+    class Adapter:
+        async def set_config(self, key, value):
+            stored[key] = value
+
+    async def get_adapter():
+        return Adapter()
+
+    async def reload_config(**kwargs):
+        reload_calls.append(kwargs)
+
+    async def password():
+        return "pwd"
+
+    async def reconfigure():
+        return None
+
+    monkeypatch.delenv("GEMINICLI_STREAM_HEADER_HEDGE_ENABLED", raising=False)
+    monkeypatch.setenv("WORKERS", "1")
+    monkeypatch.setattr(config_routes, "get_storage_adapter", get_adapter)
+    monkeypatch.setattr(config_routes.config, "reload_config", reload_config)
+    monkeypatch.setattr(config_routes.config, "get_api_password", password)
+    monkeypatch.setattr(config_routes.config, "get_panel_password", password)
+    monkeypatch.setattr(config_routes.config, "get_server_password", password)
+    monkeypatch.setattr(smart_429_service, "reconfigure", reconfigure)
+
+    response = await config_routes.save_config(
+        ConfigSaveRequest(
+            config={"geminicli_stream_header_hedge_enabled": True}
+        ),
+        token="test",
+    )
+    payload = json.loads(response.body)
+    assert stored == {"geminicli_stream_header_hedge_enabled": True}
+    assert reload_calls == [
+        {
+            "reload_stream_diagnostics": True,
+            "reload_capacity_fast_fail": True,
+            "reload_stream_header_hedge": True,
+        }
+    ]
+    assert payload["hot_updated"] == ["geminicli_stream_header_hedge_enabled"]
+
+
+@pytest.mark.asyncio
+async def test_panel_requires_restart_for_stream_header_hedge_with_multiple_workers(
+    monkeypatch,
+):
+    stored = {}
+    reload_calls = []
+
+    class Adapter:
+        async def set_config(self, key, value):
+            stored[key] = value
+
+    async def get_adapter():
+        return Adapter()
+
+    async def reload_config(**kwargs):
+        reload_calls.append(kwargs)
+
+    async def password():
+        return "pwd"
+
+    async def reconfigure():
+        return None
+
+    monkeypatch.delenv("GEMINICLI_STREAM_HEADER_HEDGE_ENABLED", raising=False)
+    monkeypatch.setenv("WORKERS", "2")
+    monkeypatch.setattr(config_routes, "get_storage_adapter", get_adapter)
+    monkeypatch.setattr(config_routes.config, "reload_config", reload_config)
+    monkeypatch.setattr(config_routes.config, "get_api_password", password)
+    monkeypatch.setattr(config_routes.config, "get_panel_password", password)
+    monkeypatch.setattr(config_routes.config, "get_server_password", password)
+    monkeypatch.setattr(smart_429_service, "reconfigure", reconfigure)
+
+    response = await config_routes.save_config(
+        ConfigSaveRequest(
+            config={"geminicli_stream_header_hedge_enabled": True}
+        ),
+        token="test",
+    )
+    payload = json.loads(response.body)
+
+    assert stored == {"geminicli_stream_header_hedge_enabled": True}
+    assert reload_calls == [
+        {
+            "reload_stream_diagnostics": False,
+            "reload_capacity_fast_fail": False,
+            "reload_stream_header_hedge": False,
+        }
+    ]
+    assert payload["hot_updated"] == []
+    assert payload["restart_required"] == [
+        "geminicli_stream_header_hedge_enabled"
+    ]
+    assert "restart_notice" in payload
+
+
+@pytest.mark.asyncio
+async def test_hedge_cost_config_environment_wins_and_locks(monkeypatch):
+    monkeypatch.setattr(config, "_config_initialized", True)
+    monkeypatch.setattr(
+        config,
+        "_config_cache",
+        {
+            "geminicli_stream_header_hedge_sample_rate": 0.8,
+            "geminicli_stream_header_hedge_daily_budget": 99,
+        },
+    )
+    monkeypatch.setenv("GEMINICLI_STREAM_HEADER_HEDGE_SAMPLE_RATE", "0.05")
+    monkeypatch.setenv("GEMINICLI_STREAM_HEADER_HEDGE_DAILY_BUDGET", "10")
+
+    assert await config.get_geminicli_stream_header_hedge_sample_rate() == 0.05
+    assert await config.get_geminicli_stream_header_hedge_daily_budget() == 10
+    locked = get_env_locked_keys()
+    assert "geminicli_stream_header_hedge_sample_rate" in locked
+    assert "geminicli_stream_header_hedge_daily_budget" in locked
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", [-0.1, 1.1, "0.5", True, None])
+async def test_panel_rejects_invalid_hedge_sample_rate(invalid):
+    with pytest.raises(HTTPException) as caught:
+        await config_routes.save_config(
+            ConfigSaveRequest(
+                config={
+                    "geminicli_stream_header_hedge_sample_rate": invalid
+                }
+            ),
+            token="test",
+        )
+    assert caught.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", [-1, 1001, 1.5, "10", True, None])
+async def test_panel_rejects_invalid_hedge_daily_budget(invalid):
+    with pytest.raises(HTTPException) as caught:
+        await config_routes.save_config(
+            ConfigSaveRequest(
+                config={
+                    "geminicli_stream_header_hedge_daily_budget": invalid
+                }
+            ),
+            token="test",
+        )
+    assert caught.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_panel_hot_updates_hedge_sample_rate_and_budget(monkeypatch):
+    stored = {}
+    reload_calls = []
+
+    class Adapter:
+        async def set_config(self, key, value):
+            stored[key] = value
+
+    async def get_adapter():
+        return Adapter()
+
+    async def reload_config(**kwargs):
+        reload_calls.append(kwargs)
+
+    async def password():
+        return "pwd"
+
+    async def reconfigure():
+        return None
+
+    monkeypatch.delenv(
+        "GEMINICLI_STREAM_HEADER_HEDGE_SAMPLE_RATE", raising=False
+    )
+    monkeypatch.delenv(
+        "GEMINICLI_STREAM_HEADER_HEDGE_DAILY_BUDGET", raising=False
+    )
+    monkeypatch.setenv("WORKERS", "1")
+    monkeypatch.setattr(config_routes, "get_storage_adapter", get_adapter)
+    monkeypatch.setattr(config_routes.config, "reload_config", reload_config)
+    monkeypatch.setattr(config_routes.config, "get_api_password", password)
+    monkeypatch.setattr(config_routes.config, "get_panel_password", password)
+    monkeypatch.setattr(config_routes.config, "get_server_password", password)
+    monkeypatch.setattr(smart_429_service, "reconfigure", reconfigure)
+
+    response = await config_routes.save_config(
+        ConfigSaveRequest(
+            config={
+                "geminicli_stream_header_hedge_sample_rate": 0.05,
+                "geminicli_stream_header_hedge_daily_budget": 10,
+            }
+        ),
+        token="test",
+    )
+    payload = json.loads(response.body)
+    assert stored == {
+        "geminicli_stream_header_hedge_sample_rate": 0.05,
+        "geminicli_stream_header_hedge_daily_budget": 10,
+    }
+    assert payload["hot_updated"] == [
+        "geminicli_stream_header_hedge_sample_rate",
+        "geminicli_stream_header_hedge_daily_budget",
+    ]
+    assert reload_calls == [
+        {
+            "reload_stream_diagnostics": True,
+            "reload_capacity_fast_fail": True,
+            "reload_stream_header_hedge": True,
+        }
+    ]

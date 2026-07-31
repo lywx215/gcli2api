@@ -1165,6 +1165,7 @@ function triggerTabDataLoad(tabName) {
     if (tabName === 'manage') {
         AppState.creds.refresh();
         if (typeof refreshTodayStats === 'function') refreshTodayStats('geminicli');
+        if (typeof refreshHedgeStats === 'function') refreshHedgeStats();
         if (typeof startStatsAutoRefresh === 'function') startStatsAutoRefresh('geminicli');
     } else if (tabName === 'antigravity-manage') {
         AppState.antigravityCreds.refresh();
@@ -3148,6 +3149,19 @@ function populateConfigForm() {
         'geminicli_capacity_fast_fail_enabled',
         c.geminicli_capacity_fast_fail_enabled
     );
+    setConfigCheckbox(
+        'geminicliStreamHeaderHedgeEnabled',
+        'geminicli_stream_header_hedge_enabled',
+        c.geminicli_stream_header_hedge_enabled
+    );
+    setConfigField(
+        'geminicliStreamHeaderHedgeSampleRate',
+        Math.round((c.geminicli_stream_header_hedge_sample_rate ?? 0.05) * 100)
+    );
+    setConfigField(
+        'geminicliStreamHeaderHedgeDailyBudget',
+        c.geminicli_stream_header_hedge_daily_budget ?? 10
+    );
 
     // 轮巡模式
     const routingModeSelect = document.getElementById('routingMode');
@@ -3173,6 +3187,10 @@ function setConfigField(fieldId, value) {
             field.disabled = false;
             field.classList.remove('env-locked');
         }
+        const locked = AppState.envLockedFields.has(configKey);
+        field.title = locked ? '此配置由环境变量锁定，无法在控制面板修改' : '';
+        const lockNote = document.getElementById(`${fieldId}EnvLock`);
+        if (lockNote) lockNote.hidden = !locked;
     }
 }
 
@@ -3192,8 +3210,14 @@ function setConfigCheckbox(fieldId, configKey, value) {
 async function saveConfig() {
     try {
         const getValue = (id, def = '') => document.getElementById(id)?.value.trim() || def;
-        const getInt = (id, def = 0) => parseInt(document.getElementById(id)?.value) || def;
-        const getFloat = (id, def = 0.0) => parseFloat(document.getElementById(id)?.value) || def;
+        const getInt = (id, def = 0) => {
+            const value = parseInt(document.getElementById(id)?.value);
+            return Number.isNaN(value) ? def : value;
+        };
+        const getFloat = (id, def = 0.0) => {
+            const value = parseFloat(document.getElementById(id)?.value);
+            return Number.isNaN(value) ? def : value;
+        };
         const getChecked = (id, def = false) => document.getElementById(id)?.checked || def;
 
         const config = {
@@ -3227,6 +3251,11 @@ async function saveConfig() {
             debug_mode: getChecked('debugMode'),
             stream_diagnostics_enabled: getChecked('streamDiagnosticsEnabled'),
             geminicli_capacity_fast_fail_enabled: getChecked('geminicliCapacityFastFailEnabled'),
+            geminicli_stream_header_hedge_enabled: getChecked('geminicliStreamHeaderHedgeEnabled'),
+            geminicli_stream_header_hedge_sample_rate:
+                Math.min(100, Math.max(0, getFloat('geminicliStreamHeaderHedgeSampleRate', 5))) / 100,
+            geminicli_stream_header_hedge_daily_budget:
+                Math.min(1000, Math.max(0, getInt('geminicliStreamHeaderHedgeDailyBudget', 10))),
             routing_mode: (document.getElementById('routingMode') || {}).value || 'normal',
             anti_truncation_max_attempts: getInt('antiTruncationMaxAttempts', 3),
             keepalive_url: getValue('keepaliveUrl'),
@@ -3886,6 +3915,65 @@ async function refreshTodayStats(mode) {
     }
 }
 
+async function refreshHedgeStats() {
+    const extraEl = document.getElementById('hedgeStatsExtra');
+    if (!extraEl) return;
+    const fields = {
+        date: document.getElementById('hedgeStatsDate'),
+        remaining: document.getElementById('hedgeStatsRemaining'),
+        primaryWins: document.getElementById('hedgeStatsPrimaryWins'),
+        backupWins: document.getElementById('hedgeStatsBackupWins'),
+        rescues: document.getElementById('hedgeStatsRescues'),
+        bothFailed: document.getElementById('hedgeStatsBothFailed'),
+        costPerWin: document.getElementById('hedgeStatsCostPerWin'),
+        sampleRate: document.getElementById('hedgeStatsSampleRate'),
+        dailyBudget: document.getElementById('hedgeStatsDailyBudget'),
+        byModel: document.getElementById('hedgeStatsByModel')
+    };
+    try {
+        const response = await fetch('./creds/hedge-stats?days=7', {
+            headers: getAuthHeaders()
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || response.statusText);
+        const today = data.today || {};
+        extraEl.textContent = Number(today.extra_upstream_requests || 0).toLocaleString();
+        if (fields.date) fields.date.textContent = data.date ? `(${data.date})` : '';
+        if (fields.remaining) {
+            fields.remaining.textContent =
+                `${Number(today.remaining_budget || 0).toLocaleString()} / ${Number(today.active_budget || 0).toLocaleString()}`;
+        }
+        if (fields.primaryWins) fields.primaryWins.textContent = Number(today.primary_wins || 0).toLocaleString();
+        if (fields.backupWins) fields.backupWins.textContent = Number(today.backup_wins || 0).toLocaleString();
+        if (fields.rescues) fields.rescues.textContent = Number(today.confirmed_rescues || 0).toLocaleString();
+        if (fields.bothFailed) fields.bothFailed.textContent = Number(today.both_failed || 0).toLocaleString();
+        if (fields.costPerWin) {
+            fields.costPerWin.textContent =
+                today.cost_per_backup_win == null ? '-' : Number(today.cost_per_backup_win).toFixed(2);
+        }
+        if (fields.sampleRate) {
+            fields.sampleRate.textContent = `${Number(data.sample_rate_percent || 0)}%`;
+        }
+        if (fields.dailyBudget) {
+            fields.dailyBudget.textContent =
+                Number(data.daily_budget_per_credential_model_family || 0).toLocaleString();
+        }
+        if (fields.byModel) {
+            const summaries = Object.entries(data.today_by_model_family || {}).map(
+                ([family, stats]) =>
+                    `${family}: 额外 ${Number(stats.extra_upstream_requests || 0)}，备胜 ${Number(stats.backup_wins || 0)}`
+            );
+            fields.byModel.textContent = summaries.length
+                ? `模型族：${summaries.join('；')}`
+                : '模型族：暂无对冲';
+        }
+    } catch (error) {
+        console.error('refreshHedgeStats failed:', error);
+        extraEl.textContent = '-';
+        if (fields.date) fields.date.textContent = '(加载失败)';
+    }
+}
+
 
 // 定时自动刷新统计卡片
 let _statsAutoRefreshTimer = null;
@@ -3894,6 +3982,9 @@ function startStatsAutoRefresh(mode) {
     _statsAutoRefreshTimer = setInterval(() => {
         if (typeof refreshTodayStats === 'function') {
             refreshTodayStats(mode);
+        }
+        if (mode === 'geminicli' && typeof refreshHedgeStats === 'function') {
+            refreshHedgeStats();
         }
     }, 30000);
 }

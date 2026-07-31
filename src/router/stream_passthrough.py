@@ -319,6 +319,7 @@ async def build_streaming_response_or_error(
                 "first_upstream_event",
                 "conversion",
                 "first_content",
+                "hedge",
             }
         )
 
