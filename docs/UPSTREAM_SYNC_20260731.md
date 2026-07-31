@@ -70,4 +70,8 @@
 | compileall / JavaScript 语法 / diff-check | 通过 |
 | amd64/arm64 Docker 验证 | 本机 OrbStack daemon 未运行；保留为现有 buildx CI 的推送前门槛 |
 | 启停与资源关闭烟测 | 通过；确认 SMART/task→credential→hedge→storage→HTTP 顺序，内存任务已取消 |
-| 最终同步提交 | 待创建 |
+| 最终同步提交 | `d35471a5c48ad3993805bf538be345b60bf2c1ac`；父提交依次为 `7e7675b`、`4f5e343` |
+
+`git merge-base --is-ancestor upstream/master d35471a` 已通过。merge commit 处的分叉计数为
+上游独有 0 个提交、同步分支独有 132 个提交；追加本报告的文档收尾提交后为 0/133。
+本次未推送，也未修改 `dev6`。

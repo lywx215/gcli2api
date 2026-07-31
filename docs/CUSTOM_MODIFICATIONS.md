@@ -16,13 +16,15 @@ HEAD 确认上游默认分支仍为 `master`。
 | Fork 远端 | `origin = https://github.com/lywx215/gcli2api.git` |
 | 上游远端 | `upstream = https://github.com/su-kaka/gcli2api.git` |
 | 当前开发基线 | `origin/dev6@7e7675be19714efa2af135117b6fbbc805c1994b` |
-| 当前同步分支 | `codex/sync-upstream-20260731`；从 `origin/dev6` 创建 |
+| 当前同步结果 | merge `d35471a5c48ad3993805bf538be345b60bf2c1ac`；其后仅追加同步文档收尾提交 |
 | dev6 的提交基座 | `origin/dev5`，`5a85e5892a679445e77125d1567f6699d845fa76` |
 | 上游比较基线 | `upstream/master`，`4f5e3432e1d5fc5ba41cf56c99981ba89d1987f7` |
 | 共同祖先 | `78f391acee42cc2b2b39bf55577c8eed80aab7e3` |
 | 同步前提交分叉 | 上游独有 13 个提交；dev6 独有 131 个提交 |
 | 同步前直接树差异 | 74 个文件，约 `+21680/-1566` |
 | 同步前三方分类 | 65 个仅 dev6 修改；8 个双方修改；1 个仅上游新增 |
+| 同步后提交分叉 | 上游独有 0 个提交；当前同步分支独有 133 个提交（含 1 个文档收尾提交） |
+| 同步后直接树差异 | 74 个文件；`upstream/master` 已成为同步分支祖先 |
 | dev6 初始实施对 dev5 增量 | 31 个文件，约 `+3564/-485` |
 | 本次文本冲突 | 4 个文件：`.gitignore`、`src/utils.py`、`version.txt`、`web.py`；均按批准方案人工解决 |
 
@@ -527,7 +529,7 @@ dev6/dev5 当前行为：
 | --- | --- | --- | --- |
 | 2026-07-30 | `5a85e58` | `4f5e343` | 建立首份保护清单；只读预演发现 4 个文本冲突、8 个双方修改文件；未执行同步 |
 | 2026-07-30 | `origin/dev6@3c73782`，基于 `5a85e58` | 未同步上游 | 登记 30 个项目文件的 dev6 增量、API-05/API-06/AUTH-01/CORE-01/OPS-03；全量测试 `112 passed, 7 warnings` |
-| 2026-07-31 | `origin/dev6@7e7675b` | `upstream/master@4f5e343` | 在 `codex/sync-upstream-20260731` 人工解决 4 个文本冲突并复核 8 个双方修改文件；`185 passed, 7 warnings`；merge SHA 见同步报告 |
+| 2026-07-31 | `origin/dev6@7e7675b` | `upstream/master@4f5e343` | merge `d35471a`；人工解决 4 个文本冲突并复核 8 个双方修改文件；`185 passed, 7 warnings`；未推送 |
 
 ## 16. dev6 最新修改明细（相对 `origin/dev5`）
 
