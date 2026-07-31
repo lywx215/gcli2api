@@ -1780,6 +1780,29 @@
                     </div>
                 </div>
 
+                <div id="hedgeStatsCard"
+                    style="background:#fff8e1;border:1px solid #ffca28;border-radius:8px;padding:16px 20px;margin:10px 0;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <strong>🏁 今日对冲成本 <span id="hedgeStatsDate"></span></strong>
+                        <button onclick="refreshHedgeStats()" class="refresh-btn">↻ 刷新</button>
+                    </div>
+                    <small>预计额度消耗采用保守计数；取消请求是否实际扣费以 Google 配额为准。</small>
+                    <div style="font-size:12px;margin-top:4px;">
+                        当前采样率：<span id="hedgeStatsSampleRate">-</span>；
+                        每桶每日预算：<span id="hedgeStatsDailyBudget">-</span>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(115px,1fr));gap:8px;margin-top:10px;">
+                        <div><small>预计额外消耗</small><div id="hedgeStatsExtra">-</div></div>
+                        <div><small>剩余额度</small><div id="hedgeStatsRemaining">-</div></div>
+                        <div><small>主请求获胜</small><div id="hedgeStatsPrimaryWins">-</div></div>
+                        <div><small>备用请求获胜</small><div id="hedgeStatsBackupWins">-</div></div>
+                        <div><small>确认挽救</small><div id="hedgeStatsRescues">-</div></div>
+                        <div><small>双失败</small><div id="hedgeStatsBothFailed">-</div></div>
+                        <div><small>每次备胜成本</small><div id="hedgeStatsCostPerWin">-</div></div>
+                    </div>
+                    <div id="hedgeStatsByModel" style="font-size:12px;margin-top:10px;"></div>
+                </div>
+
                 <div
                     style="background:#f0f7ff;border:1px solid #b8d4f0;border-radius:6px;padding:10px 14px;margin:8px 0;font-size:13px;">
                     <strong>📡 API地址（点击复制）：</strong>
@@ -1813,7 +1836,7 @@
                 <div class="status info" style="margin-bottom: 20px;">
                     <strong>💡 检验功能说明：</strong>
                     <p style="margin: 10px 0;">
-                        点击每个凭证的"检验"按钮可以重新获取Project ID, 并查看账号的tier(free/pro/ultra)。<br>
+                        点击每个凭证的"检验"按钮可以重新获取Project ID，并查看账号的Tier（Code Assist Standard / Enterprise / Free / Pro / Ultra / Unknown）。<br>
                         <strong style="color: #0c5460;">✅ 检验成功可以恢复403错误</strong>，让凭证重新正常工作。<br>
                         建议在遇到403错误时使用此功能。
                     </p>
@@ -1920,9 +1943,12 @@
                     <label for="tierFilter" style="margin-left: 20px;">Tier：</label>
                     <select id="tierFilter" class="filter-select" onchange="applyStatusFilter()">
                         <option value="all">全部</option>
+                        <option value="code_assist_standard">Code Assist Standard</option>
+                        <option value="code_assist_enterprise">Code Assist Enterprise</option>
                         <option value="free">Free</option>
                         <option value="pro">Pro</option>
                         <option value="ultra">Ultra</option>
+                        <option value="unknown">Unknown</option>
                     </select>
 
                     <label for="remarkFilter" style="margin-left: 20px;">备注：</label>
@@ -2377,6 +2403,22 @@
 
 
                         <div class="config-group">
+                            <h4>SMART 429 分级保护</h4>
+                            <div class="form-group">
+                                <label><input type="checkbox" id="smart429ProtectionEnabled" class="config-checkbox" /> 启动 SMART 429 保护</label>
+                                <small class="config-note">默认停止；仅单进程、单副本部署支持。启动失败时服务仍正常运行。</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="smart429MaxAttempts">单请求最多尝试次数:</label>
+                                <input type="number" id="smart429MaxAttempts" class="config-input" min="1" max="5" value="3" />
+                            </div>
+                            <div class="form-group">
+                                <label for="smart429RetryBaseInterval">退避基准间隔(秒):</label>
+                                <input type="number" id="smart429RetryBaseInterval" class="config-input" min="0.1" max="5" step="0.1" value="0.5" />
+                            </div>
+                        </div>
+
+                        <div class="config-group">
                             <h4>兼容性配置</h4>
 
                             <div class="form-group">
@@ -2448,6 +2490,71 @@
                                     <strong>🔍 说明：</strong>调试模式仅影响额外诊断日志的输出，不影响正常功能。
                                     正常模式下这些日志不会输出，不产生任何性能开销。
                                     <br><strong>适用场景：</strong>排查请求错误、重试行为、最终返回内容等问题时启用。
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="streamDiagnosticsEnabled" class="config-checkbox" />
+                                    流式 TTFT 诊断
+                                    <span id="streamDiagnosticsEnabledEnvLock" hidden
+                                        style="color: #dc3545; margin-left: 8px;">环境变量已锁定</span>
+                                </label>
+                                <small class="config-note">记录流式请求各阶段耗时并返回 Server-Timing <span
+                                        style="color: #28a745;">✓ 支持热更新</span></small>
+                                <div class="config-info"
+                                    style="background-color: #e3f2fd; border: 1px solid #2196f3; color: #0d47a1;">
+                                    <strong>⏱️ 说明：</strong>默认关闭。开启后输出 STREAM_PERF_SUMMARY；不会记录 Token、Prompt、代理认证信息或完整请求体。
+                                    <br><strong>采样：</strong>慢请求、失败和重试全量记录，普通成功请求默认采样 1%。
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="geminicliCapacityFastFailEnabled"
+                                        class="config-checkbox" />
+                                    GeminiCLI 模型容量快速失败
+                                    <span id="geminicliCapacityFastFailEnabledEnvLock" hidden
+                                        style="color: #dc3545; margin-left: 8px;">环境变量已锁定</span>
+                                </label>
+                                <small class="config-note">模型容量不足时限制凭证切换并快速返回 503 <span
+                                        style="color: #28a745;">✓ 支持热更新</span></small>
+                                <div class="config-info"
+                                    style="background-color: #fff8e1; border: 1px solid #ffca28; color: #6d4c00;">
+                                    <strong>⚡ 说明：</strong>默认关闭。开启后 MODEL_CAPACITY_EXHAUSTED
+                                    单请求最多调用上游两次，并使用进程内模型保护器返回 Retry-After。
+                                    多 Worker 的保护状态彼此独立。
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="geminicliStreamHeaderHedgeEnabled"
+                                        class="config-checkbox" />
+                                    GeminiCLI 流式响应头对冲
+                                    <span id="geminicliStreamHeaderHedgeEnabledEnvLock" hidden
+                                        style="color: #dc3545; margin-left: 8px;">环境变量已锁定</span>
+                                </label>
+                                <small class="config-note">响应头等待 15 秒后并行探测一个备用凭证 <span
+                                        style="color: #28a745;">✓ 支持热更新</span></small>
+                                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px;">
+                                    <label>采样率（%）
+                                        <input type="number" id="geminicliStreamHeaderHedgeSampleRate"
+                                            class="config-input" min="0" max="100" step="1" />
+                                        <span id="geminicliStreamHeaderHedgeSampleRateEnvLock" hidden
+                                            style="color:#dc3545;">环境变量已锁定</span>
+                                    </label>
+                                    <label>每日预算（每凭证/模型族）
+                                        <input type="number" id="geminicliStreamHeaderHedgeDailyBudget"
+                                            class="config-input" min="0" max="1000" step="1" />
+                                        <span id="geminicliStreamHeaderHedgeDailyBudgetEnvLock" hidden
+                                            style="color:#dc3545;">环境变量已锁定</span>
+                                    </label>
+                                </div>
+                                <div class="config-info"
+                                    style="background-color: #e3f2fd; border: 1px solid #2196f3; color: #0d47a1;">
+                                    <strong>🏁 说明：</strong>默认关闭。开启后首个有效上游事件获胜并关闭另一请求；
+                                    单 Worker 默认最多 20 个并发对冲，不会在首内容后重试。
                                 </div>
                             </div>
 
@@ -2604,30 +2711,6 @@
                 </div>
             </div>
 
-            <!-- 系统状态标签页 -->
-            <div id="statusTab" class="tab-content">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <h3 style="margin: 0;">Redis 缓存状态</h3>
-                    <button class="refresh-btn" onclick="loadSystemStatus()">🔄 刷新</button>
-                </div>
-
-                <div id="redisStatusCard" style="max-width: 500px;">
-                    <div
-                        style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); border-radius: 12px; padding: 24px; color: white; box-shadow: 0 4px 15px rgba(79,172,254,0.3);">
-                        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px;">
-                            <span style="font-size: 24px;">⚡</span>
-                            <h4 style="margin: 0; font-size: 18px;">Redis 缓存</h4>
-                        </div>
-                        <div id="redisStatus" style="font-size: 14px;">
-                            <div style="opacity: 0.7;">加载中...</div>
-                        </div>
-                    </div>
-                    <div style="text-align: right; color: #999; font-size: 12px; margin-top: 8px;">
-                        最后更新: <span id="statusLastUpdate">-</span>
-                    </div>
-                </div>
-            </div>
-
             <!-- 项目信息标签页 -->
             <div id="aboutTab" class="tab-content">
                 <h3>项目信息</h3>
@@ -2713,7 +2796,7 @@
     </div>
 
     <!-- 引入公共JavaScript模块 -->
-    <script src="./front/common.js"></script>
+    <script src="./front/common.js?v=__GCLI2API_ASSET_VERSION__"></script>
 
 </body>
 

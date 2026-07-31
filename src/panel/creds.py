@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Respons
 from fastapi.responses import JSONResponse
 
 from log import log
+from src.log_safety import credential_log_id
 from src.credential_manager import credential_manager
 from src.models import (
     CredFileActionRequest,
@@ -25,16 +26,67 @@ from src.models import (
 from src.storage_adapter import get_storage_adapter
 from src.utils import verify_panel_token, GEMINICLI_USER_AGENT, ANTIGRAVITY_USER_AGENT
 from src.api.antigravity import fetch_quota_info
-from src.api.utils import check_should_auto_ban
-from src.google_oauth_api import Credentials, fetch_project_id_and_tier, get_user_projects, select_default_project, enable_required_apis
+from src.api.utils import check_should_auto_ban, parse_and_log_cooldown
+from src.smart_429 import (
+    Upstream429Kind,
+    classify_upstream_429,
+    smart_429_service,
+)
+from src.google_oauth_api import (
+    Credentials,
+    enable_required_apis,
+    fetch_geminicli_subscription_info,
+    fetch_project_id_and_tier,
+    get_user_projects,
+    select_default_project,
+)
+from src.subscription_tiers import (
+    GeminiCliSubscriptionInfo,
+    TIER_UNKNOWN,
+    default_tier_for_mode,
+    valid_tiers_for_mode,
+)
 from src.httpx_client import post_async
-from config import get_code_assist_endpoint, get_antigravity_api_url, get_oauth_proxy_url
+from src.hedge_stats import hedge_stats_service
+from config import (
+    get_code_assist_endpoint,
+    get_antigravity_api_url,
+    get_geminicli_stream_header_hedge_daily_budget,
+    get_geminicli_stream_header_hedge_sample_rate,
+    get_oauth_proxy_url,
+    is_smart_429_protection_enabled,
+)
 from datetime import datetime, timedelta, timezone
 from .utils import validate_mode
 
 
 # 创建路由器
 router = APIRouter(prefix="/creds", tags=["credentials"])
+
+
+@router.get("/hedge-stats")
+async def get_hedge_stats(
+    days: int = 7,
+    token: str = Depends(verify_panel_token),
+):
+    """Return conservative GeminiCLI hedge cost statistics."""
+    if not 1 <= days <= 90:
+        raise HTTPException(status_code=400, detail="days 必须在 1–90 之间")
+    try:
+        return JSONResponse(
+            content=await hedge_stats_service.get_stats(
+                days=days,
+                daily_budget=(
+                    await get_geminicli_stream_header_hedge_daily_budget()
+                ),
+                sample_rate=(
+                    await get_geminicli_stream_header_hedge_sample_rate()
+                ),
+            )
+        )
+    except Exception as exc:
+        log.error(f"获取对冲统计失败: {type(exc).__name__}")
+        raise HTTPException(status_code=500, detail="获取对冲统计失败")
 
 
 # =============================================================================
@@ -103,9 +155,160 @@ async def clear_all_model_cooldowns_for_credential(
     try:
         cleared = await storage_adapter._backend.clear_all_model_cooldowns(filename, mode=mode)
         if not cleared:
-            log.warning(f"清空模型CD失败或凭证不存在: {filename} (mode={mode})")
+            log.warning(f"清空模型CD失败或凭证不存在: {credential_log_id(filename)} (mode={mode})")
     except Exception as e:
-        log.warning(f"清空模型CD时出错: {filename} (mode={mode}), error={e}")
+        log.warning(f"清空模型CD时出错: {credential_log_id(filename)} (mode={mode})")
+
+
+async def sync_model_cooldowns_from_quota(
+    storage_adapter: Any,
+    filename: str,
+    mode: str,
+    models: dict,
+) -> dict:
+    """按实时模型额度双向同步冷却，返回本次变更摘要。"""
+    backend = getattr(storage_adapter, "_backend", None)
+    if not hasattr(backend, "set_model_cooldown"):
+        return {"cleared": [], "added": []}
+
+    state = await storage_adapter.get_credential_state(filename, mode=mode)
+    cooldowns = (state or {}).get("model_cooldowns", {}) or {}
+    now = time.time()
+    cleared = []
+    added = []
+
+    for model_name, info in models.items():
+        remaining = info.get("remaining")
+        if remaining is None:
+            continue
+
+        existing = cooldowns.get(model_name)
+        try:
+            existing_until = float(existing) if existing is not None else None
+        except (TypeError, ValueError):
+            existing_until = None
+
+        if remaining > 0:
+            # 实时额度是权威恢复信号；清除旧 429 留下的误冷却。
+            if existing is not None and await backend.set_model_cooldown(
+                filename, model_name, None, mode=mode
+            ):
+                cleared.append(model_name)
+            continue
+
+        # 已有仍生效的冷却时保持原截止时间，避免每次查看额度都续期。
+        if existing_until is not None and existing_until > now:
+            continue
+
+        cooldown_until = None
+        raw_reset_time = info.get("resetTimeRaw") or ""
+        if raw_reset_time:
+            try:
+                cooldown_until = datetime.fromisoformat(
+                    raw_reset_time.replace("Z", "+00:00")
+                ).timestamp()
+                if cooldown_until < now + 60:
+                    cooldown_until = None
+            except (TypeError, ValueError):
+                cooldown_until = None
+        if cooldown_until is None:
+            cooldown_until = now + 4 * 3600
+
+        if await backend.set_model_cooldown(
+            filename, model_name, cooldown_until, mode=mode
+        ):
+            added.append(model_name)
+
+    return {"cleared": cleared, "added": added}
+
+
+async def _detect_uploaded_geminicli_subscription(
+    filename: str, credential_data: dict
+) -> GeminiCliSubscriptionInfo:
+    """Detect and persist Tier for an uploaded Gemini CLI credential.
+
+    Upload remains successful when refresh or loadCodeAssist is temporarily
+    unavailable. In that case the storage layer keeps an existing Tier, while a
+    new credential retains the safe ``unknown`` default.
+    """
+    storage_adapter = await get_storage_adapter()
+    previous_state = await storage_adapter.get_credential_state(
+        filename, mode="geminicli"
+    )
+
+    def preserved_unavailable_info(
+        unavailable_project_id: Optional[str],
+    ) -> GeminiCliSubscriptionInfo:
+        return GeminiCliSubscriptionInfo(
+            project_id=unavailable_project_id,
+            tier=previous_state.get("tier") or TIER_UNKNOWN,
+            raw_tier_id=previous_state.get("tier_raw_id"),
+            raw_tier_name=previous_state.get("tier_raw_name"),
+            detected_at=previous_state.get("tier_detected_at"),
+            status="unavailable",
+        )
+
+    project_id = credential_data.get("project_id")
+    credentials = Credentials.from_dict(credential_data)
+
+    if not credentials.access_token and not credentials.refresh_token:
+        log.warning(
+            f"[GeminiCLI tier] uploaded credential has no usable token: {filename}"
+        )
+        return preserved_unavailable_info(project_id)
+
+    token_refreshed = False
+    if credentials.refresh_token and credentials.is_expired():
+        try:
+            token_refreshed = await credentials.refresh_if_needed()
+        except Exception as exc:
+            # The existing access token may still be accepted when an uploaded
+            # expiry value is missing or stale, so let loadCodeAssist decide.
+            log.warning(
+                f"[GeminiCLI tier] uploaded token refresh failed: "
+                f"status=unavailable, error_type={type(exc).__name__}"
+            )
+
+    if not credentials.access_token:
+        return preserved_unavailable_info(project_id)
+
+    subscription_info = await fetch_geminicli_subscription_info(
+        access_token=credentials.access_token,
+        user_agent=GEMINICLI_USER_AGENT,
+        api_base_url=await get_code_assist_endpoint(),
+        project_id=project_id,
+        antigravity_api_base_url=await get_antigravity_api_url(),
+        antigravity_user_agent=ANTIGRAVITY_USER_AGENT,
+    )
+
+    credential_changed = token_refreshed
+    if token_refreshed:
+        refreshed_data = credentials.to_dict()
+        credential_data.update(
+            {key: value for key, value in refreshed_data.items() if value is not None}
+        )
+        if "token" in credential_data:
+            credential_data["token"] = credentials.access_token
+
+    detected_project_id = subscription_info.project_id or project_id
+    if detected_project_id and detected_project_id != credential_data.get("project_id"):
+        credential_data["project_id"] = detected_project_id
+        credential_changed = True
+
+    if credential_changed:
+        await storage_adapter.store_credential(
+            filename, credential_data, mode="geminicli"
+        )
+
+    if subscription_info.status != "unavailable":
+        await storage_adapter.update_credential_state(
+            filename, subscription_info.state_fields(), mode="geminicli"
+        )
+
+    if subscription_info.status == "unavailable":
+        return preserved_unavailable_info(subscription_info.project_id or project_id)
+
+    return subscription_info
 
 
 async def upload_credentials_common(
@@ -157,6 +360,7 @@ async def upload_credentials_common(
 
 
     batch_size = 1000
+    tier_detection_semaphore = asyncio.Semaphore(5)
     all_results = []
     total_success = 0
 
@@ -177,8 +381,32 @@ async def upload_credentials_common(
                 else:
                     await credential_manager.add_credential(filename, credential_data)
 
-                log.debug(f"成功上传 {mode} 凭证文件: {filename}")
-                return {"filename": filename, "status": "success", "message": "上传成功"}
+                result = {
+                    "filename": filename,
+                    "status": "success",
+                    "message": "上传成功",
+                }
+                if mode == "geminicli":
+                    async with tier_detection_semaphore:
+                        subscription_info = await _detect_uploaded_geminicli_subscription(
+                            filename, credential_data
+                        )
+                    result.update(
+                        {
+                            "project_id": subscription_info.project_id
+                            or credential_data.get("project_id"),
+                            "subscription_tier": subscription_info.tier,
+                            "tier_raw_id": subscription_info.raw_tier_id,
+                            "tier_raw_name": subscription_info.raw_tier_name,
+                            "tier_detected_at": subscription_info.detected_at,
+                            "tier_detection_status": subscription_info.status,
+                        }
+                    )
+                    if subscription_info.status == "unavailable":
+                        result["message"] = "上传成功，Tier 暂未识别，请稍后检验"
+
+                log.debug(f"成功上传 {mode} 凭证文件: {credential_log_id(filename)}")
+                return result
 
             except json.JSONDecodeError as e:
                 return {
@@ -253,8 +481,10 @@ async def get_creds_status_common(
         raise HTTPException(status_code=400, detail="cooldown_filter 只能是 all、in_cooldown、no_cooldown、pro_no_cooldown 或 flash_no_cooldown")
     if preview_filter and preview_filter not in ["all", "preview", "no_preview"]:
         raise HTTPException(status_code=400, detail="preview_filter 只能是 all、preview 或 no_preview")
-    if tier_filter and tier_filter not in ["all", "free", "pro", "ultra"]:
-        raise HTTPException(status_code=400, detail="tier_filter 只能是 all、free、pro 或 ultra")
+    allowed_tier_filters = ("all", *valid_tiers_for_mode(mode))
+    if tier_filter and tier_filter not in allowed_tier_filters:
+        allowed_text = "、".join(allowed_tier_filters)
+        raise HTTPException(status_code=400, detail=f"tier_filter 只能是 {allowed_text}")
     if remark_filter is not None and len(remark_filter) > 64:
         raise HTTPException(status_code=400, detail="remark_filter 不能超过 64 个字符")
 
@@ -279,19 +509,25 @@ async def get_creds_status_common(
     for summary in result["items"]:
         cred_info = {
             "filename": os.path.basename(summary["filename"]),
+            "diagnostic_id": credential_log_id(summary["filename"]),
             "user_email": summary["user_email"],
             "disabled": summary["disabled"],
             "error_codes": summary["error_codes"],
             "last_success": summary["last_success"],
             "backend_type": backend_type,
             "model_cooldowns": summary.get("model_cooldowns", {}),
-            "tier": summary.get("tier", "pro"),
+            "tier": summary.get("tier") or default_tier_for_mode(mode),
             "success_count": summary.get("success_count", 0),
             "failure_count": summary.get("failure_count", 0),
             "cycle_stats": summary.get("cycle_stats", {}),
             "last_cycle_stats": summary.get("last_cycle_stats", {}),
             "remark": summary.get("remark", ""),
         }
+
+        if mode == "geminicli":
+            cred_info["tier_raw_id"] = summary.get("tier_raw_id")
+            cred_info["tier_raw_name"] = summary.get("tier_raw_name")
+            cred_info["tier_detected_at"] = summary.get("tier_detected_at")
 
         if mode == "geminicli":
             cred_info["preview"] = summary.get("preview", True)
@@ -339,7 +575,7 @@ async def download_all_creds_common(mode: str = "geminicli") -> Response:
                         log.debug(f"打包进度: {idx}/{len(credential_filenames)}")
 
             except Exception as e:
-                log.warning(f"处理 {mode} 凭证文件 {filename} 时出错: {e}")
+                log.warning(f"处理 {mode} 凭证文件 {credential_log_id(filename)} 时出错")
                 continue
 
     log.info(f"打包完成: 成功 {success_count}/{len(credential_filenames)} 个文件")
@@ -499,12 +735,12 @@ async def deduplicate_credentials_by_email_common(mode: str = "geminicli") -> JS
                     if success:
                         deleted_count += 1
                         deleted_files_in_group.append(os.path.basename(filename))
-                        log.info(f"去重删除凭证: {filename} (邮箱: {email}) (mode={mode})")
+                        log.info(f"去重删除凭证: {credential_log_id(filename)} (mode={mode})")
                     else:
                         delete_errors.append(f"{os.path.basename(filename)}: 删除失败")
                 except Exception as e:
                     delete_errors.append(f"{os.path.basename(filename)}: {str(e)}")
-                    log.error(f"去重删除凭证 {filename} 时出错: {e}")
+                    log.error(f"去重删除凭证 {credential_log_id(filename)} 时出错")
 
             result_duplicate_groups.append({
                 "email": email,
@@ -551,6 +787,7 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
 
 
     storage_adapter = await get_storage_adapter()
+    previous_state = await storage_adapter.get_credential_state(filename, mode=mode)
 
     # 获取凭证数据
     credential_data = await storage_adapter.get_credential(filename, mode=mode)
@@ -565,7 +802,7 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
 
     # 如果token被刷新了，更新存储
     if token_refreshed:
-        log.info(f"Token已自动刷新: {filename} (mode={mode})")
+        log.info(f"Token已自动刷新: {credential_log_id(filename)} (mode={mode})")
         credential_data = credentials.to_dict()
         await storage_adapter.store_credential(filename, credential_data, mode=mode)
 
@@ -579,18 +816,21 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
             api_base_url=api_base_url,
             include_credits=True,
         )
+        subscription_info = None
+        tier_raw_id = None
+        tier_raw_name = None
+        tier_detected_at = None
+        tier_detection_status = "detected" if subscription_tier else "unrecognized"
     else:
-        # geminicli 模式：通过项目列表获取 project_id
         credit_amount = None
-        subscription_tier = None
-        user_projects = await get_user_projects(credentials)
-        if user_projects:
-            if len(user_projects) == 1:
-                project_id = user_projects[0].get("projectId")
-            else:
-                project_id = await select_default_project(user_projects)
-        else:
-            project_id = None
+        project_id = credential_data.get("project_id")
+        if not project_id:
+            user_projects = await get_user_projects(credentials)
+            if user_projects:
+                if len(user_projects) == 1:
+                    project_id = user_projects[0].get("projectId")
+                else:
+                    project_id = await select_default_project(user_projects)
 
         if project_id:
             log.info(f"正在为项目 {project_id} 启用必需的API服务...")
@@ -598,6 +838,27 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
                 await enable_required_apis(credentials, project_id)
             except Exception as e:
                 log.warning(f"自动启用API服务失败: {e}")
+
+        subscription_info = await fetch_geminicli_subscription_info(
+            access_token=credentials.access_token,
+            user_agent=GEMINICLI_USER_AGENT,
+            api_base_url=await get_code_assist_endpoint(),
+            project_id=project_id,
+            antigravity_api_base_url=await get_antigravity_api_url(),
+            antigravity_user_agent=ANTIGRAVITY_USER_AGENT,
+        )
+        project_id = subscription_info.project_id or project_id
+        tier_detection_status = subscription_info.status
+        if subscription_info.status == "unavailable":
+            subscription_tier = previous_state.get("tier") or TIER_UNKNOWN
+            tier_raw_id = previous_state.get("tier_raw_id")
+            tier_raw_name = previous_state.get("tier_raw_name")
+            tier_detected_at = previous_state.get("tier_detected_at")
+        else:
+            subscription_tier = subscription_info.tier
+            tier_raw_id = subscription_info.raw_tier_id
+            tier_raw_name = subscription_info.raw_tier_name
+            tier_detected_at = subscription_info.detected_at
 
     if project_id:
         credential_data["project_id"] = project_id
@@ -611,8 +872,10 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
             "error_codes": []
         }
 
-        # 同步更新状态表中的 tier 字段
-        state_update["tier"] = subscription_tier
+        if mode == "antigravity":
+            state_update["tier"] = subscription_tier
+        elif subscription_info.status != "unavailable":
+            state_update.update(subscription_info.state_fields())
 
         # 如果是 geminicli 模式，直接设置 preview=True
         if mode == "geminicli":
@@ -620,13 +883,17 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
 
         await storage_adapter.update_credential_state(filename, state_update, mode=mode)
 
-        log.info(f"检验 {mode} 凭证成功: {filename} - Project ID: {project_id}, Tier: {subscription_tier} - 已解除禁用并清除错误码")
+        log.info(f"检验 {mode} 凭证成功: {credential_log_id(filename)}, Tier: {subscription_tier}")
 
         response_data = {
             "success": True,
             "filename": filename,
             "project_id": project_id,
             "subscription_tier": subscription_tier,
+            "tier_raw_id": tier_raw_id,
+            "tier_raw_name": tier_raw_name,
+            "tier_detected_at": tier_detected_at,
+            "tier_detection_status": tier_detection_status,
             "message": "检验成功！Project ID已更新，已解除禁用状态并清除错误码，403错误应该已恢复"
         }
 
@@ -788,6 +1055,7 @@ async def get_cred_detail(
             "status": file_status,
             "content": credential_data,
             "filename": os.path.basename(filename),
+            "diagnostic_id": credential_log_id(filename),
             "backend_type": backend_type,
             "user_email": file_status.get("user_email"),
             "model_cooldowns": file_status.get("model_cooldowns", {}),
@@ -809,7 +1077,7 @@ async def get_cred_detail(
     except HTTPException:
         raise
     except Exception as e:
-        log.error(f"获取凭证详情失败 {filename}: {e}")
+        log.error(f"获取凭证详情失败 {credential_log_id(filename)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -828,11 +1096,11 @@ async def creds_action(
         filename = request.filename
         action = request.action
 
-        log.info(f"Performing action '{action}' on file: {filename} (mode={mode})")
+        log.info(f"Performing action '{action}' on credential: {credential_log_id(filename)} (mode={mode})")
 
         # 验证文件名
         if not filename.endswith(".json"):
-            log.error(f"无效的文件名: {filename}（不是.json文件）")
+            log.error(f"无效的凭证文件名: {credential_log_id(filename)}")
             raise HTTPException(status_code=400, detail=f"无效的文件名: {filename}")
 
         # 获取存储适配器
@@ -844,33 +1112,33 @@ async def creds_action(
             # 检查凭证数据是否存在
             credential_data = await storage_adapter.get_credential(filename, mode=mode)
             if not credential_data:
-                log.error(f"凭证未找到: {filename} (mode={mode})")
+                log.error(f"凭证未找到: {credential_log_id(filename)} (mode={mode})")
                 raise HTTPException(status_code=404, detail="凭证文件不存在")
 
         if action == "enable":
-            log.info(f"Web请求: 启用文件 {filename} (mode={mode})")
+            log.info(f"Web请求: 启用凭证 {credential_log_id(filename)} (mode={mode})")
             result = await credential_manager.set_cred_disabled(filename, False, mode=mode)
             log.info(f"[WebRoute] set_cred_disabled 返回结果: {result}")
             if result:
-                log.info(f"Web请求: 文件 {filename} 已成功启用 (mode={mode})")
+                log.info(f"Web请求: 凭证 {credential_log_id(filename)} 已成功启用 (mode={mode})")
                 return JSONResponse(content={"message": f"已启用凭证文件 {os.path.basename(filename)}"})
             else:
-                log.error(f"Web请求: 文件 {filename} 启用失败 (mode={mode})")
+                log.error(f"Web请求: 凭证 {credential_log_id(filename)} 启用失败 (mode={mode})")
                 raise HTTPException(status_code=500, detail="启用凭证失败，可能凭证不存在")
 
         elif action == "disable":
-            log.info(f"Web请求: 禁用文件 {filename} (mode={mode})")
+            log.info(f"Web请求: 禁用凭证 {credential_log_id(filename)} (mode={mode})")
             result = await credential_manager.set_cred_disabled(filename, True, mode=mode)
             log.info(f"[WebRoute] set_cred_disabled 返回结果: {result}")
             if result:
-                log.info(f"Web请求: 文件 {filename} 已成功禁用 (mode={mode})")
+                log.info(f"Web请求: 凭证 {credential_log_id(filename)} 已成功禁用 (mode={mode})")
                 return JSONResponse(content={"message": f"已禁用凭证文件 {os.path.basename(filename)}"})
             else:
-                log.error(f"Web请求: 文件 {filename} 禁用失败 (mode={mode})")
+                log.error(f"Web请求: 凭证 {credential_log_id(filename)} 禁用失败 (mode={mode})")
                 raise HTTPException(status_code=500, detail="禁用凭证失败，可能凭证不存在")
 
         elif action == "permanent_disable":
-            log.info(f"Web请求: 永久禁用文件 {filename} (mode={mode})")
+            log.info(f"Web请求: 永久禁用凭证 {credential_log_id(filename)} (mode={mode})")
             result = await credential_manager.update_credential_state(
                 filename, {"disabled": True, "permanent_disabled": True}, mode=mode
             )
@@ -883,14 +1151,14 @@ async def creds_action(
                 # 使用 CredentialManager 删除凭证（包含队列/状态同步）
                 success = await credential_manager.remove_credential(filename, mode=mode)
                 if success:
-                    log.info(f"通过管理器成功删除凭证: {filename} (mode={mode})")
+                    log.info(f"通过管理器成功删除凭证: {credential_log_id(filename)} (mode={mode})")
                     return JSONResponse(
                         content={"message": f"已删除凭证文件 {os.path.basename(filename)}"}
                     )
                 else:
                     raise HTTPException(status_code=500, detail="删除凭证失败")
             except Exception as e:
-                log.error(f"删除凭证 {filename} 时出错: {e}")
+                log.error(f"删除凭证 {credential_log_id(filename)} 时出错")
                 raise HTTPException(status_code=500, detail=f"删除文件失败: {str(e)}")
 
         elif action == "enable_credit":
@@ -983,7 +1251,7 @@ async def creds_batch_action(
                         delete_success = await credential_manager.remove_credential(filename, mode=mode)
                         if delete_success:
                             success_count += 1
-                            log.info(f"成功删除批量中的凭证: {filename}")
+                            log.info(f"成功删除批量中的凭证: {credential_log_id(filename)}")
                         else:
                             errors.append(f"{filename}: 删除失败")
                             continue
@@ -1021,7 +1289,7 @@ async def creds_batch_action(
                     continue
 
             except Exception as e:
-                log.error(f"处理 {filename} 时出错: {e}")
+                log.error(f"处理凭证 {credential_log_id(filename)} 时出错")
                 errors.append(f"{filename}: 处理失败 - {str(e)}")
                 continue
 
@@ -1165,7 +1433,7 @@ async def verify_credential_project(
     except HTTPException:
         raise
     except Exception as e:
-        log.error(f"检验凭证Project ID失败 {filename}: {e}")
+        log.error(f"检验凭证Project ID失败 {credential_log_id(filename)}")
         raise HTTPException(status_code=500, detail=f"检验失败: {str(e)}")
 
 
@@ -1209,7 +1477,7 @@ async def get_credential_errors(
     except HTTPException:
         raise
     except Exception as e:
-        log.error(f"获取凭证错误信息失败 {filename}: {e}")
+        log.error(f"获取凭证错误信息失败 {credential_log_id(filename)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1250,7 +1518,7 @@ async def get_credential_quota(
         # 如果 token 被刷新了，更新存储
         updated_data = creds.to_dict()
         if updated_data != credential_data:
-            log.info(f"Token已自动刷新: {filename}")
+            log.info(f"Token已自动刷新: {credential_log_id(filename)}")
             await storage_adapter.store_credential(filename, updated_data, mode=mode)
             credential_data = updated_data
 
@@ -1263,49 +1531,34 @@ async def get_credential_quota(
         if mode == "antigravity":
             quota_info = await fetch_quota_info(access_token)
         else:
-            from src.api.geminicli import fetch_geminicli_quota_info
-            project_id = credential_data.get("project_id")
-            quota_info = await fetch_geminicli_quota_info(
-                access_token=access_token,
-                project_id=project_id,
-            )
+            if is_smart_429_protection_enabled():
+                health_result = await smart_429_service.verify_credential(
+                    filename, credential_data, source="quota_panel"
+                )
+                quota_info = health_result.get("quota", {})
+            else:
+                from src.api.geminicli import fetch_geminicli_quota_info
+                project_id = credential_data.get("project_id")
+                quota_info = await fetch_geminicli_quota_info(
+                    access_token=access_token,
+                    project_id=project_id,
+                )
 
         if quota_info.get("success"):
-            # 自动同步 quota=0 的模型到 model_cooldowns
+            # 实时额度与模型冷却双向同步：0% 加冷，正额度解除旧误冷。
             try:
-                import time
-                from datetime import datetime as _dt
                 models = quota_info.get("models", {}) or {}
-                synced = []
-                for model_name, info in models.items():
-                    remaining = info.get("remaining")
-                    if remaining is None or remaining > 0:
-                        continue
-                    # quota 为 0：尝试用 resetTimeRaw 解析 cooldown 时间
-                    cooldown_until = None
-                    raw = info.get("resetTimeRaw") or ""
-                    if raw:
-                        try:
-                            iso = raw.replace("Z", "+00:00")
-                            ts = _dt.fromisoformat(iso).timestamp()
-                            # 1970-01-01（epoch 0）或已过期，用 4h 兜底
-                            if ts < time.time() + 60:
-                                ts = None
-                            cooldown_until = ts
-                        except Exception:
-                            cooldown_until = None
-                    if cooldown_until is None:
-                        cooldown_until = time.time() + 4 * 3600
-
-                    if hasattr(storage_adapter._backend, "set_model_cooldown"):
-                        await storage_adapter._backend.set_model_cooldown(
-                            filename, model_name, cooldown_until, mode=mode
-                        )
-                        synced.append(model_name)
-                if synced:
-                    log.info(f"[QUOTA SYNC] {filename}: 自动写入冷却的模型 {synced}")
-            except Exception as sync_err:
-                log.warning(f"[QUOTA SYNC] {filename}: 同步冷却失败: {sync_err}")
+                sync_result = await sync_model_cooldowns_from_quota(
+                    storage_adapter, filename, mode, models
+                )
+                if sync_result["cleared"] or sync_result["added"]:
+                    log.info(
+                        f"[QUOTA SYNC] {credential_log_id(filename)}: "
+                        f"解除 {len(sync_result['cleared'])} 个，"
+                        f"写入 {len(sync_result['added'])} 个模型冷却"
+                    )
+            except Exception:
+                log.warning(f"[QUOTA SYNC] {credential_log_id(filename)}: 同步冷却失败")
 
             return JSONResponse(content={
                 "success": True,
@@ -1314,6 +1567,14 @@ async def get_credential_quota(
                 "models": quota_info.get("models", {})
             })
         else:
+            if mode == "geminicli" and is_smart_429_protection_enabled():
+                return JSONResponse(content={
+                    "success": False,
+                    "filename": filename,
+                    "mode": mode,
+                    "health": health_result,
+                    "error": quota_info.get("error", "health_check_failed"),
+                })
             return JSONResponse(
                 status_code=400,
                 content={
@@ -1327,8 +1588,43 @@ async def get_credential_quota(
     except HTTPException:
         raise
     except Exception as e:
-        log.error(f"获取凭证额度失败 {filename}: {e}")
+        log.error(f"获取凭证额度失败 {credential_log_id(filename)}")
         raise HTTPException(status_code=500, detail=f"获取额度失败: {str(e)}")
+
+
+@router.post("/risk-check/{filename}")
+async def immediately_recheck_risk_control(
+    filename: str,
+    token: str = Depends(verify_panel_token),
+):
+    """Synchronously recheck one GeminiCLI credential through the quota coordinator."""
+    if not is_smart_429_protection_enabled():
+        raise HTTPException(status_code=409, detail="SMART 429 protection is stopped")
+    filename = os.path.basename(filename)
+    storage_adapter = await get_storage_adapter()
+    credential_data = await storage_adapter.get_credential(filename, mode="geminicli")
+    if not credential_data:
+        raise HTTPException(status_code=404, detail="credential not found")
+
+    # Keep immediate rechecks consistent with the quota panel path.  A stored
+    # access token may already be expired even though its refresh token is
+    # still valid; probing it directly would turn a recoverable token refresh
+    # into an indeterminate 401 health result.
+    from src.google_oauth_api import Credentials
+
+    creds = Credentials.from_dict(credential_data)
+    await creds.refresh_if_needed()
+    refreshed_data = creds.to_dict()
+    if refreshed_data != credential_data:
+        await storage_adapter.store_credential(
+            filename, refreshed_data, mode="geminicli"
+        )
+        credential_data = refreshed_data
+
+    result = await smart_429_service.verify_credential(
+        filename, credential_data, source="immediate_recheck"
+    )
+    return JSONResponse(content={"filename": filename, "health": result})
 
 
 # ---------------------------------------------------------------------------
@@ -1379,12 +1675,21 @@ async def _fetch_quota_for_credential(filename: str, mode: str) -> dict:
     if mode == "antigravity":
         info = await fetch_quota_info(access_token)
     else:
-        from src.api.geminicli import fetch_geminicli_quota_info
-        project_id = credential_data.get("project_id")
-        info = await fetch_geminicli_quota_info(
-            access_token=access_token,
-            project_id=project_id,
-        )
+        if is_smart_429_protection_enabled():
+            health_result = await smart_429_service.verify_credential(
+                filename, credential_data, source="batch_refresh"
+            )
+            info = health_result.get("quota", {})
+            info["health"] = {
+                key: value for key, value in health_result.items() if key != "quota"
+            }
+        else:
+            from src.api.geminicli import fetch_geminicli_quota_info
+            project_id = credential_data.get("project_id")
+            info = await fetch_geminicli_quota_info(
+                access_token=access_token,
+                project_id=project_id,
+            )
     return info
 
 
@@ -1419,7 +1724,9 @@ async def batch_refresh_cooldown(
         backend = getattr(storage_adapter, "_backend", None)
         can_set_cooldown = hasattr(backend, "set_model_cooldown")
 
-        semaphore = asyncio.Semaphore(5)
+        semaphore = asyncio.Semaphore(
+            2 if mode == "geminicli" and is_smart_429_protection_enabled() else 5
+        )
 
         async def run_one(filename: str) -> dict:
             async with semaphore:
@@ -1533,7 +1840,7 @@ async def batch_refresh_cooldown(
                         "model_count": len(models),
                     }
                 except Exception as e:
-                    log.warning(f"[BATCH REFRESH COOLDOWN] {filename} 失败: {e}")
+                    log.warning(f"[BATCH REFRESH COOLDOWN] {credential_log_id(filename)} 失败")
                     return {
                         "filename": filename,
                         "success": False,
@@ -1615,7 +1922,7 @@ async def configure_preview_channel(
         token_refreshed = await credentials.refresh_if_needed()
 
         if token_refreshed:
-            log.info(f"Token已自动刷新: {filename}")
+            log.info(f"Token已自动刷新: {credential_log_id(filename)}")
             credential_data = credentials.to_dict()
             await storage_adapter.store_credential(filename, credential_data, mode=mode)
 
@@ -1632,7 +1939,7 @@ async def configure_preview_channel(
         # 根据文档，需要两个步骤：
         # 1. 创建 Release Channel Setting (EXPERIMENTAL)
         # 2. 创建 Setting Binding (绑定到目标项目)
-        from src.httpx_client import post_async
+        from src.httpx_client import post_async, get_async
         import uuid
 
         # 生成唯一的 ID
@@ -1645,7 +1952,7 @@ async def configure_preview_channel(
             "Content-Type": "application/json"
         }
 
-        log.info(f"开始配置 preview 通道: {filename} (project_id={project_id})")
+        log.info(f"开始配置 preview 通道: {credential_log_id(filename)}")
 
         # 步骤 1: 创建 Release Channel Setting
         setting_url = f"{base_url}/releaseChannelSettings"
@@ -1662,12 +1969,31 @@ async def configure_preview_channel(
         if setting_status == 200 or setting_status == 201:
             log.info(f"步骤 1/2: Release Channel Setting 创建成功 (setting_id={setting_id})")
         elif setting_status == 409:
+            list_response = await get_async(
+                url=setting_url,
+                headers=headers,
+                timeout=30.0
+            )
+            if list_response.status_code == 200:
+                try:
+                    list_data = list_response.json()
+                    settings = list_data.get("releaseChannelSettings", [])
+                    if settings:
+                        existing_name = settings[0].get("name", "")
+                        setting_id = existing_name.split("/")[-1]
+                        log.info(f"Existing Release Channel Setting setting_id={setting_id}")
+                    else:
+                        log.warning("Release Channel Setting list returned empty")
+                except Exception as e:
+                    log.warning(f"Failed to parse Release Channel Setting list: {e}")
+            else:
+                log.warning(f"Failed to list Release Channel Settings (status={list_response.status_code})")
             # Setting 已存在，继续下一步
             log.info(f"步骤 1/2: Release Channel Setting 已存在")
         else:
             # 步骤 1 失败
             error_text = setting_response.text if hasattr(setting_response, 'text') else ""
-            log.error(f"步骤 1/2 失败: {filename} - Status: {setting_status}, Error: {error_text}")
+            log.error(f"步骤 1/2 失败: {credential_log_id(filename)} - Status: {setting_status}")
 
             return JSONResponse(
                 status_code=setting_status,
@@ -1701,7 +2027,7 @@ async def configure_preview_channel(
                 "preview": True
             }, mode=mode)
 
-            log.info(f"步骤 2/2: Setting Binding 创建成功 - Preview 通道配置完成: {filename}")
+            log.info(f"步骤 2/2: Preview 通道配置完成: {credential_log_id(filename)}")
 
             return JSONResponse(content={
                 "success": True,
@@ -1717,7 +2043,7 @@ async def configure_preview_channel(
                 "preview": True
             }, mode=mode)
 
-            log.info(f"步骤 2/2: Setting Binding 已存在 - Preview 通道已配置: {filename}")
+            log.info(f"步骤 2/2: Preview 通道已存在: {credential_log_id(filename)}")
 
             return JSONResponse(content={
                 "success": True,
@@ -1728,7 +2054,7 @@ async def configure_preview_channel(
         else:
             # 步骤 2 失败
             error_text = binding_response.text if hasattr(binding_response, 'text') else ""
-            log.error(f"步骤 2/2 失败: {filename} - Status: {binding_status}, Error: {error_text}")
+            log.error(f"步骤 2/2 失败: {credential_log_id(filename)} - Status: {binding_status}")
 
             return JSONResponse(
                 status_code=binding_status,
@@ -1745,7 +2071,7 @@ async def configure_preview_channel(
     except HTTPException:
         raise
     except Exception as e:
-        log.error(f"配置 preview 通道失败 {filename}: {e}")
+        log.error(f"配置 preview 通道失败 {credential_log_id(filename)}")
         raise HTTPException(status_code=500, detail=f"配置失败: {str(e)}")
 
 
@@ -1783,7 +2109,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
 
         # 如果 token 被刷新了，更新存储
         if token_refreshed:
-            log.info(f"Token已自动刷新: {filename} (mode={mode})")
+            log.info(f"Token已自动刷新: {credential_log_id(filename)} (mode={mode})")
             credential_data = credentials.to_dict()
             await storage_adapter.store_credential(filename, credential_data, mode=mode)
 
@@ -1808,7 +2134,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         if mode == "antigravity":
             api_base_url = await get_antigravity_api_url()
             from src.api.antigravity import build_antigravity_headers
-            headers = build_antigravity_headers(access_token, test_model)
+            headers = build_antigravity_headers(access_token)
         else:
             api_base_url = await get_code_assist_endpoint()
             headers = {
@@ -1835,8 +2161,57 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         # 返回实际的状态码和详细信息
         status_code = response.status_code
 
+        if (
+            status_code == 429
+            and mode == "geminicli"
+            and is_smart_429_protection_enabled()
+        ):
+            error_text = response.text if hasattr(response, "text") else ""
+            try:
+                error_payload = response.json()
+            except Exception:
+                try:
+                    error_payload = json.loads(error_text)
+                except Exception:
+                    error_payload = {}
+            classification = classify_upstream_429(error_payload, mode="geminicli")
+            if classification.kind == Upstream429Kind.MODEL_CAPACITY_EXHAUSTED:
+                return JSONResponse(content={
+                    "success": True,
+                    "status_code": 429,
+                    "classification": classification.kind.value,
+                    "message": "远端容量不足，凭证未判定失效",
+                    "filename": filename,
+                })
+            if classification.kind == Upstream429Kind.QUOTA_EXHAUSTED:
+                cooldown_until = await parse_and_log_cooldown(error_text, mode="geminicli")
+                if cooldown_until and hasattr(storage_adapter._backend, "set_model_cooldown"):
+                    await storage_adapter._backend.set_model_cooldown(
+                        filename, test_model, cooldown_until, mode=mode
+                    )
+                return JSONResponse(content={
+                    "success": True,
+                    "status_code": 429,
+                    "classification": classification.kind.value,
+                    "message": "凭证正常，当前模型额度已耗尽",
+                    "filename": filename,
+                })
+
+            await smart_429_service.mark_checking(filename)
+            health_result = await smart_429_service.verify_credential(
+                filename, credential_data, source="message_test"
+            )
+            return JSONResponse(content={
+                "success": health_result.get("status") in ("normal", "quota_exhausted"),
+                "status_code": 429,
+                "classification": classification.kind.value,
+                "health": health_result,
+                "message": "已完成额度风控检查",
+                "filename": filename,
+            })
+
         if status_code == 200 or status_code == 429:
-            log.info(f"凭证测试成功: {filename} (mode={mode}, model={test_model}, status={status_code})")
+            log.info(f"凭证测试成功: {credential_log_id(filename)} (mode={mode}, model={test_model}, status={status_code})")
             # 测试成功时清除错误状态
             if status_code == 200:
                 if hasattr(storage_adapter._backend, "record_success"):
@@ -1854,7 +2229,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                 # 如果是 geminicli 模式且第一次测试成功，继续测试 gemini-3-flash-preview（仅在未指定具体模型时）
                 if mode == "geminicli" and not skip_preview_test:
                     preview_model = "gemini-3-flash-preview"
-                    log.info(f"开始测试 preview 模型: {filename} (model={preview_model})")
+                    log.info(f"开始测试 preview 模型: {credential_log_id(filename)} (model={preview_model})")
 
                     try:
                         preview_response = await post_async(
@@ -1875,18 +2250,21 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
 
                         if preview_status == 200 or preview_status == 429:
                             # preview 模型测试成功，设置 preview=True
-                            log.info(f"Preview 模型测试成功: {filename} (status={preview_status})")
+                            log.info(f"Preview 模型测试成功: {credential_log_id(filename)} (status={preview_status})")
                             await storage_adapter.update_credential_state(filename, {
                                 "preview": True
                             }, mode=mode)
                         elif preview_status == 404:
                             # preview 模型返回 404 时只记录，不再自动覆盖用户设置的 preview=True。
-                            log.warning(f"Preview 模型测试返回404，保持当前Preview状态不变: {filename} (status=404)")
+                            log.warning(
+                                "Preview 模型测试返回404，保持当前Preview状态不变: "
+                                f"{credential_log_id(filename)} (status=404)"
+                            )
                         else:
                             # 其他错误，保持默认 preview 状态
-                            log.warning(f"Preview 模型测试失败: {filename} (status={preview_status})")
+                            log.warning(f"Preview 模型测试失败: {credential_log_id(filename)} (status={preview_status})")
                     except Exception as e:
-                        log.error(f"Preview 模型测试异常: {filename} - {e}")
+                        log.error(f"Preview 模型测试异常: {credential_log_id(filename)}")
             else:
                 error_text = response.text if hasattr(response, 'text') else ""
                 if hasattr(storage_adapter._backend, "record_failure"):
@@ -1908,13 +2286,13 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                 }
             )
         else:
-            log.warning(f"凭证测试失败: {filename} (mode={mode}, status={status_code})")
+            log.warning(f"凭证测试失败: {credential_log_id(filename)} (mode={mode}, status={status_code})")
             # 测试失败时保存错误码和错误消息（覆盖模式，只保存最新的一个错误）
             try:
                 error_text = response.text if hasattr(response, 'text') else ""
 
                 # 打印详细错误内容到日志
-                log.error(f"凭证测试错误详情 - 文件: {filename}, 模式: {mode}, 状态码: {status_code}, 错误内容: {error_text}")
+                log.error(f"凭证测试错误 - credential={credential_log_id(filename)}, mode={mode}, status={status_code}")
 
                 if hasattr(storage_adapter._backend, "record_failure"):
                     await storage_adapter._backend.record_failure(
@@ -1934,7 +2312,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                         "error_messages": error_messages
                     }, mode=mode)
 
-                log.info(f"已保存测试错误信息: {filename} - 错误码 {status_code}")
+                log.info(f"已保存测试错误信息: {credential_log_id(filename)} - 错误码 {status_code}")
 
                 # 测试失败也触发自动封禁（与真实业务调用对齐）：
                 # auto_ban_enabled=True 且 status_code 在 auto_ban_error_codes 列表内时
@@ -1949,7 +2327,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                             filename, True, mode=mode
                         )
                 except Exception as ban_err:
-                    log.error(f"测试失败自动封禁触发异常 {filename}: {ban_err}")
+                    log.error(f"测试失败自动封禁触发异常 {credential_log_id(filename)}")
             except Exception as e:
                 log.error(f"保存测试错误信息失败: {e}")
 
@@ -1970,7 +2348,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
     except HTTPException:
         raise
     except Exception as e:
-        log.error(f"测试凭证失败 {filename}: {e}")
+        log.error(f"测试凭证失败 {credential_log_id(filename)}")
         raise HTTPException(status_code=500, detail=f"测试失败: {str(e)}")
 
 
@@ -2022,7 +2400,7 @@ async def batch_test_credentials(
                         "message": str(e.detail),
                     }
                 except Exception as e:
-                    log.error(f"批量测试凭证失败 {filename}: {e}")
+                    log.error(f"批量测试凭证失败 {credential_log_id(filename)}")
                     return {
                         "filename": filename,
                         "success": False,
@@ -2242,6 +2620,7 @@ async def _add_credential_by_refresh_token(
     csec = (client_secret or DEFAULT_GEMINI_CLI_CLIENT_SECRET).strip()
 
     # 1. 换 access_token
+    subscription_info = None
     try:
         credential_data = await _exchange_refresh_token_to_credential(
             refresh_token=refresh_token,
@@ -2254,6 +2633,7 @@ async def _add_credential_by_refresh_token(
             "success": False,
             "error": f"refresh_token 无效或网络异常: {e}",
         }
+    credentials = Credentials.from_dict(credential_data)
 
     # 2. 探测 project_id
     pid = (project_id or "").strip() or None
@@ -2262,7 +2642,6 @@ async def _add_credential_by_refresh_token(
     if not pid:
         try:
             if mode == "geminicli":
-                credentials = Credentials.from_dict(credential_data)
                 projects = await get_user_projects(credentials)
                 if projects:
                     if len(projects) == 1:
@@ -2283,6 +2662,18 @@ async def _add_credential_by_refresh_token(
         except Exception as e:
             log.warning(f"自动探测 project_id 失败: {e}")
 
+    if mode == "geminicli":
+        subscription_info = await fetch_geminicli_subscription_info(
+            access_token=credentials.access_token,
+            user_agent=GEMINICLI_USER_AGENT,
+            api_base_url=await get_code_assist_endpoint(),
+            project_id=pid,
+            antigravity_api_base_url=await get_antigravity_api_url(),
+            antigravity_user_agent=ANTIGRAVITY_USER_AGENT,
+        )
+        pid = subscription_info.project_id or pid
+        subscription_tier = subscription_info.tier
+
     if pid:
         credential_data["project_id"] = pid
 
@@ -2298,18 +2689,45 @@ async def _add_credential_by_refresh_token(
         filename = f"{stem}.json"
 
     # 4. 入库
+    tier_raw_id = None
+    tier_raw_name = None
+    tier_detected_at = None
+    tier_detection_status = None
     if mode == "antigravity":
         await credential_manager.add_antigravity_credential(filename, credential_data)
     else:
+        storage_adapter = await get_storage_adapter()
+        existed = await storage_adapter.get_credential(filename, mode="geminicli") is not None
+        previous_state = (
+            await storage_adapter.get_credential_state(filename, mode="geminicli")
+            if existed else {}
+        )
         await credential_manager.add_credential(filename, credential_data)
+        if subscription_info.status == "unavailable":
+            subscription_tier = previous_state.get("tier") or TIER_UNKNOWN
+            tier_raw_id = previous_state.get("tier_raw_id")
+            tier_raw_name = previous_state.get("tier_raw_name")
+            tier_detected_at = previous_state.get("tier_detected_at")
+        else:
+            await storage_adapter.update_credential_state(
+                filename, subscription_info.state_fields(), mode="geminicli"
+            )
+            tier_raw_id = subscription_info.raw_tier_id
+            tier_raw_name = subscription_info.raw_tier_name
+            tier_detected_at = subscription_info.detected_at
+        tier_detection_status = subscription_info.status
 
-    log.info(f"通过 refresh_token 成功添加凭证: {filename} (mode={mode})")
+    log.info(f"通过 refresh_token 成功添加凭证: {credential_log_id(filename)} (mode={mode})")
 
     return {
         "success": True,
         "filename": filename,
         "project_id": pid,
         "subscription_tier": subscription_tier,
+        "tier_raw_id": tier_raw_id,
+        "tier_raw_name": tier_raw_name,
+        "tier_detected_at": tier_detected_at,
+        "tier_detection_status": tier_detection_status,
     }
 
 

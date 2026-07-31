@@ -14,6 +14,11 @@ from urllib.parse import urlparse, parse_qs
 import aiomysql
 
 from log import log
+from src.subscription_tiers import (
+    default_tier_for_mode,
+    required_tiers_for_geminicli_model,
+    valid_tiers_for_mode,
+)
 
 
 class MySQLManager:
@@ -29,6 +34,16 @@ class MySQLManager:
         "model_cooldowns",
         "preview",
         "tier",
+        "tier_raw_id",
+        "tier_raw_name",
+        "tier_detected_at",
+        "health_status",
+        "quarantine_reason",
+        "probe_stage",
+        "next_probe_at",
+        "last_health_check_at",
+        "health_check_started_at",
+        "health_state_version",
     }
 
     def __init__(self):
@@ -143,7 +158,18 @@ class MySQLManager:
                         preview TINYINT(1) DEFAULT 1,
 
                         -- tier 等级 (free/pro/ultra)
-                        tier VARCHAR(16) DEFAULT 'pro',
+                        tier VARCHAR(32) DEFAULT 'unknown',
+                        tier_raw_id VARCHAR(255),
+                        tier_raw_name VARCHAR(255),
+                        tier_detected_at BIGINT,
+
+                        health_status VARCHAR(32) DEFAULT 'healthy',
+                        quarantine_reason VARCHAR(255),
+                        probe_stage INT DEFAULT 0,
+                        next_probe_at DOUBLE,
+                        last_health_check_at DOUBLE,
+                        health_check_started_at DOUBLE,
+                        health_state_version BIGINT DEFAULT 0,
 
                         -- 轮换相关
                         rotation_order INT DEFAULT 0,
@@ -180,7 +206,7 @@ class MySQLManager:
                         model_cooldowns TEXT,
 
                         -- tier 等级 (free/pro/ultra)
-                        tier VARCHAR(16) DEFAULT 'pro',
+                        tier VARCHAR(32) DEFAULT 'pro',
 
                         -- 轮换相关
                         rotation_order INT DEFAULT 0,
@@ -210,31 +236,94 @@ class MySQLManager:
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """)
 
+                await cur.execute("""
+                    CREATE TABLE IF NOT EXISTS gcli_daily_hedge_stats (
+                        server_name VARCHAR(64) NOT NULL DEFAULT 'default',
+                        date VARCHAR(10) NOT NULL,
+                        credential_name VARCHAR(255) NOT NULL,
+                        model_family VARCHAR(128) NOT NULL,
+                        extra_upstream_requests BIGINT NOT NULL DEFAULT 0,
+                        primary_wins BIGINT NOT NULL DEFAULT 0,
+                        backup_wins BIGINT NOT NULL DEFAULT 0,
+                        confirmed_rescues BIGINT NOT NULL DEFAULT 0,
+                        both_failed BIGINT NOT NULL DEFAULT 0,
+                        client_cancelled BIGINT NOT NULL DEFAULT 0,
+                        budget_skips BIGINT NOT NULL DEFAULT 0,
+                        outcome_pending BIGINT NOT NULL DEFAULT 0,
+                        updated_at DOUBLE,
+                        PRIMARY KEY
+                            (server_name, date, credential_name, model_family),
+                        KEY idx_hedge_server_date (server_name, date)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+
             await conn.commit()
 
             # 自动添加缺失的 tier 列（兼容旧表结构）
             await self._ensure_tier_column()
+            await self._ensure_smart_429_columns()
 
             log.debug("MySQL tables and indexes created")
 
     async def _ensure_tier_column(self):
         """确保 tier 列存在（兼容旧表结构）"""
-        for table in ["gcli_credentials", "gcli_antigravity_credentials"]:
+        for table, mode in (
+            ("gcli_credentials", "geminicli"),
+            ("gcli_antigravity_credentials", "antigravity"),
+        ):
             try:
                 async with self._pool.acquire() as conn:
                     async with conn.cursor() as cur:
-                        await cur.execute(f"""
-                            SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-                            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}' AND COLUMN_NAME = 'tier'
-                        """)
-                        if not await cur.fetchone():
-                            await cur.execute(f"""
-                                ALTER TABLE {table} ADD COLUMN tier VARCHAR(16) DEFAULT 'pro'
-                            """)
-                            log.info(f"Added 'tier' column to {table}")
+                        tier_default = default_tier_for_mode(mode)
+                        await cur.execute(f"""SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}' AND COLUMN_NAME = 'tier'""")
+                        if await cur.fetchone():
+                            await cur.execute(
+                                f"ALTER TABLE {table} MODIFY COLUMN tier VARCHAR(32) DEFAULT '{tier_default}'"
+                            )
+                        else:
+                            await cur.execute(
+                                f"ALTER TABLE {table} ADD COLUMN tier VARCHAR(32) DEFAULT '{tier_default}'"
+                            )
+                        if mode == "geminicli":
+                            for name, definition in (
+                                ("tier_raw_id", "VARCHAR(255)"),
+                                ("tier_raw_name", "VARCHAR(255)"),
+                                ("tier_detected_at", "BIGINT"),
+                            ):
+                                await cur.execute(f"""SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                                    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}' AND COLUMN_NAME = '{name}'""")
+                                if not await cur.fetchone():
+                                    await cur.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
                     await conn.commit()
             except Exception as e:
-                log.warning(f"Failed to ensure tier column in {table}: {e}")
+                log.warning(f"Failed to ensure tier columns in {table}: {e}")
+
+    async def _ensure_smart_429_columns(self):
+        definitions = {
+            "health_status": "VARCHAR(32) DEFAULT 'healthy'",
+            "quarantine_reason": "VARCHAR(255)",
+            "probe_stage": "INT DEFAULT 0",
+            "next_probe_at": "DOUBLE",
+            "last_health_check_at": "DOUBLE",
+            "health_check_started_at": "DOUBLE",
+            "health_state_version": "BIGINT DEFAULT 0",
+        }
+        try:
+            async with self._pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    for name, definition in definitions.items():
+                        await cur.execute(
+                            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+                            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'gcli_credentials' "
+                            "AND COLUMN_NAME = %s",
+                            (name,),
+                        )
+                        if not await cur.fetchone():
+                            await cur.execute(f"ALTER TABLE gcli_credentials ADD COLUMN {name} {definition}")
+                await conn.commit()
+        except Exception as exc:
+            log.warning(f"Failed to ensure SMART 429 columns in gcli_credentials: {exc}")
 
     async def _load_config_cache(self):
         """加载配置到内存缓存（仅在初始化时调用一次）"""
@@ -332,6 +421,10 @@ class MySQLManager:
         """未禁用且 preview=True 的凭证 Redis Set key（仅 geminicli）"""
         return f"gcli:preview:{mode}"
 
+    def _rk_tier(self, mode: str, tier: str) -> str:
+        """按 tier 分桶的未禁用凭证 Redis Set key"""
+        return f"gcli:tier:{mode}:{tier}"
+
     def _rk_cd(self, mode: str, filename: str, escaped_model: str) -> str:
         """模型冷却 Redis key（带 TTL）"""
         return f"gcli:cd:{mode}:{filename}:{escaped_model}"
@@ -351,13 +444,13 @@ class MySQLManager:
                 async with conn.cursor() as cur:
                     if mode == "geminicli":
                         await cur.execute(f"""
-                            SELECT filename, disabled, preview, model_cooldowns
+                            SELECT filename, disabled, preview, model_cooldowns, tier
                             FROM {table_name}
                             WHERE server_name = %s
                         """, (self._server_name,))
                     else:
                         await cur.execute(f"""
-                            SELECT filename, disabled, 0, model_cooldowns
+                            SELECT filename, disabled, 0, model_cooldowns, tier
                             FROM {table_name}
                             WHERE server_name = %s
                         """, (self._server_name,))
@@ -365,12 +458,15 @@ class MySQLManager:
 
             avail: List[str] = []
             preview: List[str] = []
+            tier_buckets: Dict[str, List[str]] = {}
             cooldown_entries: List[tuple] = []  # (cd_key, ttl_seconds, value)
             current_time = time.time()
 
-            for filename, disabled, is_preview, model_cooldowns_json in rows:
+            for filename, disabled, is_preview, model_cooldowns_json, tier in rows:
                 if not disabled:
                     avail.append(filename)
+                    normalized_tier = tier or default_tier_for_mode(mode)
+                    tier_buckets.setdefault(normalized_tier, []).append(filename)
                     if mode == "geminicli" and is_preview:
                         preview.append(filename)
 
@@ -410,6 +506,30 @@ class MySQLManager:
                     pipe2.delete(tmp_preview)
             await pipe2.execute()
 
+            # Tier 分桶同样通过临时 key 原子替换。
+            all_tiers = valid_tiers_for_mode(mode)
+            tier_write_pipe = self._redis.pipeline()
+            for tier in all_tiers:
+                tier_key = self._rk_tier(mode, tier)
+                tmp_tier_key = tier_key + ":tmp"
+                tier_write_pipe.delete(tmp_tier_key)
+                members = tier_buckets.get(tier, [])
+                if members:
+                    tier_write_pipe.sadd(tmp_tier_key, *members)
+            await tier_write_pipe.execute()
+
+            tier_swap_pipe = self._redis.pipeline()
+            for tier in all_tiers:
+                tier_key = self._rk_tier(mode, tier)
+                tmp_tier_key = tier_key + ":tmp"
+                members = tier_buckets.get(tier, [])
+                if members:
+                    tier_swap_pipe.rename(tmp_tier_key, tier_key)
+                else:
+                    tier_swap_pipe.delete(tier_key)
+                    tier_swap_pipe.delete(tmp_tier_key)
+            await tier_swap_pipe.execute()
+
             # 批量恢复未过期的模型冷却 TTL Key
             if cooldown_entries:
                 pipe3 = self._redis.pipeline()
@@ -419,18 +539,23 @@ class MySQLManager:
 
             log.debug(
                 f"Redis cache rebuilt [{mode}]: {len(avail)} avail, {len(preview)} preview, "
+                f"tiers={{{', '.join(f'{t}:{len(tier_buckets.get(t, []))}' for t in all_tiers)}}}, "
                 f"{len(cooldown_entries)} cooldown key(s) restored"
             )
         except Exception as e:
             log.warning(f"Redis rebuild cache error [{mode}]: {e}")
 
-    async def _redis_add_cred(self, mode: str, filename: str, preview: bool = True) -> None:
-        """将凭证加入 Redis 可用池"""
+    async def _redis_add_cred(
+        self, mode: str, filename: str, tier: Optional[str] = None, preview: bool = True
+    ) -> None:
+        """将凭证加入 Redis 可用池、Tier 分桶及 preview 分桶"""
         if not self._redis_enabled:
             return
         try:
+            tier = tier or default_tier_for_mode(mode)
             pipe = self._redis.pipeline()
             pipe.sadd(self._rk_avail(mode), filename)
+            pipe.sadd(self._rk_tier(mode, tier), filename)
             if mode == "geminicli" and preview:
                 pipe.sadd(self._rk_preview(mode), filename)
             await pipe.execute()
@@ -445,21 +570,34 @@ class MySQLManager:
             pipe = self._redis.pipeline()
             pipe.srem(self._rk_avail(mode), filename)
             pipe.srem(self._rk_preview(mode), filename)
+            for tier in valid_tiers_for_mode(mode):
+                pipe.srem(self._rk_tier(mode, tier), filename)
             await pipe.execute()
         except Exception as e:
             log.warning(f"Redis remove_cred error: {e}")
 
-    async def _redis_sync_cred(self, mode: str, filename: str, disabled: bool, preview: bool = True) -> None:
+    async def _redis_sync_cred(
+        self,
+        mode: str,
+        filename: str,
+        disabled: bool,
+        tier: Optional[str] = None,
+        preview: bool = True,
+    ) -> None:
         """根据最新状态同步单个凭证在 Redis 中的集合成员"""
         if not self._redis_enabled:
             return
         try:
+            tier = tier or default_tier_for_mode(mode)
             pipe = self._redis.pipeline()
+            for known_tier in valid_tiers_for_mode(mode):
+                pipe.srem(self._rk_tier(mode, known_tier), filename)
             if disabled:
                 pipe.srem(self._rk_avail(mode), filename)
                 pipe.srem(self._rk_preview(mode), filename)
             else:
                 pipe.sadd(self._rk_avail(mode), filename)
+                pipe.sadd(self._rk_tier(mode, tier), filename)
                 if mode == "geminicli":
                     if preview:
                         pipe.sadd(self._rk_preview(mode), filename)
@@ -492,7 +630,10 @@ class MySQLManager:
             log.warning(f"Redis clear_cooldown error: {e}")
 
     async def _get_next_available_from_redis(
-        self, mode: str, model_name: Optional[str]
+        self,
+        mode: str,
+        model_name: Optional[str],
+        excluded_credentials: Optional[set[str]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
         Redis 快速路径：随机取候选凭证，跳过冷却中的，返回 (filename, credential_data)。
@@ -503,24 +644,46 @@ class MySQLManager:
         - "unstable": 基于 preview 成功率加权随机选择
         """
         try:
+            excluded = set(excluded_credentials or ())
             # 选择候选池
             is_preview_model = model_name and "preview" in model_name.lower()
+            required_tiers = (
+                required_tiers_for_geminicli_model(model_name)
+                if mode == "geminicli"
+                else None
+            )
 
-            if mode == "geminicli" and is_preview_model:
+            if required_tiers:
+                tier_members = set()
+                for tier in required_tiers:
+                    tier_members |= await self._redis.smembers(self._rk_tier(mode, tier))
+                if is_preview_model:
+                    tier_members &= await self._redis.smembers(self._rk_preview(mode))
+                if not tier_members:
+                    log.debug(
+                        f"[Redis MISS] mode={mode} model={model_name}: "
+                        f"no candidates for tiers={required_tiers}, fallback to MySQL"
+                    )
+                    return None
+                candidates = random.sample(list(tier_members), min(len(tier_members), 10))
+            elif mode == "geminicli" and is_preview_model:
                 pool_key = self._rk_preview(mode)
-            elif mode == "geminicli" and model_name and not is_preview_model:
-                pool_key = self._rk_avail(mode)
             else:
                 pool_key = self._rk_avail(mode)
 
-            pool_size = await self._redis.scard(pool_key)
-            if pool_size == 0:
-                log.debug(f"[Redis MISS] mode={mode} pool_key={pool_key}: pool empty, fallback to MySQL")
-                return None
+            if not required_tiers:
+                pool_size = await self._redis.scard(pool_key)
+                if pool_size == 0:
+                    log.debug(f"[Redis MISS] mode={mode} pool_key={pool_key}: pool empty, fallback to MySQL")
+                    return None
 
-            # 一次取多个随机成员，减少 round-trip
-            sample_size = min(pool_size, 10)
-            candidates = await self._redis.srandmember(pool_key, sample_size)
+                # 一次取多个随机成员，减少 round-trip
+                sample_size = min(pool_size, 10)
+                candidates = await self._redis.srandmember(pool_key, sample_size)
+                if not candidates:
+                    return None
+
+            candidates = [candidate for candidate in candidates if candidate not in excluded]
             if not candidates:
                 return None
 
@@ -593,6 +756,11 @@ class MySQLManager:
 
             # 返回第一个能获取到凭证数据的候选
             for filename in ordered:
+                from config import is_smart_429_protection_enabled
+                if mode == "geminicli" and is_smart_429_protection_enabled():
+                    state = await self.get_credential_state(filename, mode)
+                    if state.get("health_status", "healthy") != "healthy":
+                        continue
                 credential_data = await self.get_credential(filename, mode)
                 if credential_data:
                     log.debug(f"[Redis HIT] mode={mode} model={model_name} -> {filename}")
@@ -606,7 +774,10 @@ class MySQLManager:
     # ============ 凭证查询方法 ============
 
     async def get_next_available_credential(
-        self, mode: str = "geminicli", model_name: Optional[str] = None
+        self,
+        mode: str = "geminicli",
+        model_name: Optional[str] = None,
+        excluded_credentials: Optional[set[str]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
         随机获取一个可用凭证（负载均衡）
@@ -617,9 +788,14 @@ class MySQLManager:
         """
         self._ensure_initialized()
 
+        from config import is_smart_429_protection_enabled
+        smart_enabled = is_smart_429_protection_enabled()
+        health_enabled = mode == "geminicli" and smart_enabled
+        excluded = set(excluded_credentials or ())
+
         # Redis 快速路径
         if self._redis_enabled:
-            result = await self._get_next_available_from_redis(mode, model_name)
+            result = await self._get_next_available_from_redis(mode, model_name, excluded)
             if result is not None:
                 return result
             # result 为 None: 池为空或所有候选都在冷却中，降级到 MySQL
@@ -631,17 +807,28 @@ class MySQLManager:
                     current_time = time.time()
 
                     if mode == "geminicli":
+                        required_tiers = required_tiers_for_geminicli_model(model_name)
+                        tier_clause = ""
+                        query_params: List[Any] = [self._server_name]
+                        if required_tiers:
+                            placeholders = ", ".join("%s" for _ in required_tiers)
+                            tier_clause = f" AND tier IN ({placeholders})"
+                            query_params.extend(required_tiers)
+                        health_clause = " AND COALESCE(health_status, 'healthy') = 'healthy'" if health_enabled else ""
                         await cur.execute(f"""
-                            SELECT filename, credential_data, model_cooldowns, preview
+                            SELECT filename, credential_data, model_cooldowns, preview, tier
                             FROM {table_name}
                             WHERE server_name = %s AND disabled = 0
+                            {health_clause}
+                            {tier_clause}
                             ORDER BY RAND()
-                        """, (self._server_name,))
+                        """, tuple(query_params))
                         rows = await cur.fetchall()
 
                         if not model_name:
-                            if rows:
-                                filename, credential_json, _, _ = rows[0]
+                            available_rows = [row for row in rows if row[0] not in excluded]
+                            if available_rows:
+                                filename, credential_json, _, _, _ = available_rows[0]
                                 credential_data = json.loads(credential_json)
                                 return filename, credential_data
                             return None
@@ -651,7 +838,11 @@ class MySQLManager:
                         non_preview_creds = []
                         preview_creds = []
 
-                        for filename, credential_json, model_cooldowns_json, preview in rows:
+                        for filename, credential_json, model_cooldowns_json, preview, tier in rows:
+                            if filename in excluded:
+                                continue
+                            if required_tiers and (tier or default_tier_for_mode(mode)) not in required_tiers:
+                                continue
                             model_cooldowns = json.loads(model_cooldowns_json or '{}')
 
                             model_cooldown = model_cooldowns.get(model_name)
@@ -685,12 +876,15 @@ class MySQLManager:
                         rows = await cur.fetchall()
 
                         if not model_name:
-                            if rows:
-                                filename, credential_json, _ = rows[0]
+                            available_rows = [row for row in rows if row[0] not in excluded]
+                            if available_rows:
+                                filename, credential_json, _ = available_rows[0]
                                 return filename, json.loads(credential_json)
                             return None
 
                         for filename, credential_json, model_cooldowns_json in rows:
+                            if filename in excluded:
+                                continue
                             model_cooldowns = json.loads(model_cooldowns_json or '{}')
 
                             model_cooldown = model_cooldowns.get(model_name)
@@ -727,6 +921,31 @@ class MySQLManager:
         except Exception as e:
             log.error(f"Error getting available credentials list (mode={mode}): {e}")
             return []
+
+    async def check_smart_429_capability(self) -> tuple[bool, Optional[str]]:
+        required = {
+            "health_status", "quarantine_reason", "probe_stage", "next_probe_at",
+            "last_health_check_at", "health_check_started_at", "health_state_version",
+        }
+        try:
+            self._ensure_initialized()
+            async with self._pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+                        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'gcli_credentials'"
+                    )
+                    columns = {row[0] for row in await cur.fetchall()}
+                    missing = sorted(required - columns)
+                    if missing:
+                        return False, f"missing_health_fields:{','.join(missing)}"
+                    await cur.execute(
+                        "UPDATE gcli_credentials SET health_state_version = "
+                        "COALESCE(health_state_version, 0) WHERE 1 = 0"
+                    )
+            return True, None
+        except Exception as exc:
+            return False, f"health_fields_unavailable:{exc}"
 
     # ============ StorageBackend 协议方法 ============
 
@@ -773,27 +992,32 @@ class MySQLManager:
                                 (server_name, filename, credential_data, disabled,
                                  error_codes, error_messages, last_success,
                                  model_cooldowns, preview, rotation_order,
-                                 call_count, created_at, updated_at)
-                                VALUES (%s, %s, %s, 0, '[]', '[]', %s, '{{}}', 1, %s, 0, %s, %s)
+                                 call_count, created_at, updated_at, tier)
+                                VALUES (%s, %s, %s, 0, '[]', '[]', %s, '{{}}', 1, %s, 0, %s, %s, %s)
                             """, (self._server_name, filename, json.dumps(credential_data),
-                                  current_ts, next_order, current_ts, current_ts))
+                                  current_ts, next_order, current_ts, current_ts, default_tier_for_mode(mode)))
                         else:
                             await cur.execute(f"""
                                 INSERT INTO {table_name}
                                 (server_name, filename, credential_data, disabled,
                                  error_codes, error_messages, last_success,
                                  model_cooldowns, rotation_order,
-                                 call_count, created_at, updated_at)
-                                VALUES (%s, %s, %s, 0, '[]', '[]', %s, '{{}}', %s, 0, %s, %s)
+                                 call_count, created_at, updated_at, tier)
+                                VALUES (%s, %s, %s, 0, '[]', '[]', %s, '{{}}', %s, 0, %s, %s, %s)
                             """, (self._server_name, filename, json.dumps(credential_data),
-                                  current_ts, next_order, current_ts, current_ts))
+                                  current_ts, next_order, current_ts, current_ts, default_tier_for_mode(mode)))
 
                 await conn.commit()
                 log.debug(f"Stored credential: {filename} (mode={mode})")
 
                 # Redis: 新增凭证到可用池（新凭证默认 disabled=0, preview=1）
                 if not existing:
-                    await self._redis_add_cred(mode, filename, preview=True)
+                    await self._redis_add_cred(
+                        mode,
+                        filename,
+                        tier=default_tier_for_mode(mode),
+                        preview=True,
+                    )
 
                 return True
 
@@ -895,6 +1119,8 @@ class MySQLManager:
                     # antigravity 表没有 preview 列
                     if key == "preview" and mode != "geminicli":
                         continue
+                    if key.startswith("tier_raw_") and mode != "geminicli":
+                        continue
                     if key in ("error_codes", "error_messages", "model_cooldowns"):
                         set_clauses.append(f"{key} = %s")
                         values.append(json.dumps(value))
@@ -921,24 +1147,42 @@ class MySQLManager:
 
                 await conn.commit()
 
-                # Redis: 同步 disabled/preview/cooldown 变更
+                # Redis: 同步 disabled/tier/preview/cooldown 变更
                 if updated_count > 0 and self._redis_enabled:
-                    if "disabled" in state_updates:
-                        # 需要获取当前 preview 状态
+                    if any(key in state_updates for key in ("disabled", "tier", "preview")):
+                        disabled = False
+                        tier = default_tier_for_mode(mode)
                         preview = True
                         if mode == "geminicli":
                             async with self._pool.acquire() as conn2:
                                 async with conn2.cursor() as cur2:
                                     await cur2.execute(f"""
-                                        SELECT preview FROM {table_name}
+                                        SELECT disabled, tier, preview FROM {table_name}
                                         WHERE server_name = %s AND filename = %s
                                     """, (self._server_name, filename))
                                     row = await cur2.fetchone()
                                     if row:
-                                        preview = bool(row[0])
-                        await self._redis_sync_cred(mode, filename, state_updates["disabled"], preview)
-                    elif "preview" in state_updates and mode == "geminicli":
-                        await self._redis_sync_cred(mode, filename, False, state_updates["preview"])
+                                        disabled = bool(row[0])
+                                        tier = row[1] or default_tier_for_mode(mode)
+                                        preview = bool(row[2])
+                        else:
+                            async with self._pool.acquire() as conn2:
+                                async with conn2.cursor() as cur2:
+                                    await cur2.execute(f"""
+                                        SELECT disabled, tier FROM {table_name}
+                                        WHERE server_name = %s AND filename = %s
+                                    """, (self._server_name, filename))
+                                    row = await cur2.fetchone()
+                                    if row:
+                                        disabled = bool(row[0])
+                                        tier = row[1] or default_tier_for_mode(mode)
+                        await self._redis_sync_cred(
+                            mode,
+                            filename,
+                            disabled=disabled,
+                            tier=tier,
+                            preview=preview,
+                        )
                     if "model_cooldowns" in state_updates:
                         # 冷却整体覆盖，重建所有 TTL key
                         cooldowns = state_updates["model_cooldowns"]
@@ -967,7 +1211,10 @@ class MySQLManager:
                     if mode == "geminicli":
                         await cur.execute(f"""
                             SELECT disabled, error_codes, last_success,
-                                   user_email, model_cooldowns, preview, tier
+                                   user_email, model_cooldowns, preview, tier,
+                                   tier_raw_id, tier_raw_name, tier_detected_at,
+                                   health_status, quarantine_reason, probe_stage, next_probe_at,
+                                   last_health_check_at, health_check_started_at, health_state_version
                             FROM {table_name}
                             WHERE server_name = %s AND filename = %s
                         """, (self._server_name, filename))
@@ -981,14 +1228,34 @@ class MySQLManager:
                                 "user_email": row[3],
                                 "model_cooldowns": json.loads(row[4] or '{}'),
                                 "preview": bool(row[5]) if row[5] is not None else True,
-                                "tier": row[6] if row[6] is not None else "pro",
+                                "tier": row[6] if row[6] is not None else "unknown",
+                                "tier_raw_id": row[7],
+                                "tier_raw_name": row[8],
+                                "tier_detected_at": row[9],
+                                "health_status": row[10] or "healthy",
+                                "quarantine_reason": row[11],
+                                "probe_stage": row[12] or 0,
+                                "next_probe_at": row[13],
+                                "last_health_check_at": row[14],
+                                "health_check_started_at": row[15],
+                                "health_state_version": row[16] or 0,
                             }
 
                         return {
                             "disabled": False, "error_codes": [],
                             "last_success": time.time(), "user_email": None,
                             "model_cooldowns": {}, "preview": True,
-                            "tier": "pro",
+                            "tier": "unknown",
+                            "tier_raw_id": None,
+                            "tier_raw_name": None,
+                            "tier_detected_at": None,
+                            "health_status": "healthy",
+                            "quarantine_reason": None,
+                            "probe_stage": 0,
+                            "next_probe_at": None,
+                            "last_health_check_at": None,
+                            "health_check_started_at": None,
+                            "health_state_version": 0,
                         }
                     else:
                         await cur.execute(f"""
@@ -1031,7 +1298,10 @@ class MySQLManager:
                     if mode == "geminicli":
                         await cur.execute(f"""
                             SELECT filename, disabled, error_codes, last_success,
-                                   user_email, model_cooldowns, preview, tier
+                                   user_email, model_cooldowns, preview, tier,
+                                   tier_raw_id, tier_raw_name, tier_detected_at,
+                                   health_status, quarantine_reason, probe_stage, next_probe_at,
+                                   last_health_check_at, health_check_started_at, health_state_version
                             FROM {table_name}
                             WHERE server_name = %s
                         """, (self._server_name,))
@@ -1070,7 +1340,17 @@ class MySQLManager:
 
                         if mode == "geminicli":
                             state["preview"] = bool(row[6]) if row[6] is not None else True
-                            state["tier"] = row[7] if row[7] is not None else "pro"
+                            state["tier"] = row[7] if row[7] is not None else "unknown"
+                            state["tier_raw_id"] = row[8]
+                            state["tier_raw_name"] = row[9]
+                            state["tier_detected_at"] = row[10]
+                            state["health_status"] = row[11] or "healthy"
+                            state["quarantine_reason"] = row[12]
+                            state["probe_stage"] = row[13] or 0
+                            state["next_probe_at"] = row[14]
+                            state["last_health_check_at"] = row[15]
+                            state["health_check_started_at"] = row[16]
+                            state["health_state_version"] = row[17] or 0
                         else:
                             state["tier"] = row[6] if row[6] is not None else "pro"
 
@@ -1141,7 +1421,10 @@ class MySQLManager:
                     if mode == "geminicli":
                         query = f"""
                             SELECT filename, disabled, error_codes, last_success,
-                                   user_email, rotation_order, model_cooldowns, preview, tier
+                                   user_email, rotation_order, model_cooldowns, preview, tier,
+                                   tier_raw_id, tier_raw_name, tier_detected_at,
+                                   health_status, quarantine_reason, probe_stage, next_probe_at,
+                                   last_health_check_at, health_check_started_at, health_state_version
                             FROM {table_name}
                             {where_clause}
                             ORDER BY rotation_order
@@ -1203,7 +1486,17 @@ class MySQLManager:
 
                         if mode == "geminicli":
                             summary["preview"] = bool(row[7]) if row[7] is not None else True
-                            summary["tier"] = row[8] if row[8] is not None else "pro"
+                            summary["tier"] = row[8] if row[8] is not None else "unknown"
+                            summary["tier_raw_id"] = row[9]
+                            summary["tier_raw_name"] = row[10]
+                            summary["tier_detected_at"] = row[11]
+                            summary["health_status"] = row[12] or "healthy"
+                            summary["quarantine_reason"] = row[13]
+                            summary["probe_stage"] = row[14] or 0
+                            summary["next_probe_at"] = row[15]
+                            summary["last_health_check_at"] = row[16]
+                            summary["health_check_started_at"] = row[17]
+                            summary["health_state_version"] = row[18] or 0
                         else:
                             summary["tier"] = row[7] if row[7] is not None else "pro"
 
@@ -1216,7 +1509,7 @@ class MySQLManager:
                                 continue
 
                         # tier 筛选
-                        if tier_filter and tier_filter in ("free", "pro", "ultra"):
+                        if tier_filter and tier_filter in valid_tiers_for_mode(mode):
                             if summary["tier"] != tier_filter:
                                 continue
 
@@ -1517,3 +1810,164 @@ class MySQLManager:
 
         except Exception as e:
             log.error(f"Error recording success for {filename}: {e}")
+
+    async def reserve_hedge_budget(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        daily_budget: int,
+    ) -> bool:
+        """Atomically reserve one hedge unit within this server namespace."""
+        self._ensure_initialized()
+        if daily_budget <= 0:
+            return False
+        now = time.time()
+        async with self._pool.acquire() as conn:
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        """
+                        INSERT IGNORE INTO gcli_daily_hedge_stats
+                            (server_name, date, credential_name, model_family, updated_at)
+                        VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (
+                            self._server_name,
+                            date,
+                            credential_name,
+                            model_family,
+                            now,
+                        ),
+                    )
+                    await cur.execute(
+                        """
+                        UPDATE gcli_daily_hedge_stats
+                        SET extra_upstream_requests = extra_upstream_requests + 1,
+                            outcome_pending = outcome_pending + 1,
+                            updated_at = %s
+                        WHERE server_name = %s
+                          AND date = %s
+                          AND credential_name = %s
+                          AND model_family = %s
+                          AND extra_upstream_requests < %s
+                        """,
+                        (
+                            now,
+                            self._server_name,
+                            date,
+                            credential_name,
+                            model_family,
+                            daily_budget,
+                        ),
+                    )
+                    reserved = cur.rowcount == 1
+                await conn.commit()
+                return reserved
+            except BaseException:
+                await conn.rollback()
+                raise
+
+    async def record_hedge_metric(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        metric: str,
+    ) -> None:
+        self._ensure_initialized()
+        if metric != "budget_skips":
+            raise ValueError(f"unsupported hedge metric: {metric}")
+        async with self._pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO gcli_daily_hedge_stats
+                        (server_name, date, credential_name, model_family,
+                         budget_skips, updated_at)
+                    VALUES (%s, %s, %s, %s, 1, %s)
+                    ON DUPLICATE KEY UPDATE
+                        budget_skips = budget_skips + 1,
+                        updated_at = VALUES(updated_at)
+                    """,
+                    (
+                        self._server_name,
+                        date,
+                        credential_name,
+                        model_family,
+                        time.time(),
+                    ),
+                )
+            await conn.commit()
+
+    async def record_hedge_outcome(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        outcome: str,
+        confirmed_rescue: bool = False,
+    ) -> None:
+        self._ensure_initialized()
+        allowed = {
+            "primary_wins",
+            "backup_wins",
+            "both_failed",
+            "client_cancelled",
+        }
+        if outcome not in allowed:
+            raise ValueError(f"unsupported hedge outcome: {outcome}")
+        query = f"""
+            UPDATE gcli_daily_hedge_stats
+            SET {outcome} = {outcome} + 1,
+                confirmed_rescues = confirmed_rescues + %s,
+                outcome_pending = GREATEST(0, outcome_pending - 1),
+                updated_at = %s
+            WHERE server_name = %s
+              AND date = %s
+              AND credential_name = %s
+              AND model_family = %s
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    query,
+                    (
+                        1 if confirmed_rescue else 0,
+                        time.time(),
+                        self._server_name,
+                        date,
+                        credential_name,
+                        model_family,
+                    ),
+                )
+            await conn.commit()
+
+    async def get_hedge_stats(self, days: int = 7) -> List[Dict[str, Any]]:
+        self._ensure_initialized()
+        days = max(1, min(int(days or 7), 90))
+        async with self._pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    """
+                    SELECT date, credential_name, model_family,
+                           extra_upstream_requests, primary_wins, backup_wins,
+                           confirmed_rescues, both_failed, client_cancelled,
+                           budget_skips, outcome_pending
+                    FROM gcli_daily_hedge_stats
+                    WHERE server_name = %s
+                      AND date IN (
+                          SELECT date FROM (
+                              SELECT DISTINCT date
+                              FROM gcli_daily_hedge_stats
+                              WHERE server_name = %s
+                              ORDER BY date DESC
+                              LIMIT %s
+                          ) AS recent_hedge_dates
+                      )
+                    ORDER BY date DESC, model_family, credential_name
+                    """,
+                    (self._server_name, self._server_name, days),
+                )
+                rows = await cur.fetchall()
+        return [dict(row) for row in rows]

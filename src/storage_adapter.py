@@ -8,7 +8,7 @@
 import asyncio
 import json
 import os
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 
 from log import log
 
@@ -35,6 +35,19 @@ class StorageBackend(Protocol):
 
     async def list_credentials(self, mode: str = "geminicli") -> List[str]:
         """列出所有凭证文件名"""
+        ...
+
+    async def get_next_available_credential(
+        self,
+        mode: str = "geminicli",
+        model_name: Optional[str] = None,
+        excluded_credentials: Optional[Set[str]] = None,
+    ) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """Select an eligible credential, excluding request-local failures when enabled."""
+        ...
+
+    async def check_smart_429_capability(self) -> Tuple[bool, Optional[str]]:
+        """Verify SMART 429 health-state storage support."""
         ...
 
     async def delete_credential(self, filename: str, mode: str = "geminicli") -> bool:
@@ -69,6 +82,42 @@ class StorageBackend(Protocol):
 
     async def delete_config(self, key: str) -> bool:
         """删除配置项"""
+        ...
+
+    # GeminiCLI hedge cost statistics
+    async def reserve_hedge_budget(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        daily_budget: int,
+    ) -> bool:
+        """Atomically reserve one daily hedge budget unit."""
+        ...
+
+    async def record_hedge_metric(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        metric: str,
+    ) -> None:
+        """Increment a hedge metric."""
+        ...
+
+    async def record_hedge_outcome(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        outcome: str,
+        confirmed_rescue: bool = False,
+    ) -> None:
+        """Finalize one reserved hedge."""
+        ...
+
+    async def get_hedge_stats(self, days: int = 7) -> List[Dict[str, Any]]:
+        """Return raw hedge statistic buckets."""
         ...
 
 
@@ -366,6 +415,7 @@ class StorageAdapter:
 
 # 全局存储适配器实例
 _storage_adapter: Optional[StorageAdapter] = None
+_storage_adapter_lock = asyncio.Lock()
 
 
 async def get_storage_adapter() -> StorageAdapter:
@@ -373,8 +423,11 @@ async def get_storage_adapter() -> StorageAdapter:
     global _storage_adapter
 
     if _storage_adapter is None:
-        _storage_adapter = StorageAdapter()
-        await _storage_adapter.initialize()
+        async with _storage_adapter_lock:
+            if _storage_adapter is None:
+                candidate = StorageAdapter()
+                await candidate.initialize()
+                _storage_adapter = candidate
 
     return _storage_adapter
 
@@ -383,6 +436,8 @@ async def close_storage_adapter():
     """关闭全局存储适配器"""
     global _storage_adapter
 
-    if _storage_adapter:
-        await _storage_adapter.close()
-        _storage_adapter = None
+    async with _storage_adapter_lock:
+        if _storage_adapter:
+            adapter = _storage_adapter
+            _storage_adapter = None
+            await adapter.close()

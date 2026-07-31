@@ -2,6 +2,8 @@
 配置路由模块 - 处理 /config/* 相关的HTTP请求
 """
 
+import os
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
@@ -61,7 +63,11 @@ async def debug_storage():
 async def get_system_status(token: str = Depends(verify_panel_token)):
     """获取系统状态（Redis 缓存状态），仅显示本服务器的内容"""
     import os
-    result = {"redis": {"enabled": False}}
+    from src.smart_429 import smart_429_service
+    result = {
+        "redis": {"enabled": False},
+        "smart_429": smart_429_service.status(),
+    }
 
     try:
         from src.storage_adapter import _storage_adapter
@@ -135,6 +141,9 @@ async def get_config(token: str = Depends(verify_panel_token)):
         current_config["retry_429_max_retries"] = await config.get_retry_429_max_retries()
         current_config["retry_429_enabled"] = await config.get_retry_429_enabled()
         current_config["retry_429_interval"] = await config.get_retry_429_interval()
+        current_config["smart_429_protection_enabled"] = await config.get_smart_429_protection_enabled()
+        current_config["smart_429_max_attempts"] = await config.get_smart_429_max_attempts()
+        current_config["smart_429_retry_base_interval"] = await config.get_smart_429_retry_base_interval()
         # 抗截断配置
         current_config["anti_truncation_max_attempts"] = await config.get_anti_truncation_max_attempts()
 
@@ -150,6 +159,21 @@ async def get_config(token: str = Depends(verify_panel_token)):
 
         # 调试模式
         current_config["debug_mode"] = await config.get_debug_mode()
+        current_config["stream_diagnostics_enabled"] = (
+            await config.get_stream_diagnostics_enabled()
+        )
+        current_config["geminicli_capacity_fast_fail_enabled"] = (
+            await config.get_geminicli_capacity_fast_fail_enabled()
+        )
+        current_config["geminicli_stream_header_hedge_enabled"] = (
+            await config.get_geminicli_stream_header_hedge_enabled()
+        )
+        current_config["geminicli_stream_header_hedge_sample_rate"] = (
+            await config.get_geminicli_stream_header_hedge_sample_rate()
+        )
+        current_config["geminicli_stream_header_hedge_daily_budget"] = (
+            await config.get_geminicli_stream_header_hedge_daily_budget()
+        )
 
         # 轮巡模式
         current_config["routing_mode"] = await config.get_routing_mode()
@@ -191,8 +215,23 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
 
         new_config = request.config
 
+        if "smart_429_protection_enabled" in new_config:
+            if not isinstance(new_config["smart_429_protection_enabled"], bool):
+                raise HTTPException(status_code=400, detail="SMART 429 protection switch must be boolean")
+        if "smart_429_max_attempts" in new_config:
+            value = new_config["smart_429_max_attempts"]
+            if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 5:
+                raise HTTPException(status_code=400, detail="SMART 429 attempts must be an integer from 1 to 5")
+        if "smart_429_retry_base_interval" in new_config:
+            try:
+                value = float(new_config["smart_429_retry_base_interval"])
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="SMART 429 retry interval must be numeric")
+            if not 0.1 <= value <= 5:
+                raise HTTPException(status_code=400, detail="SMART 429 retry interval must be from 0.1 to 5 seconds")
+            new_config["smart_429_retry_base_interval"] = value
+
         log.debug(f"收到的配置数据: {list(new_config.keys())}")
-        log.debug(f"收到的password值: {new_config.get('password', 'NOT_FOUND')}")
 
         # 验证配置项
         if "retry_429_max_retries" in new_config:
@@ -245,6 +284,47 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
             if not isinstance(new_config["debug_mode"], bool):
                 raise HTTPException(status_code=400, detail="调试模式开关必须是布尔值")
 
+        if "stream_diagnostics_enabled" in new_config:
+            if not isinstance(new_config["stream_diagnostics_enabled"], bool):
+                raise HTTPException(status_code=400, detail="流式 TTFT 诊断开关必须是布尔值")
+        if "geminicli_capacity_fast_fail_enabled" in new_config:
+            if not isinstance(new_config["geminicli_capacity_fast_fail_enabled"], bool):
+                raise HTTPException(
+                    status_code=400,
+                    detail="GeminiCLI 模型容量快速失败开关必须是布尔值",
+                )
+        if "geminicli_stream_header_hedge_enabled" in new_config:
+            if not isinstance(new_config["geminicli_stream_header_hedge_enabled"], bool):
+                raise HTTPException(
+                    status_code=400,
+                    detail="GeminiCLI 流式响应头对冲开关必须是布尔值",
+                )
+        if "geminicli_stream_header_hedge_sample_rate" in new_config:
+            value = new_config["geminicli_stream_header_hedge_sample_rate"]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise HTTPException(
+                    status_code=400,
+                    detail="GeminiCLI 对冲采样率必须是 0.0–1.0 的数字",
+                )
+            value = float(value)
+            if not 0.0 <= value <= 1.0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="GeminiCLI 对冲采样率必须在 0.0–1.0 之间",
+                )
+            new_config["geminicli_stream_header_hedge_sample_rate"] = value
+        if "geminicli_stream_header_hedge_daily_budget" in new_config:
+            value = new_config["geminicli_stream_header_hedge_daily_budget"]
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not 0 <= value <= 1000
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="GeminiCLI 每日对冲预算必须是 0–1000 的整数",
+                )
+
         # 验证保活配置
         if "keepalive_url" in new_config:
             if not isinstance(new_config["keepalive_url"], str):
@@ -285,6 +365,30 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
 
         # 获取环境变量锁定的配置键
         env_locked_keys = get_env_locked_keys()
+        diagnostics_saved = (
+            "stream_diagnostics_enabled" in new_config
+            and "stream_diagnostics_enabled" not in env_locked_keys
+        )
+        capacity_fast_fail_saved = (
+            "geminicli_capacity_fast_fail_enabled" in new_config
+            and "geminicli_capacity_fast_fail_enabled" not in env_locked_keys
+        )
+        stream_header_hedge_saved = (
+            "geminicli_stream_header_hedge_enabled" in new_config
+            and "geminicli_stream_header_hedge_enabled" not in env_locked_keys
+        )
+        stream_header_hedge_sample_rate_saved = (
+            "geminicli_stream_header_hedge_sample_rate" in new_config
+            and "geminicli_stream_header_hedge_sample_rate" not in env_locked_keys
+        )
+        stream_header_hedge_daily_budget_saved = (
+            "geminicli_stream_header_hedge_daily_budget" in new_config
+            and "geminicli_stream_header_hedge_daily_budget" not in env_locked_keys
+        )
+        try:
+            workers = int(os.getenv("WORKERS", "1"))
+        except (TypeError, ValueError):
+            workers = 1
 
         # 直接使用存储适配器保存配置
         storage_adapter = await get_storage_adapter()
@@ -292,10 +396,17 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
             if key not in env_locked_keys:
                 await storage_adapter.set_config(key, value)
                 if key in ("password", "api_password", "panel_password"):
-                    log.debug(f"设置{key}字段为: {value}")
+                    log.debug(f"已更新敏感配置字段: {key}")
 
         # 重新加载配置缓存（关键！）
-        await config.reload_config()
+        await config.reload_config(
+            reload_stream_diagnostics=workers == 1,
+            reload_capacity_fast_fail=workers == 1,
+            reload_stream_header_hedge=workers == 1,
+        )
+        from src.smart_429 import model_capacity_guard, smart_429_service
+        await smart_429_service.reconfigure()
+        model_capacity_guard.reconfigure()
 
         # 如果保活相关配置发生变化，立即重启保活服务
         keepalive_keys = {"keepalive_url", "keepalive_interval"}
@@ -306,18 +417,73 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
                 log.warning(f"重启保活服务失败: {e}")
 
         # 验证保存后的结果
-        test_api_password = await config.get_api_password()
-        test_panel_password = await config.get_panel_password()
-        test_password = await config.get_server_password()
-        log.debug(f"保存后立即读取的API密码: {test_api_password}")
-        log.debug(f"保存后立即读取的面板密码: {test_panel_password}")
-        log.debug(f"保存后立即读取的通用密码: {test_password}")
+        await config.get_api_password()
+        await config.get_panel_password()
+        await config.get_server_password()
+        log.debug("配置保存后敏感字段读取验证完成")
 
         # 构建响应消息
         response_data = {
             "message": "配置保存成功",
             "saved_config": {k: v for k, v in new_config.items() if k not in env_locked_keys},
+            "smart_429": smart_429_service.status(),
+            "hot_updated": [
+                key
+                for key, saved in (
+                    ("stream_diagnostics_enabled", diagnostics_saved),
+                    (
+                        "geminicli_capacity_fast_fail_enabled",
+                        capacity_fast_fail_saved,
+                    ),
+                    (
+                        "geminicli_stream_header_hedge_enabled",
+                        stream_header_hedge_saved,
+                    ),
+                    (
+                        "geminicli_stream_header_hedge_sample_rate",
+                        stream_header_hedge_sample_rate_saved,
+                    ),
+                    (
+                        "geminicli_stream_header_hedge_daily_budget",
+                        stream_header_hedge_daily_budget_saved,
+                    ),
+                )
+                if saved and workers == 1
+            ],
+            "restart_required": [
+                key
+                for key, saved in (
+                    ("stream_diagnostics_enabled", diagnostics_saved),
+                    (
+                        "geminicli_capacity_fast_fail_enabled",
+                        capacity_fast_fail_saved,
+                    ),
+                    (
+                        "geminicli_stream_header_hedge_enabled",
+                        stream_header_hedge_saved,
+                    ),
+                    (
+                        "geminicli_stream_header_hedge_sample_rate",
+                        stream_header_hedge_sample_rate_saved,
+                    ),
+                    (
+                        "geminicli_stream_header_hedge_daily_budget",
+                        stream_header_hedge_daily_budget_saved,
+                    ),
+                )
+                if saved and workers > 1
+            ],
         }
+        if (
+            diagnostics_saved
+            or capacity_fast_fail_saved
+            or stream_header_hedge_saved
+            or stream_header_hedge_sample_rate_saved
+            or stream_header_hedge_daily_budget_saved
+        ) and workers > 1:
+            response_data["restart_notice"] = (
+                "当前为多 Worker 模式，请重启全部 Worker 以统一应用诊断、容量保护和响应头对冲配置。"
+            )
 
         return JSONResponse(content=response_data)
 
@@ -614,4 +780,3 @@ async def _migrate_between_backends(source, target) -> dict:
              f"Config {result['config']['migrated']}/{result['config']['total']}")
 
     return result
-

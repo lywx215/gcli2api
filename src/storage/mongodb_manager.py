@@ -9,6 +9,12 @@ import time
 from typing import Any, Dict, List, Optional
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from pymongo.errors import DuplicateKeyError
+from src.subscription_tiers import (
+    default_tier_for_mode,
+    required_tiers_for_geminicli_model,
+    valid_tiers_for_mode,
+)
 
 from log import log
 
@@ -26,10 +32,20 @@ class MongoDBManager:
         "model_cooldowns",
         "preview",
         "tier",
+        "tier_raw_id",
+        "tier_raw_name",
+        "tier_detected_at",
         "enable_credit",
         "success_count",
         "failure_count",
         "remark",
+        "health_status",
+        "quarantine_reason",
+        "probe_stage",
+        "next_probe_at",
+        "last_health_check_at",
+        "health_check_started_at",
+        "health_state_version",
     }
 
     @staticmethod
@@ -100,6 +116,7 @@ class MongoDBManager:
 
         credentials_collection = self._db["credentials"]
         antigravity_credentials_collection = self._db["antigravity_credentials"]
+        hedge_stats_collection = self._db["daily_hedge_stats"]
 
         # ===== Geminicli 凭证索引 =====
         geminicli_indexes = [
@@ -143,6 +160,20 @@ class MongoDBManager:
         try:
             await credentials_collection.create_indexes(geminicli_indexes)
             await antigravity_credentials_collection.create_indexes(antigravity_indexes)
+            await hedge_stats_collection.create_indexes(
+                [
+                    IndexModel(
+                        [
+                            ("date", ASCENDING),
+                            ("credential_name", ASCENDING),
+                            ("model_family", ASCENDING),
+                        ],
+                        unique=True,
+                        name="idx_hedge_bucket_unique",
+                    ),
+                    IndexModel([("date", ASCENDING)], name="idx_hedge_date"),
+                ]
+            )
             log.debug("MongoDB indexes created successfully")
         except Exception as e:
             # 如果索引已存在，忽略错误
@@ -246,7 +277,7 @@ class MongoDBManager:
                     avail.append(filename)
 
                     # 按 tier 分桶
-                    tier = doc.get("tier") or "pro"
+                    tier = doc.get("tier") or default_tier_for_mode(mode)
                     tier_buckets.setdefault(tier, []).append(filename)
 
                     # preview 分桶（仅 geminicli）
@@ -281,7 +312,7 @@ class MongoDBManager:
             await pipe2.execute()
 
             # 重建 tier 分桶 Set（原子替换）
-            all_tiers = ("free", "pro", "ultra")
+            all_tiers = valid_tiers_for_mode(mode)
             pipe3 = self._redis.pipeline()
             for tier in all_tiers:
                 tier_key = self._rk_tier(mode, tier)
@@ -336,11 +367,12 @@ class MongoDBManager:
         except Exception as e:
             log.warning(f"Redis rebuild cache error [{mode}]: {e}")
 
-    async def _redis_add_cred(self, mode: str, filename: str, tier: str = "pro", preview: bool = True) -> None:
+    async def _redis_add_cred(self, mode: str, filename: str, tier: Optional[str] = None, preview: bool = True) -> None:
         """将凭证加入 Redis 可用池及对应 tier 分桶、preview 分桶"""
         if not self._redis_enabled:
             return
         try:
+            tier = tier or default_tier_for_mode(mode)
             pipe = self._redis.pipeline()
             pipe.sadd(self._rk_avail(mode), filename)
             pipe.sadd(self._rk_tier(mode, tier), filename)
@@ -361,23 +393,24 @@ class MongoDBManager:
                 pipe.srem(self._rk_tier(mode, tier), filename)
             else:
                 # tier 未知时从所有分桶中移除
-                for t in ("free", "pro", "ultra"):
+                for t in valid_tiers_for_mode(mode):
                     pipe.srem(self._rk_tier(mode, t), filename)
             pipe.srem(self._rk_preview(mode), filename)
             await pipe.execute()
         except Exception as e:
             log.warning(f"Redis remove_cred error: {e}")
 
-    async def _redis_sync_cred(self, mode: str, filename: str, disabled: bool, tier: str = "pro", preview: bool = True) -> None:
+    async def _redis_sync_cred(self, mode: str, filename: str, disabled: bool, tier: Optional[str] = None, preview: bool = True) -> None:
         """根据最新状态同步单个凭证在 Redis 中的集合成员"""
         if not self._redis_enabled:
             return
         try:
+            tier = tier or default_tier_for_mode(mode)
             pipe = self._redis.pipeline()
+            for known_tier in valid_tiers_for_mode(mode):
+                pipe.srem(self._rk_tier(mode, known_tier), filename)
             if disabled:
                 pipe.srem(self._rk_avail(mode), filename)
-                for t in ("free", "pro", "ultra"):
-                    pipe.srem(self._rk_tier(mode, t), filename)
                 pipe.srem(self._rk_preview(mode), filename)
             else:
                 pipe.sadd(self._rk_avail(mode), filename)
@@ -391,26 +424,35 @@ class MongoDBManager:
             log.warning(f"Redis sync_cred error: {e}")
 
     async def _get_next_available_from_redis(
-        self, mode: str, model_name: Optional[str], exclude_free_tier: bool = False, preview_only: bool = False
+        self,
+        mode: str,
+        model_name: Optional[str],
+        required_tiers: Optional[tuple[str, ...]] = None,
+        preview_only: bool = False,
+        excluded_credentials: Optional[set[str]] = None,
     ) -> Optional[tuple]:
         """
         Redis 快速路径：随机取候选凭证，跳过冷却中的，返回 (filename, credential_data)。
         失败或池为空时返回 None，由调用方降级到 MongoDB。
         """
         try:
-            # 选择候选池优先级：preview_only > exclude_free_tier > 全量池
-            if preview_only and exclude_free_tier:
-                # preview 且非 free：preview ∩ (pro ∪ ultra)
-                preview_set = await self._redis.smembers(self._rk_preview(mode))
-                pro_members = await self._redis.smembers(self._rk_tier(mode, "pro"))
-                ultra_members = await self._redis.smembers(self._rk_tier(mode, "ultra"))
-                non_free = pro_members | ultra_members
-                all_candidates = list(preview_set & non_free)
-                if not all_candidates:
-                    log.debug(f"[Redis MISS] mode={mode} preview+non-free: no candidates, fallback to MongoDB")
+            from config import is_smart_429_protection_enabled
+            smart_enabled = is_smart_429_protection_enabled()
+            excluded = set(excluded_credentials or ())
+            # 受限模型先从允许的 Tier 分桶取并集，再叠加 preview 条件。
+            if required_tiers:
+                tier_members = set()
+                for tier in required_tiers:
+                    tier_members |= await self._redis.smembers(self._rk_tier(mode, tier))
+                if preview_only:
+                    tier_members &= await self._redis.smembers(self._rk_preview(mode))
+                if not tier_members:
+                    log.debug(
+                        f"[Redis MISS] mode={mode} model={model_name}: "
+                        f"no candidates for tiers={required_tiers}, fallback to MongoDB"
+                    )
                     return None
-                sample_size = min(len(all_candidates), 10)
-                candidates = random.sample(all_candidates, sample_size)
+                candidates = random.sample(list(tier_members), min(len(tier_members), 10))
             elif preview_only:
                 preview_key = self._rk_preview(mode)
                 preview_size = await self._redis.scard(preview_key)
@@ -421,15 +463,6 @@ class MongoDBManager:
                 candidates = await self._redis.srandmember(preview_key, sample_size)
                 if not candidates:
                     return None
-            elif exclude_free_tier:
-                pro_members = await self._redis.smembers(self._rk_tier(mode, "pro"))
-                ultra_members = await self._redis.smembers(self._rk_tier(mode, "ultra"))
-                all_candidates = list(pro_members | ultra_members)
-                if not all_candidates:
-                    log.debug(f"[Redis MISS] mode={mode} exclude_free: no non-free creds, fallback to MongoDB")
-                    return None
-                sample_size = min(len(all_candidates), 10)
-                candidates = random.sample(all_candidates, sample_size)
             else:
                 pool_key = self._rk_avail(mode)
                 pool_size = await self._redis.scard(pool_key)
@@ -441,10 +474,18 @@ class MongoDBManager:
                 if not candidates:
                     return None
 
+            candidates = [candidate for candidate in candidates if candidate not in excluded]
+            if not candidates:
+                return None
+
             # 过滤冷却中的凭证
             if model_name:
                 escaped = self._escape_model_name(model_name)
                 for filename in candidates:
+                    if smart_enabled and mode == "geminicli":
+                        state = await self.get_credential_state(filename, mode)
+                        if state.get("health_status", "healthy") != "healthy":
+                            continue
                     cd_key = self._rk_cd(mode, filename, escaped)
                     if not await self._redis.exists(cd_key):
                         credential_data = await self.get_credential(filename, mode)
@@ -458,7 +499,17 @@ class MongoDBManager:
                 log.debug(f"[Redis MISS] mode={mode} model={model_name}: all {len(candidates)} candidates in cooldown, fallback to MongoDB")
                 return None
             else:
-                filename = candidates[0]
+                filename = None
+                for item in candidates:
+                    if mode != "geminicli" or not smart_enabled:
+                        filename = item
+                        break
+                    state = await self.get_credential_state(item, mode)
+                    if state.get("health_status", "healthy") == "healthy":
+                        filename = item
+                        break
+                if filename is None:
+                    return None
                 credential_data = await self.get_credential(filename, mode)
                 if mode == "antigravity":
                     state = await self.get_credential_state(filename, mode)
@@ -500,7 +551,10 @@ class MongoDBManager:
     # ============ SQL 方法 ============
 
     async def get_next_available_credential(
-        self, mode: str = "geminicli", model_name: Optional[str] = None
+        self,
+        mode: str = "geminicli",
+        model_name: Optional[str] = None,
+        excluded_credentials: Optional[set[str]] = None,
     ) -> Optional[tuple[str, Dict[str, Any]]]:
         """
         随机获取一个可用凭证（负载均衡）
@@ -518,13 +572,26 @@ class MongoDBManager:
         """
         self._ensure_initialized()
 
+        from config import is_smart_429_protection_enabled
+        smart_enabled = is_smart_429_protection_enabled()
+        health_enabled = mode == "geminicli" and smart_enabled
+        excluded = set(excluded_credentials or ())
+
         # Redis 快速路径：根据模型名派生过滤标志，直接在 Redis 分桶中筛选
+        required_tiers = (
+            required_tiers_for_geminicli_model(model_name)
+            if mode == "geminicli"
+            else None
+        )
         if self._redis_enabled:
             model_lower = model_name.lower() if model_name else ""
-            exclude_free = False
             preview_only = mode == "geminicli" and "preview" in model_lower
             result = await self._get_next_available_from_redis(
-                mode, model_name, exclude_free_tier=exclude_free, preview_only=preview_only
+                mode,
+                model_name,
+                required_tiers=required_tiers,
+                preview_only=preview_only,
+                excluded_credentials=excluded,
             )
             if result is not None:
                 return result
@@ -538,6 +605,14 @@ class MongoDBManager:
 
             # 构建普通查询（避免 $sample 聚合导致全集合扫描）
             match_query: Dict[str, Any] = {"disabled": False}
+
+            if health_enabled:
+                match_query["health_status"] = {"$in": ["healthy", None]}
+                if excluded:
+                    match_query["filename"] = {"$nin": list(excluded)}
+
+            if required_tiers:
+                match_query["tier"] = {"$in": list(required_tiers)}
 
             # preview 模型只允许 preview=True 的凭证
             if mode == "geminicli" and model_name and "preview" in model_name.lower():
@@ -600,6 +675,20 @@ class MongoDBManager:
             log.error(f"Error getting available credentials list (mode={mode}): {e}")
             return []
 
+    async def check_smart_429_capability(self) -> tuple[bool, Optional[str]]:
+        """MongoDB is schemaless; verify the health fields can be projected and updated."""
+        try:
+            self._ensure_initialized()
+            collection = self._db["credentials"]
+            await collection.find_one({}, {"health_status": 1, "health_state_version": 1})
+            await collection.update_many(
+                {"_id": {"$exists": False}},
+                {"$set": {"health_state_version": 0}},
+            )
+            return True, None
+        except Exception as exc:
+            return False, f"health_fields_unavailable:{exc}"
+
     # ============ StorageBackend 协议方法 ============
 
     async def store_credential(self, filename: str, credential_data: Dict[str, Any], mode: str = "geminicli") -> bool:
@@ -652,7 +741,7 @@ class MongoDBManager:
                         "user_email": None,
                         "model_cooldowns": {},
                         "preview": True,
-                        "tier": "pro",
+                        "tier": default_tier_for_mode(mode),
                         "rotation_order": next_order,
                         "call_count": 0,
                         "success_count": 0,
@@ -663,6 +752,19 @@ class MongoDBManager:
 
                     if mode == "antigravity":
                         new_credential["enable_credit"] = False
+                    else:
+                        new_credential.update({
+                            "tier_raw_id": None,
+                            "tier_raw_name": None,
+                            "tier_detected_at": None,
+                            "health_status": "healthy",
+                            "quarantine_reason": None,
+                            "probe_stage": 0,
+                            "next_probe_at": None,
+                            "last_health_check_at": None,
+                            "health_check_started_at": None,
+                            "health_state_version": 0,
+                        })
 
                     await collection.insert_one(new_credential)
                     # 新凭证插入成功，添加到 Redis 可用池
@@ -864,6 +966,10 @@ class MongoDBManager:
 
             if mode != "antigravity":
                 valid_updates.pop("enable_credit", None)
+            else:
+                valid_updates.pop("tier_raw_id", None)
+                valid_updates.pop("tier_raw_name", None)
+                valid_updates.pop("tier_detected_at", None)
 
             if not valid_updates:
                 return True
@@ -887,7 +993,7 @@ class MongoDBManager:
                         {"filename": filename},
                         projection={"tier": 1, "preview": 1, "_id": 0},
                     )
-                    tier_val = (doc or {}).get("tier", "pro") or "pro"
+                    tier_val = (doc or {}).get("tier") or default_tier_for_mode(mode)
                     preview_val = (doc or {}).get("preview", True)
                     await self._redis_sync_cred(mode, filename, disabled=False, tier=tier_val, preview=preview_val)
             elif self._redis_enabled and ("tier" in valid_updates or "preview" in valid_updates):
@@ -897,7 +1003,7 @@ class MongoDBManager:
                     projection={"disabled": 1, "tier": 1, "preview": 1, "_id": 0},
                 )
                 if doc and not doc.get("disabled", False):
-                    tier_val = doc.get("tier", "pro") or "pro"
+                    tier_val = doc.get("tier") or default_tier_for_mode(mode)
                     preview_val = doc.get("preview", True)
                     await self._redis_sync_cred(mode, filename, disabled=False, tier=tier_val, preview=preview_val)
 
@@ -938,11 +1044,24 @@ class MongoDBManager:
                     "user_email": doc.get("user_email"),
                     "model_cooldowns": model_cooldowns,
                     "preview": doc.get("preview", True),
-                    "tier": doc.get("tier", "pro"),
+                    "tier": doc.get("tier") or default_tier_for_mode(mode),
+                    "tier_raw_id": doc.get("tier_raw_id") if mode == "geminicli" else None,
+                    "tier_raw_name": doc.get("tier_raw_name") if mode == "geminicli" else None,
+                    "tier_detected_at": doc.get("tier_detected_at") if mode == "geminicli" else None,
                     "success_count": doc.get("success_count", 0),
                     "failure_count": doc.get("failure_count", 0),
                     "remark": doc.get("remark", ""),
                 }
+                if mode == "geminicli":
+                    state.update({
+                        "health_status": doc.get("health_status") or "healthy",
+                        "quarantine_reason": doc.get("quarantine_reason"),
+                        "probe_stage": doc.get("probe_stage", 0),
+                        "next_probe_at": doc.get("next_probe_at"),
+                        "last_health_check_at": doc.get("last_health_check_at"),
+                        "health_check_started_at": doc.get("health_check_started_at"),
+                        "health_state_version": doc.get("health_state_version", 0),
+                    })
                 if mode == "antigravity":
                     state["enable_credit"] = doc.get("enable_credit", False)
                 return state
@@ -955,11 +1074,24 @@ class MongoDBManager:
                 "user_email": None,
                 "model_cooldowns": {},
                 "preview": True,
-                "tier": "pro",
+                "tier": default_tier_for_mode(mode),
+                "tier_raw_id": None,
+                "tier_raw_name": None,
+                "tier_detected_at": None,
                 "success_count": 0,
                 "failure_count": 0,
                 "remark": "",
             }
+            if mode == "geminicli":
+                default_state.update({
+                    "health_status": "healthy",
+                    "quarantine_reason": None,
+                    "probe_stage": 0,
+                    "next_probe_at": None,
+                    "last_health_check_at": None,
+                    "health_check_started_at": None,
+                    "health_state_version": 0,
+                })
             if mode == "antigravity":
                 default_state["enable_credit"] = False
             return default_state
@@ -986,10 +1118,20 @@ class MongoDBManager:
                 "model_cooldowns": 1,
                 "preview": 1,
                 "tier": 1,
+                "tier_raw_id": 1,
+                "tier_raw_name": 1,
+                "tier_detected_at": 1,
                 "enable_credit": 1,
                 "success_count": 1,
                 "failure_count": 1,
                 "remark": 1,
+                "health_status": 1,
+                "quarantine_reason": 1,
+                "probe_stage": 1,
+                "next_probe_at": 1,
+                "last_health_check_at": 1,
+                "health_check_started_at": 1,
+                "health_state_version": 1,
                 "_id": 0
             }
 
@@ -1016,11 +1158,24 @@ class MongoDBManager:
                     "user_email": doc.get("user_email"),
                     "model_cooldowns": model_cooldowns,
                     "preview": doc.get("preview", True),
-                    "tier": doc.get("tier", "pro"),
+                    "tier": doc.get("tier") or default_tier_for_mode(mode),
+                    "tier_raw_id": doc.get("tier_raw_id") if mode == "geminicli" else None,
+                    "tier_raw_name": doc.get("tier_raw_name") if mode == "geminicli" else None,
+                    "tier_detected_at": doc.get("tier_detected_at") if mode == "geminicli" else None,
                     "success_count": doc.get("success_count", 0),
                     "failure_count": doc.get("failure_count", 0),
                     "remark": doc.get("remark", ""),
                 }
+                if mode == "geminicli":
+                    state.update({
+                        "health_status": doc.get("health_status") or "healthy",
+                        "quarantine_reason": doc.get("quarantine_reason"),
+                        "probe_stage": doc.get("probe_stage", 0),
+                        "next_probe_at": doc.get("next_probe_at"),
+                        "last_health_check_at": doc.get("last_health_check_at"),
+                        "health_check_started_at": doc.get("health_check_started_at"),
+                        "health_state_version": doc.get("health_state_version", 0),
+                    })
                 if mode == "antigravity":
                     state["enable_credit"] = doc.get("enable_credit", False)
                 states[filename] = state
@@ -1123,10 +1278,20 @@ class MongoDBManager:
                 "model_cooldowns": 1,
                 "preview": 1,
                 "tier": 1,
+                "tier_raw_id": 1,
+                "tier_raw_name": 1,
+                "tier_detected_at": 1,
                 "enable_credit": 1,
                 "success_count": 1,
                 "failure_count": 1,
                 "remark": 1,
+                "health_status": 1,
+                "quarantine_reason": 1,
+                "probe_stage": 1,
+                "next_probe_at": 1,
+                "last_health_check_at": 1,
+                "health_check_started_at": 1,
+                "health_state_version": 1,
                 "_id": 0
             }
 
@@ -1155,11 +1320,25 @@ class MongoDBManager:
                     "rotation_order": doc.get("rotation_order", 0),
                     "model_cooldowns": active_cooldowns,
                     "preview": doc.get("preview", True),
-                    "tier": doc.get("tier", "pro"),
+                    "tier": doc.get("tier") or default_tier_for_mode(mode),
+                    "tier_raw_id": doc.get("tier_raw_id") if mode == "geminicli" else None,
+                    "tier_raw_name": doc.get("tier_raw_name") if mode == "geminicli" else None,
+                    "tier_detected_at": doc.get("tier_detected_at") if mode == "geminicli" else None,
                     "success_count": doc.get("success_count", 0),
                     "failure_count": doc.get("failure_count", 0),
                     "remark": doc.get("remark", ""),
                 }
+
+                if mode == "geminicli":
+                    summary.update({
+                        "health_status": doc.get("health_status") or "healthy",
+                        "quarantine_reason": doc.get("quarantine_reason"),
+                        "probe_stage": doc.get("probe_stage", 0),
+                        "next_probe_at": doc.get("next_probe_at"),
+                        "last_health_check_at": doc.get("last_health_check_at"),
+                        "health_check_started_at": doc.get("health_check_started_at"),
+                        "health_state_version": doc.get("health_state_version", 0),
+                    })
 
                 if mode == "antigravity":
                     summary["enable_credit"] = bool(doc.get("enable_credit", False))
@@ -1175,7 +1354,7 @@ class MongoDBManager:
                     continue
 
                 # 应用tier筛选
-                if tier_filter and tier_filter in ("free", "pro", "ultra"):
+                if tier_filter and tier_filter in valid_tiers_for_mode(mode):
                     if summary["tier"] != tier_filter:
                         continue
 
@@ -1621,6 +1800,151 @@ class MongoDBManager:
 
     async def get_recent_daily_stats(self, days: int = 7, mode: Optional[str] = None) -> List[Dict[str, Any]]:
         return []
+
+    async def reserve_hedge_budget(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        daily_budget: int,
+    ) -> bool:
+        """Atomically reserve a MongoDB hedge budget unit."""
+        self._ensure_initialized()
+        if daily_budget <= 0:
+            return False
+        collection = self._db["daily_hedge_stats"]
+        key = {
+            "date": date,
+            "credential_name": credential_name,
+            "model_family": model_family,
+        }
+        now = time.time()
+        initial = {
+            **key,
+            "extra_upstream_requests": 1,
+            "primary_wins": 0,
+            "backup_wins": 0,
+            "confirmed_rescues": 0,
+            "both_failed": 0,
+            "client_cancelled": 0,
+            "budget_skips": 0,
+            "outcome_pending": 1,
+            "updated_at": now,
+        }
+        try:
+            await collection.insert_one(initial)
+            return True
+        except DuplicateKeyError:
+            result = await collection.update_one(
+                {**key, "extra_upstream_requests": {"$lt": daily_budget}},
+                {
+                    "$inc": {
+                        "extra_upstream_requests": 1,
+                        "outcome_pending": 1,
+                    },
+                    "$set": {"updated_at": now},
+                },
+            )
+            return result.modified_count == 1
+
+    async def record_hedge_metric(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        metric: str,
+    ) -> None:
+        self._ensure_initialized()
+        if metric != "budget_skips":
+            raise ValueError(f"unsupported hedge metric: {metric}")
+        key = {
+            "date": date,
+            "credential_name": credential_name,
+            "model_family": model_family,
+        }
+        await self._db["daily_hedge_stats"].update_one(
+            key,
+            {
+                "$setOnInsert": {
+                    "extra_upstream_requests": 0,
+                    "primary_wins": 0,
+                    "backup_wins": 0,
+                    "confirmed_rescues": 0,
+                    "both_failed": 0,
+                    "client_cancelled": 0,
+                    "outcome_pending": 0,
+                },
+                "$inc": {"budget_skips": 1},
+                "$set": {"updated_at": time.time()},
+            },
+            upsert=True,
+        )
+
+    async def record_hedge_outcome(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        outcome: str,
+        confirmed_rescue: bool = False,
+    ) -> None:
+        self._ensure_initialized()
+        allowed = {
+            "primary_wins",
+            "backup_wins",
+            "both_failed",
+            "client_cancelled",
+        }
+        if outcome not in allowed:
+            raise ValueError(f"unsupported hedge outcome: {outcome}")
+        key = {
+            "date": date,
+            "credential_name": credential_name,
+            "model_family": model_family,
+        }
+        await self._db["daily_hedge_stats"].update_one(
+            key,
+            [
+                {
+                    "$set": {
+                        outcome: {
+                            "$add": [{"$ifNull": [f"${outcome}", 0]}, 1]
+                        },
+                        "confirmed_rescues": {
+                            "$add": [
+                                {"$ifNull": ["$confirmed_rescues", 0]},
+                                1 if confirmed_rescue else 0,
+                            ]
+                        },
+                        "outcome_pending": {
+                            "$max": [
+                                0,
+                                {
+                                    "$subtract": [
+                                        {"$ifNull": ["$outcome_pending", 0]},
+                                        1,
+                                    ]
+                                },
+                            ]
+                        },
+                        "updated_at": time.time(),
+                    }
+                }
+            ],
+        )
+
+    async def get_hedge_stats(self, days: int = 7) -> List[Dict[str, Any]]:
+        self._ensure_initialized()
+        days = max(1, min(int(days or 7), 90))
+        collection = self._db["daily_hedge_stats"]
+        dates = sorted(await collection.distinct("date"), reverse=True)[:days]
+        if not dates:
+            return []
+        cursor = collection.find(
+            {"date": {"$in": dates}},
+            {"_id": 0},
+        ).sort([("date", -1), ("model_family", 1), ("credential_name", 1)])
+        return [dict(row) async for row in cursor]
 
     async def get_today_stats_by_model(self, mode: Optional[str] = None) -> Dict[str, Any]:
         from datetime import datetime, timedelta, timezone

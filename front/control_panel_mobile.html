@@ -1422,6 +1422,27 @@
                     </div>
                 </div>
 
+                <div id="hedgeStatsCard"
+                    style="background:#fff8e1;border:1px solid #ffca28;border-radius:8px;padding:12px;margin:8px 0;font-size:12px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <strong>🏁 今日对冲成本 <span id="hedgeStatsDate"></span></strong>
+                        <button onclick="refreshHedgeStats()">↻</button>
+                    </div>
+                    <div>采样 <span id="hedgeStatsSampleRate">-</span>；
+                        预算 <span id="hedgeStatsDailyBudget">-</span></div>
+                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px;">
+                        <div>额外 <b id="hedgeStatsExtra">-</b></div>
+                        <div>剩余 <b id="hedgeStatsRemaining">-</b></div>
+                        <div>主胜 <b id="hedgeStatsPrimaryWins">-</b></div>
+                        <div>备胜 <b id="hedgeStatsBackupWins">-</b></div>
+                        <div>挽救 <b id="hedgeStatsRescues">-</b></div>
+                        <div>双败 <b id="hedgeStatsBothFailed">-</b></div>
+                    </div>
+                    <div>每次备胜成本：<b id="hedgeStatsCostPerWin">-</b></div>
+                    <div id="hedgeStatsByModel" style="margin-top:6px;"></div>
+                    <small>预计消耗为保守统计，最终以 Google 配额为准。</small>
+                </div>
+
                 <div
                     style="background:#f0f7ff;border:1px solid #b8d4f0;border-radius:6px;padding:10px 14px;margin:8px 0;font-size:13px;">
                     <strong>📡 API地址（点击复制）：</strong>
@@ -1455,7 +1476,7 @@
                 <div class="status info" style="margin-bottom: 15px;">
                     <strong>💡 检验功能说明：</strong>
                     <p style="margin: 8px 0; font-size: 14px;">
-                        点击每个凭证的"检验"按钮可以重新获取Project ID, 并查看账号的tier(free/pro/ultra)。<br>
+                        点击每个凭证的"检验"按钮可以重新获取Project ID，并查看账号的Tier（Code Assist Standard / Enterprise / Free / Pro / Ultra / Unknown）。<br>
                         <strong style="color: #0c5460;">✅ 检验成功可以恢复403错误</strong>，让凭证重新正常工作。<br>
                         建议在遇到403错误时使用此功能。
                     </p>
@@ -1571,9 +1592,12 @@
                         <label for="tierFilter">Tier：</label>
                         <select id="tierFilter" onchange="applyStatusFilter()">
                             <option value="all">全部</option>
+                            <option value="code_assist_standard">Code Assist Standard</option>
+                            <option value="code_assist_enterprise">Code Assist Enterprise</option>
                             <option value="free">Free</option>
                             <option value="pro">Pro</option>
                             <option value="ultra">Ultra</option>
+                            <option value="unknown">Unknown</option>
                         </select>
                     </div>
 
@@ -1606,19 +1630,6 @@
                             <div id="paginationInfo" style="font-size: 14px; color: #666;">第 1 页，共 1 页</div>
                             <button class="btn btn-small" id="nextPageBtn" onclick="changePage(1)"
                                 style="background-color: #6c757d;">下一页</button>
-                        </div>
-                        <div
-                            style="margin-top: 10px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-                            <div>
-                                <label for="pageSizeSelect" style="font-size: 12px; margin-right: 5px;">每页显示：</label>
-                                <select id="pageSizeSelect" onchange="changePageSize()"
-                                    style="padding: 4px; font-size: 12px;">
-                                    <option value="10">10</option>
-                                    <option value="20" selected>20</option>
-                                    <option value="50">50</option>
-                                    <option value="100">100</option>
-                                </select>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -2040,6 +2051,25 @@
 
 
                         <div class="card">
+                            <h4 style="margin-top: 0; margin-bottom: 15px;">SMART 429 分级保护</h4>
+                            <div class="form-group">
+                                <label style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" id="smart429ProtectionEnabled" style="width: auto; margin: 0;" />
+                                    启动 SMART 429 保护
+                                </label>
+                                <small>默认停止；首版仅支持单进程、单副本。</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="smart429MaxAttempts">单请求最多尝试次数:</label>
+                                <input type="number" id="smart429MaxAttempts" min="1" max="5" value="3" />
+                            </div>
+                            <div class="form-group">
+                                <label for="smart429RetryBaseInterval">退避基准间隔(秒):</label>
+                                <input type="number" id="smart429RetryBaseInterval" min="0.1" max="5" step="0.1" value="0.5" />
+                            </div>
+                        </div>
+
+                        <div class="card">
                             <h4 style="margin-top: 0; margin-bottom: 15px;">兼容性配置</h4>
 
                             <div class="form-group">
@@ -2104,6 +2134,73 @@
                                 <div
                                     style="background-color: #e8f5e9; border: 1px solid #66bb6a; border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 13px; color: #1b5e20;">
                                     <strong>✅ 说明：</strong>默认关闭，便于连续使用同一凭证；当发生模型CD或自动禁用时仍会切换。
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" id="streamDiagnosticsEnabled"
+                                        style="width: auto; margin: 0;" />
+                                    流式 TTFT 诊断
+                                    <span id="streamDiagnosticsEnabledEnvLock" hidden
+                                        style="color: #dc3545; margin-left: 8px;">环境变量已锁定</span>
+                                </label>
+                                <small
+                                    style="display: block; color: #666; font-size: 12px; margin-top: 5px;">记录流式请求各阶段耗时并返回 Server-Timing
+                                    <span style="color: #28a745;">✓ 支持热更新</span></small>
+                                <div
+                                    style="background-color: #e3f2fd; border: 1px solid #2196f3; border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 13px; color: #0d47a1;">
+                                    <strong>⏱️ 说明：</strong>默认关闭。开启后输出 STREAM_PERF_SUMMARY；不会记录 Token、Prompt、代理认证信息或完整请求体。
+                                    <br><strong>采样：</strong>慢请求、失败和重试全量记录，普通成功请求默认采样 1%。
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" id="geminicliCapacityFastFailEnabled"
+                                        style="width: auto; margin: 0;" />
+                                    GeminiCLI 模型容量快速失败
+                                    <span id="geminicliCapacityFastFailEnabledEnvLock" hidden
+                                        style="color: #dc3545; margin-left: 8px;">环境变量已锁定</span>
+                                </label>
+                                <small
+                                    style="display: block; color: #666; font-size: 12px; margin-top: 5px;">模型容量不足时限制凭证切换并快速返回 503
+                                    <span style="color: #28a745;">✓ 支持热更新</span></small>
+                                <div
+                                    style="background-color: #fff8e1; border: 1px solid #ffca28; border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 13px; color: #6d4c00;">
+                                    <strong>⚡ 说明：</strong>默认关闭。开启后 MODEL_CAPACITY_EXHAUSTED
+                                    单请求最多调用上游两次，并使用进程内模型保护器返回 Retry-After。
+                                    多 Worker 的保护状态彼此独立。
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" id="geminicliStreamHeaderHedgeEnabled"
+                                        style="width: auto; margin: 0;" />
+                                    GeminiCLI 流式响应头对冲
+                                    <span id="geminicliStreamHeaderHedgeEnabledEnvLock" hidden
+                                        style="color: #dc3545; margin-left: 8px;">环境变量已锁定</span>
+                                </label>
+                                <small
+                                    style="display: block; color: #666; font-size: 12px; margin-top: 5px;">响应头等待 15 秒后并行探测一个备用凭证
+                                    <span style="color: #28a745;">✓ 支持热更新</span></small>
+                                <label style="display:block;margin-top:8px;">采样率（%）
+                                    <input type="number" id="geminicliStreamHeaderHedgeSampleRate"
+                                        min="0" max="100" step="1" />
+                                    <span id="geminicliStreamHeaderHedgeSampleRateEnvLock" hidden
+                                        style="color:#dc3545;">环境变量已锁定</span>
+                                </label>
+                                <label style="display:block;margin-top:8px;">每日预算（每凭证/模型族）
+                                    <input type="number" id="geminicliStreamHeaderHedgeDailyBudget"
+                                        min="0" max="1000" step="1" />
+                                    <span id="geminicliStreamHeaderHedgeDailyBudgetEnvLock" hidden
+                                        style="color:#dc3545;">环境变量已锁定</span>
+                                </label>
+                                <div
+                                    style="background-color: #e3f2fd; border: 1px solid #2196f3; border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 13px; color: #0d47a1;">
+                                    <strong>🏁 说明：</strong>默认关闭。开启后首个有效上游事件获胜并关闭另一请求；
+                                    单 Worker 默认最多 20 个并发对冲，不会在首内容后重试。
                                 </div>
                             </div>
                         </div>
@@ -2298,7 +2395,7 @@
     </div>
 
     <!-- 引入公共JavaScript模块 -->
-    <script src="./front/common.js"></script>
+    <script src="./front/common.js?v=__GCLI2API_ASSET_VERSION__"></script>
 </body>
 
 </html>

@@ -12,6 +12,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import Response
 from log import log
+from src.streaming_latency import StreamFailure
 from src.converter.utils import merge_system_messages
 
 from src.converter.thoughtSignature_fix import (
@@ -303,9 +304,6 @@ def clean_json_schema(schema: Any) -> Any:
 
         if key == "type" and isinstance(value, list):
             # type: ["string", "null"] -> type: "string", nullable: true
-            has_null = any(
-                isinstance(t, str) and t.strip() and t.strip().lower() == "null" for t in value
-            )
             non_null_types = [
                 t.strip()
                 for t in value
@@ -1291,6 +1289,8 @@ async def gemini_stream_to_anthropic_stream(
 
         yield _sse_event("message_stop", {"type": "message_stop"})
 
+    except StreamFailure:
+        raise
     except Exception as e:
         log.error(f"[ANTHROPIC] 流式转换失败: {e}")
         # 发送错误事件

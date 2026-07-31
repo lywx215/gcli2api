@@ -8,9 +8,16 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from log import log
+from src.log_safety import credential_log_id, safe_exception
 
 from src.google_oauth_api import Credentials
 from src.storage_adapter import get_storage_adapter
+from src.streaming_latency import (
+    StreamLatencyConfig,
+    StreamPhase,
+    current_stream_trace,
+)
+
 
 def _fire_and_forget_cb(task: asyncio.Task):
     """回调：消费 fire-and-forget 任务的异常，防止任务对象泄漏"""
@@ -31,9 +38,9 @@ class CredentialManager:
         # 核心状态
         self._initialized = False
         self._storage_adapter = None
-
-        # 并发控制（简化）
-        # 后端数据库自行处理并发，credential_manager 不再使用本地锁
+        self._init_lock = asyncio.Lock()
+        self._refresh_lock = asyncio.Lock()
+        self._refresh_tasks: Dict[Tuple[str, str], asyncio.Task] = {}
 
     async def _ensure_initialized(self):
         """确保管理器已初始化（内部使用）"""
@@ -44,24 +51,36 @@ class CredentialManager:
         """初始化凭证管理器"""
         if self._initialized and self._storage_adapter is not None:
             return
-
-        # 初始化统一存储适配器
-        self._storage_adapter = await get_storage_adapter()
-        self._initialized = True
+        async with self._init_lock:
+            if self._initialized and self._storage_adapter is not None:
+                return
+            adapter = await get_storage_adapter()
+            self._storage_adapter = adapter
+            self._initialized = True
 
     async def close(self):
         """清理资源"""
         log.debug("Closing credential manager...")
+        async with self._refresh_lock:
+            tasks = list(self._refresh_tasks.values())
+            self._refresh_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         self._initialized = False
         log.debug("Credential manager closed")
 
     async def get_valid_credential(
-        self, mode: str = "geminicli", model_name: Optional[str] = None
+        self,
+        mode: str = "geminicli",
+        model_name: Optional[str] = None,
+        excluded_credentials: Optional[set[str]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
         获取有效的凭证 - 随机负载均衡版
         每次随机选择一个可用的凭证（未禁用、未冷却、符合preview要求）
-        如果刷新失败会自动禁用失效凭证并重试获取下一个可用凭证
+        刷新失败会排除当前凭证；仅明确永久失效时禁用，并尝试下一个可用凭证
 
         Args:
             mode: 凭证模式 ("geminicli" 或 "antigravity")
@@ -75,9 +94,12 @@ class CredentialManager:
 
         # 最多重试3次
         max_retries = 3
+        excluded = set(excluded_credentials or ())
         for attempt in range(max_retries):
             result = await self._storage_adapter._backend.get_next_available_credential(
-                mode=mode, model_name=model_name
+                mode=mode,
+                model_name=model_name,
+                excluded_credentials=excluded,
             )
 
             # 如果没有可用凭证，直接返回None
@@ -88,23 +110,24 @@ class CredentialManager:
 
             filename, credential_data = result
 
-            # Token 刷新检查
-            if await self._should_refresh_token(credential_data):
-                log.debug(f"Token需要刷新 - 文件: {filename} (mode={mode})")
-                refreshed_data = await self._refresh_token(credential_data, filename, mode=mode)
+            seconds_left = self._token_seconds_left(credential_data)
+            if seconds_left <= 60:
+                log.debug(f"Token需要同步刷新: credential={credential_log_id(filename)} (mode={mode})")
+                refreshed_data = await self._wait_for_refresh(credential_data, filename, mode=mode)
                 if refreshed_data:
                     # 刷新成功，返回凭证
                     credential_data = refreshed_data
-                    log.debug(f"Token刷新成功: {filename} (mode={mode})")
+                    log.debug(f"Token刷新成功: credential={credential_log_id(filename)} (mode={mode})")
                     return filename, credential_data
                 else:
                     # 刷新失败（_refresh_token内部已自动禁用失效凭证）
-                    log.warning(f"Token刷新失败，尝试获取下一个凭证: {filename} (mode={mode}, attempt={attempt+1}/{max_retries})")
+                    log.warning(f"Token刷新失败，尝试获取下一个凭证: credential={credential_log_id(filename)} (mode={mode}, attempt={attempt+1}/{max_retries})")
                     # 继续循环，尝试获取下一个可用凭证
+                    excluded.add(filename)
                     continue
-            else:
-                # Token有效，直接返回
-                return filename, credential_data
+            if seconds_left <= 600:
+                await self._ensure_refresh_task(credential_data, filename, mode=mode)
+            return filename, credential_data
 
         # 重试次数用尽
         log.error(f"重试{max_retries}次后仍无可用凭证 (mode={mode}, model_name={model_name})")
@@ -117,7 +140,7 @@ class CredentialManager:
         """
         await self._ensure_initialized()
         await self._storage_adapter.store_credential(credential_name, credential_data)
-        log.info(f"Credential added/updated: {credential_name}")
+        log.info(f"Credential added/updated: {credential_log_id(credential_name)}")
 
     async def add_antigravity_credential(self, credential_name: str, credential_data: Dict[str, Any]):
         """
@@ -126,24 +149,39 @@ class CredentialManager:
         """
         await self._ensure_initialized()
         await self._storage_adapter.store_credential(credential_name, credential_data, mode="antigravity")
-        log.info(f"Antigravity credential added/updated: {credential_name}")
+        log.info(f"Antigravity credential added/updated: {credential_log_id(credential_name)}")
 
     async def remove_credential(self, credential_name: str, mode: str = "geminicli") -> bool:
         """删除一个凭证"""
         await self._ensure_initialized()
         try:
+            if mode == "geminicli":
+                state = await self._storage_adapter.get_credential_state(credential_name, mode=mode)
+                await self._storage_adapter.update_credential_state(
+                    credential_name,
+                    {"health_state_version": int(state.get("health_state_version", 0) or 0) + 1},
+                    mode=mode,
+                )
             await self._storage_adapter.delete_credential(credential_name, mode=mode)
-            log.info(f"Credential removed: {credential_name} (mode={mode})")
+            log.info(f"Credential removed: {credential_log_id(credential_name)} (mode={mode})")
             return True
         except Exception as e:
-            log.error(f"Error removing credential {credential_name}: {e}")
+            log.error(f"Error removing credential {credential_log_id(credential_name)}: {safe_exception(e)}")
             return False
 
     async def update_credential_state(self, credential_name: str, state_updates: Dict[str, Any], mode: str = "geminicli"):
         """更新凭证状态"""
-        log.debug(f"[CredMgr] update_credential_state 开始: credential_name={credential_name}, state_updates={state_updates}, mode={mode}")
+        log.debug(f"[CredMgr] update_credential_state: credential={credential_log_id(credential_name)}, fields={list(state_updates)}, mode={mode}")
         log.debug(f"[CredMgr] 调用 _ensure_initialized...")
         await self._ensure_initialized()
+        if (
+            mode == "geminicli"
+            and "permanent_disabled" in state_updates
+            and "health_state_version" not in state_updates
+        ):
+            current = await self._storage_adapter.get_credential_state(credential_name, mode=mode)
+            state_updates = dict(state_updates)
+            state_updates["health_state_version"] = int(current.get("health_state_version", 0) or 0) + 1
         log.debug(f"[CredMgr] _ensure_initialized 完成")
         try:
             log.debug(f"[CredMgr] 调用 storage_adapter.update_credential_state...")
@@ -152,33 +190,44 @@ class CredentialManager:
             )
             log.debug(f"[CredMgr] storage_adapter.update_credential_state 返回: {success}")
             if success:
-                log.debug(f"Updated credential state: {credential_name} (mode={mode})")
+                log.debug(f"Updated credential state: {credential_log_id(credential_name)} (mode={mode})")
             else:
-                log.warning(f"Failed to update credential state: {credential_name} (mode={mode})")
+                log.warning(f"Failed to update credential state: {credential_log_id(credential_name)} (mode={mode})")
             return success
         except Exception as e:
-            log.error(f"Error updating credential state {credential_name}: {e}")
+            log.error(f"Error updating credential state {credential_log_id(credential_name)}: {safe_exception(e)}")
             return False
 
     async def set_cred_disabled(self, credential_name: str, disabled: bool, mode: str = "geminicli"):
         """设置凭证的启用/禁用状态"""
         try:
-            log.info(f"[CredMgr] set_cred_disabled 开始: credential_name={credential_name}, disabled={disabled}, mode={mode}")
+            log.info(f"[CredMgr] set_cred_disabled: credential={credential_log_id(credential_name)}, disabled={disabled}, mode={mode}")
             updates = {"disabled": disabled}
             if not disabled:
                 updates["permanent_disabled"] = False
+            if mode == "geminicli":
+                await self._ensure_initialized()
+                state = await self._storage_adapter.get_credential_state(credential_name, mode=mode)
+                updates["health_state_version"] = int(state.get("health_state_version", 0) or 0) + 1
+                if not disabled:
+                    updates.update(
+                        health_status="healthy",
+                        quarantine_reason=None,
+                        probe_stage=0,
+                        next_probe_at=None,
+                    )
             success = await self.update_credential_state(
                 credential_name, updates, mode=mode
             )
             log.info(f"[CredMgr] update_credential_state 返回: success={success}")
             if success:
                 action = "disabled" if disabled else "enabled"
-                log.info(f"Credential {action}: {credential_name} (mode={mode})")
+                log.info(f"Credential {action}: {credential_log_id(credential_name)} (mode={mode})")
             else:
-                log.warning(f"[CredMgr] 设置禁用状态失败: credential_name={credential_name}, disabled={disabled}")
+                log.warning(f"[CredMgr] 设置禁用状态失败: credential={credential_log_id(credential_name)}, disabled={disabled}")
             return success
         except Exception as e:
-            log.error(f"Error setting credential disabled state {credential_name}: {e}")
+            log.error(f"Error setting credential disabled state {credential_log_id(credential_name)}: {safe_exception(e)}")
             return False
 
     async def get_creds_status(self) -> Dict[str, Dict[str, Any]]:
@@ -232,7 +281,7 @@ class CredentialManager:
 
             # 如果 token 被刷新了，更新存储
             if token_refreshed:
-                log.info(f"Token已自动刷新: {credential_name} (mode={mode})")
+                log.info(f"Token已自动刷新: credential={credential_log_id(credential_name)} (mode={mode})")
                 updated_data = credentials.to_dict()
                 await self._storage_adapter.store_credential(credential_name, updated_data, mode=mode)
 
@@ -249,7 +298,7 @@ class CredentialManager:
             return None
 
         except Exception as e:
-            log.error(f"Error fetching user email for {credential_name}: {e}")
+            log.error(f"Error fetching user email for {credential_log_id(credential_name)}: {safe_exception(e)}")
             return None
 
     async def record_api_call_result(
@@ -314,67 +363,79 @@ class CredentialManager:
                             credential_name, model_name, cooldown_until, mode=mode
                         )
                         log.info(
-                            f"设置模型级冷却: {credential_name}, model_name={model_name}, "
+                            f"设置模型级冷却: credential={credential_log_id(credential_name)}, model_name={model_name}, "
                             f"冷却至: {datetime.fromtimestamp(cooldown_until, timezone.utc).isoformat()}"
                         )
 
         except Exception as e:
-            log.error(f"Error recording API call result for {credential_name}: {e}")
+            log.error(f"Error recording API call result for {credential_log_id(credential_name)}: {safe_exception(e)}")
 
-    async def _should_refresh_token(self, credential_data: Dict[str, Any]) -> bool:
-        """检查token是否需要刷新"""
+    def _token_seconds_left(self, credential_data: Dict[str, Any]) -> float:
+        """Return remaining token lifetime; malformed/missing data requires refresh."""
+        if not credential_data.get("access_token") and not credential_data.get("token"):
+            return float("-inf")
+        expiry_str = credential_data.get("expiry")
+        if not isinstance(expiry_str, str) or not expiry_str:
+            return float("-inf")
         try:
-            # 如果没有access_token或过期时间，需要刷新
-            if not credential_data.get("access_token") and not credential_data.get("token"):
-                log.debug("没有access_token，需要刷新")
-                return True
+            if expiry_str.endswith("Z"):
+                expiry = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
+            else:
+                expiry = datetime.fromisoformat(expiry_str)
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            return (expiry - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError):
+            return float("-inf")
 
-            expiry_str = credential_data.get("expiry")
-            if not expiry_str:
-                log.debug("没有过期时间，需要刷新")
-                return True
-
-            # 解析过期时间
-            try:
-                if isinstance(expiry_str, str):
-                    if "+" in expiry_str:
-                        file_expiry = datetime.fromisoformat(expiry_str)
-                    elif expiry_str.endswith("Z"):
-                        file_expiry = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
-                    else:
-                        file_expiry = datetime.fromisoformat(expiry_str)
-                else:
-                    log.debug("过期时间格式无效，需要刷新")
-                    return True
-
-                # 确保时区信息
-                if file_expiry.tzinfo is None:
-                    file_expiry = file_expiry.replace(tzinfo=timezone.utc)
-
-                # 检查是否还有至少5分钟有效期
-                now = datetime.now(timezone.utc)
-                time_left = (file_expiry - now).total_seconds()
-
-                log.debug(
-                    f"Token时间检查: "
-                    f"当前UTC时间={now.isoformat()}, "
-                    f"过期时间={file_expiry.isoformat()}, "
-                    f"剩余时间={int(time_left/60)}分{int(time_left%60)}秒"
+    async def _ensure_refresh_task(
+        self,
+        credential_data: Dict[str, Any],
+        filename: str,
+        *,
+        mode: str,
+    ) -> asyncio.Task:
+        """Return the single in-flight refresh for a credential, creating it once."""
+        key = (mode, filename)
+        async with self._refresh_lock:
+            task = self._refresh_tasks.get(key)
+            if task is None or task.done():
+                task = asyncio.create_task(
+                    self._refresh_token(dict(credential_data), filename, mode=mode)
                 )
+                self._refresh_tasks[key] = task
 
-                if time_left > 300:  # 5分钟缓冲
-                    return False
-                else:
-                    log.debug(f"Token即将过期（剩余{int(time_left/60)}分钟），需要刷新")
-                    return True
+                def _cleanup(done: asyncio.Task, *, task_key=key) -> None:
+                    _fire_and_forget_cb(done)
+                    if self._refresh_tasks.get(task_key) is done:
+                        self._refresh_tasks.pop(task_key, None)
 
-            except Exception as e:
-                log.warning(f"解析过期时间失败: {e}，需要刷新")
-                return True
+                task.add_done_callback(_cleanup)
+            return task
 
-        except Exception as e:
-            log.error(f"检查token过期时出错: {e}")
-            return True
+    async def _wait_for_refresh(
+        self,
+        credential_data: Dict[str, Any],
+        filename: str,
+        *,
+        mode: str,
+    ) -> Optional[Dict[str, Any]]:
+        task = await self._ensure_refresh_task(credential_data, filename, mode=mode)
+        timeout = StreamLatencyConfig.from_env().oauth_refresh_timeout
+        trace = current_stream_trace()
+        started_at = time.perf_counter()
+        if trace:
+            trace.phase = StreamPhase.REFRESHING_TOKEN
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except TimeoutError:
+            log.warning(
+                f"Token刷新等待超时，不禁用凭证: credential={credential_log_id(filename)} (mode={mode}, timeout={timeout}s)"
+            )
+            return None
+        finally:
+            if trace:
+                trace.duration("oauth_refresh", started_at)
 
     async def _refresh_token(
         self, credential_data: Dict[str, Any], filename: str, mode: str = "geminicli"
@@ -387,17 +448,13 @@ class CredentialManager:
 
             # 检查是否可以刷新
             if not creds.refresh_token:
-                log.error(f"没有refresh_token，无法刷新: {filename} (mode={mode})")
-                # 自动禁用没有refresh_token的凭证
-                try:
-                    await self.update_credential_state(filename, {"disabled": True}, mode=mode)
-                    log.warning(f"凭证已自动禁用（缺少refresh_token）: {filename}")
-                except Exception as e:
-                    log.error(f"禁用凭证失败 {filename}: {e}")
+                log.error(f"没有refresh_token，无法刷新: credential={credential_log_id(filename)} (mode={mode})")
+                # 缺少 refresh_token 只在当前请求排除；不把不完整配置误判为
+                # OAuth 服务明确确认的永久失效。
                 return None
 
             # 刷新token
-            log.debug(f"正在刷新token: {filename} (mode={mode})")
+            log.debug(f"正在刷新token: credential={credential_log_id(filename)} (mode={mode})")
             await creds.refresh()
 
             # 更新凭证数据
@@ -411,24 +468,24 @@ class CredentialManager:
 
             # 保存到存储
             await self._storage_adapter.store_credential(filename, credential_data, mode=mode)
-            log.info(f"Token刷新成功并已保存: {filename} (mode={mode})")
+            log.info(f"Token刷新成功并已保存: credential={credential_log_id(filename)} (mode={mode})")
 
             return credential_data
 
         except Exception as e:
             error_msg = str(e)
-            log.error(f"Token刷新失败 {filename} (mode={mode}): {error_msg}")
+            log.error(f"Token刷新失败 credential={credential_log_id(filename)} (mode={mode}): {safe_exception(e)}")
 
             # 尝试提取HTTP状态码（TokenError可能携带status_code属性）
             status_code = None
             if hasattr(e, 'status_code'):
                 status_code = e.status_code
 
-            # 检查是否是凭证永久失效的错误（只有明确的400/403等才判定为永久失效）
+            # 只有明确的 invalid_grant、401、403 才判定为永久失效。
             is_permanent_failure = self._is_permanent_refresh_failure(error_msg, status_code)
 
             if is_permanent_failure:
-                log.warning(f"检测到凭证永久失效 (HTTP {status_code}): {filename}")
+                log.warning(f"检测到凭证永久失效 (HTTP {status_code}): credential={credential_log_id(filename)}")
                 # 记录失效状态
                 if status_code:
                     await self.record_api_call_result(filename, False, status_code, mode=mode)
@@ -440,14 +497,14 @@ class CredentialManager:
                     # 直接禁用该凭证（随机选择机制会自动跳过它）
                     disabled_ok = await self.update_credential_state(filename, {"disabled": True}, mode=mode)
                     if disabled_ok:
-                        log.warning(f"永久失效凭证已禁用: {filename}")
+                        log.warning(f"永久失效凭证已禁用: credential={credential_log_id(filename)}")
                     else:
                         log.warning("永久失效凭证禁用失败，将由上层逻辑继续处理")
                 except Exception as e2:
-                    log.error(f"禁用永久失效凭证时出错 {filename}: {e2}")
+                    log.error(f"禁用永久失效凭证时出错 {credential_log_id(filename)}: {safe_exception(e2)}")
             else:
                 # 网络错误或其他临时性错误，不封禁凭证
-                log.warning(f"Token刷新失败但非永久性错误 (HTTP {status_code})，不封禁凭证: {filename}")
+                log.warning(f"Token刷新失败但非永久性错误 (HTTP {status_code})，不封禁凭证: credential={credential_log_id(filename)}")
 
             return None
 
@@ -462,63 +519,43 @@ class CredentialManager:
         Returns:
             True表示凭证永久失效应封禁，False表示临时错误不应封禁
         """
-        # 优先使用HTTP状态码判断
-        if status_code is not None:
-            # 400/401/403 明确表示凭证有问题，应该封禁
-            if status_code in [400, 401, 403]:
-                log.debug(f"检测到客户端错误状态码 {status_code}，判定为永久失效")
-                return True
-            # 500/502/503/504 是服务器错误，不应封禁凭证
-            elif status_code in [500, 502, 503, 504]:
-                log.debug(f"检测到服务器错误状态码 {status_code}，不应封禁凭证")
-                return False
-            # 429 (限流) 不应封禁凭证
-            elif status_code == 429:
-                log.debug("检测到限流错误 429，不应封禁凭证")
-                return False
-
-        # 如果没有状态码，回退到错误信息匹配（谨慎判断）
-        # 只有明确的凭证失效错误才判定为永久失效
-        permanent_error_patterns = [
-            "invalid_grant",
-            "refresh_token_expired",
-            "invalid_refresh_token",
-            "unauthorized_client",
-            "access_denied",
-        ]
-
         error_msg_lower = error_msg.lower()
-        for pattern in permanent_error_patterns:
-            if pattern.lower() in error_msg_lower:
-                log.debug(f"错误信息匹配到永久失效模式: {pattern}")
-                return True
+        if "invalid_grant" in error_msg_lower:
+            log.debug("错误信息明确包含 invalid_grant，判定为永久失效")
+            return True
+        if status_code in (401, 403):
+            log.debug(f"检测到凭证错误状态码 {status_code}，判定为永久失效")
+            return True
 
-        # 默认认为是临时错误（如网络问题），不应封禁凭证
-        log.debug("未匹配到明确的永久失效模式，判定为临时错误")
+        # 400（但非 invalid_grant）、429、5xx、超时和网络错误均视为临时错误。
+        log.debug(f"未匹配到明确永久失效证据 (HTTP {status_code})，判定为临时错误")
         return False
+
 
 class _CredentialManagerSingleton:
     """单例包装器，支持懒加载和自动初始化"""
 
     _instance: Optional[CredentialManager] = None
-    _lock = None
 
     def __init__(self):
         self._manager = None
+        self._init_lock = asyncio.Lock()
 
     async def _get_or_create(self) -> CredentialManager:
         """获取或创建单例实例（线程安全）"""
         if self._instance is None:
-            # 简单的实例创建（异步环境下一般不需要复杂的锁）
-            if self._instance is None:
-                self._instance = CredentialManager()
-                await self._instance.initialize()
-                log.debug("CredentialManager singleton initialized")
+            async with self._init_lock:
+                if self._instance is None:
+                    candidate = CredentialManager()
+                    await candidate.initialize()
+                    self._instance = candidate
+                    log.debug("CredentialManager singleton initialized")
 
         return self._instance
 
     def __getattr__(self, name):
         """代理所有方法调用到真实的 CredentialManager 实例"""
+
         async def _async_wrapper(*args, **kwargs):
             manager = await self._get_or_create()
             method = getattr(manager, name)

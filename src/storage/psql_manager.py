@@ -13,6 +13,11 @@ import asyncpg
 
 from log import log
 from src.storage._stats_common import MODEL_FAMILY_RULES, normalize_model_family, _today_beijing_str
+from src.subscription_tiers import (
+    default_tier_for_mode,
+    required_tiers_for_geminicli_model,
+    valid_tiers_for_mode,
+)
 
 
 class PSQLManager:
@@ -31,10 +36,20 @@ class PSQLManager:
         "model_cooldowns",
         "preview",
         "tier",
+        "tier_raw_id",
+        "tier_raw_name",
+        "tier_detected_at",
         "enable_credit",
         "success_count",
         "failure_count",
         "remark",
+        "health_status",
+        "quarantine_reason",
+        "probe_stage",
+        "next_probe_at",
+        "last_health_check_at",
+        "health_check_started_at",
+        "health_state_version",
     }
 
     def __init__(self):
@@ -98,7 +113,18 @@ class PSQLManager:
 
                 model_cooldowns TEXT DEFAULT '{}',
                 preview INTEGER DEFAULT 1,
-                tier TEXT DEFAULT 'pro',
+                tier TEXT DEFAULT 'unknown',
+                tier_raw_id TEXT,
+                tier_raw_name TEXT,
+                tier_detected_at BIGINT,
+
+                health_status TEXT DEFAULT 'healthy',
+                quarantine_reason TEXT,
+                probe_stage INTEGER DEFAULT 0,
+                next_probe_at DOUBLE PRECISION,
+                last_health_check_at DOUBLE PRECISION,
+                health_check_started_at DOUBLE PRECISION,
+                health_state_version BIGINT DEFAULT 0,
 
                 rotation_order INTEGER DEFAULT 0,
                 call_count INTEGER DEFAULT 0,
@@ -188,6 +214,24 @@ class PSQLManager:
             CREATE INDEX IF NOT EXISTS idx_minute_model_stats_ts ON minute_model_stats(minute_ts)
         """)
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS daily_hedge_stats (
+                date TEXT NOT NULL,
+                credential_name TEXT NOT NULL,
+                model_family TEXT NOT NULL,
+                extra_upstream_requests BIGINT NOT NULL DEFAULT 0,
+                primary_wins BIGINT NOT NULL DEFAULT 0,
+                backup_wins BIGINT NOT NULL DEFAULT 0,
+                confirmed_rescues BIGINT NOT NULL DEFAULT 0,
+                both_failed BIGINT NOT NULL DEFAULT 0,
+                client_cancelled BIGINT NOT NULL DEFAULT 0,
+                budget_skips BIGINT NOT NULL DEFAULT 0,
+                outcome_pending BIGINT NOT NULL DEFAULT 0,
+                updated_at DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW()),
+                PRIMARY KEY (date, credential_name, model_family)
+            )
+        """)
+
         # 索引
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_disabled ON credentials(disabled)
@@ -215,7 +259,10 @@ class PSQLManager:
                 ("user_email", "TEXT"),
                 ("model_cooldowns", "TEXT DEFAULT '{}'"),
                 ("preview", "INTEGER DEFAULT 1"),
-                ("tier", "TEXT DEFAULT 'pro'"),
+                ("tier", "TEXT DEFAULT 'unknown'"),
+                ("tier_raw_id", "TEXT"),
+                ("tier_raw_name", "TEXT"),
+                ("tier_detected_at", "BIGINT"),
                 ("rotation_order", "INTEGER DEFAULT 0"),
                 ("call_count", "INTEGER DEFAULT 0"),
                 ("success_count", "INTEGER DEFAULT 0"),
@@ -224,6 +271,13 @@ class PSQLManager:
                 ("cycle_stats", "TEXT DEFAULT '{}'"),
                 ("last_cycle_stats", "TEXT DEFAULT '{}'"),
                 ("remark", "TEXT DEFAULT ''"),
+                ("health_status", "TEXT DEFAULT 'healthy'"),
+                ("quarantine_reason", "TEXT"),
+                ("probe_stage", "INTEGER DEFAULT 0"),
+                ("next_probe_at", "DOUBLE PRECISION"),
+                ("last_health_check_at", "DOUBLE PRECISION"),
+                ("health_check_started_at", "DOUBLE PRECISION"),
+                ("health_state_version", "BIGINT DEFAULT 0"),
                 ("created_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
                 ("updated_at", "DOUBLE PRECISION DEFAULT EXTRACT(EPOCH FROM NOW())"),
             ],
@@ -314,27 +368,44 @@ class PSQLManager:
     # ============ 凭证查询方法 ============
 
     async def get_next_available_credential(
-        self, mode: str = "geminicli", model_name: Optional[str] = None
+        self,
+        mode: str = "geminicli",
+        model_name: Optional[str] = None,
+        excluded_credentials: Optional[set[str]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """随机获取一个可用凭证（负载均衡）"""
         self._ensure_initialized()
 
         try:
+            from config import is_smart_429_protection_enabled
+            smart_enabled = is_smart_429_protection_enabled()
+            health_enabled = mode == "geminicli" and smart_enabled
+            excluded = set(excluded_credentials or ())
             table_name = self._get_table_name(mode)
             current_time = time.time()
 
             async with self._pool.acquire() as conn:
                 if mode == "geminicli":
+                    required_tiers = required_tiers_for_geminicli_model(model_name)
+                    tier_clause = ""
+                    query_args: tuple[Any, ...] = ()
+                    if required_tiers:
+                        tier_clause = " AND tier = ANY($1::text[])"
+                        query_args = (list(required_tiers),)
+                    health_clause = " AND COALESCE(health_status, 'healthy') = 'healthy'" if health_enabled else ""
                     rows = await conn.fetch(f"""
-                        SELECT filename, credential_data, model_cooldowns, preview
+                        SELECT filename, credential_data, model_cooldowns, preview, tier
                         FROM {table_name}
                         WHERE disabled = 0
+                        {health_clause}
+                        {tier_clause}
                         ORDER BY RANDOM()
-                    """)
+                    """, *query_args)
 
                     if not model_name:
-                        if rows:
-                            return rows[0]["filename"], json.loads(rows[0]["credential_data"])
+                        available_rows = [row for row in rows if row["filename"] not in excluded]
+                        if available_rows:
+                            return available_rows[0]["filename"], json.loads(available_rows[0]["credential_data"])
                         return None
 
                     is_preview_model = "preview" in model_name.lower()
@@ -342,6 +413,11 @@ class PSQLManager:
                     preview_creds = []
 
                     for row in rows:
+                        if row["filename"] in excluded:
+                            continue
+                        tier = row["tier"] or default_tier_for_mode(mode)
+                        if required_tiers and tier not in required_tiers:
+                            continue
                         model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
                         cd = model_cooldowns.get(model_name)
                         if cd is None or current_time >= cd:
@@ -369,13 +445,16 @@ class PSQLManager:
                     """)
 
                     if not model_name:
-                        if rows:
-                            credential_data = json.loads(rows[0]["credential_data"])
-                            credential_data["enable_credit"] = bool(rows[0]["enable_credit"])
-                            return rows[0]["filename"], credential_data
+                        available_rows = [row for row in rows if row["filename"] not in excluded]
+                        if available_rows:
+                            credential_data = json.loads(available_rows[0]["credential_data"])
+                            credential_data["enable_credit"] = bool(available_rows[0]["enable_credit"])
+                            return available_rows[0]["filename"], credential_data
                         return None
 
                     for row in rows:
+                        if row["filename"] in excluded:
+                            continue
                         model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
                         cd = model_cooldowns.get(model_name)
                         if cd is None or current_time >= cd:
@@ -404,6 +483,30 @@ class PSQLManager:
         except Exception as e:
             log.error(f"Error getting available credentials list: {e}")
             return []
+
+    async def check_smart_429_capability(self) -> tuple[bool, Optional[str]]:
+        required = {
+            "health_status", "quarantine_reason", "probe_stage", "next_probe_at",
+            "last_health_check_at", "health_check_started_at", "health_state_version",
+        }
+        try:
+            self._ensure_initialized()
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() AND table_name = 'credentials'"
+                )
+                columns = {row["column_name"] for row in rows}
+                missing = sorted(required - columns)
+                if missing:
+                    return False, f"missing_health_fields:{','.join(missing)}"
+                await conn.execute(
+                    "UPDATE credentials SET health_state_version = "
+                    "COALESCE(health_state_version, 0) WHERE FALSE"
+                )
+            return True, None
+        except Exception as exc:
+            return False, f"health_fields_unavailable:{exc}"
 
     # ============ StorageBackend 协议方法 ============
 
@@ -437,10 +540,11 @@ class PSQLManager:
                     await conn.execute(
                         f"""
                         INSERT INTO {table_name}
-                        (filename, credential_data, rotation_order, last_success)
-                        VALUES ($1, $2, $3, $4)
+                        (filename, credential_data, rotation_order, last_success, tier)
+                        VALUES ($1, $2, $3, $4, $5)
                         """,
-                        filename, json.dumps(credential_data), next_order, time.time()
+                        filename, json.dumps(credential_data), next_order, time.time(),
+                        default_tier_for_mode(mode)
                     )
 
             log.debug(f"Stored credential: {filename} (mode={mode})")
@@ -525,6 +629,8 @@ class PSQLManager:
                 if key in self.STATE_FIELDS:
                     if key == "enable_credit" and mode != "antigravity":
                         continue
+                    if key.startswith("tier_raw_") and mode != "geminicli":
+                        continue
                     if key in ("error_codes", "error_messages", "model_cooldowns"):
                         set_clauses.append(f"{key} = ${idx}")
                         values.append(json.dumps(value))
@@ -566,7 +672,10 @@ class PSQLManager:
                 if mode == "geminicli":
                     row = await conn.fetchrow(f"""
                         SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
-                               preview, tier, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               preview, tier, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
+                               tier_raw_id, tier_raw_name, tier_detected_at
+                               , health_status, quarantine_reason, probe_stage, next_probe_at,
+                               last_health_check_at, health_check_started_at, health_state_version
                         FROM {table_name} WHERE filename = $1
                     """, filename)
 
@@ -578,13 +687,23 @@ class PSQLManager:
                             "user_email": row["user_email"],
                             "model_cooldowns": json.loads(row["model_cooldowns"] or "{}"),
                             "preview": bool(row["preview"]) if row["preview"] is not None else True,
-                            "tier": row["tier"] if row["tier"] is not None else "pro",
+                            "tier": row["tier"] if row["tier"] is not None else "unknown",
+                            "tier_raw_id": row["tier_raw_id"],
+                            "tier_raw_name": row["tier_raw_name"],
+                            "tier_detected_at": row["tier_detected_at"],
                             "success_count": row["success_count"] or 0,
                             "failure_count": row["failure_count"] or 0,
                             "permanent_disabled": bool(row["permanent_disabled"]),
                             "cycle_stats": json.loads(row["cycle_stats"] or "{}"),
                             "last_cycle_stats": json.loads(row["last_cycle_stats"] or "{}"),
                             "remark": row["remark"] or "",
+                            "health_status": row["health_status"] or "healthy",
+                            "quarantine_reason": row["quarantine_reason"],
+                            "probe_stage": row["probe_stage"] or 0,
+                            "next_probe_at": row["next_probe_at"],
+                            "last_health_check_at": row["last_health_check_at"],
+                            "health_check_started_at": row["health_check_started_at"],
+                            "health_state_version": row["health_state_version"] or 0,
                         }
 
                     return {
@@ -594,10 +713,20 @@ class PSQLManager:
                         "user_email": None,
                         "model_cooldowns": {},
                         "preview": True,
-                        "tier": "pro",
+                        "tier": "unknown",
+                        "tier_raw_id": None,
+                        "tier_raw_name": None,
+                        "tier_detected_at": None,
                         "success_count": 0,
                         "failure_count": 0,
                         "remark": "",
+                        "health_status": "healthy",
+                        "quarantine_reason": None,
+                        "probe_stage": 0,
+                        "next_probe_at": None,
+                        "last_health_check_at": None,
+                        "health_check_started_at": None,
+                        "health_state_version": 0,
                     }
                 else:
                     row = await conn.fetchrow(f"""
@@ -653,7 +782,10 @@ class PSQLManager:
                     rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, model_cooldowns, preview, tier,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
+                               tier_raw_id, tier_raw_name, tier_detected_at
+                               , health_status, quarantine_reason, probe_stage, next_probe_at,
+                               last_health_check_at, health_check_started_at, health_state_version
                         FROM {table_name}
                     """)
 
@@ -670,13 +802,23 @@ class PSQLManager:
                             "user_email": row["user_email"],
                             "model_cooldowns": model_cooldowns,
                             "preview": bool(row["preview"]) if row["preview"] is not None else True,
-                            "tier": row["tier"] if row["tier"] is not None else "pro",
+                            "tier": row["tier"] if row["tier"] is not None else "unknown",
+                            "tier_raw_id": row["tier_raw_id"],
+                            "tier_raw_name": row["tier_raw_name"],
+                            "tier_detected_at": row["tier_detected_at"],
                             "success_count": row["success_count"] or 0,
                             "failure_count": row["failure_count"] or 0,
                             "permanent_disabled": bool(row["permanent_disabled"]),
                             "cycle_stats": json.loads(row["cycle_stats"] or "{}"),
                             "last_cycle_stats": json.loads(row["last_cycle_stats"] or "{}"),
                             "remark": row["remark"] or "",
+                            "health_status": row["health_status"] or "healthy",
+                            "quarantine_reason": row["quarantine_reason"],
+                            "probe_stage": row["probe_stage"] or 0,
+                            "next_probe_at": row["next_probe_at"],
+                            "last_health_check_at": row["last_health_check_at"],
+                            "health_check_started_at": row["health_check_started_at"],
+                            "health_state_version": row["health_state_version"] or 0,
                         }
                     return states
                 else:
@@ -764,7 +906,10 @@ class PSQLManager:
                     all_rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, preview, tier,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
+                               tier_raw_id, tier_raw_name, tier_detected_at
+                               , health_status, quarantine_reason, probe_stage, next_probe_at,
+                               last_health_check_at, health_check_started_at, health_state_version
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -834,7 +979,10 @@ class PSQLManager:
                         "user_email": row["user_email"],
                         "rotation_order": row["rotation_order"],
                         "model_cooldowns": active_cooldowns,
-                        "tier": row["tier"] if row["tier"] is not None else "pro",
+                        "tier": row["tier"] if row["tier"] is not None else default_tier_for_mode(mode),
+                        "tier_raw_id": row["tier_raw_id"] if mode == "geminicli" else None,
+                        "tier_raw_name": row["tier_raw_name"] if mode == "geminicli" else None,
+                        "tier_detected_at": row["tier_detected_at"] if mode == "geminicli" else None,
                         "success_count": row["success_count"] or 0,
                         "failure_count": row["failure_count"] or 0,
                         "cycle_stats": json.loads(row["cycle_stats"] or "{}"),
@@ -844,6 +992,13 @@ class PSQLManager:
 
                     if mode == "geminicli":
                         summary["preview"] = bool(row["preview"]) if row["preview"] is not None else True
+                        summary["health_status"] = row["health_status"] or "healthy"
+                        summary["quarantine_reason"] = row["quarantine_reason"]
+                        summary["probe_stage"] = row["probe_stage"] or 0
+                        summary["next_probe_at"] = row["next_probe_at"]
+                        summary["last_health_check_at"] = row["last_health_check_at"]
+                        summary["health_check_started_at"] = row["health_check_started_at"]
+                        summary["health_state_version"] = row["health_state_version"] or 0
 
                         if preview_filter:
                             preview_value = summary.get("preview", True)
@@ -854,7 +1009,7 @@ class PSQLManager:
                     else:
                         summary["enable_credit"] = bool(row["enable_credit"]) if row["enable_credit"] is not None else False
 
-                    if tier_filter and tier_filter in ("free", "pro", "ultra"):
+                    if tier_filter and tier_filter in valid_tiers_for_mode(mode):
                         if summary["tier"] != tier_filter:
                             continue
 
@@ -1483,6 +1638,140 @@ class PSQLManager:
         except Exception as e:
             log.error(f"get_recent_daily_stats failed: {e}")
             return []
+
+    async def reserve_hedge_budget(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        daily_budget: int,
+    ) -> bool:
+        """Atomically reserve one conservative hedge quota unit."""
+        self._ensure_initialized()
+        if daily_budget <= 0:
+            return False
+        now = time.time()
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO daily_hedge_stats
+                        (date, credential_name, model_family, updated_at)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (date, credential_name, model_family) DO NOTHING
+                    """,
+                    date,
+                    credential_name,
+                    model_family,
+                    now,
+                )
+                row = await conn.fetchrow(
+                    """
+                    UPDATE daily_hedge_stats
+                    SET extra_upstream_requests = extra_upstream_requests + 1,
+                        outcome_pending = outcome_pending + 1,
+                        updated_at = $5
+                    WHERE date = $1
+                      AND credential_name = $2
+                      AND model_family = $3
+                      AND extra_upstream_requests < $4
+                    RETURNING extra_upstream_requests
+                    """,
+                    date,
+                    credential_name,
+                    model_family,
+                    daily_budget,
+                    now,
+                )
+                return row is not None
+
+    async def record_hedge_metric(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        metric: str,
+    ) -> None:
+        """Increment a non-terminal hedge metric."""
+        self._ensure_initialized()
+        if metric != "budget_skips":
+            raise ValueError(f"unsupported hedge metric: {metric}")
+        await self._pool.execute(
+            """
+            INSERT INTO daily_hedge_stats
+                (date, credential_name, model_family, budget_skips, updated_at)
+            VALUES ($1, $2, $3, 1, $4)
+            ON CONFLICT (date, credential_name, model_family)
+            DO UPDATE SET budget_skips = daily_hedge_stats.budget_skips + 1,
+                          updated_at = EXCLUDED.updated_at
+            """,
+            date,
+            credential_name,
+            model_family,
+            time.time(),
+        )
+
+    async def record_hedge_outcome(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        outcome: str,
+        confirmed_rescue: bool = False,
+    ) -> None:
+        """Finalize a previously reserved hedge without refunding quota."""
+        self._ensure_initialized()
+        allowed = {
+            "primary_wins",
+            "backup_wins",
+            "both_failed",
+            "client_cancelled",
+        }
+        if outcome not in allowed:
+            raise ValueError(f"unsupported hedge outcome: {outcome}")
+        rescue_increment = 1 if confirmed_rescue else 0
+        query = f"""
+            UPDATE daily_hedge_stats
+            SET {outcome} = {outcome} + 1,
+                confirmed_rescues = confirmed_rescues + $4,
+                outcome_pending = GREATEST(0, outcome_pending - 1),
+                updated_at = $5
+            WHERE date = $1
+              AND credential_name = $2
+              AND model_family = $3
+        """
+        await self._pool.execute(
+            query,
+            date,
+            credential_name,
+            model_family,
+            rescue_increment,
+            time.time(),
+        )
+
+    async def get_hedge_stats(self, days: int = 7) -> List[Dict[str, Any]]:
+        """Return raw hedge buckets for the latest Beijing dates."""
+        self._ensure_initialized()
+        days = max(1, min(int(days or 7), 90))
+        rows = await self._pool.fetch(
+            """
+            SELECT date, credential_name, model_family,
+                   extra_upstream_requests, primary_wins, backup_wins,
+                   confirmed_rescues, both_failed, client_cancelled,
+                   budget_skips, outcome_pending
+            FROM daily_hedge_stats
+            WHERE date IN (
+                SELECT date
+                FROM daily_hedge_stats
+                GROUP BY date
+                ORDER BY date DESC
+                LIMIT $1
+            )
+            ORDER BY date DESC, model_family, credential_name
+            """,
+            days,
+        )
+        return [dict(row) for row in rows]
 
 
     @staticmethod

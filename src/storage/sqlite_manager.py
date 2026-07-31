@@ -12,6 +12,11 @@ import aiosqlite
 
 from log import log
 from src.storage._stats_common import normalize_model_family, _today_beijing_str
+from src.subscription_tiers import (
+    default_tier_for_mode,
+    required_tiers_for_geminicli_model,
+    valid_tiers_for_mode,
+)
 
 
 class SQLiteManager:
@@ -30,10 +35,20 @@ class SQLiteManager:
         "model_cooldowns",
         "preview",
         "tier",
+        "tier_raw_id",
+        "tier_raw_name",
+        "tier_detected_at",
         "enable_credit",
         "success_count",
         "failure_count",
         "remark",
+        "health_status",
+        "quarantine_reason",
+        "probe_stage",
+        "next_probe_at",
+        "last_health_check_at",
+        "health_check_started_at",
+        "health_state_version",
     }
 
     # 所有必需的列定义（用于自动校验和修复）
@@ -49,14 +64,24 @@ class SQLiteManager:
             ("user_email", "TEXT"),
             ("model_cooldowns", "TEXT DEFAULT '{}'"),
             ("preview", "INTEGER DEFAULT 1"),
-            ("tier", "TEXT DEFAULT 'pro'"),
+            ("tier", "TEXT DEFAULT 'unknown'"),
+            ("tier_raw_id", "TEXT"),
+            ("tier_raw_name", "TEXT"),
+            ("tier_detected_at", "INTEGER"),
             ("rotation_order", "INTEGER DEFAULT 0"),
             ("call_count", "INTEGER DEFAULT 0"),
             ("success_count", "INTEGER DEFAULT 0"),
             ("failure_count", "INTEGER DEFAULT 0"),
             ("remark", "TEXT DEFAULT ''"),
-            ("created_at", "REAL DEFAULT (unixepoch())"),
-            ("updated_at", "REAL DEFAULT (unixepoch())")
+            ("health_status", "TEXT DEFAULT 'healthy'"),
+            ("quarantine_reason", "TEXT"),
+            ("probe_stage", "INTEGER DEFAULT 0"),
+            ("next_probe_at", "REAL"),
+            ("last_health_check_at", "REAL"),
+            ("health_check_started_at", "REAL"),
+            ("health_state_version", "INTEGER DEFAULT 0"),
+            ("created_at", "REAL DEFAULT 0"),
+            ("updated_at", "REAL DEFAULT 0")
         ],
         "antigravity_credentials": [
             ("disabled", "INTEGER DEFAULT 0"),
@@ -75,8 +100,8 @@ class SQLiteManager:
             ("success_count", "INTEGER DEFAULT 0"),
             ("failure_count", "INTEGER DEFAULT 0"),
             ("remark", "TEXT DEFAULT ''"),
-            ("created_at", "REAL DEFAULT (unixepoch())"),
-            ("updated_at", "REAL DEFAULT (unixepoch())")
+            ("created_at", "REAL DEFAULT 0"),
+            ("updated_at", "REAL DEFAULT 0")
         ]
     }
 
@@ -209,8 +234,20 @@ class SQLiteManager:
                 -- preview 状态 (只对 geminicli 有效，默认为 true)
                 preview INTEGER DEFAULT 1,
 
-                -- tier 状态 (只对 geminicli 有效，默认为 pro)
-                tier TEXT DEFAULT 'pro',
+                -- Gemini CLI subscription state
+                tier TEXT DEFAULT 'unknown',
+                tier_raw_id TEXT,
+                tier_raw_name TEXT,
+                tier_detected_at INTEGER,
+
+                -- SMART 429 health state (GeminiCLI only)
+                health_status TEXT DEFAULT 'healthy',
+                quarantine_reason TEXT,
+                probe_stage INTEGER DEFAULT 0,
+                next_probe_at REAL,
+                last_health_check_at REAL,
+                health_check_started_at REAL,
+                health_state_version INTEGER DEFAULT 0,
 
                 -- 轮换相关
                 rotation_order INTEGER DEFAULT 0,
@@ -324,6 +361,24 @@ class SQLiteManager:
                 model_family TEXT NOT NULL,
                 count INTEGER DEFAULT 0,
                 PRIMARY KEY (minute_ts, mode, model_family)
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS daily_hedge_stats (
+                date TEXT NOT NULL,
+                credential_name TEXT NOT NULL,
+                model_family TEXT NOT NULL,
+                extra_upstream_requests INTEGER NOT NULL DEFAULT 0,
+                primary_wins INTEGER NOT NULL DEFAULT 0,
+                backup_wins INTEGER NOT NULL DEFAULT 0,
+                confirmed_rescues INTEGER NOT NULL DEFAULT 0,
+                both_failed INTEGER NOT NULL DEFAULT 0,
+                client_cancelled INTEGER NOT NULL DEFAULT 0,
+                budget_skips INTEGER NOT NULL DEFAULT 0,
+                outcome_pending INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL,
+                PRIMARY KEY (date, credential_name, model_family)
             )
         """)
 
@@ -462,7 +517,10 @@ class SQLiteManager:
     # ============ SQL 方法 ============
 
     async def get_next_available_credential(
-        self, mode: str = "geminicli", model_name: Optional[str] = None
+        self,
+        mode: str = "geminicli",
+        model_name: Optional[str] = None,
+        excluded_credentials: Optional[set[str]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
         随机获取一个可用凭证（负载均衡）
@@ -477,22 +535,38 @@ class SQLiteManager:
         self._ensure_initialized()
 
         try:
+            from config import is_smart_429_protection_enabled
+
+            smart_enabled = is_smart_429_protection_enabled()
+            health_enabled = mode == "geminicli" and smart_enabled
+            excluded = set(excluded_credentials or ())
             table_name = self._get_table_name(mode)
             async with aiosqlite.connect(self._db_path) as db:
                 current_time = time.time()
 
                 if mode == "geminicli":
+                    required_tiers = required_tiers_for_geminicli_model(model_name)
+                    tier_clause = ""
+                    query_params: tuple[Any, ...] = ()
+                    if required_tiers:
+                        placeholders = ", ".join("?" for _ in required_tiers)
+                        tier_clause = f" AND tier IN ({placeholders})"
+                        query_params = tuple(required_tiers)
+                    health_clause = " AND COALESCE(health_status, 'healthy') = 'healthy'" if health_enabled else ""
                     async with db.execute(f"""
-                        SELECT filename, credential_data, model_cooldowns, preview
+                        SELECT filename, credential_data, model_cooldowns, preview, tier
                         FROM {table_name}
                         WHERE disabled = 0
+                        {health_clause}
+                        {tier_clause}
                         ORDER BY RANDOM()
-                    """) as cursor:
+                    """, query_params) as cursor:
                         rows = await cursor.fetchall()
 
                         if not model_name:
-                            if rows:
-                                filename, credential_json, _, _ = rows[0]
+                            available_rows = [row for row in rows if row[0] not in excluded]
+                            if available_rows:
+                                filename, credential_json, _, _, _ = available_rows[0]
                                 credential_data = json.loads(credential_json)
                                 return filename, credential_data
                             return None
@@ -501,7 +575,11 @@ class SQLiteManager:
                         non_preview_creds = []
                         preview_creds = []
 
-                        for filename, credential_json, model_cooldowns_json, preview in rows:
+                        for filename, credential_json, model_cooldowns_json, preview, tier in rows:
+                            if filename in excluded:
+                                continue
+                            if required_tiers and (tier or default_tier_for_mode(mode)) not in required_tiers:
+                                continue
                             model_cooldowns = json.loads(model_cooldowns_json or '{}')
                             model_cooldown = model_cooldowns.get(model_name)
                             if model_cooldown is None or current_time >= model_cooldown:
@@ -536,14 +614,17 @@ class SQLiteManager:
                         rows = await cursor.fetchall()
 
                         if not model_name:
-                            if rows:
-                                filename, credential_json, _, enable_credit = rows[0]
+                            available_rows = [row for row in rows if row[0] not in excluded]
+                            if available_rows:
+                                filename, credential_json, _, enable_credit = available_rows[0]
                                 credential_data = json.loads(credential_json)
                                 credential_data["enable_credit"] = bool(enable_credit)
                                 return filename, credential_data
                             return None
 
                         for filename, credential_json, model_cooldowns_json, enable_credit in rows:
+                            if filename in excluded:
+                                continue
                             model_cooldowns = json.loads(model_cooldowns_json or '{}')
                             model_cooldown = model_cooldowns.get(model_name)
                             if model_cooldown is None or current_time >= model_cooldown:
@@ -579,6 +660,27 @@ class SQLiteManager:
         except Exception as e:
             log.error(f"Error getting available credentials list: {e}")
             return []
+
+    async def check_smart_429_capability(self) -> tuple[bool, Optional[str]]:
+        """Verify that all SMART 429 health columns are readable and writable."""
+        required = {
+            "health_status", "quarantine_reason", "probe_stage", "next_probe_at",
+            "last_health_check_at", "health_check_started_at", "health_state_version",
+        }
+        try:
+            self._ensure_initialized()
+            async with aiosqlite.connect(self._db_path) as db:
+                async with db.execute("PRAGMA table_info(credentials)") as cursor:
+                    columns = {row[1] for row in await cursor.fetchall()}
+                missing = sorted(required - columns)
+                if missing:
+                    return False, f"missing_health_fields:{','.join(missing)}"
+                await db.execute(
+                    "UPDATE credentials SET health_state_version = COALESCE(health_state_version, 0) WHERE 1 = 0"
+                )
+            return True, None
+        except Exception as exc:
+            return False, f"health_fields_unavailable:{exc}"
 
     # ============ StorageBackend 协议方法 ============
 
@@ -618,9 +720,9 @@ class SQLiteManager:
 
                     await db.execute(f"""
                         INSERT INTO {table_name}
-                        (filename, credential_data, rotation_order, last_success)
-                        VALUES (?, ?, ?, ?)
-                    """, (filename, json.dumps(credential_data), next_order, time.time()))
+                        (filename, credential_data, rotation_order, last_success, tier)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (filename, json.dumps(credential_data), next_order, time.time(), default_tier_for_mode(mode)))
 
                 await db.commit()
                 log.debug(f"Stored credential: {filename} (mode={mode})")
@@ -719,6 +821,8 @@ class SQLiteManager:
                 if key in self.STATE_FIELDS:
                     if key == "enable_credit" and mode != "antigravity":
                         continue
+                    if key.startswith("tier_raw_") and mode != "geminicli":
+                        continue
                     if key in ("error_codes", "error_messages", "model_cooldowns"):
                         # JSON 字段需要序列化
                         set_clauses.append(f"{key} = ?")
@@ -777,7 +881,10 @@ class SQLiteManager:
                 if mode == "geminicli":
                     async with db.execute(f"""
                         SELECT disabled, error_codes, last_success, user_email, model_cooldowns,
-                               preview, tier, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               preview, tier, success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
+                               tier_raw_id, tier_raw_name, tier_detected_at,
+                               health_status, quarantine_reason, probe_stage, next_probe_at,
+                               last_health_check_at, health_check_started_at, health_state_version
                         FROM {table_name} WHERE filename = ?
                     """, (filename,)) as cursor:
                         row = await cursor.fetchone()
@@ -792,13 +899,23 @@ class SQLiteManager:
                                 "user_email": row[3],
                                 "model_cooldowns": json.loads(model_cooldowns_json),
                                 "preview": bool(row[5]) if row[5] is not None else True,
-                                "tier": row[6] if row[6] is not None else "pro",
+                                "tier": row[6] if row[6] is not None else "unknown",
                                 "success_count": row[7] or 0,
                                 "failure_count": row[8] or 0,
                                 "permanent_disabled": bool(row[9]) if len(row) > 9 else False,
                                 "cycle_stats": json.loads(row[10] or "{}") if len(row) > 10 else {},
                                 "last_cycle_stats": json.loads(row[11] or "{}") if len(row) > 11 else {},
                                 "remark": row[12] or "" if len(row) > 12 else "",
+                                "tier_raw_id": row[13] if len(row) > 13 else None,
+                                "tier_raw_name": row[14] if len(row) > 14 else None,
+                                "tier_detected_at": row[15] if len(row) > 15 else None,
+                                "health_status": (row[16] or "healthy") if len(row) > 16 else "healthy",
+                                "quarantine_reason": row[17] if len(row) > 17 else None,
+                                "probe_stage": (row[18] or 0) if len(row) > 18 else 0,
+                                "next_probe_at": row[19] if len(row) > 19 else None,
+                                "last_health_check_at": row[20] if len(row) > 20 else None,
+                                "health_check_started_at": row[21] if len(row) > 21 else None,
+                                "health_state_version": (row[22] or 0) if len(row) > 22 else 0,
                             }
 
                     # 返回默认状态
@@ -809,10 +926,20 @@ class SQLiteManager:
                         "user_email": None,
                         "model_cooldowns": {},
                         "preview": True,
-                        "tier": "pro",
+                        "tier": "unknown",
+                        "tier_raw_id": None,
+                        "tier_raw_name": None,
+                        "tier_detected_at": None,
                         "success_count": 0,
                         "failure_count": 0,
                         "remark": "",
+                        "health_status": "healthy",
+                        "quarantine_reason": None,
+                        "probe_stage": 0,
+                        "next_probe_at": None,
+                        "last_health_check_at": None,
+                        "health_check_started_at": None,
+                        "health_state_version": 0,
                     }
                 else:
                     # antigravity 模式
@@ -871,7 +998,10 @@ class SQLiteManager:
                     async with db.execute(f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, model_cooldowns, preview, tier,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
+                               tier_raw_id, tier_raw_name, tier_detected_at,
+                               health_status, quarantine_reason, probe_stage, next_probe_at,
+                               last_health_check_at, health_check_started_at, health_state_version
                         FROM {table_name}
                     """) as cursor:
                         rows = await cursor.fetchall()
@@ -899,13 +1029,23 @@ class SQLiteManager:
                                 "user_email": row[4],
                                 "model_cooldowns": model_cooldowns,
                                 "preview": bool(row[6]) if row[6] is not None else True,
-                                "tier": row[7] if row[7] is not None else "pro",
+                                "tier": row[7] if row[7] is not None else "unknown",
                                 "success_count": row[8] or 0,
                                 "failure_count": row[9] or 0,
                                 "permanent_disabled": bool(row[10]) if len(row) > 10 else False,
                                 "cycle_stats": json.loads(row[11] or "{}") if len(row) > 11 else {},
                                 "last_cycle_stats": json.loads(row[12] or "{}") if len(row) > 12 else {},
                                 "remark": row[13] or "" if len(row) > 13 else "",
+                                "tier_raw_id": row[14] if len(row) > 14 else None,
+                                "tier_raw_name": row[15] if len(row) > 15 else None,
+                                "tier_detected_at": row[16] if len(row) > 16 else None,
+                                "health_status": (row[17] or "healthy") if len(row) > 17 else "healthy",
+                                "quarantine_reason": row[18] if len(row) > 18 else None,
+                                "probe_stage": (row[19] or 0) if len(row) > 19 else 0,
+                                "next_probe_at": row[20] if len(row) > 20 else None,
+                                "last_health_check_at": row[21] if len(row) > 21 else None,
+                                "health_check_started_at": row[22] if len(row) > 22 else None,
+                                "health_state_version": (row[23] or 0) if len(row) > 23 else 0,
                             }
 
                         return states
@@ -1041,7 +1181,10 @@ class SQLiteManager:
                     all_query = f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, preview, tier,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
+                               tier_raw_id, tier_raw_name, tier_detected_at
+                               , health_status, quarantine_reason, probe_stage, next_probe_at,
+                               last_health_check_at, health_check_started_at, health_state_version
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order
@@ -1113,7 +1256,7 @@ class SQLiteManager:
                             "rotation_order": row[5],
                             "model_cooldowns": active_cooldowns,
                             "tier": row[8] if mode == "geminicli" and row[8] is not None else (
-                                row[7] if mode != "geminicli" and row[7] is not None else "pro"
+                                row[7] if mode != "geminicli" and row[7] is not None else default_tier_for_mode(mode)
                             ),
                             "success_count": row[9] or 0,
                             "failure_count": row[10] or 0,
@@ -1121,6 +1264,17 @@ class SQLiteManager:
                             "last_cycle_stats": json.loads(row[13] or "{}") if len(row) > 13 else {},
                             "remark": row_remark,
                         }
+                        if mode == "geminicli":
+                            summary["tier_raw_id"] = row[15] if len(row) > 15 else None
+                            summary["tier_raw_name"] = row[16] if len(row) > 16 else None
+                            summary["tier_detected_at"] = row[17] if len(row) > 17 else None
+                            summary["health_status"] = (row[18] or "healthy") if len(row) > 18 else "healthy"
+                            summary["quarantine_reason"] = row[19] if len(row) > 19 else None
+                            summary["probe_stage"] = (row[20] or 0) if len(row) > 20 else 0
+                            summary["next_probe_at"] = row[21] if len(row) > 21 else None
+                            summary["last_health_check_at"] = row[22] if len(row) > 22 else None
+                            summary["health_check_started_at"] = row[23] if len(row) > 23 else None
+                            summary["health_state_version"] = (row[24] or 0) if len(row) > 24 else 0
 
                         if mode != "geminicli":
                             summary["enable_credit"] = bool(row[8]) if row[8] is not None else False
@@ -1136,7 +1290,7 @@ class SQLiteManager:
                                     continue
 
                         # 应用tier筛选
-                        if tier_filter and tier_filter in ("free", "pro", "ultra"):
+                        if tier_filter and tier_filter in valid_tiers_for_mode(mode):
                             if summary["tier"] != tier_filter:
                                 continue
 
@@ -1835,6 +1989,133 @@ class SQLiteManager:
                 "total_count": 0,
                 "error": str(e),
             }
+
+    async def reserve_hedge_budget(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        daily_budget: int,
+    ) -> bool:
+        """Atomically reserve one conservative hedge-cost unit."""
+        self._ensure_initialized()
+        if daily_budget <= 0:
+            return False
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            await db.execute(
+                """
+                INSERT OR IGNORE INTO daily_hedge_stats
+                    (date, credential_name, model_family, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (date, credential_name, model_family, time.time()),
+            )
+            cursor = await db.execute(
+                """
+                UPDATE daily_hedge_stats
+                SET extra_upstream_requests = extra_upstream_requests + 1,
+                    outcome_pending = outcome_pending + 1,
+                    updated_at = ?
+                WHERE date = ? AND credential_name = ? AND model_family = ?
+                  AND extra_upstream_requests < ?
+                """,
+                (
+                    time.time(),
+                    date,
+                    credential_name,
+                    model_family,
+                    daily_budget,
+                ),
+            )
+            accepted = cursor.rowcount == 1
+            await db.commit()
+            return accepted
+
+    async def record_hedge_metric(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        metric: str,
+    ) -> None:
+        if metric != "budget_skips":
+            return
+        self._ensure_initialized()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO daily_hedge_stats
+                    (date, credential_name, model_family, budget_skips, updated_at)
+                VALUES (?, ?, ?, 1, ?)
+                ON CONFLICT(date, credential_name, model_family) DO UPDATE SET
+                    budget_skips = budget_skips + 1,
+                    updated_at = excluded.updated_at
+                """,
+                (date, credential_name, model_family, time.time()),
+            )
+            await db.commit()
+
+    async def record_hedge_outcome(
+        self,
+        date: str,
+        credential_name: str,
+        model_family: str,
+        outcome: str,
+        confirmed_rescue: bool = False,
+    ) -> None:
+        if outcome not in {
+            "primary_wins",
+            "backup_wins",
+            "both_failed",
+            "client_cancelled",
+        }:
+            return
+        self._ensure_initialized()
+        rescue = 1 if confirmed_rescue and outcome == "backup_wins" else 0
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                f"""
+                UPDATE daily_hedge_stats
+                SET {outcome} = {outcome} + 1,
+                    confirmed_rescues = confirmed_rescues + ?,
+                    outcome_pending = CASE
+                        WHEN outcome_pending > 0 THEN outcome_pending - 1
+                        ELSE 0
+                    END,
+                    updated_at = ?
+                WHERE date = ? AND credential_name = ? AND model_family = ?
+                """,
+                (
+                    rescue,
+                    time.time(),
+                    date,
+                    credential_name,
+                    model_family,
+                ),
+            )
+            await db.commit()
+
+    async def get_hedge_stats(self, days: int = 7) -> List[Dict[str, Any]]:
+        self._ensure_initialized()
+        days = max(1, min(int(days or 7), 90))
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT *
+                FROM daily_hedge_stats
+                WHERE date IN (
+                    SELECT DISTINCT date
+                    FROM daily_hedge_stats
+                    ORDER BY date DESC
+                    LIMIT ?
+                )
+                ORDER BY date DESC, model_family, credential_name
+                """,
+                (days,),
+            ) as cursor:
+                return [dict(row) for row in await cursor.fetchall()]
 
     async def get_recent_daily_stats(self, days: int = 7, mode: Optional[str] = None) -> List[Dict[str, Any]]:
         """获取最近 N 天的每日调用统计（按北京日期）。"""

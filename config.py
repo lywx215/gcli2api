@@ -16,8 +16,25 @@ _config_initialized = False
 # 调试模式同步缓存（热路径使用，避免 async 开销）
 _debug_mode_cache: bool = False
 
+# 流式 TTFT 诊断同步缓存（独立于 DEBUG_MODE）
+_stream_diagnostics_enabled_cache: bool = False
+
+# GeminiCLI model-capacity fast-fail cache (independent from SMART 429)
+_geminicli_capacity_fast_fail_enabled_cache: bool = False
+
+# GeminiCLI streaming response-header hedge cache
+_geminicli_stream_header_hedge_enabled_cache: bool = False
+_geminicli_stream_header_hedge_sample_rate_cache: float = 0.05
+_geminicli_stream_header_hedge_daily_budget_cache: int = 10
+
 # 轮巡模式同步缓存（热路径使用）
 _routing_mode_cache: str = "normal"
+
+# SMART 429 hot-path caches. Fail-safe defaults keep the feature disabled.
+_smart_429_enabled_cache: bool = False
+_smart_429_max_attempts_cache: int = 3
+_smart_429_retry_base_interval_cache: float = 0.5
+_smart_429_runtime_blocked_reason: Optional[str] = None
 
 # Client Configuration
 
@@ -41,6 +58,9 @@ ENV_MAPPINGS = {
     "RETRY_429_MAX_RETRIES": "retry_429_max_retries",
     "RETRY_429_ENABLED": "retry_429_enabled",
     "RETRY_429_INTERVAL": "retry_429_interval",
+    "SMART_429_PROTECTION_ENABLED": "smart_429_protection_enabled",
+    "SMART_429_MAX_ATTEMPTS": "smart_429_max_attempts",
+    "SMART_429_RETRY_BASE_INTERVAL": "smart_429_retry_base_interval",
     "ANTI_TRUNCATION_MAX_ATTEMPTS": "anti_truncation_max_attempts",
     "COMPATIBILITY_MODE": "compatibility_mode_enabled",
     "RETURN_THOUGHTS_TO_FRONTEND": "return_thoughts_to_frontend",
@@ -54,6 +74,11 @@ ENV_MAPPINGS = {
     "KEEPALIVE_URL": "keepalive_url",
     "KEEPALIVE_INTERVAL": "keepalive_interval",
     "DEBUG_MODE": "debug_mode",
+    "STREAM_DIAGNOSTICS_ENABLED": "stream_diagnostics_enabled",
+    "GEMINICLI_CAPACITY_FAST_FAIL_ENABLED": "geminicli_capacity_fast_fail_enabled",
+    "GEMINICLI_STREAM_HEADER_HEDGE_ENABLED": "geminicli_stream_header_hedge_enabled",
+    "GEMINICLI_STREAM_HEADER_HEDGE_SAMPLE_RATE": "geminicli_stream_header_hedge_sample_rate",
+    "GEMINICLI_STREAM_HEADER_HEDGE_DAILY_BUDGET": "geminicli_stream_header_hedge_daily_budget",
     "ROUTING_MODE": "routing_mode",
 }
 
@@ -63,6 +88,11 @@ ENV_MAPPINGS = {
 async def init_config():
     """初始化配置缓存（启动时调用一次）"""
     global _config_cache, _config_initialized, _debug_mode_cache, _routing_mode_cache
+    global _stream_diagnostics_enabled_cache, _geminicli_capacity_fast_fail_enabled_cache
+    global _geminicli_stream_header_hedge_enabled_cache
+    global _geminicli_stream_header_hedge_sample_rate_cache
+    global _geminicli_stream_header_hedge_daily_budget_cache
+    global _smart_429_enabled_cache, _smart_429_max_attempts_cache, _smart_429_retry_base_interval_cache
 
     if _config_initialized:
         return
@@ -79,12 +109,38 @@ async def init_config():
 
     # 刷新同步缓存
     _debug_mode_cache = await get_debug_mode()
+    _stream_diagnostics_enabled_cache = await get_stream_diagnostics_enabled()
+    _geminicli_capacity_fast_fail_enabled_cache = (
+        await get_geminicli_capacity_fast_fail_enabled()
+    )
+    _geminicli_stream_header_hedge_enabled_cache = (
+        await get_geminicli_stream_header_hedge_enabled()
+    )
+    _geminicli_stream_header_hedge_sample_rate_cache = (
+        await get_geminicli_stream_header_hedge_sample_rate()
+    )
+    _geminicli_stream_header_hedge_daily_budget_cache = (
+        await get_geminicli_stream_header_hedge_daily_budget()
+    )
     _routing_mode_cache = await get_routing_mode()
+    _smart_429_enabled_cache = await get_smart_429_protection_enabled()
+    _smart_429_max_attempts_cache = await get_smart_429_max_attempts()
+    _smart_429_retry_base_interval_cache = await get_smart_429_retry_base_interval()
 
 
-async def reload_config():
+async def reload_config(
+    *,
+    reload_stream_diagnostics: bool = True,
+    reload_capacity_fast_fail: bool = True,
+    reload_stream_header_hedge: bool = True,
+):
     """重新加载配置（修改配置后调用）"""
     global _config_cache, _config_initialized, _debug_mode_cache, _routing_mode_cache
+    global _stream_diagnostics_enabled_cache, _geminicli_capacity_fast_fail_enabled_cache
+    global _geminicli_stream_header_hedge_enabled_cache
+    global _geminicli_stream_header_hedge_sample_rate_cache
+    global _geminicli_stream_header_hedge_daily_budget_cache
+    global _smart_429_enabled_cache, _smart_429_max_attempts_cache, _smart_429_retry_base_interval_cache
 
     try:
         from src.storage_adapter import get_storage_adapter
@@ -102,7 +158,26 @@ async def reload_config():
 
     # 刷新同步缓存
     _debug_mode_cache = await get_debug_mode()
+    if reload_stream_diagnostics:
+        _stream_diagnostics_enabled_cache = await get_stream_diagnostics_enabled()
+    if reload_capacity_fast_fail:
+        _geminicli_capacity_fast_fail_enabled_cache = (
+            await get_geminicli_capacity_fast_fail_enabled()
+        )
+    if reload_stream_header_hedge:
+        _geminicli_stream_header_hedge_enabled_cache = (
+            await get_geminicli_stream_header_hedge_enabled()
+        )
+        _geminicli_stream_header_hedge_sample_rate_cache = (
+            await get_geminicli_stream_header_hedge_sample_rate()
+        )
+        _geminicli_stream_header_hedge_daily_budget_cache = (
+            await get_geminicli_stream_header_hedge_daily_budget()
+        )
     _routing_mode_cache = await get_routing_mode()
+    _smart_429_enabled_cache = await get_smart_429_protection_enabled()
+    _smart_429_max_attempts_cache = await get_smart_429_max_attempts()
+    _smart_429_retry_base_interval_cache = await get_smart_429_retry_base_interval()
 
 
 def _get_cached_config(key: str, default: Any = None) -> Any:
@@ -196,6 +271,79 @@ async def get_retry_429_interval() -> float:
             pass
 
     return float(await get_config_value("retry_429_interval", 1))
+
+
+async def get_smart_429_protection_enabled() -> bool:
+    """Return the requested SMART 429 state; invalid values fail closed."""
+    raw = os.getenv("SMART_429_PROTECTION_ENABLED")
+    if raw is None:
+        raw = await get_config_value("smart_429_protection_enabled", False)
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return raw == 1
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized in ("true", "1", "yes", "on"):
+            return True
+        if normalized in ("false", "0", "no", "off", ""):
+            return False
+    return False
+
+
+async def get_smart_429_max_attempts() -> int:
+    raw = os.getenv("SMART_429_MAX_ATTEMPTS")
+    if raw is None:
+        raw = await get_config_value("smart_429_max_attempts", 3)
+    try:
+        return max(1, min(5, int(raw)))
+    except (TypeError, ValueError):
+        return 3
+
+
+async def get_smart_429_retry_base_interval() -> float:
+    raw = os.getenv("SMART_429_RETRY_BASE_INTERVAL")
+    if raw is None:
+        raw = await get_config_value("smart_429_retry_base_interval", 0.5)
+    try:
+        return max(0.1, min(5.0, float(raw)))
+    except (TypeError, ValueError):
+        return 0.5
+
+
+def is_smart_429_protection_enabled() -> bool:
+    """Synchronous hot-path check. Multi-worker mode is unsupported in v1."""
+    try:
+        workers = int(os.getenv("WORKERS", "1"))
+    except ValueError:
+        workers = 1
+    return _smart_429_enabled_cache and workers == 1 and _smart_429_runtime_blocked_reason is None
+
+
+def set_smart_429_runtime_blocked_reason(reason: Optional[str]) -> None:
+    global _smart_429_runtime_blocked_reason
+    _smart_429_runtime_blocked_reason = reason
+
+
+def get_smart_429_config_sync() -> dict[str, Any]:
+    return {
+        "enabled": is_smart_429_protection_enabled(),
+        "requested_enabled": _smart_429_enabled_cache,
+        "blocked_reason": (
+            "multi_instance_unsupported"
+            if _smart_429_enabled_cache and workers_not_supported()
+            else _smart_429_runtime_blocked_reason
+        ),
+        "max_attempts": _smart_429_max_attempts_cache,
+        "retry_base_interval": _smart_429_retry_base_interval_cache,
+    }
+
+
+def workers_not_supported() -> bool:
+    try:
+        return int(os.getenv("WORKERS", "1")) != 1
+    except ValueError:
+        return False
 
 
 async def get_anti_truncation_max_attempts() -> int:
@@ -539,6 +687,125 @@ def is_debug_mode() -> bool:
     缓存在 init_config() 和 reload_config() 时自动刷新。
     """
     return _debug_mode_cache
+
+
+# Streaming TTFT diagnostics (independent from DEBUG_MODE)
+async def get_stream_diagnostics_enabled() -> bool:
+    """Return the persisted TTFT diagnostics switch with ENV precedence."""
+    env_value = os.getenv("STREAM_DIAGNOSTICS_ENABLED")
+    if env_value:
+        return env_value.strip().lower() in ("true", "1", "yes", "on")
+
+    value = await get_config_value("stream_diagnostics_enabled", False)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return False
+
+
+def is_stream_diagnostics_enabled() -> bool:
+    """Synchronous hot-path getter; an explicit ENV value always wins."""
+    env_value = os.getenv("STREAM_DIAGNOSTICS_ENABLED")
+    if env_value:
+        return env_value.strip().lower() in ("true", "1", "yes", "on")
+    return _stream_diagnostics_enabled_cache
+
+
+async def get_geminicli_capacity_fast_fail_enabled() -> bool:
+    """Return the model-capacity fast-fail switch with ENV precedence."""
+    env_value = os.getenv("GEMINICLI_CAPACITY_FAST_FAIL_ENABLED")
+    if env_value:
+        return env_value.strip().lower() in ("true", "1", "yes", "on")
+    value = await get_config_value("geminicli_capacity_fast_fail_enabled", False)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return False
+
+
+def is_geminicli_capacity_fast_fail_enabled() -> bool:
+    """Synchronous request-snapshot getter for the capacity fast-fail policy."""
+    env_value = os.getenv("GEMINICLI_CAPACITY_FAST_FAIL_ENABLED")
+    if env_value:
+        return env_value.strip().lower() in ("true", "1", "yes", "on")
+    return _geminicli_capacity_fast_fail_enabled_cache
+
+
+async def get_geminicli_stream_header_hedge_enabled() -> bool:
+    """Return the streaming response-header hedge switch with ENV precedence."""
+    env_value = os.getenv("GEMINICLI_STREAM_HEADER_HEDGE_ENABLED")
+    if env_value:
+        return env_value.strip().lower() in ("true", "1", "yes", "on")
+    value = await get_config_value("geminicli_stream_header_hedge_enabled", False)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return False
+
+
+def is_geminicli_stream_header_hedge_enabled() -> bool:
+    """Synchronous request-snapshot getter for streaming header hedging."""
+    env_value = os.getenv("GEMINICLI_STREAM_HEADER_HEDGE_ENABLED")
+    if env_value:
+        return env_value.strip().lower() in ("true", "1", "yes", "on")
+    return _geminicli_stream_header_hedge_enabled_cache
+
+
+def _clamp_hedge_sample_rate(value: Any, default: float = 0.05) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if 0.0 <= parsed <= 1.0 else default
+
+
+async def get_geminicli_stream_header_hedge_sample_rate() -> float:
+    """Return hedge sampling fraction with ENV precedence."""
+    env_value = os.getenv("GEMINICLI_STREAM_HEADER_HEDGE_SAMPLE_RATE")
+    if env_value is not None:
+        return _clamp_hedge_sample_rate(env_value)
+    value = await get_config_value(
+        "geminicli_stream_header_hedge_sample_rate", 0.05
+    )
+    return _clamp_hedge_sample_rate(value)
+
+
+def get_cached_geminicli_stream_header_hedge_sample_rate() -> float:
+    env_value = os.getenv("GEMINICLI_STREAM_HEADER_HEDGE_SAMPLE_RATE")
+    if env_value is not None:
+        return _clamp_hedge_sample_rate(env_value)
+    return _geminicli_stream_header_hedge_sample_rate_cache
+
+
+def _clamp_hedge_daily_budget(value: Any, default: int = 10) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if 0 <= parsed <= 1000 else default
+
+
+async def get_geminicli_stream_header_hedge_daily_budget() -> int:
+    """Return daily budget per backup credential/model family."""
+    env_value = os.getenv("GEMINICLI_STREAM_HEADER_HEDGE_DAILY_BUDGET")
+    if env_value is not None:
+        return _clamp_hedge_daily_budget(env_value)
+    value = await get_config_value(
+        "geminicli_stream_header_hedge_daily_budget", 10
+    )
+    return _clamp_hedge_daily_budget(value)
+
+
+def get_cached_geminicli_stream_header_hedge_daily_budget() -> int:
+    env_value = os.getenv("GEMINICLI_STREAM_HEADER_HEDGE_DAILY_BUDGET")
+    if env_value is not None:
+        return _clamp_hedge_daily_budget(env_value)
+    return _geminicli_stream_header_hedge_daily_budget_cache
 
 
 # Routing Mode（轮巡模式）

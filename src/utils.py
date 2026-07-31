@@ -61,23 +61,44 @@ BASE_MODELS = [
     "gemini-2.5-flash",
     "gemini-3-flash-preview",
     "gemini-3.1-pro-preview",
-    "gemini-3.1-flash-lite-preview",
-    "gemini-3.5-flash"
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-preview",
 ]
 
 
 # ====================== Model Helper Functions ======================
 
 GEMINICLI_MODEL_ALIASES = {
-    # Official Gemini CLI exposes this as gemini-3.5-flash, while the
-    # Code Assist backend currently expects the secondary ID gemini-3-flash.
-    "gemini-3.5-flash": "gemini-3-flash",
+    # Keep the GA model on Google's matching upstream ID. Expose the legacy
+    # Code Assist ID separately so clients can select it explicitly.
+    "gemini-3.5-flash-preview": "gemini-3-flash",
 }
+
+GEMINICLI_MODEL_ALIAS_SUFFIXES = [
+    "",
+    "-minimal",
+    "-low",
+    "-medium",
+    "-high",
+    "-search",
+    "-minimal-search",
+    "-low-search",
+    "-medium-search",
+    "-high-search",
+]
 
 
 def normalize_geminicli_model_alias(model_name: str) -> str:
     """Map public GeminiCLI model names to Code Assist upstream IDs."""
-    return GEMINICLI_MODEL_ALIASES.get(model_name, model_name)
+    for public_base, upstream_base in GEMINICLI_MODEL_ALIASES.items():
+        if model_name == public_base:
+            return upstream_base
+        if model_name.startswith(f"{public_base}-"):
+            suffix = model_name[len(public_base):]
+            if suffix in GEMINICLI_MODEL_ALIAS_SUFFIXES:
+                return f"{upstream_base}{suffix}"
+    return model_name
 
 def is_fake_streaming_model(model_name: str) -> bool:
     """Check if model name indicates fake streaming should be used."""
@@ -150,15 +171,14 @@ def get_available_models(router_type: str = "openai") -> List[str]:
         # Gemini 3 系列: 使用思考等级后缀
         elif "gemini-3" in base_model:
             if base_model == "gemini-3.5-flash":
-                # Code Assist exposes 3.5 Flash as one official model name;
-                # do not create Antigravity-style high/medium/low variants here.
-                thinking_suffixes = []
+                # Gemini CLI exposes Minimal/Low/Medium/High thinking levels for 3.5 Flash.
+                thinking_suffixes = ["-minimal", "-low", "-medium", "-high"]
             elif "flash" in base_model:
                 # 3-flash-preview: 支持 high/medium/low/minimal
                 thinking_suffixes = ["-high", "-medium", "-low", "-minimal"]
             elif "pro" in base_model:
                 # 3-pro-preview: 支持 high/low
-                thinking_suffixes = ["-low"]
+                thinking_suffixes = ["-high", "-low"]
 
         search_suffix = "-search"
 

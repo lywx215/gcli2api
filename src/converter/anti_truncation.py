@@ -11,6 +11,7 @@ from typing import Any, AsyncGenerator, Dict, List, Tuple
 from fastapi.responses import StreamingResponse
 
 from log import log
+from src.streaming_latency import StreamFailure
 
 # 反截断配置
 DONE_MARKER = "[done]"
@@ -362,6 +363,10 @@ class AntiTruncationStreamProcessor:
                     yield b"data: [DONE]\n\n"
                     return
 
+            except StreamFailure:
+                # API transport already applied its safe pre-content retry policy.
+                # Never let anti-truncation replay a failed stream implicitly.
+                raise
             except Exception as e:
                 log.error(f"Anti-truncation error in attempt {self.current_attempt}: {str(e)}")
                 if self.current_attempt >= self.max_attempts:

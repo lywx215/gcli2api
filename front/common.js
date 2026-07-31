@@ -133,7 +133,14 @@ function createCredsManager(type) {
                             user_email: item.user_email,
                             model_cooldowns: item.model_cooldowns || {},
                             preview: item.preview,
-                            tier: item.tier || 'pro',
+                            tier: item.tier || (this.type === 'antigravity' ? 'pro' : 'unknown'),
+                            tier_raw_id: item.tier_raw_id,
+                            tier_raw_name: item.tier_raw_name,
+                            tier_detected_at: item.tier_detected_at,
+                            health_status: item.health_status || 'healthy',
+                            quarantine_reason: item.quarantine_reason || null,
+                            probe_stage: item.probe_stage || 0,
+                            next_probe_at: item.next_probe_at || null,
                             enable_credit: !!item.enable_credit,
                             success_count: item.success_count || 0,
                             failure_count: item.failure_count || 0,
@@ -675,6 +682,17 @@ function createCredCard(credInfo, manager) {
         statusBadges += '<span class="status-badge" style="background-color: #28a745; color: white;">无错误</span>';
     }
 
+    if (managerType !== 'antigravity') {
+        const health = credInfo.health_status || 'healthy';
+        const healthBadge = {
+            checking: ['风控检测中', '#f0ad4e'],
+            risk_quarantined: ['风控隔离', '#d9534f'],
+            manual_review: ['待人工复核', '#6f42c1'],
+            healthy: ['健康', '#28a745']
+        }[health] || [health, '#616161'];
+        statusBadges += `<span class="status-badge" style="background-color: ${healthBadge[1]}; color: white;" title="${escapeHtmlAttribute(credInfo.quarantine_reason || '')}">${healthBadge[0]}</span>`;
+    }
+
     // Preview状态显示 (仅对geminicli模式显示)
     if (managerType !== 'antigravity' && credInfo.preview !== undefined) {
         if (credInfo.preview) {
@@ -685,10 +703,36 @@ function createCredCard(credInfo, manager) {
     }
 
     // tier 状态显示 (geminicli 和 antigravity 都显示)
-    const tier = (credInfo.tier || 'pro').toString().toLowerCase();
-    const tierLabel = tier.toUpperCase();
-    const tierColor = tier === 'ultra' ? '#ff9800' : (tier === 'free' ? '#607d8b' : '#2e7d32');
-    statusBadges += `<span class="status-badge" style="background-color: ${tierColor}; color: white;" title="凭证等级: ${tierLabel}">Tier: ${tierLabel}</span>`;
+    const tier = (credInfo.tier || (managerType === 'antigravity' ? 'pro' : 'unknown')).toString().toLowerCase();
+    if (managerType === 'antigravity') {
+        const tierLabel = tier.toUpperCase();
+        const tierColor = tier === 'ultra' ? '#ff9800' : (tier === 'free' ? '#607d8b' : '#2e7d32');
+        statusBadges += `<span class="status-badge" style="background-color: ${tierColor}; color: white;" title="凭证等级: ${tierLabel}">Tier: ${tierLabel}</span>`;
+    } else {
+        const tierPresentation = {
+            code_assist_standard: { label: 'Code Assist Standard', color: '#1565c0' },
+            code_assist_enterprise: { label: 'Code Assist Enterprise', color: '#6a1b9a' },
+            free: { label: 'Free', color: '#607d8b' },
+            pro: { label: 'Pro', color: '#2e7d32' },
+            ultra: { label: 'Ultra', color: '#ef6c00' },
+            unknown: { label: 'Unknown', color: '#616161' }
+        }[tier] || { label: 'Unknown', color: '#616161' };
+        const tooltipLines = [`凭证等级: ${tierPresentation.label}`];
+        if (credInfo.tier_raw_id) {
+            tooltipLines.push(`原始 Tier ID: ${credInfo.tier_raw_id}`);
+        }
+        if (credInfo.tier_raw_name) {
+            tooltipLines.push(`原始 Tier 名称: ${credInfo.tier_raw_name}`);
+        }
+        if (credInfo.tier_detected_at) {
+            const detectedDate = new Date(Number(credInfo.tier_detected_at) * 1000);
+            if (!Number.isNaN(detectedDate.getTime())) {
+                tooltipLines.push(`识别时间: ${detectedDate.toLocaleString()}`);
+            }
+        }
+        const tooltip = escapeHtmlAttribute(tooltipLines.join('\n'));
+        statusBadges += `<span class="status-badge" style="background-color: ${tierPresentation.color}; color: white;" title="${tooltip}">Tier: ${tierPresentation.label}</span>`;
+    }
 
     // Credit 状态显示（仅 antigravity）
     if (managerType === 'antigravity') {
@@ -936,6 +980,7 @@ async function login() {
             document.getElementById('loginSection').classList.add('hidden');
             document.getElementById('mainSection').classList.remove('hidden');
             showStatus('登录成功', 'success');
+            await fetchAndDisplayVersion();
             // 显示面板后初始化滑块
             requestAnimationFrame(() => initTabSlider());
         } else {
@@ -1120,6 +1165,7 @@ function triggerTabDataLoad(tabName) {
     if (tabName === 'manage') {
         AppState.creds.refresh();
         if (typeof refreshTodayStats === 'function') refreshTodayStats('geminicli');
+        if (typeof refreshHedgeStats === 'function') refreshHedgeStats();
         if (typeof startStatsAutoRefresh === 'function') startStatsAutoRefresh('geminicli');
     } else if (tabName === 'antigravity-manage') {
         AppState.antigravityCreds.refresh();
@@ -2422,6 +2468,10 @@ function escapeHtml(text) {
 }
 
 // 高亮HTTP链接函数
+
+function escapeHtmlAttribute(text) {
+    return escapeHtml(String(text)).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 function highlightHttpLinks(text) {
     // 匹配 http:// 或 https:// 开头的URL
     const urlRegex = /(https?:\/\/[^\s<>"]+)/gi;
@@ -3069,19 +3119,49 @@ function populateConfigForm() {
     setConfigField('serviceUsageApiUrl', c.service_usage_api_url || '');
     setConfigField('antigravityApiUrl', c.antigravity_api_url || '');
 
-    document.getElementById('autoBanEnabled').checked = Boolean(c.auto_ban_enabled);
+    setConfigCheckbox('autoBanEnabled', 'auto_ban_enabled', c.auto_ban_enabled);
     setConfigField('autoBanErrorCodes', (c.auto_ban_error_codes || []).join(','));
     setConfigField('callsPerRotation', c.calls_per_rotation || 10);
 
-    document.getElementById('retry429Enabled').checked = Boolean(c.retry_429_enabled);
+    setConfigCheckbox('retry429Enabled', 'retry_429_enabled', c.retry_429_enabled);
     setConfigField('retry429MaxRetries', c.retry_429_max_retries || 20);
     setConfigField('retry429Interval', c.retry_429_interval || 0.1);
+    setConfigCheckbox(
+        'smart429ProtectionEnabled',
+        'smart_429_protection_enabled',
+        c.smart_429_protection_enabled
+    );
+    setConfigField('smart429MaxAttempts', c.smart_429_max_attempts || 3);
+    setConfigField('smart429RetryBaseInterval', c.smart_429_retry_base_interval || 0.5);
 
-    document.getElementById('compatibilityModeEnabled').checked = Boolean(c.compatibility_mode_enabled);
-    document.getElementById('returnThoughtsToFrontend').checked = Boolean(c.return_thoughts_to_frontend !== false);
-    document.getElementById('antigravityStream2nostream').checked = Boolean(c.antigravity_stream2nostream !== false);
-    document.getElementById('antigravitySwitchCredentialEnabled').checked = Boolean(c.antigravity_switch_credential_enabled);
-    document.getElementById('debugMode').checked = Boolean(c.debug_mode);
+    setConfigCheckbox('compatibilityModeEnabled', 'compatibility_mode_enabled', c.compatibility_mode_enabled);
+    setConfigCheckbox('returnThoughtsToFrontend', 'return_thoughts_to_frontend', c.return_thoughts_to_frontend !== false);
+    setConfigCheckbox('antigravityStream2nostream', 'antigravity_stream2nostream', c.antigravity_stream2nostream !== false);
+    setConfigCheckbox('antigravitySwitchCredentialEnabled', 'antigravity_switch_credential_enabled', c.antigravity_switch_credential_enabled);
+    setConfigCheckbox('debugMode', 'debug_mode', c.debug_mode);
+    setConfigCheckbox(
+        'streamDiagnosticsEnabled',
+        'stream_diagnostics_enabled',
+        c.stream_diagnostics_enabled
+    );
+    setConfigCheckbox(
+        'geminicliCapacityFastFailEnabled',
+        'geminicli_capacity_fast_fail_enabled',
+        c.geminicli_capacity_fast_fail_enabled
+    );
+    setConfigCheckbox(
+        'geminicliStreamHeaderHedgeEnabled',
+        'geminicli_stream_header_hedge_enabled',
+        c.geminicli_stream_header_hedge_enabled
+    );
+    setConfigField(
+        'geminicliStreamHeaderHedgeSampleRate',
+        Math.round((c.geminicli_stream_header_hedge_sample_rate ?? 0.05) * 100)
+    );
+    setConfigField(
+        'geminicliStreamHeaderHedgeDailyBudget',
+        c.geminicli_stream_header_hedge_daily_budget ?? 10
+    );
 
     // 轮巡模式
     const routingModeSelect = document.getElementById('routingMode');
@@ -3107,14 +3187,37 @@ function setConfigField(fieldId, value) {
             field.disabled = false;
             field.classList.remove('env-locked');
         }
+        const locked = AppState.envLockedFields.has(configKey);
+        field.title = locked ? '此配置由环境变量锁定，无法在控制面板修改' : '';
+        const lockNote = document.getElementById(`${fieldId}EnvLock`);
+        if (lockNote) lockNote.hidden = !locked;
     }
+}
+
+function setConfigCheckbox(fieldId, configKey, value) {
+    const field = document.getElementById(fieldId);
+    if (!field) return;
+
+    field.checked = Boolean(value);
+    const locked = AppState.envLockedFields.has(configKey);
+    field.disabled = locked;
+    field.classList.toggle('env-locked', locked);
+    field.title = locked ? '此配置由环境变量锁定，无法在控制面板修改' : '';
+    const lockNote = document.getElementById(`${fieldId}EnvLock`);
+    if (lockNote) lockNote.hidden = !locked;
 }
 
 async function saveConfig() {
     try {
         const getValue = (id, def = '') => document.getElementById(id)?.value.trim() || def;
-        const getInt = (id, def = 0) => parseInt(document.getElementById(id)?.value) || def;
-        const getFloat = (id, def = 0.0) => parseFloat(document.getElementById(id)?.value) || def;
+        const getInt = (id, def = 0) => {
+            const value = parseInt(document.getElementById(id)?.value);
+            return Number.isNaN(value) ? def : value;
+        };
+        const getFloat = (id, def = 0.0) => {
+            const value = parseFloat(document.getElementById(id)?.value);
+            return Number.isNaN(value) ? def : value;
+        };
         const getChecked = (id, def = false) => document.getElementById(id)?.checked || def;
 
         const config = {
@@ -3138,11 +3241,21 @@ async function saveConfig() {
             retry_429_enabled: getChecked('retry429Enabled'),
             retry_429_max_retries: getInt('retry429MaxRetries', 20),
             retry_429_interval: getFloat('retry429Interval', 0.1),
+            smart_429_protection_enabled: getChecked('smart429ProtectionEnabled'),
+            smart_429_max_attempts: getInt('smart429MaxAttempts', 3),
+            smart_429_retry_base_interval: getFloat('smart429RetryBaseInterval', 0.5),
             compatibility_mode_enabled: getChecked('compatibilityModeEnabled'),
             return_thoughts_to_frontend: getChecked('returnThoughtsToFrontend'),
             antigravity_stream2nostream: getChecked('antigravityStream2nostream'),
             antigravity_switch_credential_enabled: getChecked('antigravitySwitchCredentialEnabled'),
             debug_mode: getChecked('debugMode'),
+            stream_diagnostics_enabled: getChecked('streamDiagnosticsEnabled'),
+            geminicli_capacity_fast_fail_enabled: getChecked('geminicliCapacityFastFailEnabled'),
+            geminicli_stream_header_hedge_enabled: getChecked('geminicliStreamHeaderHedgeEnabled'),
+            geminicli_stream_header_hedge_sample_rate:
+                Math.min(100, Math.max(0, getFloat('geminicliStreamHeaderHedgeSampleRate', 5))) / 100,
+            geminicli_stream_header_hedge_daily_budget:
+                Math.min(1000, Math.max(0, getInt('geminicliStreamHeaderHedgeDailyBudget', 10))),
             routing_mode: (document.getElementById('routingMode') || {}).value || 'normal',
             anti_truncation_max_attempts: getInt('antiTruncationMaxAttempts', 3),
             keepalive_url: getValue('keepaliveUrl'),
@@ -3802,13 +3915,76 @@ async function refreshTodayStats(mode) {
     }
 }
 
+async function refreshHedgeStats() {
+    const extraEl = document.getElementById('hedgeStatsExtra');
+    if (!extraEl) return;
+    const fields = {
+        date: document.getElementById('hedgeStatsDate'),
+        remaining: document.getElementById('hedgeStatsRemaining'),
+        primaryWins: document.getElementById('hedgeStatsPrimaryWins'),
+        backupWins: document.getElementById('hedgeStatsBackupWins'),
+        rescues: document.getElementById('hedgeStatsRescues'),
+        bothFailed: document.getElementById('hedgeStatsBothFailed'),
+        costPerWin: document.getElementById('hedgeStatsCostPerWin'),
+        sampleRate: document.getElementById('hedgeStatsSampleRate'),
+        dailyBudget: document.getElementById('hedgeStatsDailyBudget'),
+        byModel: document.getElementById('hedgeStatsByModel')
+    };
+    try {
+        const response = await fetch('./creds/hedge-stats?days=7', {
+            headers: getAuthHeaders()
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || response.statusText);
+        const today = data.today || {};
+        extraEl.textContent = Number(today.extra_upstream_requests || 0).toLocaleString();
+        if (fields.date) fields.date.textContent = data.date ? `(${data.date})` : '';
+        if (fields.remaining) {
+            fields.remaining.textContent =
+                `${Number(today.remaining_budget || 0).toLocaleString()} / ${Number(today.active_budget || 0).toLocaleString()}`;
+        }
+        if (fields.primaryWins) fields.primaryWins.textContent = Number(today.primary_wins || 0).toLocaleString();
+        if (fields.backupWins) fields.backupWins.textContent = Number(today.backup_wins || 0).toLocaleString();
+        if (fields.rescues) fields.rescues.textContent = Number(today.confirmed_rescues || 0).toLocaleString();
+        if (fields.bothFailed) fields.bothFailed.textContent = Number(today.both_failed || 0).toLocaleString();
+        if (fields.costPerWin) {
+            fields.costPerWin.textContent =
+                today.cost_per_backup_win == null ? '-' : Number(today.cost_per_backup_win).toFixed(2);
+        }
+        if (fields.sampleRate) {
+            fields.sampleRate.textContent = `${Number(data.sample_rate_percent || 0)}%`;
+        }
+        if (fields.dailyBudget) {
+            fields.dailyBudget.textContent =
+                Number(data.daily_budget_per_credential_model_family || 0).toLocaleString();
+        }
+        if (fields.byModel) {
+            const summaries = Object.entries(data.today_by_model_family || {}).map(
+                ([family, stats]) =>
+                    `${family}: 额外 ${Number(stats.extra_upstream_requests || 0)}，备胜 ${Number(stats.backup_wins || 0)}`
+            );
+            fields.byModel.textContent = summaries.length
+                ? `模型族：${summaries.join('；')}`
+                : '模型族：暂无对冲';
+        }
+    } catch (error) {
+        console.error('refreshHedgeStats failed:', error);
+        extraEl.textContent = '-';
+        if (fields.date) fields.date.textContent = '(加载失败)';
+    }
+}
 
-// \u5b9a\u65f6\u81ea\u52a8\u5237\u65b0\u7edf\u8ba1\u5361\u7247\nlet _statsAutoRefreshTimer = null;
+
+// 定时自动刷新统计卡片
+let _statsAutoRefreshTimer = null;
 function startStatsAutoRefresh(mode) {
     stopStatsAutoRefresh();
     _statsAutoRefreshTimer = setInterval(() => {
         if (typeof refreshTodayStats === 'function') {
             refreshTodayStats(mode);
+        }
+        if (mode === 'geminicli' && typeof refreshHedgeStats === 'function') {
+            refreshHedgeStats();
         }
     }, 30000);
 }
@@ -4057,4 +4233,3 @@ async function testModelQuota(btn, filename, modelName, mode, displayName) {
         }, 3000);
     }
 }
-

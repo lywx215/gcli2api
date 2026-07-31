@@ -19,6 +19,12 @@ from config import (
 from log import log
 
 from src.httpx_client import get_async, post_async
+from src.streaming_latency import StreamLatencyConfig
+from src.subscription_tiers import (
+    GeminiCliSubscriptionInfo,
+    TIER_UNKNOWN,
+    normalize_geminicli_subscription,
+)
 
 
 class TokenError(Exception):
@@ -89,6 +95,7 @@ class Credentials:
                 token_url,
                 data=data,
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=StreamLatencyConfig.from_env().oauth_refresh_timeout,
             )
             response.raise_for_status()
 
@@ -115,6 +122,12 @@ class Credentials:
             status_code = None
             if hasattr(e, 'response') and hasattr(e.response, 'status_code'):
                 status_code = e.response.status_code
+                try:
+                    response_detail = e.response.text[:500]
+                except Exception:
+                    response_detail = ""
+                if response_detail:
+                    error_msg = f"{error_msg}; body={response_detail}"
                 error_msg = f"Token刷新失败 (HTTP {status_code}): {error_msg}"
             else:
                 error_msg = f"Token刷新失败: {error_msg}"
@@ -487,7 +500,7 @@ async def get_user_projects(credentials: Credentials) -> List[Dict[str, Any]]:
 
         log.info(f"API响应状态码: {response.status_code}")
         if response.status_code != 200:
-            log.error(f"API响应内容: {response.text}")
+            log.error("Resource Manager API returned an error response")
 
         if response.status_code == 200:
             data = response.json()
@@ -499,7 +512,7 @@ async def get_user_projects(credentials: Credentials) -> List[Dict[str, Any]]:
             log.info(f"获取到 {len(active_projects)} 个活跃项目")
             return active_projects
         else:
-            log.warning(f"获取项目列表失败: {response.status_code} - {response.text}")
+            log.warning(f"获取项目列表失败: HTTP {response.status_code}")
             return []
 
     except Exception as e:
@@ -529,6 +542,161 @@ async def select_default_project(projects: List[Dict[str, Any]]) -> Optional[str
         f"选择第一个项目作为默认: {project_id} ({first_project.get('displayName', project_id)})"
     )
     return project_id
+
+
+def _safe_tier_log_value(value: Optional[str]) -> str:
+    if not value:
+        return "-"
+    return " ".join(str(value).split())[:128]
+
+
+async def _fetch_antigravity_paid_tier_fallback(
+    access_token: str,
+    user_agent: str,
+    api_base_url: str,
+    project_id: Optional[str],
+) -> Optional[GeminiCliSubscriptionInfo]:
+    """Read an explicit Antigravity paidTier without guessing from currentTier."""
+    request_url = f"{api_base_url.rstrip('/')}/v1internal:loadCodeAssist"
+    try:
+        response = await post_async(
+            request_url,
+            json={"metadata": {"ideType": "ANTIGRAVITY"}},
+            headers={
+                "User-Agent": user_agent,
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+                "Accept-Encoding": "gzip",
+            },
+            timeout=30.0,
+        )
+        if response.status_code != 200:
+            log.warning(
+                f"[GeminiCLI tier fallback] Antigravity loadCodeAssist unavailable: "
+                f"HTTP {response.status_code}"
+            )
+            return None
+
+        data = response.json()
+        if not isinstance(data, dict):
+            log.warning(
+                "[GeminiCLI tier fallback] Antigravity loadCodeAssist returned "
+                "a non-object response"
+            )
+            return None
+
+        paid_tier = data.get("paidTier")
+        if not isinstance(paid_tier, dict) or not (
+            paid_tier.get("id") or paid_tier.get("name")
+        ):
+            log.info("[GeminiCLI tier fallback] Antigravity paidTier is absent")
+            return None
+
+        fallback_payload: Dict[str, Any] = {"paidTier": paid_tier}
+        if project_id:
+            fallback_payload["cloudaicompanionProject"] = project_id
+        info = normalize_geminicli_subscription(fallback_payload, int(time.time()))
+        if info.status != "detected" or info.tier == TIER_UNKNOWN:
+            log.info(
+                f"[GeminiCLI tier fallback] Antigravity paidTier is unrecognized: "
+                f"raw_id={_safe_tier_log_value(info.raw_tier_id)}, "
+                f"raw_name={_safe_tier_log_value(info.raw_tier_name)}"
+            )
+            return None
+
+        log.info(
+            f"[GeminiCLI tier fallback] detected tier={info.tier}, "
+            f"raw_id={_safe_tier_log_value(info.raw_tier_id)}, "
+            f"raw_name={_safe_tier_log_value(info.raw_tier_name)}"
+        )
+        return info
+    except Exception as exc:
+        log.warning(
+            f"[GeminiCLI tier fallback] Antigravity loadCodeAssist failed: "
+            f"error_type={type(exc).__name__}"
+        )
+        return None
+
+
+async def fetch_geminicli_subscription_info(
+    access_token: str,
+    user_agent: str,
+    api_base_url: str,
+    project_id: Optional[str] = None,
+    antigravity_api_base_url: Optional[str] = None,
+    antigravity_user_agent: Optional[str] = None,
+) -> GeminiCliSubscriptionInfo:
+    """Read Gemini CLI subscription information without onboarding the user."""
+    headers = {
+        "User-Agent": user_agent,
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "Accept-Encoding": "gzip",
+    }
+    metadata: Dict[str, Any] = {
+        "ideType": "IDE_UNSPECIFIED",
+        "platform": "PLATFORM_UNSPECIFIED",
+        "pluginType": "GEMINI",
+    }
+    request_body: Dict[str, Any] = {"metadata": metadata}
+    if project_id:
+        request_body["cloudaicompanionProject"] = project_id
+        metadata["duetProject"] = project_id
+
+    request_url = f"{api_base_url.rstrip('/')}/v1internal:loadCodeAssist"
+    try:
+        response = await post_async(
+            request_url,
+            json=request_body,
+            headers=headers,
+            timeout=30.0,
+        )
+        if response.status_code != 200:
+            log.warning(
+                f"[GeminiCLI tier] loadCodeAssist unavailable: HTTP {response.status_code}"
+            )
+            return GeminiCliSubscriptionInfo.unavailable(project_id)
+
+        data = response.json()
+        if not isinstance(data, dict):
+            log.warning("[GeminiCLI tier] loadCodeAssist returned a non-object response")
+            return GeminiCliSubscriptionInfo.unavailable(project_id)
+
+        info = normalize_geminicli_subscription(data, int(time.time()))
+        if not info.project_id and project_id:
+            info = GeminiCliSubscriptionInfo(
+                project_id=project_id,
+                tier=info.tier,
+                raw_tier_id=info.raw_tier_id,
+                raw_tier_name=info.raw_tier_name,
+                detected_at=info.detected_at,
+                status=info.status,
+            )
+        if (
+            info.status == "unrecognized"
+            and info.tier == TIER_UNKNOWN
+            and antigravity_api_base_url
+        ):
+            fallback_info = await _fetch_antigravity_paid_tier_fallback(
+                access_token=access_token,
+                user_agent=antigravity_user_agent or user_agent,
+                api_base_url=antigravity_api_base_url,
+                project_id=info.project_id or project_id,
+            )
+            if fallback_info is not None:
+                info = fallback_info
+        log.info(
+            f"[GeminiCLI tier] status={info.status}, tier={info.tier}, "
+            f"raw_id={_safe_tier_log_value(info.raw_tier_id)}, "
+            f"raw_name={_safe_tier_log_value(info.raw_tier_name)}"
+        )
+        return info
+    except Exception as exc:
+        log.warning(
+            f"[GeminiCLI tier] loadCodeAssist request failed: "
+            f"status=unavailable, error_type={type(exc).__name__}"
+        )
+        return GeminiCliSubscriptionInfo.unavailable(project_id)
 
 
 async def fetch_project_id_and_tier(
@@ -651,7 +819,7 @@ async def _try_load_code_assist(
     }
 
     log.debug(f"[loadCodeAssist] Fetching project_id from: {request_url}")
-    log.debug(f"[loadCodeAssist] Request body: {request_body}")
+    log.debug("[loadCodeAssist] Request metadata prepared")
 
     response = await post_async(
         request_url,
@@ -663,9 +831,6 @@ async def _try_load_code_assist(
     log.debug(f"[loadCodeAssist] Response status: {response.status_code}")
 
     if response.status_code == 200:
-        response_text = response.text
-        log.debug(f"[loadCodeAssist] Response body: {response_text}")
-
         data = response.json()
         log.debug(f"[loadCodeAssist] Response JSON keys: {list(data.keys())}")
 
@@ -709,8 +874,7 @@ async def _try_load_code_assist(
             return None, None, credit_amount
     else:
         log.warning(f"[loadCodeAssist] Failed: HTTP {response.status_code}")
-        log.warning(f"[loadCodeAssist] Response body: {response.text[:500]}")
-        raise Exception(f"HTTP {response.status_code}: {response.text[:200]}")
+        raise Exception(f"HTTP {response.status_code}")
 
 
 async def _try_onboard_user(
@@ -745,7 +909,7 @@ async def _try_onboard_user(
     }
 
     log.debug(f"[onboardUser] Request URL: {request_url}")
-    log.debug(f"[onboardUser] Request body: {request_body}")
+    log.debug("[onboardUser] Request metadata prepared")
 
     # onboardUser 是长时间运行操作，需要轮询
     # 最多等待 10 秒（5 次 * 2 秒）
@@ -767,7 +931,7 @@ async def _try_onboard_user(
 
         if response.status_code == 200:
             data = response.json()
-            log.debug(f"[onboardUser] Response data: {data}")
+            log.debug(f"[onboardUser] Response keys: {list(data.keys())}")
 
             # 检查长时间运行操作是否完成
             if data.get("done"):
@@ -795,8 +959,7 @@ async def _try_onboard_user(
                 await asyncio.sleep(2)
         else:
             log.warning(f"[onboardUser] Failed: HTTP {response.status_code}")
-            log.warning(f"[onboardUser] Response body: {response.text[:500]}")
-            raise Exception(f"HTTP {response.status_code}: {response.text[:200]}")
+            raise Exception(f"HTTP {response.status_code}")
 
     log.error("[onboardUser] Timeout: Operation did not complete within 10 seconds")
     return None
@@ -848,5 +1011,3 @@ async def _get_onboard_tier(
     else:
         log.error(f"[_get_onboard_tier] Failed to fetch tier info: HTTP {response.status_code}")
         return None
-
-

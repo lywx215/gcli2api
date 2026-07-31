@@ -459,7 +459,12 @@ export MONGODB_URI="mongodb://localhost:27017/gcli2api?readPreference=secondaryP
 - `RETRY_429_ENABLED`: 启用 429 错误自动重试（默认：true）
 - `RETRY_429_MAX_RETRIES`: 429 错误最大重试次数（默认：3）
 - `RETRY_429_INTERVAL`: 429 错误重试间隔，秒（默认：1.0）
+- `SMART_429_PROTECTION_ENABLED`: 启动 429 分级保护（默认：false）
+- `SMART_429_MAX_ATTEMPTS`: 保护启动时单请求总尝试次数，包含首次调用（默认：3，范围：1-5）
+- `SMART_429_RETRY_BASE_INTERVAL`: 保护启动时退避基准秒数（默认：0.5，范围：0.1-5）
 - `ANTI_TRUNCATION_MAX_ATTEMPTS`: 抗截断最大重试次数（默认：3）
+
+> SMART 429 首版只支持 `WORKERS=1` 的单进程、单副本部署。外部多副本部署不受支持；`WORKERS != 1` 时保护会保持停止并报告 `multi_instance_unsupported`，但服务本身继续运行。
 
 **网络和代理配置**
 - `PROXY`: HTTP/HTTPS 代理地址（格式：`http://host:port`）
@@ -841,6 +846,19 @@ for part in response.candidates[0].content.parts:
 export COMPATIBILITY_MODE=true
 ```
 此模式下，所有 `system` 消息会转换为 `user` 消息，提高与某些客户端的兼容性。
+
+---
+
+## 🧪 实际服务器测试
+
+启动服务后的正式验证必须逐一请求 GeminiCLI 与 Antigravity 的全部基础模型，不能只用健康检查或模型列表代替。标准命令：
+
+```bash
+GCLI2API_TEST_API_KEY='<API 密钥>' \
+  .venv/bin/python scripts/test_all_base_models.py
+```
+
+完整的前置条件、通过标准、报告格式和后续回归步骤见 [`docs/REAL_SERVER_TEST_STANDARD.md`](docs/REAL_SERVER_TEST_STANDARD.md)。任一基础模型失败或任一模式因缺少凭证而阻塞时，均不得表述为“实际服务器测试通过”。
 
 ---
 

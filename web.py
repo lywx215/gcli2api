@@ -4,7 +4,10 @@ Main Web Integration - Integrates all routers and modules
 """
 
 import asyncio
+import ctypes
+import gc
 import os
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Response
@@ -26,12 +29,75 @@ from src.router.geminicli.openai import router as geminicli_openai_router
 from src.router.geminicli.gemini import router as geminicli_gemini_router
 from src.router.geminicli.anthropic import router as geminicli_anthropic_router
 from src.router.geminicli.model_list import router as geminicli_model_list_router
+from src.router.vertex.gemini import router as vertex_gemini_router
+from src.router.vertex.openai import router as vertex_openai_router
+from src.router.vertex.model_list import router as vertex_model_list_router
 from src.task_manager import shutdown_all_tasks
 from src.panel import router as panel_router
 from src.keeplive import keepalive_service
 
 # 全局凭证管理器
 global_credential_manager = None
+
+# ==================== 内存管理 ====================
+
+# 尝试获取 libc 的 malloc_trim 函数
+_libc = None
+_malloc_trim = None
+try:
+    _libc = ctypes.CDLL("libc.so.6")
+    _malloc_trim = _libc.malloc_trim
+    _malloc_trim.argtypes = [ctypes.c_size_t]
+    _malloc_trim.restype = ctypes.c_int
+except (OSError, AttributeError):
+    pass  # 非 Linux 或不支持 malloc_trim
+
+
+def _get_rss_mb() -> float:
+    """获取当前进程的 RSS（MB），仅 Linux 可用"""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024
+    except Exception:
+        pass
+    return 0.0
+
+
+async def _memory_trim_loop():
+    """
+    定期执行 GC + malloc_trim，将 glibc 堆中的空闲页归还给操作系统。
+    glibc 的 malloc 默认不会主动归还内存，导致 Python 进程的 RSS 持续增长。
+    每 60 秒执行一次，每次开销极低（< 1ms）。
+    """
+    while True:
+        try:
+            await asyncio.sleep(60)
+
+            rss_before = _get_rss_mb()
+
+            # 强制 GC 回收循环引用
+            gc.collect()
+
+            # 调用 malloc_trim 归还空闲内存给 OS
+            if _malloc_trim is not None:
+                _malloc_trim(0)
+
+            rss_after = _get_rss_mb()
+            freed = rss_before - rss_after
+
+            if freed > 10:  # 只在释放了 >10MB 时记录
+                log.info(f"[MEM] malloc_trim: {rss_before:.0f}MB → {rss_after:.0f}MB (释放 {freed:.0f}MB)")
+            elif rss_after > 500:  # RSS > 500MB 时始终记录
+                log.debug(f"[MEM] malloc_trim: {rss_before:.0f}MB → {rss_after:.0f}MB")
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning(f"[MEM] malloc_trim 异常: {e}")
+
+_memory_trim_task = None
 
 
 @asynccontextmanager
@@ -51,6 +117,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.error(f"配置缓存初始化失败: {e}")
 
+    try:
+        from src.streaming_latency import StreamLatencyConfig
+
+        stream_config = StreamLatencyConfig.from_env()
+        log.info(
+            "GeminiCLI upstream transport: "
+            f"http2_enabled={stream_config.upstream_http2_enabled}, "
+            f"header_hedge_enabled={stream_config.header_hedge_enabled}, "
+            f"header_hedge_delay={stream_config.header_hedge_delay}s, "
+            f"header_hedge_max_inflight={stream_config.header_hedge_max_inflight}, "
+            f"header_hedge_sample_rate={stream_config.header_hedge_sample_rate}, "
+            f"header_hedge_daily_budget={stream_config.header_hedge_daily_budget}"
+        )
+    except Exception as e:
+        log.warning(f"读取 GeminiCLI 上游传输配置失败: {type(e).__name__}")
+
     # 初始化全局凭证管理器（带超时，避免 MySQL 连接阻塞整个启动）
     try:
         await asyncio.wait_for(
@@ -69,6 +151,14 @@ async def lifespan(app: FastAPI):
     # OAuth回调服务器将在需要时按需启动
 
     # 启动保活服务（未配置URL时自动跳过，零开销）
+    try:
+        from src.smart_429 import model_capacity_guard, smart_429_service
+        await smart_429_service.reconfigure()
+        model_capacity_guard.reconfigure()
+        log.info(f"SMART 429 status: {smart_429_service.status()}")
+    except Exception as e:
+        log.error(f"SMART 429 initialization failed; protection remains stopped: {e}")
+
     try:
         await keepalive_service.start()
     except Exception as e:
@@ -94,6 +184,16 @@ async def lifespan(app: FastAPI):
 
     cleanup_task = asyncio.create_task(_cleanup_minute_stats_loop())
 
+    # 启动内存回收任务（定期 GC + malloc_trim）
+    global _memory_trim_task
+    _memory_trim_task = asyncio.create_task(
+        _memory_trim_loop(), name="memory_trim"
+    )
+    if _malloc_trim is not None:
+        log.info("[MEM] 内存回收任务已启动（每60秒执行 gc.collect + malloc_trim）")
+    else:
+        log.info("[MEM] 内存回收任务已启动（仅 gc.collect，malloc_trim 不可用）")
+
     yield
 
     # 清理资源
@@ -105,34 +205,60 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-    # 关闭 httpx 持久化连接池
-    try:
-        from src.httpx_client import http_client
-        await http_client.close()
-        log.info("HTTP连接池已关闭")
-    except Exception as e:
-        log.error(f"关闭HTTP连接池时出错: {e}")
-
     # 停止保活服务
     try:
         await keepalive_service.stop()
     except Exception as e:
         log.error(f"关闭保活服务时出错: {e}")
 
+    # 停止内存回收任务
+    if _memory_trim_task and not _memory_trim_task.done():
+        _memory_trim_task.cancel()
+        try:
+            await _memory_trim_task
+        except asyncio.CancelledError:
+            pass
+
     # 首先关闭所有异步任务
+    try:
+        from src.smart_429 import smart_429_service
+        await smart_429_service.close()
+    except Exception as e:
+        log.error(f"Error closing SMART 429 service: {e}")
+
     try:
         await shutdown_all_tasks(timeout=10.0)
         log.info("所有异步任务已关闭")
     except Exception as e:
         log.error(f"关闭异步任务时出错: {e}")
 
-    # 然后关闭凭证管理器
-    if global_credential_manager:
-        try:
-            await global_credential_manager.close()
-            log.info("凭证管理器已关闭")
-        except Exception as e:
-            log.error(f"关闭凭证管理器时出错: {e}")
+    # 然后关闭凭证管理器（使用单例实例而非未赋值的全局变量）
+    try:
+        await credential_manager.close()
+        log.info("凭证管理器已关闭")
+    except Exception as e:
+        log.error(f"关闭凭证管理器时出错: {e}")
+
+    try:
+        from src.hedge_stats import hedge_stats_service
+        await hedge_stats_service.drain(timeout=1.0)
+    except Exception as e:
+        log.error(f"刷新对冲统计时出错: {type(e).__name__}")
+
+    try:
+        from src.storage_adapter import close_storage_adapter
+        await close_storage_adapter()
+        log.info("存储适配器已关闭")
+    except Exception as e:
+        log.error(f"关闭存储适配器时出错: {e}")
+
+    # 所有使用 HTTP 的任务停止后，最后关闭共享连接池。
+    try:
+        from src.httpx_client import http_client
+        await http_client.close()
+        log.info("HTTP连接池已关闭")
+    except Exception as e:
+        log.error(f"关闭HTTP连接池时出错: {e}")
 
     log.info("GCLI2API 主服务已停止")
 
@@ -144,6 +270,15 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def ensure_request_id_header(request, call_next):
+    """Return a server correlation ID even for non-stream and panel responses."""
+    response = await call_next(request)
+    if "X-Request-ID" not in response.headers:
+        response.headers["X-Request-ID"] = uuid.uuid4().hex
+    return response
 
 # CORS中间件
 app.add_middleware(
@@ -181,6 +316,15 @@ app.include_router(geminicli_anthropic_router, prefix="", tags=["Geminicli Anthr
 
 # Panel路由 - 包含认证、凭证管理和控制面板功能
 app.include_router(panel_router, prefix="", tags=["Panel Interface"])
+
+# Vertex AI 路由 - Gemini 原生格式
+app.include_router(vertex_gemini_router, prefix="", tags=["Vertex Gemini API"])
+
+# Vertex AI 路由 - OpenAI 兼容格式
+app.include_router(vertex_openai_router, prefix="", tags=["Vertex OpenAI API"])
+
+# Vertex AI 路由 - 模型列表
+app.include_router(vertex_model_list_router, prefix="", tags=["Vertex Model List"])
 
 # 静态文件路由 - 服务docs目录下的文件
 if os.path.isdir("docs"):

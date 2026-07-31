@@ -9,6 +9,8 @@ from datetime import datetime
 from collections import deque
 import atexit
 
+from src.log_safety import safe_text
+
 # 日志级别定义
 LOG_LEVELS = {"debug": 0, "info": 1, "warning": 2, "error": 3, "critical": 4}
 
@@ -240,6 +242,8 @@ def _log(level: str, message: str):
     if level_val < _cached_log_level:
         return
 
+    # Last-line defense: every sink receives the same token/email/proxy/credential redaction.
+    message = safe_text(message, limit=None)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     entry = f"[{timestamp}] [{level.upper()}] {message}"
 

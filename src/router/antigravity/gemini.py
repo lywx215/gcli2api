@@ -190,7 +190,7 @@ async def stream_generate_content(
 
             # 检查是否是错误响应（有些错误可能status_code是200但包含error字段）
             if "error" in response_data:
-                log.error(f"Fake streaming got error in response body: {response_data['error']}")
+                log.error("Fake streaming received an upstream error response")
                 yield f"data: {json.dumps(response_data)}\n\n".encode()
                 yield "data: [DONE]\n\n".encode()
                 return
