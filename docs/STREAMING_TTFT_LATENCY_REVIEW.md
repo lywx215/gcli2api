@@ -855,6 +855,15 @@ CLIProxyAPI 的可取之处是共享 transport、HTTP/2 连接复用，以及在
 HTTP/2 开启表示“允许协商”，不是强制协议；ALPN 未协商成功时 HTTPX 自动使用 HTTP/1.1。
 诊断 schema v2 的每条 `attempt_details` 增加 `http_version`，以实际响应为准验证协商结果。
 
+为避免长时间运行后复用到已经关闭的 HTTP/2 状态机，新增
+`UPSTREAM_HTTP2_CLIENT_MAX_AGE=2700`。到期只切换新请求使用的 client generation，旧活动流
+继续完成后再关闭。遇到 `ConnectionState.CLOSED`、HTTP/2 `LocalProtocolError` 或
+`RemoteProtocolError` 时立即淘汰对应 generation；首内容前可使用同一凭证在新 generation
+立即重试，不 sleep、不处罚凭证，也不写入容量或 SMART 状态。诊断记录 generation 和失效原因。
+
+非流式传输新增 `NONSTREAM_TRANSPORT_MAX_ATTEMPTS=2`。只有连接池等待或建连类故障允许立即
+重试；读取/写入超时、状态码失败、转换错误和未知异常不执行通用重试，从而限制额外额度消耗。
+
 ### 18.3 GeminiCLI 真流响应头对冲
 
 新增以下配置：
@@ -934,3 +943,23 @@ HTTP/2、对冲开关、延迟、上限和采样率的有效值，便于确认�
 主胜/备胜/确认挽救/双失败/客户端取消、管理接口、双端面板和配置校验。MySQL、PostgreSQL
 和 MongoDB 的原子实现通过统一存储契约检查；生产部署仍应在实际所用数据库版本上执行并发
 冒烟验证。
+
+### 18.6 失效 HTTP/2 连接、自定义错误和模型隔离
+
+最新日志中的 `LocalProtocolError` / `ConnectionState.CLOSED` 表明部分失败来自本地 HTTP/2
+client generation 已进入关闭状态后仍被复用，并非 Google 响应头本身一直无响应。修复后，
+检测到该类协议状态错误会立即淘汰整代 client；正在使用旧代次的流继续排空，新请求创建新代次。
+首内容前允许同一凭证在新连接上立即重试，不等待 429 退避，也不处罚凭证。另以 2700 秒默认
+最大存活时间主动轮换 HTTP/2 generation，降低上游长连接生命周期未知导致的复用风险。
+
+对外错误不再透传 Google 正文或 Python/httpx 异常文本。统一映射保留 400（参数）、
+502（建连/协议）、503（容量/认证/上游不可用）和 504（超时）语义，同时仅返回固定文案、
+稳定错误码和本服务 `X-Request-ID`。首内容后继续使用三种协议各自的 SSE error 事件结束，
+但事件内同样不含上游正文、URL、凭证和内部模型名。
+
+客户端成功响应中的 `model` 或 `modelVersion` 固定回显其原始请求值。实际别名映射、tier 选择
+和最终上游模型仅留在服务端路由与脱敏诊断中。该约束不修改模型生成的自然语言正文。
+
+本轮修改完成后执行全量回归：`197 passed, 7 warnings`；同时通过 `compileall` 和
+`git diff --check`。新增用例覆盖 HTTP/2 最大存活时间轮换、活动流排空、上游认证错误脱敏、
+安全 `Retry-After`、错误正文/内部模型名不外泄以及成功响应回显公开模型别名。

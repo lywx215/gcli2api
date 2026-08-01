@@ -15,7 +15,7 @@ if str(project_root) not in sys.path:
 import json
 
 # 第三方库
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 # 本地模块 - 配置和日志
@@ -44,6 +44,7 @@ from src.router.stream_passthrough import (
     client_request_id_from_headers,
 )
 from src.streaming_latency import StreamFailure
+from src.public_errors import render_public_error
 
 # 本地模块 - 数据模型
 from src.models import ClaudeRequest, model_to_dict
@@ -86,6 +87,7 @@ async def messages(
     use_fake_streaming = is_fake_streaming_model(claude_request.model)
     use_anti_truncation = is_anti_truncation_model(claude_request.model)
     public_model = get_base_model_from_feature_model(claude_request.model)
+    response_model = claude_request.model
     real_model = normalize_geminicli_model_alias(public_model)
     if real_model != public_model:
         log.info(f"[GEMINICLI-ANTHROPIC] Code Assist 模型别名: {public_model} -> {real_model}")
@@ -125,6 +127,11 @@ async def messages(
 
         # 检查响应状态码
         status_code = getattr(response, "status_code", 200)
+        if status_code != 200:
+            return render_public_error(
+                StreamFailure.from_response(response, stage="upstream_status"),
+                protocol="anthropic",
+            )
 
         # 提取响应体
         if hasattr(response, "body"):
@@ -137,14 +144,22 @@ async def messages(
         try:
             gemini_response = json.loads(response_body)
         except Exception as e:
-            log.error(f"Failed to parse Gemini response: {e}")
-            raise HTTPException(status_code=500, detail="Response parsing failed")
+            log.error(f"Failed to parse Gemini response: {type(e).__name__}")
+            return render_public_error(
+                StreamFailure(
+                    "Upstream response could not be processed",
+                    stage="conversion",
+                    status_code=500,
+                    error_type=type(e).__name__,
+                ),
+                protocol="anthropic",
+            )
 
         # 转换为 Anthropic 格式
         from src.converter.anthropic2gemini import gemini_to_anthropic_response
         anthropic_response = gemini_to_anthropic_response(
             gemini_response,
-            real_model,
+            response_model,
             status_code
         )
 
@@ -174,47 +189,36 @@ async def messages(
 
         try:
             gemini_response = json.loads(response_body)
-            log.debug(f"Anthropic fake stream Gemini response: {gemini_response}")
+            log.debug("Anthropic fake stream response parsed")
 
             # 检查是否是错误响应（有些错误可能status_code是200但包含error字段）
             if "error" in gemini_response:
                 log.error("Fake streaming received an upstream error response")
-                # 转换错误为 Anthropic 格式
-                from src.converter.anthropic2gemini import gemini_to_anthropic_response
-                anthropic_error = gemini_to_anthropic_response(
-                    gemini_response,
-                    real_model,
-                    200
-                )
-                yield f"data: {json.dumps(anthropic_error)}\n\n".encode()
-                yield "data: [DONE]\n\n".encode()
-                return
+                raise ValueError("upstream error payload")
 
             # 使用统一的解析函数
             content, reasoning_content, finish_reason, images = parse_response_for_fake_stream(gemini_response)
 
-            log.debug(f"Anthropic extracted content: {content}")
-            log.debug(f"Anthropic extracted reasoning: {reasoning_content[:100] if reasoning_content else 'None'}...")
+            log.debug("Anthropic fake stream content extracted")
             log.debug(f"Anthropic extracted images count: {len(images)}")
 
             # 构建响应块
-            chunks = build_anthropic_fake_stream_chunks(content, reasoning_content, finish_reason, real_model, images)
+            chunks = build_anthropic_fake_stream_chunks(
+                content, reasoning_content, finish_reason, response_model, images
+            )
             for idx, chunk in enumerate(chunks):
                 chunk_json = json.dumps(chunk)
-                log.debug(f"[FAKE_STREAM] Yielding chunk #{idx+1}: {chunk_json[:200]}")
+                log.debug(f"[FAKE_STREAM] Yielding chunk #{idx+1}")
                 yield f"data: {chunk_json}\n\n".encode()
 
         except Exception as e:
-            log.error(f"Response parsing failed: {e}, directly yield error")
-            # 构建错误响应
-            error_chunk = {
-                "type": "error",
-                "error": {
-                    "type": "api_error",
-                    "message": str(e)
-                }
-            }
-            yield f"data: {json.dumps(error_chunk)}\n\n".encode()
+            log.error(f"Response parsing failed: {type(e).__name__}")
+            raise StreamFailure(
+                "Upstream response could not be processed",
+                stage="conversion",
+                status_code=500,
+                error_type=type(e).__name__,
+            ) from e
 
         yield "data: [DONE]\n\n".encode()
 
@@ -258,7 +262,7 @@ async def messages(
         # 直接将整个流传递给转换器
         async for anthropic_chunk in gemini_stream_to_anthropic_stream(
             bytes_wrapper(),
-            real_model,
+            response_model,
             200
         ):
             if anthropic_chunk:
@@ -289,7 +293,7 @@ async def messages(
         # 使用转换器处理整个流
         async for anthropic_chunk in gemini_stream_to_anthropic_stream(
             gemini_chunk_wrapper(),
-            real_model,
+            response_model,
             200
         ):
             if anthropic_chunk:
@@ -298,18 +302,18 @@ async def messages(
     # ========== 根据模式选择生成器 ==========
     if use_fake_streaming:
         return await build_streaming_response_or_error(
-            fake_stream_generator(), model=public_model, protocol="anthropic",
+            fake_stream_generator(), model=response_model, protocol="anthropic",
             client_request_id=client_request_id_from_headers(getattr(request, "headers", None)),
         )
     elif use_anti_truncation:
         log.info("启用流式抗截断功能")
         return await build_streaming_response_or_error(
-            anti_truncation_generator(), model=public_model, protocol="anthropic",
+            anti_truncation_generator(), model=response_model, protocol="anthropic",
             client_request_id=client_request_id_from_headers(getattr(request, "headers", None)),
         )
     else:
         return await build_streaming_response_or_error(
-            normal_stream_generator(), model=public_model, protocol="anthropic",
+            normal_stream_generator(), model=response_model, protocol="anthropic",
             client_request_id=client_request_id_from_headers(getattr(request, "headers", None)),
         )
 
@@ -331,10 +335,10 @@ async def count_tokens(
     """
     try:
         payload = await request.json()
-    except Exception as e:
+    except Exception:
         return JSONResponse(
             status_code=400,
-            content={"type": "error", "error": {"type": "invalid_request_error", "message": f"JSON 解析失败: {str(e)}"}}
+            content={"type": "error", "error": {"type": "invalid_request_error", "message": "请求体不是有效的 JSON"}}
         )
 
     if not isinstance(payload, dict):

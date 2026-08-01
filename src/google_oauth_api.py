@@ -19,6 +19,7 @@ from config import (
 from log import log
 
 from src.httpx_client import get_async, post_async
+from src.log_safety import safe_exception, safe_upstream_error_summary
 from src.streaming_latency import StreamLatencyConfig
 from src.subscription_tiers import (
     GeminiCliSubscriptionInfo,
@@ -118,23 +119,29 @@ class Credentials:
             log.debug(f"Token刷新成功，过期时间: {self.expires_at}")
 
         except Exception as e:
-            error_msg = str(e)
             status_code = None
+            invalid_grant = False
             if hasattr(e, 'response') and hasattr(e.response, 'status_code'):
                 status_code = e.response.status_code
                 try:
-                    response_detail = e.response.text[:500]
+                    response_detail = str(e.response.text or "")
                 except Exception:
                     response_detail = ""
-                if response_detail:
-                    error_msg = f"{error_msg}; body={response_detail}"
-                error_msg = f"Token刷新失败 (HTTP {status_code}): {error_msg}"
+                invalid_grant = "invalid_grant" in response_detail.lower()
+
+            if status_code is not None:
+                error_msg = f"Token刷新失败 (HTTP {status_code})"
             else:
-                error_msg = f"Token刷新失败: {error_msg}"
+                error_msg = f"Token刷新失败: {type(e).__name__}"
+            if invalid_grant:
+                # Keep the machine-readable permanent-failure signal without
+                # carrying the provider response body into logs or callers.
+                error_msg = f"{error_msg}: invalid_grant"
 
             log.error(error_msg)
             token_error = TokenError(error_msg)
             token_error.status_code = status_code
+            token_error.invalid_grant = invalid_grant
             raise token_error
 
     @classmethod
@@ -254,7 +261,7 @@ class Flow:
             return self.credentials
 
         except Exception as e:
-            error_msg = f"获取token失败: {str(e)}"
+            error_msg = f"获取token失败: {type(e).__name__}"
             log.error(error_msg)
             raise TokenError(error_msg)
 
@@ -326,7 +333,7 @@ class ServiceAccount:
             return self.access_token
 
         except Exception as e:
-            error_msg = f"Service Account获取token失败: {str(e)}"
+            error_msg = f"Service Account获取token失败: {type(e).__name__}"
             log.error(error_msg)
             raise TokenError(error_msg)
 
@@ -355,7 +362,7 @@ async def get_user_info(credentials: Credentials) -> Optional[Dict[str, Any]]:
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        log.error(f"获取用户信息失败: {e}")
+        log.error(f"获取用户信息失败: {safe_exception(e)}")
         return None
 
 
@@ -370,17 +377,17 @@ async def get_user_email(credentials: Credentials) -> Optional[str]:
         if user_info:
             email = user_info.get("email")
             if email:
-                log.info(f"成功获取邮箱地址: {email}")
+                log.info("成功获取邮箱地址（已脱敏）")
                 return email
             else:
-                log.warning(f"userinfo响应中没有邮箱信息: {user_info}")
+                log.warning("userinfo响应中没有邮箱信息")
                 return None
         else:
             log.warning("获取用户信息失败")
             return None
 
     except Exception as e:
-        log.error(f"获取用户邮箱失败: {e}")
+        log.error(f"获取用户邮箱失败: {safe_exception(e)}")
         return None
 
 
@@ -397,7 +404,7 @@ async def fetch_user_email_from_file(cred_data: Dict[str, Any]) -> Optional[str]
         return await get_user_email(credentials)
 
     except Exception as e:
-        log.error(f"从凭证数据获取用户邮箱失败: {e}")
+        log.error(f"从凭证数据获取用户邮箱失败: {safe_exception(e)}")
         return None
 
 
@@ -411,7 +418,7 @@ async def validate_token(token: str) -> Optional[Dict[str, Any]]:
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        log.error(f"验证令牌失败: {e}")
+        log.error(f"验证令牌失败: {safe_exception(e)}")
         return None
 
 
@@ -450,7 +457,7 @@ async def enable_required_apis(credentials: Credentials, project_id: str) -> boo
                         log.info(f"服务 {service} 已启用")
                         continue
             except Exception as e:
-                log.debug(f"检查服务状态失败，将尝试启用: {e}")
+                log.debug(f"检查服务状态失败，将尝试启用: {safe_exception(e)}")
 
             # 启用服务
             enable_url = f"{service_usage_base_url.rstrip('/')}/v1/projects/{project_id}/services/{service}:enable"
@@ -464,19 +471,27 @@ async def enable_required_apis(credentials: Credentials, project_id: str) -> boo
                     if "already enabled" in error_data.get("error", {}).get("message", "").lower():
                         log.info(f"✅ 服务 {service} 已经启用")
                     else:
-                        log.warning(f"⚠️ 启用服务 {service} 时出现警告: {error_data}")
+                        summary = safe_upstream_error_summary(
+                            enable_response.text,
+                            status_code=enable_response.status_code,
+                            reason="service_enable",
+                        )
+                        log.warning(f"⚠️ 启用服务 {service} 时出现警告: {summary}")
                 else:
-                    log.warning(
-                        f"⚠️ 启用服务 {service} 失败: {enable_response.status_code} - {enable_response.text}"
+                    summary = safe_upstream_error_summary(
+                        enable_response.text,
+                        status_code=enable_response.status_code,
+                        reason="service_enable",
                     )
+                    log.warning(f"⚠️ 启用服务 {service} 失败: {summary}")
 
             except Exception as e:
-                log.warning(f"⚠️ 启用服务 {service} 时发生异常: {e}")
+                log.warning(f"⚠️ 启用服务 {service} 时发生异常: {safe_exception(e)}")
 
         return True
 
     except Exception as e:
-        log.error(f"启用API服务时发生错误: {e}")
+        log.error(f"启用API服务时发生错误: {safe_exception(e)}")
         return False
 
 
@@ -516,7 +531,7 @@ async def get_user_projects(credentials: Credentials) -> List[Dict[str, Any]]:
             return []
 
     except Exception as e:
-        log.error(f"获取用户项目列表失败: {e}")
+        log.error(f"获取用户项目列表失败: {safe_exception(e)}")
         return []
 
 
@@ -774,7 +789,9 @@ async def fetch_project_id_and_tier(
         log.warning("[fetch_project_id_and_tier] loadCodeAssist did not return project_id, falling back to onboardUser")
 
     except Exception as e:
-        log.warning(f"[fetch_project_id_and_tier] loadCodeAssist failed: {type(e).__name__}: {e}")
+        log.warning(
+            f"[fetch_project_id_and_tier] loadCodeAssist failed: {safe_exception(e)}"
+        )
         log.warning("[fetch_project_id_and_tier] Falling back to onboardUser")
 
     # 步骤 2: 回退到 onboardUser
@@ -791,9 +808,9 @@ async def fetch_project_id_and_tier(
         return None, subscription_tier
 
     except Exception as e:
-        log.error(f"[fetch_project_id_and_tier] onboardUser failed: {type(e).__name__}: {e}")
-        import traceback
-        log.debug(f"[fetch_project_id_and_tier] Traceback: {traceback.format_exc()}")
+        log.error(
+            f"[fetch_project_id_and_tier] onboardUser failed: {safe_exception(e)}"
+        )
         if include_credits:
             return None, subscription_tier, credit_amount
         return None, subscription_tier

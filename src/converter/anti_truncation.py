@@ -293,7 +293,10 @@ class AntiTruncationStreamProcessor:
                             data = json.loads(payload_str)
                             content = self._extract_content_from_chunk(data)
 
-                            log.debug(f"Anti-truncation: Extracted content: {repr(content[:100] if content else '')}")
+                            content_bytes = len(content.encode("utf-8")) if content else 0
+                            log.debug(
+                                f"Anti-truncation: extracted content bytes={content_bytes}"
+                            )
 
                             if content:
                                 chunk_buffer.write(content)
@@ -303,7 +306,7 @@ class AntiTruncationStreamProcessor:
                                 log.debug(f"Anti-truncation: Check done marker result: {has_marker}, DONE_MARKER='{DONE_MARKER}'")
                                 if has_marker:
                                     found_done_marker = True
-                                    log.debug(f"Anti-truncation: Found [done] marker in chunk, content: {content[:200]}")
+                                    log.debug("Anti-truncation: found [done] marker in chunk")
 
                             # 清理行中的[done]标记后再发送
                             cleaned_line = self._remove_done_marker_from_line(line, line_str, data)
@@ -349,10 +352,6 @@ class AntiTruncationStreamProcessor:
                     log.info(
                         f"Anti-truncation: No [done] marker found in output (length: {total_length}), preparing continuation (attempt {self.current_attempt + 1})"
                     )
-                    if total_length > 100:
-                        log.debug(
-                            f"Anti-truncation: Current collected content ends with: ...{accumulated_text[-100:]}"
-                        )
                     # 在下一次循环中会继续
                     continue
                 else:
@@ -368,12 +367,15 @@ class AntiTruncationStreamProcessor:
                 # Never let anti-truncation replay a failed stream implicitly.
                 raise
             except Exception as e:
-                log.error(f"Anti-truncation error in attempt {self.current_attempt}: {str(e)}")
+                log.error(
+                    f"Anti-truncation error in attempt {self.current_attempt}: "
+                    f"{type(e).__name__}"
+                )
                 if self.current_attempt >= self.max_attempts:
                     # 发送错误chunk
                     error_chunk = {
                         "error": {
-                            "message": f"Anti-truncation failed: {str(e)}",
+                            "message": "The service failed to process the stream.",
                             "type": "api_error",
                             "code": 500,
                         }
@@ -505,10 +507,17 @@ class AntiTruncationStreamProcessor:
                 # 尝试解析 JSON
                 try:
                     response_data = json.loads(content)
-                except json.JSONDecodeError as json_err:
-                    log.error(f"Anti-truncation: Failed to parse JSON response: {json_err}, content: {content[:200]}")
-                    # 如果不是 JSON，直接返回原始内容
-                    return content.encode() if isinstance(content, str) else content
+                except json.JSONDecodeError:
+                    log.error("Anti-truncation: upstream response was not valid JSON")
+                    return json.dumps(
+                        {
+                            "error": {
+                                "message": "The service failed to process the response.",
+                                "type": "api_error",
+                                "code": 500,
+                            }
+                        }
+                    ).encode()
 
                 # 检查是否包含done标记
                 text_content = self._extract_content_from_response(response_data)
@@ -534,11 +543,13 @@ class AntiTruncationStreamProcessor:
                 # 继续循环处理下一个响应
 
             except Exception as e:
-                log.error(f"Anti-truncation non-streaming error: {str(e)}")
+                log.error(
+                    f"Anti-truncation non-streaming error: {type(e).__name__}"
+                )
                 return json.dumps(
                     {
                         "error": {
-                            "message": f"Anti-truncation failed: {str(e)}",
+                            "message": "The service failed to process the response.",
                             "type": "api_error",
                             "code": 500,
                         }

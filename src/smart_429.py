@@ -20,6 +20,7 @@ from config import (
 )
 from log import log
 from src.storage_adapter import get_storage_adapter
+from src.storage._stats_common import normalize_model_family
 
 
 RISK_CONTROL_MESSAGE = "Resource has been exhausted (e.g. check quota)"
@@ -54,7 +55,10 @@ class ModelCapacityGuard:
 
     @staticmethod
     def _key(mode: str, model: str) -> tuple[str, str]:
-        return mode, model.strip().lower()
+        family = normalize_model_family(model)
+        if family in {"unknown", "other"}:
+            family = model.strip().lower() or "unknown"
+        return mode, family
 
     def reset(self) -> None:
         self._events.clear()

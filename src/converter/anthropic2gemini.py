@@ -1012,14 +1012,15 @@ async def gemini_stream_to_anthropic_stream(
         async for chunk in gemini_stream:
             # 检查是否是 Response 对象（错误情况）
             if isinstance(chunk, Response):
-                log.warning(f"[GEMINI_TO_ANTHROPIC] 收到 Response 对象，状态码: {chunk.status_code}，直接转发错误")
-                # 直接转发错误响应内容，不做格式转换
-                error_content = chunk.body if isinstance(chunk.body, bytes) else chunk.body.encode('utf-8')
-                yield error_content
-                return
+                log.warning(
+                    f"[GEMINI_TO_ANTHROPIC] 收到上游错误响应，状态码: {chunk.status_code}"
+                )
+                raise StreamFailure.from_response(
+                    chunk, stage="upstream_status", retryable=False
+                )
 
-            # 记录接收到的原始chunk
-            log.debug(f"[GEMINI_TO_ANTHROPIC] Raw chunk: {chunk[:200] if chunk else b''}")
+            chunk_bytes = len(chunk) if chunk else 0
+            log.debug(f"[GEMINI_TO_ANTHROPIC] Received chunk bytes={chunk_bytes}")
 
             # 解析 Gemini 流式块
             if not chunk or not chunk.startswith(b"data: "):
@@ -1031,7 +1032,7 @@ async def gemini_stream_to_anthropic_stream(
                 log.debug(f"[GEMINI_TO_ANTHROPIC] Received [DONE] marker")
                 break
 
-            log.debug(f"[GEMINI_TO_ANTHROPIC] Parsing JSON: {raw[:200]}")
+            log.debug(f"[GEMINI_TO_ANTHROPIC] Parsing JSON payload bytes={len(raw)}")
 
             try:
                 data = json.loads(raw.decode('utf-8', errors='ignore'))
@@ -1292,7 +1293,7 @@ async def gemini_stream_to_anthropic_stream(
     except StreamFailure:
         raise
     except Exception as e:
-        log.error(f"[ANTHROPIC] 流式转换失败: {e}")
+        log.error(f"[ANTHROPIC] 流式转换失败: {type(e).__name__}")
         # 发送错误事件
         if not message_start_sent:
             yield _sse_event(
@@ -1313,5 +1314,11 @@ async def gemini_stream_to_anthropic_stream(
             )
         yield _sse_event(
             "error",
-            {"type": "error", "error": {"type": "api_error", "message": str(e)}},
+            {
+                "type": "error",
+                "error": {
+                    "type": "api_error",
+                    "message": "The service failed to process the stream.",
+                },
+            },
         )

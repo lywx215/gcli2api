@@ -393,17 +393,17 @@ async def collect_streaming_response(stream_generator) -> Response:
             # 处理 bytes 类型
             if isinstance(line, bytes):
                 line_str = line.decode('utf-8', errors='ignore')
-                log.debug(f"[STREAM COLLECTOR] Processing bytes line {line_count}: {line_str[:200] if line_str else 'empty'}")
+                log.debug(f"[STREAM COLLECTOR] Processing bytes line {line_count}, bytes={len(line)}")
             elif isinstance(line, str):
                 line_str = line
-                log.debug(f"[STREAM COLLECTOR] Processing line {line_count}: {line_str[:200] if line_str else 'empty'}")
+                log.debug(f"[STREAM COLLECTOR] Processing line {line_count}, chars={len(line)}")
             else:
                 log.debug(f"[STREAM COLLECTOR] Skipping non-string/bytes line: {type(line)}")
                 continue
 
             # 解析流式数据行
             if not line_str.startswith("data: "):
-                log.debug(f"[STREAM COLLECTOR] Skipping line without 'data: ' prefix: {line_str[:100]}")
+                log.debug("[STREAM COLLECTOR] Skipping line without 'data: ' prefix")
                 continue
 
             raw = line_str[6:].strip()
@@ -412,7 +412,7 @@ async def collect_streaming_response(stream_generator) -> Response:
                 break
 
             try:
-                log.debug(f"[STREAM COLLECTOR] Parsing JSON: {raw[:200]}")
+                log.debug(f"[STREAM COLLECTOR] Parsing JSON bytes={len(raw.encode('utf-8'))}")
                 chunk = json.loads(raw)
                 has_data = True
                 log.debug(f"[STREAM COLLECTOR] Chunk keys: {chunk.keys() if isinstance(chunk, dict) else type(chunk)}")
@@ -479,10 +479,14 @@ async def collect_streaming_response(stream_generator) -> Response:
                     merged_response["response"]["usageMetadata"].update(usage)
 
             except json.JSONDecodeError as e:
-                log.debug(f"[STREAM COLLECTOR] Failed to parse JSON chunk: {e}")
+                log.debug(
+                    f"[STREAM COLLECTOR] Failed to parse JSON chunk: {type(e).__name__}"
+                )
                 continue
             except Exception as e:
-                log.debug(f"[STREAM COLLECTOR] Error processing chunk: {e}")
+                log.debug(
+                    f"[STREAM COLLECTOR] Error processing chunk: {type(e).__name__}"
+                )
                 continue
 
     except Exception as e:

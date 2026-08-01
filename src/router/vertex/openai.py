@@ -18,6 +18,8 @@ from src.router.stream_passthrough import (
     prepend_async_item,
     read_first_async_item,
 )
+from src.streaming_latency import StreamFailure
+from src.public_errors import render_public_error
 
 router = APIRouter()
 
@@ -36,6 +38,7 @@ async def chat_completions(
         return JSONResponse(content=create_health_check_response(format="openai"))
 
     real_model = get_base_model_from_feature_model(openai_request.model)
+    response_model = openai_request.model
     is_streaming = openai_request.stream
 
     normalized_dict["model"] = real_model
@@ -58,6 +61,11 @@ async def chat_completions(
         response = await non_stream_request(body=api_request)
 
         status_code = getattr(response, "status_code", 200)
+        if status_code != 200:
+            return render_public_error(
+                StreamFailure.from_response(response, stage="upstream_status"),
+                protocol="openai",
+            )
 
         if hasattr(response, "body"):
             response_body = response.body.decode() if isinstance(response.body, bytes) else response.body
@@ -69,11 +77,21 @@ async def chat_completions(
         try:
             gemini_response = json.loads(response_body)
         except Exception as e:
-            log.error(f"[VERTEX-OPENAI] Failed to parse response: {e}")
-            return JSONResponse(content={"error": "Response parsing failed"}, status_code=500)
+            log.error(f"[VERTEX-OPENAI] Failed to parse response: {type(e).__name__}")
+            return render_public_error(
+                StreamFailure(
+                    "Upstream response could not be processed",
+                    stage="conversion",
+                    status_code=500,
+                    error_type=type(e).__name__,
+                ),
+                protocol="openai",
+            )
 
         from src.converter.openai2gemini import convert_gemini_to_openai_response
-        openai_response = convert_gemini_to_openai_response(gemini_response, real_model, status_code)
+        openai_response = convert_gemini_to_openai_response(
+            gemini_response, response_model, status_code
+        )
         return JSONResponse(content=openai_response, status_code=status_code)
 
     # ========== 流式请求 ==========
@@ -95,16 +113,9 @@ async def chat_completions(
 
         async for chunk in prepend_async_item(first_chunk, stream_gen):
             if isinstance(chunk, Response):
-                try:
-                    error_content = chunk.body if isinstance(chunk.body, bytes) else (chunk.body or b"").encode()
-                    gemini_error = json.loads(error_content.decode())
-                    from src.converter.openai2gemini import convert_gemini_to_openai_response
-                    openai_error = convert_gemini_to_openai_response(gemini_error, real_model, chunk.status_code)
-                    yield f"data: {json.dumps(openai_error)}\n\n".encode()
-                except Exception:
-                    yield f"data: {json.dumps({'error': 'Stream error'})}\n\n".encode()
-                yield b"data: [DONE]\n\n"
-                return
+                raise StreamFailure.from_response(
+                    chunk, stage="upstream_status"
+                )
 
             chunk_str = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
 
@@ -118,7 +129,9 @@ async def chat_completions(
             if chunk_str.startswith("data: "):
                 try:
                     from src.converter.openai2gemini import convert_gemini_to_openai_stream
-                    openai_chunk_str = convert_gemini_to_openai_stream(chunk_str, real_model, response_id)
+                    openai_chunk_str = convert_gemini_to_openai_stream(
+                        chunk_str, response_model, response_id
+                    )
                     if openai_chunk_str:
                         yield openai_chunk_str.encode("utf-8")
                 except Exception as e:
@@ -127,4 +140,6 @@ async def chat_completions(
 
         yield "data: [DONE]\n\n".encode("utf-8")
 
-    return await build_streaming_response_or_error(stream_generator())
+    return await build_streaming_response_or_error(
+        stream_generator(), model=response_model, protocol="openai"
+    )

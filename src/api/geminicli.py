@@ -28,7 +28,11 @@ from config import (
     is_geminicli_capacity_fast_fail_enabled,
 )
 from log import log
-from src.log_safety import credential_log_id, safe_exception, safe_text
+from src.log_safety import (
+    credential_log_id,
+    safe_exception,
+    safe_upstream_error_summary,
+)
 from src.hedge_stats import HedgeReservation, hedge_stats_service
 
 from src.credential_manager import credential_manager
@@ -896,7 +900,9 @@ async def stream_request(
             None,
             mode="geminicli",
             model_name=model_name,
-            error_message=error_body,
+            error_message=safe_upstream_error_summary(
+                error_body, status_code=status_code, reason=reason
+            ),
         )
 
     # 内部函数：快速更新凭证(只更新token和project_id,避免重建整个请求)
@@ -1030,7 +1036,8 @@ async def stream_request(
                             f"[GEMINICLI STREAM] 流式请求失败 "
                             f"(status={status_code}, reason={retry_reason}), "
                             f"credential={credential_log_id(current_file)}, "
-                            f"upstream={safe_text(error_body, limit=240) or 'empty'}"
+                            "upstream_error="
+                            f"{safe_upstream_error_summary(error_body, status_code=status_code, reason=retry_reason)}"
                         )
 
                         # 解析冷却时间
@@ -1074,7 +1081,11 @@ async def stream_request(
                             await record_api_call_error(
                                 credential_manager, current_file, status_code,
                                 cooldown_until, mode="geminicli", model_name=model_name,
-                                error_message=error_body
+                                error_message=safe_upstream_error_summary(
+                                    error_body,
+                                    status_code=status_code,
+                                    reason=retry_reason,
+                                )
                             )
 
                         excluded_credentials.add(current_file)
@@ -1173,7 +1184,9 @@ async def stream_request(
                         await record_api_call_error(
                             credential_manager, current_file, status_code,
                             None, mode="geminicli", model_name=model_name,
-                            error_message=error_body
+                            error_message=safe_upstream_error_summary(
+                                error_body, status_code=status_code, reason="http_404"
+                            )
                         )
 
                         # 预热下一个凭证（会自动跳过preview=False的凭证）
@@ -1213,7 +1226,8 @@ async def stream_request(
                             f"[GEMINICLI STREAM] 非重试错误 "
                             f"(status={status_code}), "
                             f"credential={credential_log_id(current_file)}, "
-                            f"upstream={safe_text(error_body, limit=240) or 'empty'}"
+                            "upstream_error="
+                            f"{safe_upstream_error_summary(error_body, status_code=status_code)}"
                         )
                         trace.record_failure(
                             stage="upstream_status",
@@ -1225,7 +1239,9 @@ async def stream_request(
                         await record_api_call_error(
                             credential_manager, current_file, status_code,
                             None, mode="geminicli", model_name=model_name,
-                            error_message=error_body
+                            error_message=safe_upstream_error_summary(
+                                error_body, status_code=status_code
+                            )
                         )
                         _debug_log_final_response("GEMINICLI STREAM", chunk)
                         raise StreamFailure.from_response(
@@ -1307,8 +1323,24 @@ async def stream_request(
                 e.request_id = e.request_id or trace.request_id
                 raise
             transport_failures += 1
-            excluded_credentials.add(current_file)
             trace.retry_reason = e.stage
+            if (
+                e.connection_invalidated
+                and transport_failures < latency_config.transport_max_attempts
+                and attempt < max_total_retries
+                and trace.remaining_first_content() > 0
+            ):
+                trace.record_retry(
+                    "transport",
+                    "http2_connection_closed",
+                    attempt=active_attempt_id,
+                )
+                log.info(
+                    "[GEMINICLI STREAM] HTTP/2连接代次已淘汰，"
+                    "使用同一凭证和新连接立即重试"
+                )
+                continue
+            excluded_credentials.add(current_file)
             if (
                 latency_config.guard_enabled
                 and e.retryable
@@ -1450,6 +1482,10 @@ async def non_stream_request(
     next_cred_task = None  # 预热的下一个凭证任务
     excluded_credentials: set[str] = set()
     capacity_failures = 0
+    transport_failures = 0
+    nonstream_transport_max_attempts = (
+        StreamLatencyConfig.from_env().nonstream_transport_max_attempts
+    )
 
     # 内部函数：快速更新凭证(只更新token和project_id,避免重建整个请求)
     async def refresh_credential_fast():
@@ -1555,7 +1591,8 @@ async def non_stream_request(
                     f"[NON-STREAM] 非流式请求失败 "
                     f"(status={status_code}, reason={retry_reason}), "
                     f"credential={credential_log_id(current_file)}, "
-                    f"upstream={safe_text(error_text, limit=240) or 'empty'}"
+                    "upstream_error="
+                    f"{safe_upstream_error_summary(error_text, status_code=status_code, reason=retry_reason)}"
                 )
 
                 # 解析冷却时间
@@ -1585,7 +1622,11 @@ async def non_stream_request(
                             cooldown_until,
                             mode="geminicli",
                             model_name=model_name,
-                            error_message=error_text,
+                            error_message=safe_upstream_error_summary(
+                                error_text,
+                                status_code=status_code,
+                                reason=retry_reason,
+                            ),
                         )
                         smart_error_recorded = True
                     excluded_credentials.add(current_file)
@@ -1624,7 +1665,11 @@ async def non_stream_request(
                     await record_api_call_error(
                         credential_manager, current_file, status_code,
                         cooldown_until, mode="geminicli", model_name=model_name,
-                        error_message=error_text
+                        error_message=safe_upstream_error_summary(
+                            error_text,
+                            status_code=status_code,
+                            reason=retry_reason,
+                        )
                     )
                     excluded_credentials.add(current_file)
 
@@ -1690,7 +1735,9 @@ async def non_stream_request(
                 await record_api_call_error(
                     credential_manager, current_file, status_code,
                     None, mode="geminicli", model_name=model_name,
-                    error_message=error_text
+                    error_message=safe_upstream_error_summary(
+                        error_text, status_code=status_code, reason="http_404"
+                    )
                 )
 
                 # 预热下一个凭证（会自动跳过preview=False的凭证）
@@ -1729,33 +1776,50 @@ async def non_stream_request(
                 log.error(
                     f"[NON-STREAM] 非重试错误 (status={status_code}), "
                     f"credential={credential_log_id(current_file)}, "
-                    f"upstream={safe_text(error_text, limit=240) or 'empty'}"
+                    "upstream_error="
+                    f"{safe_upstream_error_summary(error_text, status_code=status_code)}"
                 )
                 await record_api_call_error(
                     credential_manager, current_file, status_code,
                     None, mode="geminicli", model_name=model_name,
-                    error_message=error_text
+                    error_message=safe_upstream_error_summary(
+                        error_text, status_code=status_code
+                    )
                 )
                 _debug_log_final_response("NON-STREAM", last_error_response)
                 return last_error_response
 
+        except StreamFailure as e:
+            transport_failures += 1
+            log.error(
+                f"[NON-STREAM] 传输失败: stage={e.stage}, "
+                f"error_type={e.error_type or type(e).__name__}, "
+                f"credential={credential_log_id(current_file)}"
+            )
+            if (
+                (e.connection_invalidated or e.stage in {"pool", "connect"})
+                and transport_failures < nonstream_transport_max_attempts
+                and attempt < max_retries
+            ):
+                log.info(
+                    "[NON-STREAM] HTTP/2连接代次已淘汰，"
+                    "使用同一凭证和新连接立即重试"
+                )
+                continue
+            return e.to_response()
         except Exception as e:
             log.error(
                 f"非流式请求异常: {safe_exception(e)}, "
                 f"credential={credential_log_id(current_file)}"
             )
-            if attempt < max_retries:
-                log.info(f"[NON-STREAM] 异常后重试 (attempt {attempt + 2}/{max_retries + 1})...")
-                await asyncio.sleep(retry_interval)
-                continue
-            else:
-                # 所有重试都失败，返回固定429错误以便下游重试
-                log.error(
-                    f"[NON-STREAM] 所有重试均失败，最后异常: {safe_exception(e)}"
-                )
-                err = build_error_response("Server is busy, please retry later", 503)
-                _debug_log_final_response("NON-STREAM", err)
-                return err
+            failure = StreamFailure(
+                "The service failed to process the request",
+                stage="internal",
+                status_code=500,
+                retryable=False,
+                error_type=type(e).__name__,
+            )
+            return failure.to_response()
 
     # 所有重试都失败，返回固定429错误以便下游重试
     log.error("[NON-STREAM] 所有重试均失败")
@@ -1957,7 +2021,8 @@ async def fetch_geminicli_quota_info(
             }
 
         data = response.json()
-        log.debug(f"[GEMINICLI QUOTA] Raw response: {json.dumps(data, ensure_ascii=False)[:500]}")
+        quota_buckets = len(data.get("buckets", [])) if isinstance(data, dict) else 0
+        log.debug(f"[GEMINICLI QUOTA] Parsed quota buckets={quota_buckets}")
 
         buckets = data.get("buckets", []) or []
         quota_info: Dict[str, Any] = {}

@@ -47,7 +47,7 @@ def parse_response_for_fake_stream(response_data: Dict[str, Any]) -> tuple:
     candidate = candidates[0]
     finish_reason = candidate.get("finishReason", "STOP")
     parts = safe_get_nested(candidate, "content", "parts", default=[])
-    log.debug(f"[FAKE_STREAM] Extracted {len(parts)} parts: {json.dumps(parts, ensure_ascii=False)}")
+    log.debug(f"[FAKE_STREAM] Extracted {len(parts)} parts")
     content, reasoning_content, images = extract_content_and_reasoning(parts)
     log.debug(f"[FAKE_STREAM] Content length: {len(content)}, Reasoning length: {len(reasoning_content)}, Images count: {len(images)}")
 
@@ -112,7 +112,7 @@ def extract_fake_stream_content(response: Any) -> Tuple[str, str, Dict[str, int]
         
         # 如果完全没有内容，提供默认回复
         if not content:
-            log.warning(f"No content found in response: {gemini_response}")
+            log.warning("No content found in fake-stream response")
             content = "[响应为空，请重新尝试]"
 
         # 转换usageMetadata为OpenAI格式
@@ -175,7 +175,10 @@ def build_gemini_fake_stream_chunks(content: str, reasoning_content: str, finish
     if images is None:
         images = []
 
-    log.debug(f"[build_gemini_fake_stream_chunks] Input - content: {repr(content)}, reasoning: {repr(reasoning_content)}, finish_reason: {finish_reason}, images count: {len(images)}")
+    log.debug(
+        f"[build_gemini_fake_stream_chunks] Input lengths: content={len(content)}, "
+        f"reasoning={len(reasoning_content)}, images={len(images)}"
+    )
     chunks = []
 
     # 如果没有正常内容但有思维内容,提供默认回复
@@ -213,7 +216,7 @@ def build_gemini_fake_stream_chunks(content: str, reasoning_content: str, finish
 
         parts.append({"text": chunk_text})
         chunk_data = _build_candidate(parts, chunk_finish_reason)
-        log.debug(f"[build_gemini_fake_stream_chunks] Generated chunk: {chunk_data}")
+        log.debug("[build_gemini_fake_stream_chunks] Generated chunk")
         chunks.append(chunk_data)
 
     # 如果有推理内容，分块发送
@@ -259,7 +262,10 @@ def build_openai_fake_stream_chunks(content: str, reasoning_content: str, finish
     if images is None:
         images = []
 
-    log.debug(f"[build_openai_fake_stream_chunks] Input - content: {repr(content)}, reasoning: {repr(reasoning_content)}, finish_reason: {finish_reason}, images count: {len(images)}")
+    log.debug(
+        f"[build_openai_fake_stream_chunks] Input lengths: content={len(content)}, "
+        f"reasoning={len(reasoning_content)}, images={len(images)}"
+    )
     chunks = []
     response_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
@@ -315,7 +321,7 @@ def build_openai_fake_stream_chunks(content: str, reasoning_content: str, finish
                 "finish_reason": chunk_finish,
             }]
         }
-        log.debug(f"[build_openai_fake_stream_chunks] Generated chunk: {chunk_data}")
+        log.debug("[build_openai_fake_stream_chunks] Generated chunk")
         chunks.append(chunk_data)
 
     # 如果有推理内容，分块发送（使用 reasoning_content 字段）
@@ -372,7 +378,10 @@ def build_anthropic_fake_stream_chunks(content: str, reasoning_content: str, fin
     if images is None:
         images = []
 
-    log.debug(f"[build_anthropic_fake_stream_chunks] Input - content: {repr(content)}, reasoning: {repr(reasoning_content)}, finish_reason: {finish_reason}, images count: {len(images)}")
+    log.debug(
+        f"[build_anthropic_fake_stream_chunks] Input lengths: content={len(content)}, "
+        f"reasoning={len(reasoning_content)}, images={len(images)}"
+    )
     chunks = []
     message_id = f"msg_{uuid.uuid4().hex}"
 

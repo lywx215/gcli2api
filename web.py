@@ -124,12 +124,30 @@ async def lifespan(app: FastAPI):
         log.info(
             "GeminiCLI upstream transport: "
             f"http2_enabled={stream_config.upstream_http2_enabled}, "
+            f"http2_client_max_age={stream_config.upstream_http2_client_max_age}s, "
+            f"nonstream_transport_max_attempts={stream_config.nonstream_transport_max_attempts}, "
+            f"capacity_fast_fail_enabled={config.is_geminicli_capacity_fast_fail_enabled()}, "
             f"header_hedge_enabled={stream_config.header_hedge_enabled}, "
             f"header_hedge_delay={stream_config.header_hedge_delay}s, "
             f"header_hedge_max_inflight={stream_config.header_hedge_max_inflight}, "
             f"header_hedge_sample_rate={stream_config.header_hedge_sample_rate}, "
             f"header_hedge_daily_budget={stream_config.header_hedge_daily_budget}"
         )
+        try:
+            import h2
+            import httpcore
+            import httpx
+
+            log.info(
+                "Upstream HTTP stack: "
+                f"httpx={httpx.__version__}, httpcore={httpcore.__version__}, "
+                f"h2={h2.__version__}"
+            )
+        except Exception as version_error:
+            log.warning(
+                "读取上游 HTTP 依赖版本失败: "
+                f"{type(version_error).__name__}"
+            )
     except Exception as e:
         log.warning(f"读取 GeminiCLI 上游传输配置失败: {type(e).__name__}")
 

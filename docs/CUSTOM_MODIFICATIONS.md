@@ -146,6 +146,8 @@ comm -13 <(git diff --name-only "$base"..origin/dev6 | sort) <(git diff --name-o
 | `GEMINICLI_STREAM_HEADER_HEDGE_SAMPLE_RATE` | 满足条件的对冲采样率 | `0.05`，范围 0–1 | 控制面板显示 0–100%；环境变量锁定，单 Worker 热更新 |
 | `GEMINICLI_STREAM_HEADER_HEDGE_DAILY_BUDGET` | 每个备用凭证、每个模型族的北京时间每日预算 | `10`，范围 0–1000 | `0` 禁止备用请求；环境变量锁定，单 Worker 热更新 |
 | `UPSTREAM_HTTP2_ENABLED` | 上游 HTTP/2 连接复用 | `false` | 仅环境变量控制；修改后重启；HTTPX 可自动回退 HTTP/1.1 |
+| `UPSTREAM_HTTP2_CLIENT_MAX_AGE` | HTTP/2 client generation 主动轮换周期 | `2700` 秒；`0` 禁用 | 到期后只让新请求使用新 generation，旧活动流排空后关闭 |
+| `NONSTREAM_TRANSPORT_MAX_ATTEMPTS` | 非流式连接类故障的最大传输尝试次数 | `2`，范围 1–5 | 仅 pool/connect 类故障立即重试；read/write 和业务状态不得重复调用 |
 | `STREAM_LATENCY_GUARD_ENABLED` | 首事件、首内容、idle 超时及安全切换 | `true` | 关闭后仍保留基础连接/OAuth 上限和首事件后禁止重试 |
 | `STREAM_PERF_LOG_SAMPLE_RATE` | 正常成功流的性能摘要采样率 | `0.01`，范围 0–1 | 慢请求、失败和重试不受采样率限制；不得记录请求体、token 或代理凭证 |
 | `CREDENTIAL_ACQUIRE_TIMEOUT` | 获取可用凭证的总时限 | `10` 秒，正数 | 超时必须转为有阶段信息的 504；没有合格凭证则保持 503，不能无限等待 |
@@ -677,6 +679,14 @@ dev6 v1 明确没有实现以下行为，同步时不能以“优化”为名私
   `http2`，transport generation 指纹同时包含代理配置和 HTTP/2 状态；旧 generation
   继续等待活动流释放后关闭。依赖显式声明为 `httpx[http2,socks]`，协商失败时仍允许
   HTTPX 使用 HTTP/1.1。
+- HTTP/2 generation 默认最多存活 2700 秒。检测到 `ConnectionState.CLOSED`、HTTP/2
+  `LocalProtocolError` 或 `RemoteProtocolError` 时立即把该 generation 标记为不可复用；
+  首内容前的新尝试使用新连接且不 sleep，旧 generation 只在活动流全部释放后关闭。
+  `STREAM_PERF_SUMMARY.attempt_details` 记录 generation 和失效原因，方便区分 Google
+  响应头慢与本地复用到失效连接。
+- 非流式请求不再对所有异常执行宽泛重试。仅连接池等待和建连类错误最多立即尝试 2 次；
+  read/write 超时、协议转换错误和未知程序异常直接按固定错误语义结束，防止一次下游请求
+  被扩大为多次 GeminiCLI 额度消耗。
 - `GEMINICLI_STREAM_HEADER_HEDGE_ENABLED` /
   `geminicli_stream_header_hedge_enabled` 是独立且默认关闭的布尔开关。首请求 15 秒内没有
   响应头、命中采样、存在不同备用凭证并取得单 Worker 信号量时才启动第二请求。
@@ -713,6 +723,23 @@ dev6 v1 明确没有实现以下行为，同步时不能以“优化”为名私
   预算通过主存储跨 Worker 原子共享，不使用 Redis 协调。
 - 加入对冲成本预算后全量回归为 `182 passed, 7 warnings`，并通过 `compileall`、
   JavaScript 语法检查和 `git diff --check`。
+
+### 16.13 统一对外错误与模型名称隔离
+
+- 所有生成接口在响应提交前通过统一的公开错误映射输出固定文案。客户端只会看到
+  `invalid_request`、`upstream_unavailable`、`upstream_connection_error`、
+  `upstream_timeout`、`credential_pool_unavailable` 或 `internal_error`，并保留有意义的
+  400/502/503/504 状态分类；不得返回 Google 原始错误正文、异常消息、URL、凭证信息或
+  内部路由模型名。
+- 流式请求在首内容后失败时仍输出 OpenAI、Anthropic 或 Gemini 协议原生 SSE error，
+  但内容来自同一固定错误目录。`X-Request-ID` 始终返回，供管理员在服务端脱敏日志中关联；
+  `Retry-After` 只允许安全整数值。
+- 成功响应中的 `model` / `modelVersion` 始终回显客户端最初请求的公开模型字符串。内部别名、
+  tier 路由和最后实际调用的上游模型只用于服务端调度，不进入客户端响应。模型生成的自然语言
+  内容不做关键词过滤；本规则只约束协议元数据与服务端错误。
+- 本轮全量回归结果为 `197 passed, 7 warnings`，并通过 `compileall` 与
+  `git diff --check`；测试包含错误正文/内部模型名脱敏、三种协议错误形状、公开模型回显、
+  HTTP/2 generation 失效和最大存活时间轮换。
 
 ## 17. 2026-07-31 上游同步新增保护决策
 
