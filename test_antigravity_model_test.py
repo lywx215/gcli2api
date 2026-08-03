@@ -1,11 +1,19 @@
 """Regression tests for Antigravity credential model testing."""
 
+import copy
 import json
 import time
 
 from src import httpx_client
+from src.api import antigravity as antigravity_api
 from src.api.utils import parse_and_log_cooldown
 from src.panel import creds as creds_panel
+from src.utils import (
+    ANTIGRAVITY_CLI_VERSION,
+    ANTIGRAVITY_USER_AGENT,
+    BASE_MODELS,
+    GEMINICLI_MODEL_ALIASES,
+)
 
 
 class _FakeBackend:
@@ -49,6 +57,125 @@ class _FakeCredentialsFactory:
 
 class _FakeResponse:
     status_code = 200
+
+
+def test_antigravity_headers_allow_only_safe_forwarded_values():
+    headers = antigravity_api.build_antigravity_headers(
+        "real-access-token",
+        {
+            "Authorization": "Bearer attacker-token",
+            "User-Agent": "attacker-agent",
+            "Content-Type": "text/plain",
+            "Connection": "close",
+            "Host": "attacker.invalid",
+            "Cookie": "session=secret",
+            "Proxy-Authorization": "Basic secret",
+            "Accept-Language": "zh-CN",
+            "Traceparent": "00-trace-parent",
+            "X-B3-TraceId": "b3-trace",
+            "X-Request-ID": "client-request-id",
+        },
+    )
+
+    assert headers["Authorization"] == "Bearer real-access-token"
+    assert headers["User-Agent"] == ANTIGRAVITY_USER_AGENT
+    assert headers["Content-Type"] == "application/json"
+    assert headers["Accept"] == "*/*"
+    assert "Connection" not in headers
+    assert "Host" not in headers
+    assert "Cookie" not in headers
+    assert "Proxy-Authorization" not in headers
+    assert headers["Accept-Language"] == "zh-CN"
+    assert headers["Traceparent"] == "00-trace-parent"
+    assert headers["X-B3-TraceId"] == "b3-trace"
+    assert headers["X-Request-ID"] == "client-request-id"
+
+
+async def test_wrap_cli_request_deep_copies_and_preserves_explicit_mode(monkeypatch):
+    state = antigravity_api.AntigravitySessionState(
+        conversation_id="conversation",
+        trajectory_id="trajectory",
+        session_id="-123",
+        step_index=7,
+        created_at=1.0,
+        last_used_at=1.0,
+    )
+
+    async def fake_get_session_state(request_payload, model=""):
+        return state
+
+    monkeypatch.setattr(
+        antigravity_api, "_get_session_state", fake_get_session_state
+    )
+    request = {
+        "contents": [
+            {"role": "user", "parts": [{"text": "hello"}]},
+        ],
+        "toolConfig": {
+            "functionCallingConfig": {
+                "mode": "ANY",
+                "allowedFunctionNames": ["lookup"],
+            }
+        },
+        "safetySettings": [{"category": "example"}],
+    }
+    original = copy.deepcopy(request)
+
+    payload, request_id = await antigravity_api.wrap_cli_request(
+        request, "gemini-3.5-flash-low", "project-id"
+    )
+
+    assert request == original
+    assert payload["request"] is not request
+    assert payload["request"]["contents"] is not request["contents"]
+    assert "safetySettings" not in payload["request"]
+    assert payload["request"]["sessionId"] == "-123"
+    assert payload["request"]["labels"]["last_step_index"] == "7"
+    assert payload["request"]["toolConfig"]["functionCallingConfig"] == {
+        "mode": "ANY",
+        "allowedFunctionNames": ["lookup"],
+    }
+    assert request_id.startswith("agent/conversation/")
+    assert request_id.endswith("/trajectory/7")
+
+
+async def test_wrap_cli_request_defaults_mode_and_keeps_session_progress(monkeypatch):
+    monkeypatch.setattr(antigravity_api, "_redis_checked", True)
+    monkeypatch.setattr(antigravity_api, "_redis_client", None)
+    monkeypatch.setattr(antigravity_api, "_session_states", {})
+    request = {
+        "contents": [
+            {"role": "user", "parts": [{"text": "same conversation"}]},
+        ]
+    }
+
+    first, _ = await antigravity_api.wrap_cli_request(
+        request, "gemini-3.5-flash-low", "project-id"
+    )
+    second, _ = await antigravity_api.wrap_cli_request(
+        request, "gemini-3.5-flash-low", "project-id"
+    )
+
+    assert "sessionId" not in request
+    assert first["request"]["sessionId"] == second["request"]["sessionId"]
+    assert first["request"]["labels"]["trajectory_id"] == (
+        second["request"]["labels"]["trajectory_id"]
+    )
+    assert first["request"]["labels"]["last_step_index"] == "1"
+    assert second["request"]["labels"]["last_step_index"] == "2"
+    assert first["request"]["toolConfig"]["functionCallingConfig"]["mode"] == (
+        "VALIDATED"
+    )
+
+
+def test_synced_antigravity_version_and_gemini35_models_are_preserved():
+    assert ANTIGRAVITY_CLI_VERSION == "1.1.9"
+    assert ANTIGRAVITY_USER_AGENT.startswith("antigravity/cli/1.1.9 ")
+    assert "gemini-3.5-flash" in BASE_MODELS
+    assert "gemini-3.5-flash-preview" in BASE_MODELS
+    assert GEMINICLI_MODEL_ALIASES["gemini-3.5-flash-preview"] == (
+        "gemini-3-flash"
+    )
 
 
 async def test_antigravity_specific_model_uses_current_header_signature(monkeypatch):

@@ -4,6 +4,7 @@ Antigravity API Client - Handles communication with Google's Antigravity API
 """
 
 import asyncio
+import copy
 import hashlib
 import json
 import os
@@ -98,10 +99,7 @@ class AntigravitySessionState:
     last_used_at: float
 
 
-# 内存回退存储
 _session_states: Dict[str, AntigravitySessionState] = {}
-
-# Redis 客户端（懒初始化，REDIS_URL 存在时使用）
 _redis_client = None
 _redis_checked = False
 
@@ -117,12 +115,16 @@ async def _get_redis():
         return None
     try:
         import redis.asyncio as aioredis  # type: ignore
+
         client = aioredis.from_url(redis_url, decode_responses=True)
         await client.ping()
         _redis_client = client
         log.info("[SESSION] Redis session store enabled")
-    except Exception as e:
-        log.warning(f"[SESSION] Redis unavailable, falling back to in-memory: {e}")
+    except Exception as exc:
+        log.warning(
+            "[SESSION] Redis unavailable, falling back to in-memory: "
+            f"{safe_exception(exc)}"
+        )
     return _redis_client
 
 
@@ -155,15 +157,19 @@ def _session_key(request_payload: Dict[str, Any], model: str = "") -> str:
 
 
 def _prune_session_states(now: float) -> None:
-    expired = [k for k, s in _session_states.items() if now - s.last_used_at > SESSION_TTL_SECONDS]
-    for k in expired:
-        _session_states.pop(k, None)
+    expired = [
+        key
+        for key, state in _session_states.items()
+        if now - state.last_used_at > SESSION_TTL_SECONDS
+    ]
+    for key in expired:
+        _session_states.pop(key, None)
     if len(_session_states) <= MAX_SESSION_STATES:
         return
     overflow = len(_session_states) - MAX_SESSION_STATES
     oldest = sorted(_session_states.items(), key=lambda item: item[1].last_used_at)
-    for k, _ in oldest[:overflow]:
-        _session_states.pop(k, None)
+    for key, _ in oldest[:overflow]:
+        _session_states.pop(key, None)
 
 
 def _make_new_state(first_user_text: str, now: float) -> AntigravitySessionState:
@@ -183,7 +189,9 @@ def _make_new_state(first_user_text: str, now: float) -> AntigravitySessionState
     )
 
 
-async def _get_session_state(request_payload: Dict[str, Any], model: str = "") -> AntigravitySessionState:
+async def _get_session_state(
+    request_payload: Dict[str, Any], model: str = ""
+) -> AntigravitySessionState:
     now = time.time()
     key = _session_key(request_payload, model)
     first_user_text = _extract_first_user_text(request_payload)
@@ -200,12 +208,18 @@ async def _get_session_state(request_payload: Dict[str, Any], model: str = "") -
                 state.last_used_at = now
             else:
                 state = _make_new_state(first_user_text, now)
-            await redis.set(redis_key, json.dumps(state.__dict__), ex=SESSION_TTL_SECONDS)
+            await redis.set(
+                redis_key,
+                json.dumps(state.__dict__),
+                ex=SESSION_TTL_SECONDS,
+            )
             return state
-        except Exception as e:
-            log.warning(f"[SESSION] Redis error, falling back to memory: {e}")
+        except Exception as exc:
+            log.warning(
+                "[SESSION] Redis error, falling back to memory: "
+                f"{safe_exception(exc)}"
+            )
 
-    # 内存回退
     _prune_session_states(now)
     state = _session_states.get(key)
     if state:
@@ -233,6 +247,34 @@ def _build_labels(model: str, trajectory_id: str, step: int) -> Dict[str, str]:
     }
 
 
+def _should_forward_antigravity_header(header_name: str) -> bool:
+    normalized = header_name.strip().lower()
+    if not normalized:
+        return False
+    if normalized.startswith("x-b3-"):
+        return True
+    return normalized in {
+        "accept-language",
+        "traceparent",
+        "tracestate",
+        "x-cloud-trace-context",
+        "x-goog-api-client",
+        "x-goog-request-params",
+        "x-goog-user-project",
+        "x-request-id",
+    }
+
+
+def _sanitize_antigravity_headers(extra_headers: Optional[Dict[str, str]]) -> Dict[str, str]:
+    if not extra_headers:
+        return {}
+    sanitized: Dict[str, str] = {}
+    for key, value in extra_headers.items():
+        if _should_forward_antigravity_header(key):
+            sanitized[key] = value
+    return sanitized
+
+
 async def wrap_cli_request(
     gemini_request: Dict[str, Any],
     model: str,
@@ -242,12 +284,11 @@ async def wrap_cli_request(
     将 Gemini 格式请求包装成 Antigravity CLI 格式。
     返回 (payload, request_id)。
     """
-    inner = dict(gemini_request)
+    inner = copy.deepcopy(gemini_request)
 
     # 移除 safetySettings（CLI 不发送）
     inner.pop("safetySettings", None)
 
-    # 获取/更新会话状态
     state = await _get_session_state(inner, model)
 
     # 注入 sessionId
@@ -265,7 +306,9 @@ async def wrap_cli_request(
     tool_config["functionCallingConfig"] = func_config
     inner["toolConfig"] = tool_config
 
-    request_id = _generate_request_id(state.conversation_id, state.trajectory_id, state.step_index)
+    request_id = _generate_request_id(
+        state.conversation_id, state.trajectory_id, state.step_index
+    )
 
     payload = {
         "project": project_id,
@@ -281,14 +324,23 @@ async def wrap_cli_request(
 
 # ==================== 辅助函数 ====================
 
-def build_antigravity_headers(access_token: str) -> Dict[str, str]:
+def build_antigravity_headers(
+    access_token: str,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
     """构建 Antigravity CLI API 请求头。"""
-    return {
+    headers = {
         "User-Agent": ANTIGRAVITY_USER_AGENT,
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
+        "Accept": "*/*",
         "Accept-Encoding": "gzip",
     }
+
+    for key, value in _sanitize_antigravity_headers(extra_headers).items():
+        headers.setdefault(key, value)
+
+    return headers
 
 
 def _is_retryable_status(status_code: int, disable_error_codes: List[int]) -> bool:
@@ -376,11 +428,7 @@ async def stream_request(
     antigravity_url = await get_antigravity_api_url()
     target_url = f"{antigravity_url}/v1internal:streamGenerateContent?alt=sse"
 
-    auth_headers = build_antigravity_headers(access_token)
-
-    # 合并自定义headers
-    if headers:
-        auth_headers.update(headers)
+    auth_headers = build_antigravity_headers(access_token, headers)
 
     # 构建 CLI 格式请求体
     inner_request = body.get("request", body)
@@ -680,11 +728,7 @@ async def non_stream_request(
     antigravity_url = await get_antigravity_api_url()
     target_url = f"{antigravity_url}/v1internal:generateContent"
 
-    auth_headers = build_antigravity_headers(access_token)
-
-    # 合并自定义headers
-    if headers:
-        auth_headers.update(headers)
+    auth_headers = build_antigravity_headers(access_token, headers)
 
     # 构建 CLI 格式请求体
     inner_request = body.get("request", body)
