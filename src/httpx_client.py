@@ -11,6 +11,7 @@ from typing import Any, AsyncGenerator, Dict, Optional
 
 import httpx
 from fastapi import Response
+from log import log
 
 from config import get_proxy_config
 from src.streaming_latency import (
@@ -25,8 +26,12 @@ from src.streaming_latency import (
 class _ClientEntry:
     client: httpx.AsyncClient
     transport_fingerprint: str
+    generation: int
+    created_at: float
+    http2: bool
     active: int = 0
     retiring: bool = False
+    invalidation_reason: Optional[str] = None
 
 
 class HttpxClientManager:
@@ -36,6 +41,7 @@ class HttpxClientManager:
         self._lock = asyncio.Lock()
         self._current: Optional[_ClientEntry] = None
         self._entries: list[_ClientEntry] = []
+        self._next_generation = 1
 
     @staticmethod
     def _transport_fingerprint(proxy: Optional[str], http2: bool) -> str:
@@ -60,10 +66,45 @@ class HttpxClientManager:
         }
         if proxy:
             kwargs["proxy"] = proxy
-        return _ClientEntry(
+        entry = _ClientEntry(
             client=httpx.AsyncClient(**kwargs),
             transport_fingerprint=self._transport_fingerprint(proxy, http2),
+            generation=self._next_generation,
+            created_at=time.monotonic(),
+            http2=http2,
         )
+        self._next_generation += 1
+        return entry
+
+    def generation_for(self, client: httpx.AsyncClient) -> Optional[int]:
+        for entry in self._entries:
+            if entry.client is client:
+                return entry.generation
+        return None
+
+    async def invalidate(self, client: httpx.AsyncClient, reason: str) -> bool:
+        """Drain one poisoned client generation without interrupting active streams."""
+        close_after: Optional[httpx.AsyncClient] = None
+        generation: Optional[int] = None
+        async with self._lock:
+            entry = next((item for item in self._entries if item.client is client), None)
+            if entry is None or entry.retiring:
+                return False
+            entry.retiring = True
+            entry.invalidation_reason = reason
+            generation = entry.generation
+            if self._current is entry:
+                self._current = None
+            if entry.active == 0:
+                self._entries.remove(entry)
+                close_after = entry.client
+        log.warning(
+            "HTTP_CLIENT_GENERATION_RETIRED "
+            f"generation={generation}, reason={reason}"
+        )
+        if close_after is not None:
+            await close_after.aclose()
+        return True
 
     @asynccontextmanager
     async def get_client(
@@ -86,9 +127,27 @@ class HttpxClientManager:
             return
 
         fingerprint = self._transport_fingerprint(proxy, http2)
+        max_age = StreamLatencyConfig.from_env().upstream_http2_client_max_age
         close_after: list[httpx.AsyncClient] = []
         async with self._lock:
             entry = self._current
+            if (
+                entry is not None
+                and entry.http2
+                and max_age > 0
+                and time.monotonic() - entry.created_at >= max_age
+            ):
+                entry.retiring = True
+                entry.invalidation_reason = "max_age"
+                self._current = None
+                if entry.active == 0:
+                    close_after.append(entry.client)
+                    self._entries.remove(entry)
+                log.info(
+                    "HTTP_CLIENT_GENERATION_RETIRED "
+                    f"generation={entry.generation}, reason=max_age"
+                )
+                entry = None
             if (
                 entry is None
                 or entry.transport_fingerprint != fingerprint
@@ -142,6 +201,8 @@ class HttpxClientManager:
 class UpstreamStream:
     response: httpx.Response
     native: bool = False
+    client: Optional[httpx.AsyncClient] = None
+    transport_generation: Optional[int] = None
 
     @property
     def status_code(self) -> int:
@@ -182,7 +243,12 @@ def _http_timeout(config: StreamLatencyConfig) -> httpx.Timeout:
 
 
 def _transport_failure(
-    exc: Exception, stage: str, *, attempt: Optional[int] = None
+    exc: Exception,
+    stage: str,
+    *,
+    attempt: Optional[int] = None,
+    connection_invalidated: bool = False,
+    transport_generation: Optional[int] = None,
 ) -> StreamFailure:
     trace = current_stream_trace()
     request_id = trace.request_id if trace else None
@@ -211,6 +277,8 @@ def _transport_failure(
         retryable=True,
         request_id=request_id,
         error_type=error_type,
+        connection_invalidated=connection_invalidated,
+        transport_generation=transport_generation,
     )
     if trace:
         trace.record_failure(
@@ -221,6 +289,23 @@ def _transport_failure(
             attempt=attempt,
         )
     return failure
+
+
+def _poisoned_http2_reason(exc: Exception) -> Optional[str]:
+    if isinstance(exc, httpx.LocalProtocolError):
+        message = str(exc)
+        if "ConnectionState.CLOSED" in message or any(
+            marker in message
+            for marker in (
+                "ConnectionInputs.RECV_DATA",
+                "ConnectionInputs.RECV_HEADERS",
+                "ConnectionInputs.RECV_PING",
+            )
+        ):
+            return "http2_connection_closed"
+    if isinstance(exc, httpx.RemoteProtocolError):
+        return "remote_protocol_error"
+    return None
 
 
 class _HttpcoreTrace:
@@ -288,6 +373,11 @@ async def open_stream_post(
     if trace and "waiting_headers" not in trace.timings_ms:
         trace.mark("waiting_headers", phase=StreamPhase.WAITING_HEADERS)
     async with http_client.get_streaming_client() as client:
+        transport_generation = http_client.generation_for(client)
+        if trace:
+            trace.set_attempt_transport_generation(
+                transport_generation, attempt=attempt
+            )
         transport_trace = _HttpcoreTrace() if trace and trace.diagnostics_enabled else None
         request = client.build_request(
             "POST",
@@ -303,6 +393,20 @@ async def open_stream_post(
             async with asyncio.timeout(config.response_header_timeout):
                 response = await client.send(request, stream=True)
         except Exception as exc:
+            invalidation_reason = (
+                _poisoned_http2_reason(exc)
+                if config.upstream_http2_enabled
+                else None
+            )
+            connection_invalidated = False
+            if invalidation_reason is not None:
+                connection_invalidated = await http_client.invalidate(
+                    client, invalidation_reason
+                )
+                if trace and connection_invalidated:
+                    trace.record_connection_invalidation(
+                        invalidation_reason, attempt=attempt
+                    )
             if trace:
                 trace.duration("response_headers", headers_started_at)
                 trace.add_duration_ms(
@@ -314,7 +418,11 @@ async def open_stream_post(
                         transport_trace.finish(), attempt=attempt
                     )
             raise _transport_failure(
-                exc, "response_headers", attempt=attempt
+                exc,
+                "response_headers",
+                attempt=attempt,
+                connection_invalidated=connection_invalidated,
+                transport_generation=transport_generation,
             ) from exc
 
         try:
@@ -340,7 +448,12 @@ async def open_stream_post(
                     or response.headers.get("traceparent"),
                     attempt=attempt,
                 )
-            yield UpstreamStream(response=response, native=native)
+            yield UpstreamStream(
+                response=response,
+                native=native,
+                client=client,
+                transport_generation=transport_generation,
+            )
         finally:
             await response.aclose()
 
@@ -349,7 +462,13 @@ async def get_async(
     url: str, headers: Optional[Dict[str, str]] = None, timeout: float = 30.0, **kwargs: Any
 ) -> httpx.Response:
     async with http_client.get_client(timeout=timeout, **kwargs) as client:
-        return await client.get(url, headers=headers, timeout=timeout)
+        try:
+            return await client.get(url, headers=headers, timeout=timeout)
+        except Exception as exc:
+            reason = _poisoned_http2_reason(exc)
+            if reason is not None:
+                await http_client.invalidate(client, reason)
+            raise
 
 
 async def post_async(
@@ -361,7 +480,22 @@ async def post_async(
     **kwargs: Any,
 ) -> httpx.Response:
     async with http_client.get_client(timeout=timeout, **kwargs) as client:
-        return await client.post(url, data=data, json=json, headers=headers, timeout=timeout)
+        generation = http_client.generation_for(client)
+        try:
+            return await client.post(
+                url, data=data, json=json, headers=headers, timeout=timeout
+            )
+        except Exception as exc:
+            reason = _poisoned_http2_reason(exc)
+            invalidated = False
+            if reason is not None:
+                invalidated = await http_client.invalidate(client, reason)
+            raise _transport_failure(
+                exc,
+                "response_headers",
+                connection_invalidated=invalidated,
+                transport_generation=generation,
+            ) from exc
 
 
 async def stream_post_async(
@@ -416,7 +550,27 @@ async def stream_post_async(
                     break
                 except Exception as exc:
                     stage = "first_event" if first else "stream_idle"
-                    raise _transport_failure(exc, stage, attempt=attempt) from exc
+                    invalidation_reason = (
+                        _poisoned_http2_reason(exc)
+                        if config.upstream_http2_enabled
+                        else None
+                    )
+                    invalidated = False
+                    if invalidation_reason is not None and stream.client is not None:
+                        invalidated = await http_client.invalidate(
+                            stream.client, invalidation_reason
+                        )
+                        if trace:
+                            trace.record_connection_invalidation(
+                                invalidation_reason, attempt=attempt
+                            )
+                    raise _transport_failure(
+                        exc,
+                        stage,
+                        attempt=attempt,
+                        connection_invalidated=invalidated,
+                        transport_generation=stream.transport_generation,
+                    ) from exc
                 if first and chunk and chunk.strip():
                     first = False
                 if trace and chunk and chunk.strip():

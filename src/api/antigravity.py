@@ -21,7 +21,11 @@ from config import (
     is_smart_429_protection_enabled,
 )
 from log import log
-from src.log_safety import credential_log_id, safe_exception, safe_text
+from src.log_safety import (
+    credential_log_id,
+    safe_exception,
+    safe_upstream_error_summary,
+)
 
 from src.credential_manager import credential_manager
 from src.httpx_client import stream_post_async, post_async
@@ -447,7 +451,12 @@ async def stream_request(
 
                     # 如果错误码是429、503或者在禁用码当中，做好记录后进行重试
                     if _is_retryable_status(status_code, DISABLE_ERROR_CODES):
-                        log.warning(f"[ANTIGRAVITY STREAM] 流式请求失败 (status={status_code}), credential={credential_log_id(current_file)}, upstream={safe_text(error_body, limit=240) or 'empty'}")
+                        log.warning(
+                            "[ANTIGRAVITY STREAM] 流式请求失败 "
+                            f"(status={status_code}), credential={credential_log_id(current_file)}, "
+                            "upstream_error="
+                            f"{safe_upstream_error_summary(error_body, status_code=status_code)}"
+                        )
 
                         # 解析冷却时间
                         cooldown_until = None
@@ -467,7 +476,9 @@ async def stream_request(
                             await record_api_call_error(
                                 credential_manager, current_file, status_code,
                                 cooldown_until, mode="antigravity", model_name=model_name,
-                                error_message=error_body,
+                                error_message=safe_upstream_error_summary(
+                                    error_body, status_code=status_code
+                                ),
                             )
                             smart_error_recorded = True
 
@@ -486,7 +497,9 @@ async def stream_request(
                             await record_api_call_error(
                                 credential_manager, current_file, status_code,
                                 cooldown_until, mode="antigravity", model_name=model_name,
-                                error_message=error_body
+                                error_message=safe_upstream_error_summary(
+                                    error_body, status_code=status_code
+                                )
                             )
 
                         # 检查是否应该重试
@@ -506,11 +519,18 @@ async def stream_request(
                             return
                     else:
                         # 错误码不在禁用码当中，直接返回，无需重试
-                        log.error(f"[ANTIGRAVITY STREAM] 非重试错误 (status={status_code}), credential={credential_log_id(current_file)}, upstream={safe_text(error_body, limit=240) or 'empty'}")
+                        log.error(
+                            "[ANTIGRAVITY STREAM] 非重试错误 "
+                            f"(status={status_code}), credential={credential_log_id(current_file)}, "
+                            "upstream_error="
+                            f"{safe_upstream_error_summary(error_body, status_code=status_code)}"
+                        )
                         await record_api_call_error(
                             credential_manager, current_file, status_code,
                             None, mode="antigravity", model_name=model_name,
-                            error_message=error_body
+                            error_message=safe_upstream_error_summary(
+                                error_body, status_code=status_code
+                            )
                         )
                         yield chunk
                         return
@@ -525,12 +545,6 @@ async def stream_request(
                             smart_429_service.record_success("antigravity", model_name, current_file)
                         success_recorded = True
                         log.debug(f"[ANTIGRAVITY STREAM] 开始接收流式响应，模型: {model_name}")
-
-                    # 记录原始chunk内容（用于调试）
-                    if isinstance(chunk, bytes):
-                        log.debug(f"[ANTIGRAVITY STREAM RAW] chunk(bytes): {chunk}")
-                    else:
-                        log.debug(f"[ANTIGRAVITY STREAM RAW] chunk(str): {chunk}")
 
                     yield chunk
 
@@ -591,12 +605,15 @@ async def stream_request(
                 continue
             else:
                 # 所有重试都失败，返回最后一次的错误（如果有）
-                log.error(f"[ANTIGRAVITY STREAM] 所有重试均失败，最后异常: {e}")
+                log.error(
+                    "[ANTIGRAVITY STREAM] 所有重试均失败，最后异常: "
+                    f"{safe_exception(e)}"
+                )
                 if last_error_response:
                     yield last_error_response
                 else:
                     # 如果没有记录到错误响应，返回500错误
-                    yield build_error_response(f"流式请求异常: {str(e)}", 500)
+                    yield build_error_response("Upstream stream failed", 500)
                 return
 
     # 所有重试均已耗尽（for循环正常结束），返回最后记录的错误
@@ -774,7 +791,12 @@ async def non_stream_request(
                     pass
 
                 if _is_retryable_status(status_code, DISABLE_ERROR_CODES):
-                    log.warning(f"[ANTIGRAVITY] 非流式请求失败 (status={status_code}), credential={credential_log_id(current_file)}, upstream={safe_text(error_text, limit=240) or 'empty'}")
+                    log.warning(
+                        "[ANTIGRAVITY] 非流式请求失败 "
+                        f"(status={status_code}), credential={credential_log_id(current_file)}, "
+                        "upstream_error="
+                        f"{safe_upstream_error_summary(error_text, status_code=status_code)}"
+                    )
 
                     # 解析冷却时间
                     cooldown_until = None
@@ -794,7 +816,9 @@ async def non_stream_request(
                         await record_api_call_error(
                             credential_manager, current_file, status_code,
                             cooldown_until, mode="antigravity", model_name=model_name,
-                            error_message=error_text,
+                            error_message=safe_upstream_error_summary(
+                                error_text, status_code=status_code
+                            ),
                         )
                         smart_error_recorded = True
 
@@ -813,7 +837,9 @@ async def non_stream_request(
                         await record_api_call_error(
                             credential_manager, current_file, status_code,
                             cooldown_until, mode="antigravity", model_name=model_name,
-                            error_message=error_text
+                            error_message=safe_upstream_error_summary(
+                                error_text, status_code=status_code
+                            )
                         )
 
                     # 检查是否应该重试
@@ -831,11 +857,18 @@ async def non_stream_request(
                         return last_error_response
                 else:
                     # 错误码不在禁用码当中，直接返回，无需重试
-                    log.error(f"[ANTIGRAVITY] 非重试错误 (status={status_code}), credential={credential_log_id(current_file)}, upstream={safe_text(error_text, limit=240) or 'empty'}")
+                    log.error(
+                        "[ANTIGRAVITY] 非重试错误 "
+                        f"(status={status_code}), credential={credential_log_id(current_file)}, "
+                        "upstream_error="
+                        f"{safe_upstream_error_summary(error_text, status_code=status_code)}"
+                    )
                     await record_api_call_error(
                         credential_manager, current_file, status_code,
                         None, mode="antigravity", model_name=model_name,
-                        error_message=error_text
+                        error_message=safe_upstream_error_summary(
+                            error_text, status_code=status_code
+                        )
                     )
                     return last_error_response
             
@@ -870,11 +903,14 @@ async def non_stream_request(
                 continue
             else:
                 # 所有重试都失败，返回最后一次的错误（如果有）或500错误
-                log.error(f"[ANTIGRAVITY] 所有重试均失败，最后异常: {e}")
+                log.error(
+                    "[ANTIGRAVITY] 所有重试均失败，最后异常: "
+                    f"{safe_exception(e)}"
+                )
                 if last_error_response:
                     return last_error_response
                 else:
-                    return build_error_response(f"非流式请求异常: {str(e)}", 500)
+                    return build_error_response("Upstream request failed", 500)
 
     # 所有重试都失败，返回最后一次的原始错误（如果有）或500错误
     log.error("[ANTIGRAVITY] 所有重试均失败")
@@ -924,7 +960,12 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
 
         if response.status_code == 200:
             data = response.json()
-            log.debug(f"[ANTIGRAVITY] Raw models response: {json.dumps(data, ensure_ascii=False)[:500]}")
+            model_count = (
+                len(data.get("models", {}))
+                if isinstance(data, dict) and isinstance(data.get("models"), dict)
+                else 0
+            )
+            log.debug(f"[ANTIGRAVITY] Parsed available models={model_count}")
 
             # 转换为 OpenAI 格式的模型列表，使用 Model 类
             model_list = []
@@ -962,13 +1003,14 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
             log.info(f"[ANTIGRAVITY] Fetched {len(model_list)} available models")
             return model_list
         else:
-            log.error(f"[ANTIGRAVITY] Failed to fetch models ({response.status_code}): {response.text[:500]}")
+            summary = safe_upstream_error_summary(
+                response.text, status_code=response.status_code
+            )
+            log.error(f"[ANTIGRAVITY] Failed to fetch models: {summary}")
             return []
 
     except Exception as e:
-        import traceback
-        log.error(f"[ANTIGRAVITY] Failed to fetch models: {e}")
-        log.error(f"[ANTIGRAVITY] Traceback: {traceback.format_exc()}")
+        log.error(f"[ANTIGRAVITY] Failed to fetch models: {safe_exception(e)}")
         return []
 
 
@@ -1008,7 +1050,12 @@ async def fetch_quota_info(access_token: str) -> Dict[str, Any]:
 
         if response.status_code == 200:
             data = response.json()
-            log.debug(f"[ANTIGRAVITY QUOTA] Raw response: {json.dumps(data, ensure_ascii=False)[:500]}")
+            quota_count = (
+                len(data.get("models", {}))
+                if isinstance(data, dict) and isinstance(data.get("models"), dict)
+                else 0
+            )
+            log.debug(f"[ANTIGRAVITY QUOTA] Parsed model quota entries={quota_count}")
 
             quota_info = {}
 
@@ -1042,17 +1089,18 @@ async def fetch_quota_info(access_token: str) -> Dict[str, Any]:
                 "models": quota_info
             }
         else:
-            log.error(f"[ANTIGRAVITY QUOTA] Failed to fetch quota ({response.status_code}): {response.text[:500]}")
+            summary = safe_upstream_error_summary(
+                response.text, status_code=response.status_code
+            )
+            log.error(f"[ANTIGRAVITY QUOTA] Failed to fetch quota: {summary}")
             return {
                 "success": False,
                 "error": f"API返回错误: {response.status_code}"
             }
 
     except Exception as e:
-        import traceback
-        log.error(f"[ANTIGRAVITY QUOTA] Failed to fetch quota: {e}")
-        log.error(f"[ANTIGRAVITY QUOTA] Traceback: {traceback.format_exc()}")
+        log.error(f"[ANTIGRAVITY QUOTA] Failed to fetch quota: {safe_exception(e)}")
         return {
             "success": False,
-            "error": str(e)
+            "error": "Unable to retrieve quota information"
         }

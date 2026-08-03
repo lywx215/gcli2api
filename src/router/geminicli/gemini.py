@@ -43,6 +43,7 @@ from src.router.stream_passthrough import (
     client_request_id_from_headers,
 )
 from src.streaming_latency import StreamFailure
+from src.public_errors import render_public_error
 
 # 本地模块 - 数据模型
 from src.models import GeminiRequest, model_to_dict
@@ -82,6 +83,7 @@ async def generate_content(
     # 处理模型名称和功能检测
     use_anti_truncation = is_anti_truncation_model(model)
     public_model = get_base_model_from_feature_model(model)
+    response_model = model
     real_model = normalize_geminicli_model_alias(public_model)
     if real_model != public_model:
         log.info(f"[GEMINICLI] Code Assist 模型别名: {public_model} -> {real_model}")
@@ -105,6 +107,11 @@ async def generate_content(
     # 调用 API 层的非流式请求
     from src.api.geminicli import non_stream_request
     response = await non_stream_request(body=api_request)
+    if response.status_code != 200:
+        return render_public_error(
+            StreamFailure.from_response(response, stage="upstream_status"),
+            protocol="gemini",
+        )
 
     # 解包装响应：GeminiCli API 返回的格式有额外的 response 包装层
     # 需要提取 response.response 并返回标准 Gemini 格式
@@ -114,14 +121,32 @@ async def generate_content(
             # 如果有 response 包装，解包装它
             if "response" in response_data:
                 unwrapped_data = response_data["response"]
-                if isinstance(unwrapped_data, dict) and real_model != public_model:
-                    unwrapped_data["modelVersion"] = public_model
+                if isinstance(unwrapped_data, dict):
+                    unwrapped_data["modelVersion"] = response_model
                 return JSONResponse(content=unwrapped_data)
-        # 错误响应或没有 response 字段，直接返回
-        return response
+            if isinstance(response_data, dict):
+                response_data["modelVersion"] = response_model
+                return JSONResponse(content=response_data)
+        return render_public_error(
+            StreamFailure(
+                "Upstream response could not be processed",
+                stage="conversion",
+                status_code=500,
+                error_type="invalid_upstream_payload",
+            ),
+            protocol="gemini",
+        )
     except Exception as e:
-        log.warning(f"Failed to unwrap response: {e}, returning original response")
-        return response
+        log.warning(f"Failed to unwrap response: {type(e).__name__}")
+        return render_public_error(
+            StreamFailure(
+                "Upstream response could not be processed",
+                stage="conversion",
+                status_code=500,
+                error_type=type(e).__name__,
+            ),
+            protocol="gemini",
+        )
 
 @router.post("/v1beta/models/{model:path}:streamGenerateContent")
 @router.post("/v1/models/{model:path}:streamGenerateContent")
@@ -148,6 +173,7 @@ async def stream_generate_content(
     use_fake_streaming = is_fake_streaming_model(model)
     use_anti_truncation = is_anti_truncation_model(model)
     public_model = get_base_model_from_feature_model(model)
+    response_model = model
     real_model = normalize_geminicli_model_alias(public_model)
     if real_model != public_model:
         log.info(f"[GEMINICLI] Code Assist 流式模型别名: {public_model} -> {real_model}")
@@ -156,7 +182,7 @@ async def stream_generate_content(
 
     def _normalize_stream_model_version(chunk):
         """Rewrite streamed Gemini modelVersion back to the public request name."""
-        if real_model == public_model or not isinstance(chunk, (str, bytes)):
+        if not isinstance(chunk, (str, bytes)):
             return chunk
 
         was_bytes = isinstance(chunk, bytes)
@@ -171,13 +197,19 @@ async def stream_generate_content(
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError:
-            return chunk
+            raise StreamFailure(
+                "Upstream stream payload could not be parsed",
+                stage="conversion",
+                status_code=502,
+                retryable=False,
+                error_type="invalid_upstream_payload",
+            )
 
         if isinstance(data, dict):
             if isinstance(data.get("response"), dict):
-                data["response"]["modelVersion"] = public_model
+                data["response"]["modelVersion"] = response_model
             else:
-                data["modelVersion"] = public_model
+                data["modelVersion"] = response_model
 
         normalized = f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
         return normalized.encode("utf-8") if was_bytes else normalized
@@ -213,33 +245,34 @@ async def stream_generate_content(
 
         try:
             response_data = json.loads(response_body)
-            log.debug(f"Gemini fake stream response data: {response_data}")
+            log.debug("Gemini fake stream response parsed")
 
             # 检查是否是错误响应（有些错误可能status_code是200但包含error字段）
             if "error" in response_data:
                 log.error("Fake streaming received an upstream error response")
-                yield f"data: {json.dumps(response_data)}\n\n".encode()
-                yield "data: [DONE]\n\n".encode()
-                return
+                raise ValueError("upstream error payload")
 
             # 使用统一的解析函数
             content, reasoning_content, finish_reason, images = parse_response_for_fake_stream(response_data)
 
-            log.debug(f"Gemini extracted content: {content}")
-            log.debug(f"Gemini extracted reasoning: {reasoning_content[:100] if reasoning_content else 'None'}...")
+            log.debug("Gemini fake stream content extracted")
             log.debug(f"Gemini extracted images count: {len(images)}")
 
             # 构建响应块
             chunks = build_gemini_fake_stream_chunks(content, reasoning_content, finish_reason, images)
             for idx, chunk in enumerate(chunks):
                 chunk_json = json.dumps(chunk)
-                log.debug(f"[FAKE_STREAM] Yielding chunk #{idx+1}: {chunk_json[:200]}")
+                log.debug(f"[FAKE_STREAM] Yielding chunk #{idx+1}")
                 yield f"data: {chunk_json}\n\n".encode()
 
         except Exception as e:
-            log.error(f"Response parsing failed: {e}, directly yield original response")
-            # 直接yield原始响应,不进行包装
-            yield f"data: {response_body}\n\n".encode()
+            log.error(f"Response parsing failed: {type(e).__name__}")
+            raise StreamFailure(
+                "Upstream response could not be processed",
+                stage="conversion",
+                status_code=500,
+                error_type=type(e).__name__,
+            ) from e
 
         yield "data: [DONE]\n\n".encode()
 
@@ -303,8 +336,8 @@ async def stream_generate_content(
                         if "response" in data and "candidates" not in data:
                             log.debug(f"[GEMINICLI-ANTI-TRUNCATION] 展开response包装")
                             unwrapped_data = data["response"]
-                            if isinstance(unwrapped_data, dict) and real_model != public_model:
-                                unwrapped_data["modelVersion"] = public_model
+                            if isinstance(unwrapped_data, dict):
+                                unwrapped_data["modelVersion"] = response_model
                             # 重新构建SSE格式
                             yield f"data: {json.dumps(unwrapped_data, ensure_ascii=False)}\n\n".encode('utf-8')
                         else:
@@ -365,8 +398,8 @@ async def stream_generate_content(
                         if "response" in data and "candidates" not in data:
                             log.debug(f"[GEMINICLI] 展开response包装")
                             unwrapped_data = data["response"]
-                            if isinstance(unwrapped_data, dict) and real_model != public_model:
-                                unwrapped_data["modelVersion"] = public_model
+                            if isinstance(unwrapped_data, dict):
+                                unwrapped_data["modelVersion"] = response_model
                             # 重新构建SSE格式
                             yield f"data: {json.dumps(unwrapped_data, ensure_ascii=False)}\n\n".encode('utf-8')
                         else:
@@ -382,18 +415,18 @@ async def stream_generate_content(
     # ========== 根据模式选择生成器 ==========
     if use_fake_streaming:
         return await build_streaming_response_or_error(
-            fake_stream_generator(), model=public_model, protocol="gemini",
+            fake_stream_generator(), model=response_model, protocol="gemini",
             client_request_id=client_request_id_from_headers(getattr(request, "headers", None)),
         )
     elif use_anti_truncation:
         log.info("启用流式抗截断功能")
         return await build_streaming_response_or_error(
-            anti_truncation_generator(), model=public_model, protocol="gemini",
+            anti_truncation_generator(), model=response_model, protocol="gemini",
             client_request_id=client_request_id_from_headers(getattr(request, "headers", None)),
         )
     else:
         return await build_streaming_response_or_error(
-            normal_stream_generator(), model=public_model, protocol="gemini",
+            normal_stream_generator(), model=response_model, protocol="gemini",
             client_request_id=client_request_id_from_headers(getattr(request, "headers", None)),
         )
 

@@ -1,5 +1,4 @@
 import asyncio
-import json
 from typing import Any, AsyncIterator
 
 from fastapi import Response
@@ -14,6 +13,7 @@ from src.streaming_latency import (
     current_stream_trace,
     reset_stream_trace,
 )
+from src.public_errors import render_public_error, render_public_sse_error
 
 
 def client_request_id_from_headers(headers: Any) -> str | None:
@@ -44,68 +44,6 @@ async def close_async_iterator(iterator: AsyncIterator[Any]) -> None:
         except Exception:
             # Closing is best-effort and must not replace the original failure.
             pass
-
-
-def _protocol_failure(
-    failure: StreamFailure,
-    *,
-    protocol: str,
-    model: str,
-) -> StreamFailure:
-    """Translate a pre-content Gemini error into the caller's HTTP protocol."""
-    source = None
-    if failure.body:
-        try:
-            parsed = json.loads(failure.body.decode("utf-8"))
-            if isinstance(parsed, dict):
-                source = parsed
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            pass
-    if source is None:
-        source = {
-            "error": {
-                "code": failure.status_code,
-                "message": failure.message,
-                "status": "DEADLINE_EXCEEDED" if failure.status_code == 504 else "UNAVAILABLE",
-            }
-        }
-
-    converted = source
-    try:
-        if protocol == "openai":
-            from src.converter.openai2gemini import convert_gemini_to_openai_response
-
-            converted = convert_gemini_to_openai_response(source, model, failure.status_code)
-        elif protocol == "anthropic":
-            from src.converter.anthropic2gemini import gemini_to_anthropic_response
-
-            converted = gemini_to_anthropic_response(source, model, failure.status_code)
-    except Exception:
-        if protocol == "anthropic":
-            converted = {
-                "type": "error",
-                "error": {"type": "api_error", "message": failure.message},
-            }
-        elif protocol == "openai":
-            converted = {
-                "error": {
-                    "message": failure.message,
-                    "type": "upstream_error",
-                    "code": failure.status_code,
-                }
-            }
-
-    headers = dict(failure.headers)
-    headers["content-type"] = "application/json"
-    return StreamFailure(
-        failure.message,
-        stage=failure.stage,
-        status_code=failure.status_code,
-        retryable=failure.retryable,
-        body=json.dumps(converted, ensure_ascii=False).encode("utf-8"),
-        headers=headers,
-        request_id=failure.request_id,
-    )
 
 
 async def build_streaming_response_or_error(
@@ -155,9 +93,9 @@ async def build_streaming_response_or_error(
                 retryable=exc.retryable,
             )
         trace.finish(f"error_{exc.stage}", force_log=True)
-        response = _protocol_failure(exc, protocol=protocol, model=model).to_response()
-        response.headers["X-Request-ID"] = trace.request_id
-        return response
+        return render_public_error(
+            exc, protocol=protocol, request_id=trace.request_id
+        )
     except TimeoutError:
         await close_async_iterator(iterator)
         failure = StreamFailure(
@@ -175,9 +113,9 @@ async def build_streaming_response_or_error(
             retryable=False,
         )
         trace.finish("error_first_content", force_log=True)
-        response = failure.to_response()
-        response.headers["X-Request-ID"] = trace.request_id
-        return response
+        return render_public_error(
+            failure, protocol=protocol, request_id=trace.request_id
+        )
     except Exception as exc:
         await close_async_iterator(iterator)
         failure = StreamFailure(
@@ -195,9 +133,9 @@ async def build_streaming_response_or_error(
             retryable=False,
         )
         trace.finish("error_preparing", force_log=True)
-        response = failure.to_response()
-        response.headers["X-Request-ID"] = trace.request_id
-        return response
+        return render_public_error(
+            failure, protocol=protocol, request_id=trace.request_id
+        )
     finally:
         reset_stream_trace(token)
 
@@ -209,48 +147,18 @@ async def build_streaming_response_or_error(
             stage="upstream_status",
             request_id=trace.request_id,
         )
-        response = _protocol_failure(failure, protocol=protocol, model=model).to_response()
-        response.headers["X-Request-ID"] = trace.request_id
-        return response
+        return render_public_error(
+            failure, protocol=protocol, request_id=trace.request_id
+        )
 
     trace.mark("first_content", phase=StreamPhase.CONTENT_EMITTED)
     trace.duration_since_mark("conversion", "first_upstream_at")
 
     async def _terminal_error(failure: StreamFailure) -> AsyncIterator[bytes]:
-        request_id = failure.request_id or trace.request_id
-        if protocol == "anthropic":
-            payload = {
-                "type": "error",
-                "error": {
-                    "type": "api_error",
-                    "message": failure.message,
-                    "request_id": request_id,
-                },
-            }
-            yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
-            return
-        if protocol == "gemini":
-            payload = {
-                "error": {
-                    "code": failure.status_code,
-                    "message": failure.message,
-                    "status": "DEADLINE_EXCEEDED"
-                    if failure.status_code == 504
-                    else "UNAVAILABLE",
-                    "request_id": request_id,
-                }
-            }
-        else:
-            payload = {
-                "error": {
-                    "code": failure.status_code,
-                    "message": failure.message,
-                    "type": "upstream_stream_error",
-                    "request_id": request_id,
-                }
-            }
-        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
-        yield b"data: [DONE]\n\n"
+        for item in render_public_sse_error(
+            failure, protocol=protocol, request_id=failure.request_id or trace.request_id
+        ):
+            yield item
 
     async def _guarded_stream() -> AsyncIterator[Any]:
         stream_token = bind_stream_trace(trace)

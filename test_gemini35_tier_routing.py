@@ -209,8 +209,59 @@ async def test_anthropic_route_normalizes_gemini_35_flash_alias(
         stream=False,
     )
 
-    await messages(request, token="test")
+    response = await messages(request, token="test")
     assert captured["model"] == upstream_model
+    public_payload = response.body.decode("utf-8")
+    assert "test" not in public_payload
+    assert upstream_model not in public_payload
+
+
+@pytest.mark.asyncio
+async def test_anthropic_success_hides_routed_model_alias(monkeypatch):
+    captured = {}
+
+    async def fake_non_stream_request(body, headers=None):
+        captured["model"] = body["model"]
+        return Response(
+            content=json.dumps(
+                {
+                    "response": {
+                        "candidates": [
+                            {
+                                "content": {
+                                    "role": "model",
+                                    "parts": [{"text": "ok"}],
+                                },
+                                "finishReason": "STOP",
+                            }
+                        ],
+                        "usageMetadata": {
+                            "promptTokenCount": 1,
+                            "candidatesTokenCount": 1,
+                            "totalTokenCount": 2,
+                        },
+                    }
+                }
+            ),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    monkeypatch.setattr(geminicli, "non_stream_request", fake_non_stream_request)
+    client_model = "gemini-3.5-flash-preview"
+    response = await messages(
+        ClaudeRequest(
+            model=client_model,
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=32,
+            stream=False,
+        ),
+        token="test",
+    )
+    payload = json.loads(response.body)
+    assert captured["model"] == "gemini-3-flash"
+    assert payload["model"] == client_model
+    assert "gemini-3-flash" not in response.body.decode("utf-8")
 
 
 def test_gemini_35_client_model_aliases_and_tiers():

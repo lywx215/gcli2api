@@ -73,10 +73,12 @@ class StreamLatencyConfig:
     first_content_timeout: float = 75.0
     idle_timeout: float = 90.0
     transport_max_attempts: int = 2
+    nonstream_transport_max_attempts: int = 2
     perf_log_sample_rate: float = 0.01
     guard_enabled: bool = True
     diagnostics_enabled: bool = False
     upstream_http2_enabled: bool = False
+    upstream_http2_client_max_age: float = 2700.0
     header_hedge_enabled: bool = False
     header_hedge_delay: float = 15.0
     header_hedge_max_inflight: int = 20
@@ -103,10 +105,16 @@ class StreamLatencyConfig:
             first_content_timeout=_env_float("STREAM_FIRST_CONTENT_TIMEOUT", 75.0),
             idle_timeout=_env_float("UPSTREAM_STREAM_IDLE_TIMEOUT", 90.0),
             transport_max_attempts=_env_int("STREAM_TRANSPORT_MAX_ATTEMPTS", 2, 1, 5),
+            nonstream_transport_max_attempts=_env_int(
+                "NONSTREAM_TRANSPORT_MAX_ATTEMPTS", 2, 1, 5
+            ),
             perf_log_sample_rate=min(1.0, _env_float("STREAM_PERF_LOG_SAMPLE_RATE", 0.01, 0.0)),
             guard_enabled=_env_bool("STREAM_LATENCY_GUARD_ENABLED", True),
             diagnostics_enabled=is_stream_diagnostics_enabled(),
             upstream_http2_enabled=_env_bool("UPSTREAM_HTTP2_ENABLED", False),
+            upstream_http2_client_max_age=_env_float(
+                "UPSTREAM_HTTP2_CLIENT_MAX_AGE", 2700.0, 0.0
+            ),
             header_hedge_enabled=is_geminicli_stream_header_hedge_enabled(),
             header_hedge_delay=_env_float(
                 "GEMINICLI_STREAM_HEADER_HEDGE_DELAY", 15.0
@@ -152,6 +160,8 @@ class StreamFailure(Exception):
         headers: Optional[Dict[str, str]] = None,
         request_id: Optional[str] = None,
         error_type: Optional[str] = None,
+        connection_invalidated: bool = False,
+        transport_generation: Optional[int] = None,
     ) -> None:
         super().__init__(message)
         self.message = message
@@ -162,6 +172,8 @@ class StreamFailure(Exception):
         self.headers = headers or {}
         self.request_id = request_id
         self.error_type = error_type
+        self.connection_invalidated = connection_invalidated
+        self.transport_generation = transport_generation
 
     @classmethod
     def from_response(
@@ -187,25 +199,11 @@ class StreamFailure(Exception):
         )
 
     def to_response(self) -> Response:
-        body = self.body
-        if body is None:
-            body = json.dumps(
-                {
-                    "error": {
-                        "code": self.status_code,
-                        "message": self.message,
-                        "status": "DEADLINE_EXCEEDED" if self.status_code == 504 else "UNAVAILABLE",
-                        "request_id": self.request_id,
-                    }
-                },
-                ensure_ascii=False,
-            ).encode("utf-8")
-        safe_headers = {
-            key: value
-            for key, value in self.headers.items()
-            if key.lower() in {"retry-after", "content-type"}
-        }
-        return Response(content=body, status_code=self.status_code, headers=safe_headers)
+        # Never expose ``body`` or provider headers here.  They are retained
+        # only for internal classification and diagnostics.
+        from src.public_errors import render_public_error
+
+        return render_public_error(self, protocol="gemini", request_id=self.request_id)
 
 
 def _default_hedge_trace() -> Dict[str, Any]:
@@ -351,6 +349,21 @@ class StreamRequestTrace:
         detail = self._attempt_detail(attempt)
         if detail is not None:
             detail["http_version"] = value
+
+    def set_attempt_transport_generation(
+        self, value: Optional[int], *, attempt: Optional[int] = None
+    ) -> None:
+        detail = self._attempt_detail(attempt)
+        if detail is not None and value is not None:
+            detail["transport_generation"] = value
+
+    def record_connection_invalidation(
+        self, reason: str, *, attempt: Optional[int] = None
+    ) -> None:
+        detail = self._attempt_detail(attempt)
+        if detail is not None:
+            detail["connection_invalidated"] = True
+            detail["invalidation_reason"] = reason
 
     def set_attempt_upstream_request_id(
         self, value: Optional[str], *, attempt: Optional[int] = None

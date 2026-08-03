@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import Response
 from log import log
 from src.converter.thoughtSignature_fix import decode_tool_id_and_signature
+from src.log_safety import safe_upstream_error_summary
 
 try:
     import wreq
@@ -483,9 +484,13 @@ def _process_object(obj: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Opti
             if _is_auth_error(err_msg):
                 return None, err_msg, False
             if _is_quota_error(err_msg):
-                log.warning(f"[VERTEX] upstream quota/429 error: {err_msg}")
+                summary = safe_upstream_error_summary(
+                    err_msg, status_code=429, reason="quota"
+                )
+                log.warning(f"[VERTEX] upstream quota/429 error: {summary}")
                 return None, None, True
-            log.warning(f"[VERTEX] upstream errors in result: {err_msg}")
+            summary = safe_upstream_error_summary(err_msg, reason="result_error")
+            log.warning(f"[VERTEX] upstream error: {summary}")
 
         data = result.get("data")
         if not isinstance(data, dict):
@@ -655,13 +660,13 @@ async def stream_request(
                 emulation=Emulation.Chrome131,
             )
         except Exception as e:
-            log.error(f"[VERTEX STREAM] wreq post exception: {e}")
+            log.error(f"[VERTEX STREAM] wreq post exception: {type(e).__name__}")
             if attempt < max_retries:
                 await asyncio.sleep(1 + attempt)
                 recaptcha_token = None
                 continue
             yield Response(
-                content=json.dumps({"error": {"code": 500, "message": str(e), "status": "INTERNAL"}}),
+                content=json.dumps({"error": {"code": 500, "message": "The upstream request failed.", "status": "INTERNAL"}}),
                 status_code=500,
                 media_type="application/json",
             )
@@ -706,7 +711,15 @@ async def stream_request(
                 await asyncio.sleep(1 + attempt)
                 continue
             yield Response(
-                content=err_body.encode("utf-8") if err_body else b"",
+                content=json.dumps(
+                    {
+                        "error": {
+                            "code": resp.status,
+                            "message": "The upstream service is temporarily unavailable.",
+                            "status": "UNAVAILABLE",
+                        }
+                    }
+                ).encode("utf-8"),
                 status_code=resp.status,
                 media_type="application/json",
             )
@@ -721,7 +734,9 @@ async def stream_request(
                         if raw_chunk:
                             buffer += raw_chunk
                             text = buffer.decode("utf-8", errors="replace")
-                            log.debug(f"[VERTEX STREAM] raw buffer: {text[:500]}")
+                            log.debug(
+                                f"[VERTEX STREAM] received buffer bytes={len(buffer)}"
+                            )
                             last_end = 0
                             for obj, end_pos in _parse_json_objects(text):
                                 last_end = end_pos
@@ -753,7 +768,7 @@ async def stream_request(
                             # 只保留未被成功解析的尾部
                             buffer = text[last_end:].encode("utf-8") if last_end < len(text) else b""
         except Exception as e:
-            log.error(f"[VERTEX STREAM] stream read error: {e}")
+            log.error(f"[VERTEX STREAM] stream read error: {type(e).__name__}")
             if not content_yielded and attempt < max_retries:
                 need_retry = True
 
@@ -834,12 +849,12 @@ async def non_stream_request(
                 emulation=Emulation.Chrome131,
             )
         except Exception as e:
-            log.error(f"[VERTEX NON-STREAM] wreq exception: {e}")
+            log.error(f"[VERTEX NON-STREAM] wreq exception: {type(e).__name__}")
             if attempt < max_retries:
                 await asyncio.sleep(1)
                 continue
             return Response(
-                content=json.dumps({"error": {"code": 500, "message": str(e), "status": "INTERNAL"}}),
+                content=json.dumps({"error": {"code": 500, "message": "The upstream request failed.", "status": "INTERNAL"}}),
                 status_code=500,
                 media_type="application/json",
             )
@@ -851,7 +866,8 @@ async def non_stream_request(
             raw_text = ""
 
         if status != 200:
-            log.error(f"[VERTEX NON-STREAM] HTTP {status}: {raw_text[:300]}")
+            summary = safe_upstream_error_summary(raw_text, status_code=status)
+            log.error(f"[VERTEX NON-STREAM] upstream error: {summary}")
             if _is_auth_error(raw_text) and attempt < max_retries:
                 await asyncio.sleep(1)
                 continue
@@ -863,7 +879,15 @@ async def non_stream_request(
                 await asyncio.sleep(2 + attempt)
                 continue
             return Response(
-                content=raw_text.encode("utf-8"),
+                content=json.dumps(
+                    {
+                        "error": {
+                            "code": status,
+                            "message": "The upstream service is temporarily unavailable.",
+                            "status": "UNAVAILABLE",
+                        }
+                    }
+                ).encode("utf-8"),
                 status_code=status,
                 media_type="application/json",
             )
@@ -871,7 +895,10 @@ async def non_stream_request(
         # 解析响应
         result = _build_non_stream_response(raw_text)
         if result is None:
-            log.error(f"[VERTEX NON-STREAM] parse failed: {raw_text[:300]}")
+            summary = safe_upstream_error_summary(
+                raw_text, status_code=200, reason="parse_failed"
+            )
+            log.error(f"[VERTEX NON-STREAM] parse failed: {summary}")
             if attempt < max_retries:
                 await asyncio.sleep(1)
                 continue
@@ -886,7 +913,7 @@ async def non_stream_request(
                 await asyncio.sleep(1)
                 continue
             return Response(
-                content=json.dumps({"error": {"code": 401, "message": result["auth_error"], "status": "UNAUTHENTICATED"}}),
+                content=json.dumps({"error": {"code": 401, "message": "Upstream authentication failed.", "status": "UNAUTHENTICATED"}}),
                 status_code=401,
                 media_type="application/json",
             )
@@ -896,7 +923,7 @@ async def non_stream_request(
                 log.warning(f"[VERTEX NON-STREAM] upstream 429, retry {attempt + 1}/{max_retries}")
                 continue  # 下一轮循环会重新 fetch_recaptcha_token
             return Response(
-                content=json.dumps({"error": {"code": 429, "message": result["quota_error"], "status": "RESOURCE_EXHAUSTED"}}),
+                content=json.dumps({"error": {"code": 429, "message": "The upstream service is temporarily unavailable.", "status": "RESOURCE_EXHAUSTED"}}),
                 status_code=429,
                 media_type="application/json",
             )
@@ -945,7 +972,8 @@ def _build_non_stream_response(raw_text: str) -> Optional[Dict[str, Any]]:
                     return {"auth_error": err_msg}
                 if _is_quota_error(err_msg):
                     return {"quota_error": err_msg}
-                log.warning(f"[VERTEX NON-STREAM] upstream error: {err_msg}")
+                summary = safe_upstream_error_summary(err_msg, reason="result_error")
+                log.warning(f"[VERTEX NON-STREAM] upstream error: {summary}")
                 continue
 
             data = result.get("data")

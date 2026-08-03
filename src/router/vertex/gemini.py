@@ -3,6 +3,8 @@ Vertex AI Router - Handles native Gemini format API requests via anonymous Verte
 通过匿名 Vertex AI 端点处理 Gemini 格式请求
 """
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from fastapi.responses import JSONResponse
 
@@ -11,6 +13,8 @@ from src.utils import authenticate_gemini_flexible
 from src.models import GeminiRequest, model_to_dict
 from src.router.hi_check import is_health_check_request, create_health_check_response
 from src.router.stream_passthrough import build_streaming_response_or_error
+from src.streaming_latency import StreamFailure
+from src.public_errors import render_public_error
 
 
 router = APIRouter()
@@ -43,8 +47,36 @@ async def generate_content(
 
     from src.api.vertex import non_stream_request
     response = await non_stream_request(body=api_request)
-
-    return response
+    if response.status_code != 200:
+        return render_public_error(
+            StreamFailure.from_response(response, stage="upstream_status"),
+            protocol="gemini",
+        )
+    try:
+        payload = json.loads(response.body)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        return render_public_error(
+            StreamFailure(
+                "Upstream response could not be processed",
+                stage="conversion",
+                status_code=500,
+                error_type=type(exc).__name__,
+            ),
+            protocol="gemini",
+        )
+    if isinstance(payload, dict):
+        target = payload.get("response") if isinstance(payload.get("response"), dict) else payload
+        target["modelVersion"] = model
+        return JSONResponse(content=target)
+    return render_public_error(
+        StreamFailure(
+            "Upstream response could not be processed",
+            stage="conversion",
+            status_code=500,
+            error_type="invalid_upstream_payload",
+        ),
+        protocol="gemini",
+    )
 
 
 @router.post("/vertex/v1beta/models/{model:path}:streamGenerateContent")
@@ -74,12 +106,34 @@ async def stream_generate_content(
 
         async for chunk in stream_request(body=api_request, native=False):
             if isinstance(chunk, Response):
-                yield chunk
-                return
+                raise StreamFailure.from_response(
+                    chunk, stage="upstream_status"
+                )
             if isinstance(chunk, (str, bytes)):
-                yield chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
+                chunk_str = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+                if chunk_str.strip() == "data: [DONE]":
+                    yield b"data: [DONE]\n\n"
+                    continue
+                if not chunk_str.startswith("data: "):
+                    yield chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
+                    continue
+                try:
+                    payload = json.loads(chunk_str[6:].strip())
+                except json.JSONDecodeError as exc:
+                    raise StreamFailure(
+                        "Upstream stream payload could not be parsed",
+                        stage="conversion",
+                        status_code=500,
+                        error_type=type(exc).__name__,
+                    ) from exc
+                if isinstance(payload, dict):
+                    target = payload.get("response") if isinstance(payload.get("response"), dict) else payload
+                    target["modelVersion"] = model
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
 
-    return await build_streaming_response_or_error(stream_generator())
+    return await build_streaming_response_or_error(
+        stream_generator(), model=model, protocol="gemini"
+    )
 
 
 @router.post("/vertex/v1beta/models/{model:path}:countTokens")

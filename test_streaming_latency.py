@@ -17,7 +17,11 @@ from src.credential_manager import CredentialManager, _CredentialManagerSingleto
 from src.google_oauth_api import Credentials, TokenError
 from src.hedge_stats import HedgeReservation
 from src.httpx_client import HttpxClientManager, stream_post_async
-from src.log_safety import credential_log_id, safe_exception
+from src.log_safety import (
+    credential_log_id,
+    safe_exception,
+    safe_upstream_error_summary,
+)
 from src.router.stream_passthrough import build_streaming_response_or_error
 from src.smart_429 import ModelCapacityGuard
 from src.storage.sqlite_manager import SQLiteManager
@@ -193,7 +197,8 @@ async def test_midstream_failure_emits_terminal_error_without_replay():
     payload = b"".join(chunks)
     assert calls == 1
     assert payload.count(b"once") == 1
-    assert b"upstream_stream_error" in payload
+    assert b'"code": "upstream_timeout"' in payload
+    assert b"upstream disconnected" not in payload
     assert payload.endswith(b"data: [DONE]\n\n")
 
 
@@ -208,7 +213,8 @@ async def test_anthropic_midstream_failure_uses_error_event_without_done():
     )
     payload = b"".join([chunk async for chunk in response.body_iterator])
     assert b"event: error\n" in payload
-    assert b"upstream disconnected" in payload
+    assert b"The service could not reach its upstream provider." in payload
+    assert b"upstream disconnected" not in payload
     assert b"[DONE]" not in payload
 
 
@@ -223,6 +229,7 @@ async def test_gemini_midstream_failure_uses_gemini_error_shape():
     )
     payload = b"".join([chunk async for chunk in response.body_iterator])
     assert b'"status": "DEADLINE_EXCEEDED"' in payload
+    assert b"upstream timed out" not in payload
     assert b'"type": "upstream_stream_error"' not in payload
     assert payload.endswith(b"data: [DONE]\n\n")
 
@@ -380,6 +387,37 @@ async def test_precontent_http_error_uses_protocol_native_shape(protocol, expect
     assert response.status_code == 503
     assert response.headers.get("x-request-id")
     assert expected in json.dumps(payload)
+    public_body = json.dumps(payload)
+    assert "upstream busy" not in public_body
+    assert '"busy"' not in public_body
+    assert '"model"' not in public_body
+
+
+@pytest.mark.asyncio
+async def test_upstream_auth_error_is_provider_neutral_and_preserves_safe_retry_after():
+    async def failed_stream():
+        raise StreamFailure(
+            "invalid provider token for gemini-internal",
+            stage="upstream_status",
+            status_code=401,
+            body=b'{"error":{"message":"invalid bearer secret"}}',
+            headers={"Retry-After": "17", "X-Goog-Request-Id": "private-id"},
+        )
+        yield b"unreachable"
+
+    response = await build_streaming_response_or_error(
+        failed_stream(), model="public-alias", protocol="openai"
+    )
+    payload = response.body.decode("utf-8")
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "17"
+    assert "invalid provider token" not in payload
+    assert "invalid bearer secret" not in payload
+    assert "gemini-internal" not in payload
+    assert "private-id" not in payload
+    assert "public-alias" not in payload
+    assert '"code": "upstream_unavailable"' in payload
 
 
 @pytest.mark.asyncio
@@ -489,6 +527,74 @@ async def test_proxy_change_drains_old_client_after_active_stream(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_invalidated_client_generation_drains_and_new_leases_move_on(monkeypatch):
+    async def no_proxy():
+        return None
+
+    monkeypatch.setattr(http_module, "get_proxy_config", no_proxy)
+    manager = HttpxClientManager()
+    async with manager.get_client() as old_client:
+        old_generation = manager.generation_for(old_client)
+        assert await manager.invalidate(old_client, "http2_connection_closed") is True
+        assert await manager.invalidate(old_client, "http2_connection_closed") is False
+        async with manager.get_client() as new_client:
+            assert new_client is not old_client
+            assert manager.generation_for(new_client) != old_generation
+            assert not old_client.is_closed
+    assert old_client.is_closed
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_http2_max_age_rotates_generation_without_closing_active_stream(
+    monkeypatch,
+):
+    async def no_proxy():
+        return None
+
+    monkeypatch.setattr(http_module, "get_proxy_config", no_proxy)
+    monkeypatch.setenv("UPSTREAM_HTTP2_ENABLED", "true")
+    monkeypatch.setenv("UPSTREAM_HTTP2_CLIENT_MAX_AGE", "1")
+    manager = HttpxClientManager()
+
+    async with manager.get_client() as old_client:
+        old_generation = manager.generation_for(old_client)
+        assert manager._current is not None
+        manager._current.created_at -= 2
+
+        async with manager.get_client() as new_client:
+            assert new_client is not old_client
+            assert manager.generation_for(new_client) != old_generation
+            assert not old_client.is_closed
+
+        assert not old_client.is_closed
+
+    assert old_client.is_closed
+    await manager.close()
+    assert new_client.is_closed
+
+
+def test_safe_upstream_summary_drops_provider_message_and_secrets():
+    original = json.dumps(
+        {
+            "error": {
+                "status": "RESOURCE_EXHAUSTED",
+                "message": "No capacity for gemini-internal token=secret",
+                "details": [{"reason": "MODEL_CAPACITY_EXHAUSTED"}],
+            }
+        }
+    )
+    summary = safe_upstream_error_summary(
+        original, status_code=429, reason="model_capacity"
+    )
+    assert "RESOURCE_EXHAUSTED" in summary
+    assert "MODEL_CAPACITY_EXHAUSTED" in summary
+    assert "No capacity" not in summary
+    assert "gemini-internal" not in summary
+    assert "secret" not in summary
+
+
+@pytest.mark.asyncio
 async def test_http2_change_creates_new_transport_generation(monkeypatch):
     async def no_proxy():
         return None
@@ -591,7 +697,7 @@ def test_oauth_permanent_failure_is_strict(message, status_code, expected):
 
 
 @pytest.mark.asyncio
-async def test_oauth_invalid_grant_body_is_preserved(monkeypatch):
+async def test_oauth_invalid_grant_signal_is_preserved_without_provider_body(monkeypatch):
     async def invalid_grant(*args, **kwargs):
         del args, kwargs
         request = httpx.Request("POST", "https://oauth.test/token")
@@ -607,6 +713,7 @@ async def test_oauth_invalid_grant_body_is_preserved(monkeypatch):
         await credentials.refresh()
     assert caught.value.status_code == 400
     assert "invalid_grant" in str(caught.value)
+    assert "expired" not in str(caught.value)
 
 
 @pytest.mark.asyncio

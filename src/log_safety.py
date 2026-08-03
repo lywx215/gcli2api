@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 from typing import Any, Optional
@@ -55,7 +56,44 @@ def safe_text(value: Any, *, limit: Optional[int] = 240) -> str:
     text = _CREDENTIAL_JSON_RE.sub(
         lambda match: f"credential:{credential_log_id(match.group(1))}", text
     )
+    text = re.sub(r"[\r\n\t]+", " ", text)
+    text = re.sub(r" {2,}", " ", text).strip()
     return text if limit is None else text[:limit]
+
+
+def safe_upstream_error_summary(
+    value: Any,
+    *,
+    status_code: Optional[int] = None,
+    reason: Optional[str] = None,
+) -> str:
+    """Return a one-line provider-neutral diagnostic summary, never its message."""
+    raw = str(value or "")
+    upstream_status: Optional[str] = None
+    reasons: list[str] = []
+    try:
+        payload = json.loads(raw)
+        error = payload.get("error", payload) if isinstance(payload, dict) else {}
+        if isinstance(error, dict):
+            candidate = error.get("status")
+            if isinstance(candidate, str):
+                upstream_status = safe_text(candidate, limit=64)
+            for detail in error.get("details", []) or []:
+                if not isinstance(detail, dict):
+                    continue
+                candidate = detail.get("reason")
+                if isinstance(candidate, str) and len(reasons) < 4:
+                    reasons.append(safe_text(candidate, limit=64))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+    summary = {
+        "status_code": status_code,
+        "reason": reason,
+        "upstream_status": upstream_status,
+        "error_reasons": reasons,
+        "body_hash": hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:12],
+    }
+    return json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
 
 
 def safe_exception(exc: BaseException, *, limit: int = 240) -> str:
