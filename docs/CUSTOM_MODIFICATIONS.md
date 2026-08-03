@@ -543,6 +543,7 @@ dev6/dev5 当前行为：
 | 2026-07-30 | `5a85e58` | `4f5e343` | 建立首份保护清单；只读预演发现 4 个文本冲突、8 个双方修改文件；未执行同步 |
 | 2026-07-30 | `origin/dev6@3c73782`，基于 `5a85e58` | 未同步上游 | 登记 30 个项目文件的 dev6 增量、API-05/API-06/AUTH-01/CORE-01/OPS-03；全量测试 `112 passed, 7 warnings` |
 | 2026-07-31 | `origin/dev6@7e7675b` | `upstream/master@4f5e343` | merge `d35471a`；人工解决 4 个文本冲突并复核 8 个双方修改文件；`185 passed, 7 warnings`；未推送 |
+| 2026-08-03 | `origin/dev6@8b7597e` | `upstream/master@3d0887f` | merge `b976047`；按自定义优先解决 3 个文本冲突和 1 个自动合并语义冲突；`201 passed, 7 warnings`；未推送 |
 
 ## 16. dev6 最新修改明细（相对 `origin/dev5`）
 
@@ -758,3 +759,18 @@ dev6 v1 明确没有实现以下行为，同步时不能以“优化”为名私
   fork 版本仍由 `GCLI2API_VERSION`、`GCLI2API_REVISION`、`GCLI2API_BUILD_DATE` 提供。
 - 本次完整决策、冲突证据、测试和未完成的 Docker CI 验证记录在
   `docs/UPSTREAM_SYNC_20260731.md`。
+
+## 18. 2026-08-03 上游同步新增保护决策
+
+- Antigravity 额外请求头只允许 trace、request ID 和 Google 客户端元数据白名单；调用方不得覆盖
+  `Authorization`、`User-Agent`、`Content-Type`、Host、Cookie 或代理认证信息。
+- Antigravity 请求包装使用深拷贝，不能修改路由传入的嵌套请求对象；已有 function-calling mode
+  必须保留，仅在缺失时补 `VALIDATED`。
+- 保留 Redis/内存会话状态、conversation/trajectory/step 递增及现有 request ID 格式。不得采用
+  上游无状态 UUID 实现，也不得添加 `Connection: close` 破坏共享连接池和 HTTP/2。
+- Antigravity 通用容量压力不写持久模型冷却，但明确 `QUOTA_EXHAUSTED` 或 reset 信息仍须保留；
+  不采用上游对所有 `RESOURCE_EXHAUSTED` 一律跳过的宽泛规则。
+- `ANTIGRAVITY_CLI_VERSION` 更新为 `1.1.9`；Gemini 3.5 正式版、Preview、别名、tier 路由和公开
+  模型回显继续以 fork 为准。
+- `version.txt` 记录已吸收的上游功能提交 `10b4918`；实际发布版本仍由 fork 构建元数据决定。
+- 完整冲突记录、取舍和验证结果见 `docs/UPSTREAM_SYNC_20260803.md`。
