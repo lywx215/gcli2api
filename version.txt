@@ -1,4 +1,4 @@
-full_hash=059d84739c1f5a120ba94be88176d8143057ecc3
-short_hash=059d847
-message=merge: integrate dev6 into master
-date=2026-07-31 21:32:02 +0800
+full_hash=f8497614c1a369c2ac1973be03dbcf1e631b32b8
+short_hash=f849761
+message=Merge remote-tracking branch 'origin/master'
+date=2026-08-03 18:06:22 +0800
