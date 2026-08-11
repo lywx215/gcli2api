@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import base64
 import binascii
+import asyncio
+import hashlib
+import json
 import math
 import os
 import time
+import weakref
 from datetime import datetime, timezone
 from typing import Any
 
@@ -14,6 +18,13 @@ from src.versioning import load_version_metadata
 from .auth import ManagementApiError
 from .schemas import (
     CapabilitiesResponse,
+    CredentialActionRequest,
+    CredentialActionResponse,
+    CredentialActionIdentity,
+    CredentialBatchActionItem,
+    CredentialBatchActionRequest,
+    CredentialBatchActionResponse,
+    CredentialBatchActionResult,
     CredentialListResponse,
     CredentialSummary,
     DailyStats,
@@ -22,12 +33,32 @@ from .schemas import (
     StatsCounts,
     StatsResponse,
     SummaryResponse,
+    SideEffect,
 )
 
 MODES = ("geminicli", "antigravity")
 WINDOWS = ("5m", "15m", "1h", "24h", "7d")
 GROUPS = ("node", "mode", "model")
 STARTED_AT = time.monotonic()
+IDEMPOTENCY_CONFIG_KEY = "management_idempotency_v1"
+IDEMPOTENCY_LIMIT = 5000
+_IDEMPOTENCY_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+    weakref.WeakValueDictionary()
+)
+_CREDENTIAL_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+    weakref.WeakValueDictionary()
+)
+_PERSISTENCE_LOCK = asyncio.Lock()
+
+
+def _keyed_lock(
+    locks: weakref.WeakValueDictionary[str, asyncio.Lock], key: str
+) -> asyncio.Lock:
+    lock = locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        locks[key] = lock
+    return lock
 
 
 def _utc_now() -> str:
@@ -164,6 +195,27 @@ class ManagementService:
             capabilities.append("stats.daily")
         if backend_type != "mongodb" and hasattr(backend, "get_today_stats_by_model"):
             capabilities.extend(("stats.model", "stats.rpm"))
+        if all(
+            hasattr(backend, name)
+            for name in (
+                "list_credentials",
+                "get_credential_state",
+                "update_credential_state",
+                "delete_credential",
+                "get_config",
+                "set_config",
+            )
+        ):
+            capabilities.extend(
+                (
+                    "credential.enable",
+                    "credential.disable",
+                    "credential.permanent_disable",
+                    "credential.delete",
+                    "credential.remark",
+                    "credential.batch_action",
+                )
+            )
         return sorted(set(capabilities))
 
     async def capabilities(self) -> CapabilitiesResponse:
@@ -413,6 +465,451 @@ class ManagementService:
             by_family=by_family,
             daily=daily,
         )
+
+    @staticmethod
+    def _validate_write_target(mode: str, filename: str) -> None:
+        if mode not in MODES:
+            raise ManagementApiError(
+                status_code=400,
+                code="INVALID_MODE",
+                message="Invalid credential mode",
+            )
+        if (
+            not filename
+            or len(filename) > 512
+            or filename in (".", "..")
+            or filename != os.path.basename(filename)
+            or not filename.endswith(".json")
+        ):
+            raise ManagementApiError(
+                status_code=400,
+                code="INVALID_ACTION",
+                message="Invalid credential filename",
+            )
+
+    @staticmethod
+    def _fingerprint(kind: str, payload: dict[str, object]) -> str:
+        serialized = json.dumps(
+            {"kind": kind, **payload},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    async def _idempotency_entry(self, storage, key: str) -> dict[str, object] | None:
+        values = await storage.get_config(IDEMPOTENCY_CONFIG_KEY, {})
+        if not isinstance(values, dict):
+            return None
+        entry = values.get(key)
+        return entry if isinstance(entry, dict) else None
+
+    async def _save_idempotency(
+        self, storage, key: str, entry: dict[str, object]
+    ) -> None:
+        async with _PERSISTENCE_LOCK:
+            values = await storage.get_config(IDEMPOTENCY_CONFIG_KEY, {})
+            records = dict(values) if isinstance(values, dict) else {}
+            records.pop(key, None)
+            while len(records) >= IDEMPOTENCY_LIMIT:
+                records.pop(next(iter(records)))
+            records[key] = entry
+            if not await storage.set_config(IDEMPOTENCY_CONFIG_KEY, records):
+                raise ManagementApiError(
+                    status_code=500,
+                    code="INTERNAL_ERROR",
+                    message="Could not persist idempotency state",
+                )
+
+    @staticmethod
+    def _stored_error(value: object) -> ManagementApiError | None:
+        if not isinstance(value, dict):
+            return None
+        status_code = value.get("status_code")
+        error = value.get("error")
+        if not isinstance(status_code, int) or not isinstance(error, dict):
+            return None
+        code = error.get("code")
+        message = error.get("message")
+        if not isinstance(code, str) or not isinstance(message, str):
+            return None
+        details = error.get("details")
+        return ManagementApiError(
+            status_code=status_code,
+            code=code,
+            message=message,
+            retryable=error.get("retryable") is True,
+            details=details if isinstance(details, dict) else {},
+        )
+
+    @staticmethod
+    async def _current_state(storage, mode: str, filename: str) -> tuple[bool, dict[str, object]]:
+        filenames = await storage.list_credentials(mode=mode)
+        exists = filename in {
+            os.path.basename(item)
+            for item in filenames
+            if isinstance(item, str)
+        }
+        if not exists:
+            return False, {}
+        state = await storage.get_credential_state(filename, mode=mode)
+        return True, state if isinstance(state, dict) else {}
+
+    @staticmethod
+    def _credential_status(state: dict[str, object]) -> str:
+        if state.get("permanent_disabled") is True:
+            return "permanent_disabled"
+        return "disabled" if state.get("disabled") is True else "enabled"
+
+    @classmethod
+    def _target_confirmed(
+        cls,
+        action: str,
+        parameters: dict[str, object],
+        exists: bool,
+        state: dict[str, object],
+    ) -> bool:
+        if action == "delete":
+            return not exists
+        if not exists:
+            return False
+        if action == "enable":
+            return cls._credential_status(state) == "enabled"
+        if action == "disable":
+            return cls._credential_status(state) == "disabled"
+        if action == "permanent_disable":
+            return cls._credential_status(state) == "permanent_disabled"
+        if action == "set_remark":
+            return state.get("remark", "") == parameters.get("remark")
+        return False
+
+    def _action_success(
+        self,
+        *,
+        mode: str,
+        filename: str,
+        action: str,
+        state: dict[str, object],
+        no_change: bool,
+    ) -> CredentialActionResponse:
+        return CredentialActionResponse(
+            **self._metadata(),
+            action=action,
+            no_change=no_change,
+            credential=CredentialActionIdentity(
+                mode=mode,
+                filename=filename,
+                status=None if action == "delete" else self._credential_status(state),
+            ),
+            side_effects=(
+                []
+                if no_change
+                else [SideEffect(kind="credential_state_updated", occurred=True)]
+            ),
+        )
+
+    @staticmethod
+    async def _apply_action(
+        storage,
+        *,
+        mode: str,
+        filename: str,
+        action: str,
+        parameters: dict[str, object],
+        state: dict[str, object],
+    ) -> None:
+        version = int(state.get("health_state_version", 0) or 0) + 1
+        if action == "enable":
+            updates: dict[str, object] = {
+                "disabled": False,
+                "permanent_disabled": False,
+            }
+            if mode == "geminicli":
+                updates.update(
+                    health_state_version=version,
+                    health_status="healthy",
+                    quarantine_reason=None,
+                    probe_stage=0,
+                    next_probe_at=None,
+                )
+            changed = await storage.update_credential_state(
+                filename, updates, mode=mode
+            )
+        elif action == "disable":
+            updates = {"disabled": True}
+            if mode == "geminicli":
+                updates["health_state_version"] = version
+            changed = await storage.update_credential_state(
+                filename, updates, mode=mode
+            )
+        elif action == "permanent_disable":
+            updates = {"disabled": True, "permanent_disabled": True}
+            if mode == "geminicli":
+                updates["health_state_version"] = version
+            changed = await storage.update_credential_state(
+                filename, updates, mode=mode
+            )
+        elif action == "set_remark":
+            changed = await storage.update_credential_state(
+                filename, {"remark": parameters["remark"]}, mode=mode
+            )
+        else:
+            if mode == "geminicli":
+                await storage.update_credential_state(
+                    filename, {"health_state_version": version}, mode=mode
+                )
+            changed = await storage.delete_credential(filename, mode=mode)
+        if not changed:
+            raise ManagementApiError(
+                status_code=500,
+                code="INTERNAL_ERROR",
+                message="Credential action failed",
+            )
+
+    async def execute_action(
+        self,
+        *,
+        mode: str,
+        filename: str,
+        request: CredentialActionRequest,
+    ) -> CredentialActionResponse:
+        self._validate_write_target(mode, filename)
+        storage = await self._storage()
+        backend = getattr(storage, "_backend", None)
+        capability = f"credential.{request.action if request.action != 'set_remark' else 'remark'}"
+        if capability not in self._read_capabilities(backend, storage.get_backend_type()):
+            raise ManagementApiError(
+                status_code=501,
+                code="CAPABILITY_NOT_SUPPORTED",
+                message="Credential action is unavailable",
+            )
+        fingerprint = self._fingerprint(
+            "action",
+            {
+                "mode": mode,
+                "filename": filename,
+                "action": request.action,
+                "parameters": request.parameters,
+            },
+        )
+        async with _keyed_lock(_IDEMPOTENCY_LOCKS, request.idempotency_key):
+            entry = await self._idempotency_entry(storage, request.idempotency_key)
+            if entry is not None and entry.get("fingerprint") != fingerprint:
+                raise ManagementApiError(
+                    status_code=409,
+                    code="CONFLICT",
+                    message="Idempotency key was used for a different request",
+                    retryable=True,
+                )
+            stored_result = entry.get("result") if entry is not None else None
+            if isinstance(stored_result, dict):
+                return CredentialActionResponse.model_validate(stored_result)
+            stored_error = self._stored_error(
+                entry.get("error") if entry is not None else None
+            )
+            if stored_error is not None:
+                raise stored_error
+            recovering = entry is not None
+            if entry is None:
+                await self._save_idempotency(
+                    storage,
+                    request.idempotency_key,
+                    {"fingerprint": fingerprint, "state": "pending"},
+                )
+            credential_key = f"{mode}:{filename}"
+            async with _keyed_lock(_CREDENTIAL_LOCKS, credential_key):
+                exists, state = await self._current_state(storage, mode, filename)
+                if recovering and self._target_confirmed(
+                    request.action, request.parameters, exists, state
+                ):
+                    response = self._action_success(
+                        mode=mode,
+                        filename=filename,
+                        action=request.action,
+                        state=state,
+                        no_change=True,
+                    )
+                else:
+                    if not exists:
+                        error = ManagementApiError(
+                            status_code=404,
+                            code="CREDENTIAL_NOT_FOUND",
+                            message="Credential was not found",
+                        )
+                        await self._save_idempotency(
+                            storage,
+                            request.idempotency_key,
+                            {
+                                "fingerprint": fingerprint,
+                                "state": "completed",
+                                "error": {
+                                    "status_code": error.status_code,
+                                    **error.payload,
+                                },
+                            },
+                        )
+                        raise error
+                    if request.action == "disable" and state.get("permanent_disabled") is True:
+                        error = ManagementApiError(
+                            status_code=409,
+                            code="CONFLICT",
+                            message="Permanently disabled credential must be enabled explicitly",
+                            retryable=True,
+                        )
+                        await self._save_idempotency(
+                            storage,
+                            request.idempotency_key,
+                            {
+                                "fingerprint": fingerprint,
+                                "state": "completed",
+                                "error": {
+                                    "status_code": error.status_code,
+                                    **error.payload,
+                                },
+                            },
+                        )
+                        raise error
+                    no_change = self._target_confirmed(
+                        request.action, request.parameters, exists, state
+                    )
+                    if not no_change:
+                        await self._apply_action(
+                            storage,
+                            mode=mode,
+                            filename=filename,
+                            action=request.action,
+                            parameters=request.parameters,
+                            state=state,
+                        )
+                        exists, state = await self._current_state(storage, mode, filename)
+                        if not self._target_confirmed(
+                            request.action, request.parameters, exists, state
+                        ):
+                            raise ManagementApiError(
+                                status_code=500,
+                                code="INTERNAL_ERROR",
+                                message="Credential action readback failed",
+                            )
+                    response = self._action_success(
+                        mode=mode,
+                        filename=filename,
+                        action=request.action,
+                        state=state,
+                        no_change=no_change,
+                    )
+            await self._save_idempotency(
+                storage,
+                request.idempotency_key,
+                {
+                    "fingerprint": fingerprint,
+                    "state": "completed",
+                    "result": response.model_dump(mode="json"),
+                },
+            )
+            return response
+
+    async def _batch_item(
+        self, item: CredentialBatchActionItem
+    ) -> CredentialBatchActionResult:
+        try:
+            response = await self.execute_action(
+                mode=item.mode,
+                filename=item.filename,
+                request=CredentialActionRequest(
+                    action=item.action,
+                    parameters=item.parameters,
+                    idempotency_key=item.idempotency_key,
+                ),
+            )
+            return CredentialBatchActionResult(
+                mode=item.mode,
+                filename=item.filename,
+                action=item.action,
+                status="succeeded",
+                no_change=response.no_change,
+                credential_status=response.credential.status,
+                error=None,
+                side_effects=response.side_effects,
+            )
+        except ManagementApiError as exc:
+            detail = exc.payload["error"]
+            return CredentialBatchActionResult(
+                mode=item.mode,
+                filename=item.filename,
+                action=item.action,
+                status="failed",
+                no_change=False,
+                credential_status=None,
+                error=detail,
+                side_effects=[],
+            )
+        except Exception:
+            return CredentialBatchActionResult(
+                mode=item.mode,
+                filename=item.filename,
+                action=item.action,
+                status="failed",
+                no_change=False,
+                credential_status=None,
+                error={
+                    "code": "INTERNAL_ERROR",
+                    "message": "Credential action failed",
+                    "retryable": False,
+                    "details": {},
+                },
+                side_effects=[],
+            )
+
+    async def execute_batch(
+        self, request: CredentialBatchActionRequest
+    ) -> CredentialBatchActionResponse:
+        fingerprint = self._fingerprint(
+            "batch",
+            {
+                "items": [item.model_dump(mode="json") for item in request.items],
+            },
+        )
+        storage = await self._storage()
+        async with _keyed_lock(_IDEMPOTENCY_LOCKS, request.idempotency_key):
+            entry = await self._idempotency_entry(storage, request.idempotency_key)
+            if entry is not None and entry.get("fingerprint") != fingerprint:
+                raise ManagementApiError(
+                    status_code=409,
+                    code="CONFLICT",
+                    message="Idempotency key was used for a different request",
+                    retryable=True,
+                )
+            stored_result = entry.get("result") if entry is not None else None
+            if isinstance(stored_result, dict):
+                return CredentialBatchActionResponse.model_validate(stored_result)
+            if entry is None:
+                await self._save_idempotency(
+                    storage,
+                    request.idempotency_key,
+                    {"fingerprint": fingerprint, "state": "pending"},
+                )
+            results = list(await asyncio.gather(*(self._batch_item(item) for item in request.items)))
+            succeeded = sum(item.status == "succeeded" for item in results)
+            status = (
+                "succeeded"
+                if succeeded == len(results)
+                else "failed"
+                if succeeded == 0
+                else "partially_succeeded"
+            )
+            response = CredentialBatchActionResponse(
+                **self._metadata(), status=status, results=results
+            )
+            await self._save_idempotency(
+                storage,
+                request.idempotency_key,
+                {
+                    "fingerprint": fingerprint,
+                    "state": "completed",
+                    "result": response.model_dump(mode="json"),
+                },
+            )
+            return response
 
 
 management_service = ManagementService()

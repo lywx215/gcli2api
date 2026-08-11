@@ -14,6 +14,10 @@ from .auth import (
 )
 from .schemas import (
     CapabilitiesResponse,
+    CredentialActionRequest,
+    CredentialActionResponse,
+    CredentialBatchActionRequest,
+    CredentialBatchActionResponse,
     CredentialListResponse,
     ErrorResponse,
     StatsResponse,
@@ -24,6 +28,10 @@ from .service import ManagementService, get_management_service
 ERROR_RESPONSES = {
     400: {"model": ErrorResponse},
     401: {"model": ErrorResponse},
+    404: {"model": ErrorResponse},
+    409: {"model": ErrorResponse},
+    429: {"model": ErrorResponse},
+    502: {"model": ErrorResponse},
     501: {"model": ErrorResponse},
     503: {"model": ErrorResponse},
     500: {"model": ErrorResponse},
@@ -106,6 +114,34 @@ async def stats(
     group_by: str = "model",
 ) -> StatsResponse:
     return await service.stats(mode=mode, window=window, group_by=group_by)
+
+
+@router.post(
+    "/credentials/{mode}/{filename}/actions",
+    response_model=CredentialActionResponse,
+    responses=ERROR_RESPONSES,
+)
+async def credential_action(
+    mode: str,
+    filename: str,
+    payload: CredentialActionRequest,
+    service: Annotated[ManagementService, Depends(get_management_service)],
+) -> CredentialActionResponse:
+    return await service.execute_action(
+        mode=mode, filename=filename, request=payload
+    )
+
+
+@router.post(
+    "/credentials/batch-actions",
+    response_model=CredentialBatchActionResponse,
+    responses=ERROR_RESPONSES,
+)
+async def credential_batch_action(
+    payload: CredentialBatchActionRequest,
+    service: Annotated[ManagementService, Depends(get_management_service)],
+) -> CredentialBatchActionResponse:
+    return await service.execute_batch(payload)
 
 
 @router.api_route(

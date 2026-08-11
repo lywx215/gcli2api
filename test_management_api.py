@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 from src.management.router import install_management_api
 from src.management.schemas import (
     CapabilitiesResponse,
+    CredentialActionResponse,
+    CredentialBatchActionResponse,
     CredentialListResponse,
     PageInfo,
     StatsCounts,
@@ -67,6 +69,34 @@ class FakeManagementService:
             totals=StatsCounts(success=None, failure=None, total=None, rpm=None),
             by_family={},
             daily=[],
+        )
+
+    async def execute_action(self, *, mode, filename, request) -> CredentialActionResponse:
+        return CredentialActionResponse(
+            **self.metadata,
+            action=request.action,
+            no_change=False,
+            credential={"mode": mode, "filename": filename, "status": "disabled"},
+            side_effects=[],
+        )
+
+    async def execute_batch(self, request) -> CredentialBatchActionResponse:
+        return CredentialBatchActionResponse(
+            **self.metadata,
+            status="succeeded",
+            results=[
+                {
+                    "mode": item.mode,
+                    "filename": item.filename,
+                    "action": item.action,
+                    "status": "succeeded",
+                    "no_change": False,
+                    "credential_status": "disabled",
+                    "error": None,
+                    "side_effects": [],
+                }
+                for item in request.items
+            ],
         )
 
 
@@ -138,3 +168,84 @@ def test_legacy_routes_remain_registered() -> None:
     paths = set(app.openapi()["paths"])
     assert "/version/info" in paths
     assert "/creds/status" in paths
+
+
+def test_management_action_and_batch_responses_are_contract_shaped(monkeypatch) -> None:
+    monkeypatch.setenv("NODE_MANAGEMENT_TOKEN", "fixture-management-token")
+    client = build_client()
+    headers = {"Authorization": "Bearer fixture-management-token"}
+
+    single = client.post(
+        "/management/v1/credentials/geminicli/credential.json/actions",
+        headers=headers,
+        json={
+            "action": "disable",
+            "parameters": {},
+            "idempotency_key": "item-key-0001",
+        },
+    )
+    batch = client.post(
+        "/management/v1/credentials/batch-actions",
+        headers=headers,
+        json={
+            "idempotency_key": "batch-key-0001",
+            "items": [
+                {
+                    "mode": "geminicli",
+                    "filename": "credential.json",
+                    "action": "disable",
+                    "parameters": {},
+                    "idempotency_key": "item-key-0002",
+                }
+            ],
+        },
+    )
+
+    assert single.status_code == 200
+    assert single.json()["credential"]["status"] == "disabled"
+    assert batch.status_code == 200
+    assert batch.json()["results"][0]["status"] == "succeeded"
+    assert single.headers["cache-control"] == "no-store"
+
+
+def test_management_write_validation_is_strict_and_secret_safe(monkeypatch) -> None:
+    monkeypatch.setenv("NODE_MANAGEMENT_TOKEN", "fixture-management-token")
+    client = build_client()
+    response = client.post(
+        "/management/v1/credentials/geminicli/credential.json/actions",
+        headers={"Authorization": "Bearer fixture-management-token"},
+        json={
+            "action": "disable",
+            "parameters": {"token": "must-not-be-echoed"},
+            "idempotency_key": "item-key-0003",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ACTION"
+    assert "must-not-be-echoed" not in response.text
+
+
+def test_management_batch_is_limited_to_one_hundred_items(monkeypatch) -> None:
+    monkeypatch.setenv("NODE_MANAGEMENT_TOKEN", "fixture-management-token")
+    client = build_client()
+    response = client.post(
+        "/management/v1/credentials/batch-actions",
+        headers={"Authorization": "Bearer fixture-management-token"},
+        json={
+            "idempotency_key": "batch-key-too-large",
+            "items": [
+                {
+                    "mode": "geminicli",
+                    "filename": f"credential-{index}.json",
+                    "action": "disable",
+                    "parameters": {},
+                    "idempotency_key": f"item-key-{index:04d}",
+                }
+                for index in range(101)
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ACTION"
