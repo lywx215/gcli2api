@@ -1299,7 +1299,7 @@ class MongoDBManager:
                     "filename": doc["filename"],
                     "disabled": doc.get("disabled", False),
                     "error_codes": doc.get("error_codes", []),
-                    "last_success": doc.get("last_success", current_time),
+                    "last_success": doc.get("last_success"),
                     "user_email": doc.get("user_email"),
                     "rotation_order": doc.get("rotation_order", 0),
                     "model_cooldowns": active_cooldowns,

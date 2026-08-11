@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0",
+  "delivery_id": "MGMT-004-G-1",
+  "work_item": "MGMT-004",
+  "source_repository": "lywx215/gcli2api",
+  "status": "ready",
+  "execution_policy": {
+    "mode": "queue_only",
+    "max_automatic_runs": 0
+  },
+  "summary": "gcli2api Management schema 1.0 read provider is ready for the manager compatibility matrix. Independent token authentication, truthful capabilities, summary, paginated credential metadata, stats, UTC/null handling, strict field whitelisting, OpenAPI baseline, Legacy regressions, and a non-published amd64/arm64 candidate build have passed.",
+  "contract_sha256": "fcd8dab6607d437b8af5332f3bbfe011cc12e8346c21e2bc2594cfce0360a2e6",
+  "capabilities_added": [
+    "node.summary",
+    "credential.list",
+    "stats.daily",
+    "stats.model",
+    "stats.rpm"
+  ],
+  "capabilities_removed": [],
+  "compatibility": "The default-disabled router is independent from API and panel passwords. SQLite and PostgreSQL declare all five read capabilities; MySQL and MongoDB declare only node.summary and credential.list because unsupported statistics remain undeclared. Legacy routes remain registered. No write or external-side-effect capability is present.",
+  "tests": [
+    "Windows Python 3.12: 74 tests passed, including real temporary SQLite, both modes, authentication, pagination, nullable UTC metadata, capability truthfulness, Legacy route registration, and sensitive-field exclusion",
+    "PR #8 gcli2api-ci passed on Python 3.13; OpenAPI baseline and sensitive-literal gates passed",
+    "PR #8 Docker run 31519184271 built linux/amd64 and linux/arm64 tags pr-8 and sha-68f6de1 with registry login skipped and push=false",
+    "Compile and Git whitespace checks passed; no image was published and no environment was deployed"
+  ],
+  "artifacts": [
+    "src/management",
+    "docs/openapi/management-v1.openapi.json",
+    "docs/delivery/MGMT-004-gcli-provider.md",
+    "test_management_api.py",
+    "test_management_service.py",
+    "test_management_openapi.py",
+    "https://github.com/lywx215/gcli2api/pull/8",
+    "https://github.com/lywx215/gcli2api/actions/runs/31519184271"
+  ],
+  "next_actions": [
+    "On the latest gcli2api-manager main, consume the merged dev7 provider contract and run the final Modern schema 1.0 candidate compatibility matrix without production nodes or credentials.",
+    "Re-run Legacy Current, Legacy Minimal, and Unknown fixtures beside the Modern complete, partial, additive, malformed, future-minor, future-major, missing-capability, and 401 cases.",
+    "Verify that the manager calls only declared capabilities, never falls back after 401/403, preserves nullable unknowns, and excludes sensitive fields from database, logs, API, and browser output.",
+    "Close MGMT-004 only after the manager matrix PR is green and merged; do not publish or deploy the build-only candidate image."
+  ],
+  "generated_at": "2026-08-11T17:48:03Z"
+}

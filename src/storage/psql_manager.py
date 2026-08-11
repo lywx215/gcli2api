@@ -957,7 +957,7 @@ class PSQLManager:
                         "disabled": bool(row["disabled"]),
                         "permanent_disabled": bool(row["permanent_disabled"]),
                         "error_codes": error_codes,
-                        "last_success": row["last_success"] or current_time,
+                        "last_success": row["last_success"],
                         "user_email": row["user_email"],
                         "rotation_order": row["rotation_order"],
                         "model_cooldowns": active_cooldowns,

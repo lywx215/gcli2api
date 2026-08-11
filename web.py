@@ -32,6 +32,7 @@ from src.router.vertex.model_list import router as vertex_model_list_router
 from src.task_manager import shutdown_all_tasks
 from src.panel import router as panel_router
 from src.keeplive import keepalive_service
+from src.management import install_management_api
 
 # 全局凭证管理器
 global_credential_manager = None
@@ -169,6 +170,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 独立、默认关闭的节点 Management API；不复用面板或普通 API 密码。
+install_management_api(app)
 
 # 挂载路由器
 # OpenAI兼容路由 - 处理OpenAI格式请求
