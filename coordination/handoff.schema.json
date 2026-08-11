@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/lywx215/gcli2api/blob/main/coordination/handoff.schema.json",
+  "title": "gcli2api cross-repository handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "delivery_id",
+    "work_item",
+    "source_repository",
+    "status",
+    "execution_policy",
+    "summary",
+    "contract_sha256",
+    "capabilities_added",
+    "capabilities_removed",
+    "compatibility",
+    "tests",
+    "next_actions",
+    "generated_at"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "delivery_id": {
+      "type": "string",
+      "pattern": "^MGMT-[0-9]{3,}-[GM]-[0-9]+$"
+    },
+    "work_item": {
+      "type": "string",
+      "pattern": "^MGMT-[0-9]{3,}$"
+    },
+    "source_repository": {
+      "enum": ["lywx215/gcli2api", "lywx215/gcli2api-manager"]
+    },
+    "status": {
+      "enum": ["ready", "blocked", "no_counterpart_action"]
+    },
+    "execution_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "max_automatic_runs"],
+      "properties": {
+        "mode": { "const": "queue_only" },
+        "max_automatic_runs": { "const": 0 }
+      }
+    },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "contract_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9A-Fa-f]{64}$"
+    },
+    "capabilities_added": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "capabilities_removed": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "compatibility": { "type": "string", "maxLength": 4000 },
+    "tests": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 100
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 50,
+      "default": []
+    },
+    "next_actions": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "maxItems": 50
+    },
+    "generated_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    }
+  }
+}

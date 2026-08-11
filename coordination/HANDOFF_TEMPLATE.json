@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "delivery_id": "MGMT-001-G-1",
+  "work_item": "MGMT-001",
+  "source_repository": "lywx215/gcli2api",
+  "status": "ready",
+  "execution_policy": {
+    "mode": "queue_only",
+    "max_automatic_runs": 0
+  },
+  "summary": "说明本仓库已经完成的内容以及为什么需要另一仓库继续处理。",
+  "contract_sha256": null,
+  "capabilities_added": [],
+  "capabilities_removed": [],
+  "compatibility": "说明Legacy、当前稳定版和候选版本的兼容结果。",
+  "tests": [],
+  "artifacts": [],
+  "next_actions": [
+    "说明目标仓库可以直接执行和验收的下一步。"
+  ],
+  "generated_at": "2026-08-10T00:00:00Z"
+}

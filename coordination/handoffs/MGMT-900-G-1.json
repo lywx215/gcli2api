@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "delivery_id": "MGMT-900-G-1",
+  "work_item": "MGMT-900",
+  "source_repository": "lywx215/gcli2api",
+  "status": "no_counterpart_action",
+  "execution_policy": {
+    "mode": "queue_only",
+    "max_automatic_runs": 0
+  },
+  "summary": "验证gcli2api到gcli2api-manager的自动handoff投递、幂等Issue和零模型调用策略。",
+  "contract_sha256": "9FFC27CD8F3DD3965650839BA27D056F31F77CB98C0D0165C9D95DDA7F314F23",
+  "capabilities_added": [],
+  "capabilities_removed": [],
+  "compatibility": "仅验证GitHub控制面，不访问节点、不修改SQLite、不执行凭证操作。",
+  "tests": [
+    "目标仓库应创建codex-record-only Issue并自动关闭。",
+    "投递过程不得调用Codex或其他OpenAI模型。"
+  ],
+  "artifacts": [],
+  "next_actions": [
+    "仅确认自动交接链路可用，不实施任何业务变更。"
+  ],
+  "generated_at": "2026-08-11T02:39:54Z"
+}
