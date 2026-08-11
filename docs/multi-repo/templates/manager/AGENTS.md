@@ -4,9 +4,10 @@
 前，必须依次阅读：
 
 1. `docs/multi-repo/COORDINATION_SPEC.md`
-2. `docs/multi-repo/MANAGEMENT_API_CONTRACT.md`
-3. `docs/multi-repo/MANAGER_CODEX_GUIDE.md`
-4. `docs/multi-repo/AUTOMATED_HANDOFF.md`
+2. `docs/multi-repo/IMPLEMENTATION_ROADMAP.md`
+3. `docs/multi-repo/MANAGEMENT_API_CONTRACT.md`
+4. `docs/multi-repo/MANAGER_CODEX_GUIDE.md`
+5. `docs/multi-repo/AUTOMATED_HANDOFF.md`
 
 ## 必须遵守
 
@@ -30,6 +31,9 @@
 - 桌面端App与manager任务、业务、数据库和发布完全独立；不得引入桌面端同步或共享逻辑。
 - new-api本阶段不得接入、读取或修改；只能保留通用的只读健康和容量输出。
 - 任何Management API契约变更必须关联gcli2api仓库的同编号工作项。
+- 任何`MGMT-*`实现必须已在`IMPLEMENTATION_ROADMAP.md`中定义目标、依赖、范围、排除项、
+  验收和回滚；仅有分支或Issue标题不得开始编码，也不得跳过未完成门禁。
+- GitHub Issue只跟踪路线图工作项的状态和证据，不得通过Issue评论静默改变路线图范围。
 - 开始`MGMT-*`任务时，如GitHub访问可用，必须先检查本仓库打开的`codex-ready`交接
   Issue，并只执行其中属于当前工作项的`next_actions`。
 - 自动handoff只允许`queue_only`且自动运行次数为0；不得建立定时Codex轮询，也不得因
@@ -45,6 +49,8 @@
 - `SHOW GRANTS`证明manager数据库账号没有跨库或全局权限，且单管理员登录、会话安全和
   登录限流验证通过。
 - 交付说明列出支持矩阵、schema兼容性、迁移、测试、灰度和回滚。
+- 当前工作项状态和路线图门禁证据已更新；只把依赖满足的下一项标记为`ready`，不得自动
+  启动下一工作项。
 - 需要gcli2api继续处理时，必须在`coordination/handoffs/`生成符合schema的新交接JSON；
   其中`execution_policy`保持`queue_only`；禁止要求用户人工复制交接块。无需对端动作时
   使用`no_counterpart_action`只记录。

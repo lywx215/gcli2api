@@ -9,6 +9,9 @@
 亮色、暗色或跟随系统；桌面端保持独立，不共享数据库、账号或`servers`表，也不属于
 本阶段范围。
 
+完整实施顺序使用`implementation-roadmap-1.0`，预先定义MGMT-001至MGMT-010，禁止只
+根据当前分支或上一任务临时决定下一步。
+
 适用仓库：`gcli2api`、`gcli2api-manager`
 
 ## 文档目的
@@ -23,13 +26,14 @@ Zeabur上的多个gcli2api版本。文档同时服务于：
 ## 阅读顺序
 
 1. [协作与交付规范](./COORDINATION_SPEC.md)
-2. [Management API契约](./MANAGEMENT_API_CONTRACT.md)
-3. [gcli2api端Codex实施指南](./GCLI2API_CODEX_GUIDE.md)
-4. [manager端Codex实施指南](./MANAGER_CODEX_GUIDE.md)
-5. [第三方Review指南](./REVIEW_GUIDE.md)
-6. [双仓库自动交接](./AUTOMATED_HANDOFF.md)
-7. [第三方Review原文](./MULTI_REPO_SPEC_REVIEW.md)
-8. [Review意见处理记录](./REVIEW_RESOLUTION.md)
+2. [完整实施路线图](./IMPLEMENTATION_ROADMAP.md)
+3. [Management API契约](./MANAGEMENT_API_CONTRACT.md)
+4. [gcli2api端Codex实施指南](./GCLI2API_CODEX_GUIDE.md)
+5. [manager端Codex实施指南](./MANAGER_CODEX_GUIDE.md)
+6. [第三方Review指南](./REVIEW_GUIDE.md)
+7. [双仓库自动交接](./AUTOMATED_HANDOFF.md)
+8. [第三方Review原文](./MULTI_REPO_SPEC_REVIEW.md)
+9. [Review意见处理记录](./REVIEW_RESOLUTION.md)
 
 ## 如何放入两个仓库
 
@@ -47,6 +51,7 @@ manager仓库已经建立。两个仓库各自保留协作文档和`AGENTS.md`�
 
 - `MANAGEMENT_API_CONTRACT.md`是HTTP协议的规范性来源。
 - `COORDINATION_SPEC.md`是跨仓库流程和兼容策略的规范性来源。
+- `IMPLEMENTATION_ROADMAP.md`是工作项范围、依赖、门禁和验收的规范性来源。
 - 两份Codex指南是仓库执行约束，不得覆盖前两份规范。
 - Review通过前，所有文件均视为Draft，不应用于生产自动写操作。
 - 跨仓库任务交接必须使用自动handoff，不得要求用户手工复制交付块。
