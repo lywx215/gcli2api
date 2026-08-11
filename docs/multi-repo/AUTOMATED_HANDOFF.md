@@ -26,7 +26,7 @@ GitHub Issue是持久交接队列。相同`delivery_id`重复投递只更新同�
 
 1. 以`coordination/HANDOFF_TEMPLATE.json`为模板；
 2. 在`coordination/handoffs/`创建新的、不可覆盖的JSON；
-3. 使用双方相同的`MGMT-*`工作项；
+3. 使用双方相同且已在`IMPLEMENTATION_ROADMAP.md`定义的`MGMT-*`工作项；
 4. 填写契约SHA-256、capability变化、测试及精确`next_actions`；
 5. 将范围外发现写入`status=no_counterpart_action`的独立交接，或只写入已知问题；
 6. 在结束任务前验证JSON且确认无敏感信息。
@@ -38,6 +38,9 @@ GitHub Issue是持久交接队列。相同`delivery_id`重复投递只更新同�
 
 Codex不得修改`execution_policy`绕过零自动运行限制。若未来启用模型事件执行，必须升级
 schema、单独Review成本和安全边界，并在两个仓库同步修改。
+
+handoff只能推进路线图已定义的对端动作，不能通过`summary`或`next_actions`增加新范围、
+跳过依赖或提前启动后续工作项。路线图范围需要变化时，必须先完成双仓文档Review。
 
 文件命名：
 

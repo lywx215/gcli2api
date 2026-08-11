@@ -2,7 +2,7 @@
 
 状态：**Draft for Review**
 
-规范版本：`coordination-1.1`
+规范版本：`coordination-1.2`
 
 ## 1. 目标和边界
 
@@ -103,6 +103,14 @@ Fixture匹配，不是能力判断的唯一依据。
 ## 5. 跨仓库工作项流程
 
 跨仓库工作项使用统一编号，例如`MGMT-012`。
+
+`IMPLEMENTATION_ROADMAP.md`是`MGMT-*`目标、依赖、范围、排除项、门禁和验收的权威
+来源。GitHub Issue只跟踪状态和证据，PR只交付已定义范围，handoff只投递已审核的对端
+动作。仅创建分支、Issue标题或handoff不得替代完整工作项定义。
+
+开始编码前必须满足路线图中的Definition of Ready：工作项已定义、依赖已完成、输入和
+测试条件已具备、目标仓库与分支基线明确、回滚方式可执行。任何一项不满足时只能标记
+`planned`或`blocked`，不得边实现边决定总体方案。
 
 标准顺序：
 
@@ -275,4 +283,5 @@ Fixture不得包含真实邮箱、文件名、project ID、Token或管理密码�
 - 灰度、监控和回滚步骤明确；
 - 两个仓库的变更说明互相引用。
 - 两仓库中的`COORDINATION_SPEC.md`和`MANAGEMENT_API_CONTRACT.md` SHA-256一致。
+- 两仓库中的`IMPLEMENTATION_ROADMAP.md` SHA-256一致，当前工作项未偏离其范围和门禁。
 - 对端仍有动作时已生成并成功投递自动handoff；禁止把人工复制作为完成步骤。
