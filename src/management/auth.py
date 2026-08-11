@@ -33,11 +33,7 @@ class ManagementApiError(Exception):
         }
 
 
-async def require_management_token(
-    authorization: Annotated[
-        HTTPAuthorizationCredentials | None, Depends(management_bearer)
-    ],
-) -> None:
+def validate_management_token(scheme: str | None, supplied: str | None) -> None:
     configured = os.getenv("NODE_MANAGEMENT_TOKEN", "").strip()
     if not configured:
         raise ManagementApiError(
@@ -46,13 +42,26 @@ async def require_management_token(
             message="Management API is disabled",
         )
     if (
-        authorization is None
-        or authorization.scheme.lower() != "bearer"
-        or not authorization.credentials
-        or not secrets.compare_digest(authorization.credentials, configured)
+        scheme is None
+        or scheme.lower() != "bearer"
+        or not supplied
+        or not secrets.compare_digest(
+            supplied.encode("utf-8"), configured.encode("utf-8")
+        )
     ):
         raise ManagementApiError(
             status_code=401,
             code="AUTHENTICATION_FAILED",
             message="Management authentication failed",
         )
+
+
+async def require_management_token(
+    authorization: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(management_bearer)
+    ],
+) -> None:
+    validate_management_token(
+        authorization.scheme if authorization is not None else None,
+        authorization.credentials if authorization is not None else None,
+    )

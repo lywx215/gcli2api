@@ -87,6 +87,9 @@ def test_management_api_is_disabled_for_every_path_without_token(monkeypatch) ->
     assert capabilities.status_code == 503
     assert capabilities.json()["error"]["code"] == "MANAGEMENT_API_DISABLED"
     assert unknown.status_code == 503
+    for method in ("head", "options", "post", "put", "patch", "delete"):
+        response = client.request(method, "/management/v1/any-path")
+        assert response.status_code == 503
 
 
 def test_management_token_is_independent_and_wrong_token_is_401(monkeypatch) -> None:

@@ -7,7 +7,11 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from .auth import ManagementApiError, require_management_token
+from .auth import (
+    ManagementApiError,
+    require_management_token,
+    validate_management_token,
+)
 from .schemas import (
     CapabilitiesResponse,
     CredentialListResponse,
@@ -139,6 +143,14 @@ async def management_validation_error_handler(
 
 async def management_exception_boundary(request: Request, call_next):
     try:
+        if request.url.path.startswith("/management/v1"):
+            scheme, separator, supplied = request.headers.get(
+                "authorization", ""
+            ).partition(" ")
+            validate_management_token(
+                scheme if separator else None,
+                supplied if separator else None,
+            )
         response = await call_next(request)
     except ManagementApiError as exc:
         response = JSONResponse(status_code=exc.status_code, content=exc.payload)

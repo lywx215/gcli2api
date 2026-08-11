@@ -90,11 +90,12 @@ class FakeBackend:
 
 
 class FakeStorage:
-    def __init__(self, backend=None) -> None:
+    def __init__(self, backend=None, backend_type="sqlite") -> None:
         self._backend = backend or FakeBackend()
+        self._backend_type = backend_type
 
     def get_backend_type(self) -> str:
-        return "sqlite"
+        return self._backend_type
 
 
 @pytest.fixture
@@ -158,6 +159,21 @@ async def test_summary_and_credentials_are_whitelisted_paginated_and_nullable(se
     assert "access_token" not in serialized
     assert "future_metadata" not in serialized
 
+    with pytest.raises(ManagementApiError) as exc:
+        await service.credentials(
+            mode="geminicli",
+            cursor="not-valid-base64!",
+            offset=None,
+            limit=1,
+            status=None,
+            error_code=None,
+            cooldown=None,
+            preview=None,
+            tier=None,
+            remark=None,
+        )
+    assert exc.value.status_code == 400
+
 
 @pytest.mark.asyncio
 async def test_stats_keep_short_window_unknowns_and_return_seven_day_data(service) -> None:
@@ -186,6 +202,21 @@ async def test_stats_are_501_when_backend_does_not_implement_them(monkeypatch) -
     assert capabilities.capabilities == ["credential.list", "node.summary"]
     with pytest.raises(ManagementApiError) as exc:
         await service.stats(mode="geminicli", window="24h", group_by="mode")
+    assert exc.value.status_code == 501
+
+
+@pytest.mark.asyncio
+async def test_mongodb_noop_stats_stubs_are_not_declared(monkeypatch) -> None:
+    async def storage():
+        return FakeStorage(FakeBackend(), backend_type="mongodb")
+
+    monkeypatch.setattr("src.management.service.get_storage_adapter", storage)
+    service = ManagementService()
+
+    capabilities = await service.capabilities()
+    assert capabilities.capabilities == ["credential.list", "node.summary"]
+    with pytest.raises(ManagementApiError) as exc:
+        await service.stats(mode="geminicli", window="24h", group_by="model")
     assert exc.value.status_code == 501
 
 

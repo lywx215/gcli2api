@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import math
 import os
 import time
@@ -115,10 +116,18 @@ def _encode_cursor(offset: int) -> str:
 
 
 def _decode_cursor(cursor: str) -> int:
+    if len(cursor) > 32:
+        raise ManagementApiError(
+            status_code=400,
+            code="INVALID_ACTION",
+            message="Invalid pagination cursor",
+        )
     try:
-        decoded = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("ascii")
+        decoded = base64.b64decode(
+            cursor.encode("ascii"), altchars=b"-_", validate=True
+        ).decode("ascii")
         value = int(decoded)
-    except (UnicodeError, ValueError) as exc:
+    except (binascii.Error, UnicodeError, ValueError) as exc:
         raise ManagementApiError(
             status_code=400,
             code="INVALID_ACTION",
@@ -146,23 +155,25 @@ class ManagementService:
         return await get_storage_adapter()
 
     @staticmethod
-    def _read_capabilities(backend: object) -> list[str]:
+    def _read_capabilities(backend: object, backend_type: str) -> list[str]:
         capabilities: list[str] = []
         if hasattr(backend, "get_credentials_summary"):
             capabilities.extend(("node.summary", "credential.list"))
-        if hasattr(backend, "get_recent_daily_stats"):
+        # MongoDB currently exposes no-op compatibility stubs, not statistics.
+        if backend_type != "mongodb" and hasattr(backend, "get_recent_daily_stats"):
             capabilities.append("stats.daily")
-        if hasattr(backend, "get_today_stats_by_model"):
+        if backend_type != "mongodb" and hasattr(backend, "get_today_stats_by_model"):
             capabilities.extend(("stats.model", "stats.rpm"))
         return sorted(set(capabilities))
 
     async def capabilities(self) -> CapabilitiesResponse:
         storage = await self._storage()
         backend = getattr(storage, "_backend", None)
+        backend_type = storage.get_backend_type()
         return CapabilitiesResponse(
             **self._metadata(),
-            storage_backend=storage.get_backend_type(),
-            capabilities=self._read_capabilities(backend),
+            storage_backend=backend_type,
+            capabilities=self._read_capabilities(backend, backend_type),
         )
 
     async def _all_summaries(self, mode: str) -> dict[str, object]:
@@ -322,7 +333,7 @@ class ManagementService:
             )
         storage = await self._storage()
         backend = getattr(storage, "_backend", None)
-        if backend is None or not (
+        if storage.get_backend_type() == "mongodb" or backend is None or not (
             hasattr(backend, "get_today_stats_by_model")
             or hasattr(backend, "get_recent_daily_stats")
         ):
