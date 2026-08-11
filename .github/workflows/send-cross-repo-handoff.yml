@@ -1,0 +1,173 @@
+name: Send cross-repository handoff
+
+on:
+  push:
+    paths:
+      - "coordination/handoffs/*.json"
+  workflow_dispatch:
+    inputs:
+      handoff_file:
+        description: "Path to one coordination/handoffs/*.json file"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: cross-repo-handoff-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref_name == 'dev7' || github.ref_name == github.event.repository.default_branch }}
+    runs-on: ubuntu-latest
+    env:
+      EXPECTED_SOURCE_REPOSITORY: lywx215/gcli2api
+      TARGET_REPOSITORY: lywx215/gcli2api-manager
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate short-lived GitHub App token
+        id: app-token
+        if: ${{ vars.CROSS_REPO_HANDOFF_APP_ID != '' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.CROSS_REPO_HANDOFF_APP_ID }}
+          private-key: ${{ secrets.CROSS_REPO_HANDOFF_APP_PRIVATE_KEY }}
+          owner: lywx215
+          repositories: gcli2api-manager
+
+      - name: Select handoff files
+        id: files
+        shell: bash
+        env:
+          MANUAL_FILE: ${{ inputs.handoff_file }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            files="$MANUAL_FILE"
+          elif [[ "$PUSH_BEFORE" =~ ^0+$ ]]; then
+            files="$(git diff-tree --root --no-commit-id --name-only -r "$GITHUB_SHA" -- 'coordination/handoffs/*.json')"
+          else
+            files="$(git diff --name-only "$PUSH_BEFORE" "$GITHUB_SHA" -- 'coordination/handoffs/*.json')"
+          fi
+          if [[ -z "$files" ]]; then
+            echo "No handoff JSON was selected" >&2
+            exit 1
+          fi
+          {
+            echo "paths<<EOF"
+            echo "$files"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate and dispatch
+        shell: bash
+        env:
+          HANDOFF_FILES: ${{ steps.files.outputs.paths }}
+          HANDOFF_TOKEN: ${{ steps.app-token.outputs.token || secrets.CROSS_REPO_HANDOFF_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$HANDOFF_TOKEN" ]]; then
+            echo "Configure GitHub App credentials or fallback CROSS_REPO_HANDOFF_TOKEN" >&2
+            exit 1
+          fi
+          while IFS= read -r file; do
+            [[ -n "$file" ]] || continue
+            [[ "$file" =~ ^coordination/handoffs/[A-Za-z0-9._-]+\.json$ ]] || {
+              echo "Invalid handoff path: $file" >&2
+              exit 1
+            }
+            [[ -f "$file" ]] || {
+              echo "Handoff file does not exist: $file" >&2
+              exit 1
+            }
+            [[ $(wc -c < "$file") -le 32768 ]] || {
+              echo "Handoff exceeds 32 KiB: $file" >&2
+              exit 1
+            }
+            jq -e --arg source "$EXPECTED_SOURCE_REPOSITORY" '
+              .schema_version == "1.0" and
+              (.delivery_id | test("^MGMT-[0-9]{3,}-G-[0-9]+$")) and
+              (.work_item | test("^MGMT-[0-9]{3,}$")) and
+              .source_repository == $source and
+              (.status == "ready" or .status == "blocked" or .status == "no_counterpart_action") and
+              .execution_policy.mode == "queue_only" and
+              .execution_policy.max_automatic_runs == 0 and
+              (.summary | type == "string" and length > 0) and
+              (.contract_sha256 == null or (.contract_sha256 | test("^[0-9A-Fa-f]{64}$"))) and
+              (.capabilities_added | type == "array") and
+              (.capabilities_removed | type == "array") and
+              (.tests | type == "array") and
+              (.next_actions | type == "array" and length > 0) and
+              (.generated_at | type == "string")
+            ' "$file" >/dev/null
+            delivery_id="$(jq -r '.delivery_id' "$file")"
+            [[ "$file" == "coordination/handoffs/$delivery_id.json" ]] || {
+              echo "Handoff filename must equal delivery_id: $file" >&2
+              exit 1
+            }
+            if jq -e '[.. | objects | select(has("access_token") or has("refresh_token") or has("client_secret") or has("password") or has("token"))] | length > 0' "$file" >/dev/null; then
+              echo "Sensitive key found in $file" >&2
+              exit 1
+            fi
+            if grep -Eiq 'GOCSPX-|AIza[0-9A-Za-z_-]{20,}|ghp_[0-9A-Za-z]{20,}|github_pat_[0-9A-Za-z_]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY' "$file"; then
+              echo "Sensitive literal found in $file" >&2
+              exit 1
+            fi
+            payload="$(jq -n \
+              --slurpfile handoff "$file" \
+              --arg source_repository "$GITHUB_REPOSITORY" \
+              --arg source_sha "$GITHUB_SHA" \
+              --arg handoff_file "$file" \
+              '{event_type:"cross-repo-handoff",client_payload:{handoff:$handoff[0],source_repository:$source_repository,source_sha:$source_sha,handoff_file:$handoff_file}}')"
+            curl --fail-with-body --retry 3 \
+              --request POST \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer $HANDOFF_TOKEN" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$TARGET_REPOSITORY/dispatches" \
+              --data "$payload"
+          done <<< "$HANDOFF_FILES"
+
+      - name: Record delivery failure without invoking Codex
+        if: ${{ failure() }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const label = "handoff-delivery-failed";
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name: label });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              await github.rest.issues.createLabel({ owner, repo, name: label, color: "B60205" });
+            }
+            const marker = `<!-- handoff-delivery-failure:${context.sha} -->`;
+            const body = [
+              marker,
+              "跨仓库handoff投递失败，未调用Codex模型，也没有消耗OpenAI token。",
+              "",
+              `- Commit: ${context.sha}`,
+              `- Workflow: https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              "- 处理：修复GitHub App/PAT、JSON或目标仓库配置后，重新运行失败workflow。"
+            ].join("\n");
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: "all", labels: label, per_page: 100
+            });
+            const existing = issues.find(issue => !issue.pull_request && (issue.body || "").includes(marker));
+            if (existing) {
+              await github.rest.issues.update({
+                owner, repo, issue_number: existing.number, body, state: "open", labels: [label]
+              });
+            } else {
+              await github.rest.issues.create({
+                owner, repo, title: "[handoff] 自动交接投递失败", body, labels: [label]
+              });
+            }
