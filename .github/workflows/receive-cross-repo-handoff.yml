@@ -1,0 +1,155 @@
+name: Receive cross-repository handoff
+
+on:
+  repository_dispatch:
+    types: [cross-repo-handoff]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  create-or-update-task:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create durable Codex task issue
+        uses: actions/github-script@v7
+        env:
+          EXPECTED_SOURCE_REPOSITORY: lywx215/gcli2api-manager
+        with:
+          script: |
+            const payload = context.payload.client_payload || {};
+            const handoff = payload.handoff || {};
+            const sourceRepository = payload.source_repository;
+            if (sourceRepository !== process.env.EXPECTED_SOURCE_REPOSITORY) {
+              core.setFailed(`Unexpected handoff source: ${sourceRepository}`);
+              return;
+            }
+            if (handoff.source_repository !== sourceRepository) {
+              core.setFailed("Handoff source_repository does not match event source");
+              return;
+            }
+            if (handoff.schema_version !== "1.0") {
+              core.setFailed("Unsupported handoff schema_version");
+              return;
+            }
+            if (handoff.execution_policy?.mode !== "queue_only" ||
+                handoff.execution_policy?.max_automatic_runs !== 0) {
+              core.setFailed("Handoff must remain queue_only with zero automatic runs");
+              return;
+            }
+            if (!["ready", "blocked", "no_counterpart_action"].includes(handoff.status)) {
+              core.setFailed("Invalid handoff status");
+              return;
+            }
+            if (!/^MGMT-[0-9]{3,}$/.test(handoff.work_item || "")) {
+              core.setFailed("Invalid or missing work_item");
+              return;
+            }
+            if (!/^MGMT-[0-9]{3,}-M-[0-9]+$/.test(handoff.delivery_id || "")) {
+              core.setFailed("Invalid or missing delivery_id");
+              return;
+            }
+            if (typeof handoff.summary !== "string" || handoff.summary.length === 0 ||
+                handoff.summary.length > 2000 || !Array.isArray(handoff.next_actions) ||
+                handoff.next_actions.length === 0 || handoff.next_actions.length > 50 ||
+                handoff.next_actions.some(item => typeof item !== "string" || item.length === 0)) {
+              core.setFailed("Invalid handoff summary or next_actions");
+              return;
+            }
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const stateLabel = handoff.status === "ready"
+              ? "codex-ready"
+              : handoff.status === "blocked"
+                ? "codex-blocked"
+                : "codex-record-only";
+            const labels = ["cross-repo-handoff", stateLabel];
+            const labelColors = {
+              "cross-repo-handoff": "5319E7",
+              "codex-ready": "0E8A16",
+              "codex-blocked": "B60205",
+              "codex-record-only": "C5DEF5"
+            };
+            for (const name of labels) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name,
+                  color: labelColors[name]
+                });
+              }
+            }
+
+            const marker = `<!-- cross-repo-handoff:${sourceRepository}:${handoff.delivery_id} -->`;
+            const nextActions = Array.isArray(handoff.next_actions)
+              ? handoff.next_actions.map((item, index) => `${index + 1}. ${item}`).join("\n")
+              : "1. 检查交接数据。";
+            const body = [
+              marker,
+              `# ${handoff.work_item} 自动交接`,
+              "",
+              "此Issue由另一个仓库自动创建，不需要用户复制交接内容。",
+              "当前策略为queue_only：本次投递不会自动调用Codex模型。",
+              "",
+              "## Codex执行要求",
+              "",
+              "1. 完整阅读本仓库`AGENTS.md`和双仓库协作规范。",
+              "2. 只处理`next_actions`中属于本次工作项的内容。",
+              "3. 范围外问题只记录，不顺带实施。",
+              "4. 完成后生成新的反向handoff JSON，由Actions自动回传。",
+              "",
+              "## 下一步",
+              "",
+              nextActions,
+              "",
+              "## 交接数据",
+              "",
+              "```json",
+              JSON.stringify({
+                ...handoff,
+                source_sha: payload.source_sha,
+                handoff_file: payload.handoff_file
+              }, null, 2),
+              "```"
+            ].join("\n");
+
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "all",
+              labels: "cross-repo-handoff",
+              per_page: 100
+            });
+            const existing = issues.find(issue => !issue.pull_request && (issue.body || "").includes(marker));
+            const title = `[${handoff.work_item}] 自动交接：${sourceRepository.split("/").pop()}`;
+            let issueNumber;
+            if (existing) {
+              issueNumber = existing.number;
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                title,
+                body,
+                labels,
+                state: handoff.status === "no_counterpart_action" ? "closed" : "open"
+              });
+            } else {
+              const created = await github.rest.issues.create({ owner, repo, title, body, labels });
+              issueNumber = created.data.number;
+              if (handoff.status === "no_counterpart_action") {
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  state: "closed"
+                });
+              }
+            }
+            core.notice(`Handoff issue #${issueNumber} is ready`);
