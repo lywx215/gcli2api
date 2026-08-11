@@ -310,11 +310,13 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
   "generated_at": "2026-08-10T12:00:00Z",
   "action": "disable",
   "status": "succeeded",
+  "no_change": false,
   "credential": {
     "mode": "geminicli",
     "filename": "credential-001.json",
     "status": "disabled"
   },
+  "error": null,
   "side_effects": []
 }
 ```
@@ -324,7 +326,7 @@ Google API调用。
 
 ## 8. `POST /credentials/batch-actions`
 
-该端点仅在节点声明`credential.batch_action`时可用。单批最多500项；manager仍应按节点
+该端点仅在节点声明`credential.batch_action`时可用。单批最多100项；manager仍应按节点
 限流，外部副作用动作默认不得与普通状态动作混为同一批次。
 
 请求：
@@ -361,6 +363,7 @@ Google API调用。
       "action": "disable",
       "status": "succeeded",
       "no_change": false,
+      "credential_status": "disabled",
       "error": null,
       "side_effects": []
     }

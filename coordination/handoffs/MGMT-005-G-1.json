@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "delivery_id": "MGMT-005-G-1",
+  "work_item": "MGMT-005",
+  "source_repository": "lywx215/gcli2api",
+  "status": "ready",
+  "execution_policy": {
+    "mode": "queue_only",
+    "max_automatic_runs": 0
+  },
+  "summary": "The gcli2api Management schema 1.0 write provider is ready for the manager final compatibility matrix. Single and batch credential actions, persistent idempotency, truthful capabilities, per-credential serialization, timeout recovery, OpenAPI, Legacy regressions, sensitive-field gates, and a non-published amd64/arm64 candidate build passed.",
+  "contract_sha256": "cb9b678866854a4ab78f3c1af3e8d1ac70d335eb9d2853e26ee677589b0fb87f",
+  "capabilities_added": [
+    "credential.enable",
+    "credential.disable",
+    "credential.permanent_disable",
+    "credential.delete",
+    "credential.remark",
+    "credential.batch_action"
+  ],
+  "capabilities_removed": [],
+  "compatibility": "Write capabilities are declared only by backends with the required storage operations. Item idempotency survives retries and process restarts through provider storage, conflicting key reuse returns 409, pending recovery reads current state, batch results preserve request order, and Legacy routes are unchanged. Manager-side delete remains default-disabled.",
+  "tests": [
+    "Windows Python 3.12: 83 tests passed for single and batch actions, persistent idempotency, partial failures, conflicts, timeout recovery, concurrency serialization, capability truthfulness, Legacy registration, OpenAPI, and secret exclusion",
+    "PR #11 gcli2api-ci run 31524233905 passed on Python 3.13",
+    "PR #11 Docker run 31524233890 built linux/amd64 and linux/arm64 for candidate b74d52bc331f23dbd6e4a4e7d49ef8769050d62c with registry login skipped and push=false",
+    "OpenAPI baseline, sensitive-literal scan, compile check, and Git whitespace check passed; no image was published and no environment was deployed"
+  ],
+  "artifacts": [
+    "src/management/router.py",
+    "src/management/schemas.py",
+    "src/management/service.py",
+    "docs/openapi/management-v1.openapi.json",
+    "docs/delivery/MGMT-005-gcli-provider.md",
+    "test_management_api.py",
+    "test_management_service.py",
+    "test_management_openapi.py",
+    "https://github.com/lywx215/gcli2api/pull/11",
+    "https://github.com/lywx215/gcli2api/actions/runs/31524233905",
+    "https://github.com/lywx215/gcli2api/actions/runs/31524233890"
+  ],
+  "next_actions": [
+    "On the latest gcli2api-manager main, run the final Modern provider-candidate matrix for single and batch actions, item and batch idempotency, partial failures, timeout readback, additive fields, malformed identity, and missing capabilities.",
+    "Re-run Legacy Current, Legacy Minimal, and Unknown regression cases and confirm that no Modern fallback occurs after authentication or contract failures.",
+    "Verify that delete remains disabled by default, sensitive values never reach database, logs, API, or browser output, and the shared contract hash remains identical.",
+    "Merge the manager matrix only after all gates pass, then publish a no-counterpart-action reverse handoff and close MGMT-005."
+  ],
+  "generated_at": "2026-08-11T18:47:43Z"
+}

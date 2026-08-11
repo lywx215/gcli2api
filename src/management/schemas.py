@@ -1,8 +1,17 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+CredentialAction = Literal[
+    "enable",
+    "disable",
+    "permanent_disable",
+    "delete",
+    "set_remark",
+]
+CredentialMode = Literal["geminicli", "antigravity"]
 
 
 class StrictModel(BaseModel):
@@ -98,3 +107,99 @@ class StatsResponse(CommonMetadata):
     totals: StatsCounts
     by_family: dict[str, StatsCounts]
     daily: list[DailyStats]
+
+
+class CredentialActionRequest(StrictModel):
+    action: CredentialAction
+    parameters: dict[str, object] = Field(default_factory=dict)
+    idempotency_key: str = Field(min_length=8, max_length=128)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_key(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("idempotency_key cannot be blank")
+        return value
+
+    @model_validator(mode="after")
+    def validate_parameters(self) -> Self:
+        if self.action == "set_remark":
+            if set(self.parameters) != {"remark"}:
+                raise ValueError("set_remark requires only remark")
+            remark = self.parameters.get("remark")
+            if not isinstance(remark, str) or len(remark) > 500:
+                raise ValueError("remark must be a string of at most 500 characters")
+        elif self.parameters:
+            raise ValueError("action does not accept parameters")
+        return self
+
+
+class CredentialActionIdentity(StrictModel):
+    mode: CredentialMode
+    filename: str
+    status: Literal["enabled", "disabled", "permanent_disabled"] | None
+
+
+class SideEffect(StrictModel):
+    kind: str
+    occurred: bool
+    description: str | None = None
+
+
+class CredentialActionResponse(CommonMetadata):
+    action: CredentialAction
+    status: Literal["succeeded"] = "succeeded"
+    no_change: bool
+    credential: CredentialActionIdentity
+    error: None = None
+    side_effects: list[SideEffect] = Field(default_factory=list)
+
+
+class CredentialBatchActionItem(CredentialActionRequest):
+    mode: CredentialMode
+    filename: str = Field(min_length=1, max_length=512)
+
+    @field_validator("filename")
+    @classmethod
+    def validate_filename(cls, value: str) -> str:
+        value = value.strip()
+        if not value or value in (".", "..") or "/" in value or "\\" in value:
+            raise ValueError("filename must be a basename")
+        return value
+
+
+class CredentialBatchActionRequest(StrictModel):
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    items: list[CredentialBatchActionItem] = Field(min_length=1, max_length=100)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_key(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("idempotency_key cannot be blank")
+        return value
+
+    @model_validator(mode="after")
+    def validate_keys(self) -> Self:
+        keys = [item.idempotency_key for item in self.items]
+        if self.idempotency_key in keys or len(keys) != len(set(keys)):
+            raise ValueError("batch and item idempotency keys must be unique")
+        return self
+
+
+class CredentialBatchActionResult(StrictModel):
+    mode: CredentialMode
+    filename: str
+    action: CredentialAction
+    status: Literal["succeeded", "failed"]
+    no_change: bool
+    credential_status: Literal["enabled", "disabled", "permanent_disabled"] | None
+    error: ErrorDetail | None
+    side_effects: list[SideEffect] = Field(default_factory=list)
+
+
+class CredentialBatchActionResponse(CommonMetadata):
+    status: Literal["succeeded", "partially_succeeded", "failed"]
+    results: list[CredentialBatchActionResult]

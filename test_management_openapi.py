@@ -9,7 +9,7 @@ def test_management_openapi_matches_reviewed_baseline() -> None:
     assert json.loads(BASELINE.read_text(encoding="utf-8")) == build_schema()
 
 
-def test_management_openapi_has_only_read_contract_paths_and_no_secret_fields() -> None:
+def test_management_openapi_has_reviewed_paths_and_no_secret_fields() -> None:
     schema = build_schema()
 
     assert set(schema["paths"]) == {
@@ -17,6 +17,8 @@ def test_management_openapi_has_only_read_contract_paths_and_no_secret_fields() 
         "/management/v1/summary",
         "/management/v1/credentials",
         "/management/v1/stats",
+        "/management/v1/credentials/{mode}/{filename}/actions",
+        "/management/v1/credentials/batch-actions",
     }
     serialized = json.dumps(schema)
     for forbidden in (
@@ -28,7 +30,7 @@ def test_management_openapi_has_only_read_contract_paths_and_no_secret_fields() 
     ):
         assert forbidden not in serialized.lower()
     for path in schema["paths"].values():
-        assert set(path) <= {"get"}
+        assert set(path) <= {"get", "post"}
         for operation in path.values():
             assert "422" not in operation["responses"]
             assert operation["security"] == [{"HTTPBearer": []}]
