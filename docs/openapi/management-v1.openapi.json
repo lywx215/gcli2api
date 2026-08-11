@@ -20,8 +20,8 @@
             "type": "string"
           },
           "schema_version": {
-            "const": "1.0",
-            "default": "1.0",
+            "const": "1.1",
+            "default": "1.1",
             "title": "Schema Version",
             "type": "string"
           },
@@ -42,6 +42,36 @@
           "capabilities"
         ],
         "title": "CapabilitiesResponse",
+        "type": "object"
+      },
+      "CooldownSyncActionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "cooldown_sync",
+            "default": "cooldown_sync",
+            "title": "Kind",
+            "type": "string"
+          },
+          "model_cooldowns": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Model Cooldowns",
+            "type": "object"
+          }
+        },
+        "required": [
+          "model_cooldowns"
+        ],
+        "title": "CooldownSyncActionResult",
         "type": "object"
       },
       "CredentialActionIdentity": {
@@ -93,7 +123,16 @@
               "disable",
               "permanent_disable",
               "delete",
-              "set_remark"
+              "set_remark",
+              "enable_preview",
+              "disable_preview",
+              "enable_credit",
+              "disable_credit",
+              "quota",
+              "errors",
+              "test",
+              "risk_check",
+              "sync_cooldown"
             ],
             "title": "Action",
             "type": "string"
@@ -126,7 +165,16 @@
               "disable",
               "permanent_disable",
               "delete",
-              "set_remark"
+              "set_remark",
+              "enable_preview",
+              "disable_preview",
+              "enable_credit",
+              "disable_credit",
+              "quota",
+              "errors",
+              "test",
+              "risk_check",
+              "sync_cooldown"
             ],
             "title": "Action",
             "type": "string"
@@ -146,13 +194,42 @@
             "title": "No Change",
             "type": "boolean"
           },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviewActionResult"
+              },
+              {
+                "$ref": "#/components/schemas/CreditActionResult"
+              },
+              {
+                "$ref": "#/components/schemas/QuotaActionResult"
+              },
+              {
+                "$ref": "#/components/schemas/ErrorsActionResult"
+              },
+              {
+                "$ref": "#/components/schemas/TestActionResult"
+              },
+              {
+                "$ref": "#/components/schemas/RiskActionResult"
+              },
+              {
+                "$ref": "#/components/schemas/CooldownSyncActionResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
           "revision": {
             "title": "Revision",
             "type": "string"
           },
           "schema_version": {
-            "const": "1.0",
-            "default": "1.0",
+            "const": "1.1",
+            "default": "1.1",
             "title": "Schema Version",
             "type": "string"
           },
@@ -194,7 +271,16 @@
               "disable",
               "permanent_disable",
               "delete",
-              "set_remark"
+              "set_remark",
+              "enable_preview",
+              "disable_preview",
+              "enable_credit",
+              "disable_credit",
+              "quota",
+              "errors",
+              "test",
+              "risk_check",
+              "sync_cooldown"
             ],
             "title": "Action",
             "type": "string"
@@ -279,8 +365,8 @@
             "type": "string"
           },
           "schema_version": {
-            "const": "1.0",
-            "default": "1.0",
+            "const": "1.1",
+            "default": "1.1",
             "title": "Schema Version",
             "type": "string"
           },
@@ -317,7 +403,16 @@
               "disable",
               "permanent_disable",
               "delete",
-              "set_remark"
+              "set_remark",
+              "enable_preview",
+              "disable_preview",
+              "enable_credit",
+              "disable_credit",
+              "quota",
+              "errors",
+              "test",
+              "risk_check",
+              "sync_cooldown"
             ],
             "title": "Action",
             "type": "string"
@@ -363,6 +458,35 @@
           "no_change": {
             "title": "No Change",
             "type": "boolean"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviewActionResult"
+              },
+              {
+                "$ref": "#/components/schemas/CreditActionResult"
+              },
+              {
+                "$ref": "#/components/schemas/QuotaActionResult"
+              },
+              {
+                "$ref": "#/components/schemas/ErrorsActionResult"
+              },
+              {
+                "$ref": "#/components/schemas/TestActionResult"
+              },
+              {
+                "$ref": "#/components/schemas/RiskActionResult"
+              },
+              {
+                "$ref": "#/components/schemas/CooldownSyncActionResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
           },
           "side_effects": {
             "items": {
@@ -414,8 +538,8 @@
             "type": "string"
           },
           "schema_version": {
-            "const": "1.0",
-            "default": "1.0",
+            "const": "1.1",
+            "default": "1.1",
             "title": "Schema Version",
             "type": "string"
           },
@@ -640,6 +764,26 @@
         "title": "CredentialSummary",
         "type": "object"
       },
+      "CreditActionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "credit",
+            "default": "credit",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "CreditActionResult",
+        "type": "object"
+      },
       "DailyStats": {
         "additionalProperties": false,
         "properties": {
@@ -720,6 +864,44 @@
         "title": "ErrorDetail",
         "type": "object"
       },
+      "ErrorEntryResult": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 64,
+            "title": "Code",
+            "type": "string"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "ErrorEntryResult",
+        "type": "object"
+      },
       "ErrorResponse": {
         "additionalProperties": false,
         "properties": {
@@ -731,6 +913,30 @@
           "error"
         ],
         "title": "ErrorResponse",
+        "type": "object"
+      },
+      "ErrorsActionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/ErrorEntryResult"
+            },
+            "maxItems": 128,
+            "title": "Entries",
+            "type": "array"
+          },
+          "kind": {
+            "const": "errors",
+            "default": "errors",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "title": "ErrorsActionResult",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -858,12 +1064,136 @@
         "title": "PageInfo",
         "type": "object"
       },
+      "PreviewActionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "preview",
+            "default": "preview",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "PreviewActionResult",
+        "type": "object"
+      },
+      "QuotaActionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "captured_at": {
+            "title": "Captured At",
+            "type": "string"
+          },
+          "kind": {
+            "const": "quota",
+            "default": "quota",
+            "title": "Kind",
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/QuotaModelResult"
+            },
+            "maxItems": 128,
+            "title": "Models",
+            "type": "array"
+          }
+        },
+        "required": [
+          "captured_at",
+          "models"
+        ],
+        "title": "QuotaActionResult",
+        "type": "object"
+      },
+      "QuotaModelResult": {
+        "additionalProperties": false,
+        "properties": {
+          "model_name": {
+            "maxLength": 200,
+            "title": "Model Name",
+            "type": "string"
+          },
+          "remaining_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remaining Percent"
+          },
+          "resets_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resets At"
+          }
+        },
+        "required": [
+          "model_name",
+          "remaining_percent",
+          "resets_at"
+        ],
+        "title": "QuotaModelResult",
+        "type": "object"
+      },
+      "RiskActionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "codes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Codes",
+            "type": "array"
+          },
+          "kind": {
+            "const": "risk",
+            "default": "risk",
+            "title": "Kind",
+            "type": "string"
+          },
+          "level": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "unknown"
+            ],
+            "title": "Level",
+            "type": "string"
+          }
+        },
+        "required": [
+          "level",
+          "codes"
+        ],
+        "title": "RiskActionResult",
+        "type": "object"
+      },
       "SideEffect": {
         "additionalProperties": false,
         "properties": {
           "description": {
             "anyOf": [
               {
+                "maxLength": 200,
                 "type": "string"
               },
               {
@@ -873,6 +1203,13 @@
             "title": "Description"
           },
           "kind": {
+            "enum": [
+              "credential_state_updated",
+              "token_refreshed",
+              "google_api_called",
+              "cooldown_updated",
+              "quota_cache_hit"
+            ],
             "title": "Kind",
             "type": "string"
           },
@@ -988,8 +1325,8 @@
             "type": "string"
           },
           "schema_version": {
-            "const": "1.0",
-            "default": "1.0",
+            "const": "1.1",
+            "default": "1.1",
             "title": "Schema Version",
             "type": "string"
           },
@@ -1051,8 +1388,8 @@
             "type": "string"
           },
           "schema_version": {
-            "const": "1.0",
-            "default": "1.0",
+            "const": "1.1",
+            "default": "1.1",
             "title": "Schema Version",
             "type": "string"
           },
@@ -1073,6 +1410,55 @@
           "modes"
         ],
         "title": "SummaryResponse",
+        "type": "object"
+      },
+      "TestActionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "test",
+            "default": "test",
+            "title": "Kind",
+            "type": "string"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "maximum": 3600000.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "model_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Name"
+          },
+          "outcome": {
+            "enum": [
+              "passed",
+              "failed"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "title": "TestActionResult",
         "type": "object"
       },
       "ValidationError": {
@@ -1125,7 +1511,7 @@
   },
   "info": {
     "title": "gcli2api Management API",
-    "version": "management-schema-1.0"
+    "version": "management-schema-1.1"
   },
   "openapi": "3.1.0",
   "paths": {

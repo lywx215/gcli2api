@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "delivery_id": "MGMT-006-G-1",
+  "work_item": "MGMT-006",
+  "source_repository": "lywx215/gcli2api",
+  "status": "ready",
+  "execution_policy": {
+    "mode": "queue_only",
+    "max_automatic_runs": 0
+  },
+  "summary": "The gcli2api Management schema 1.1 active-operation provider is ready for the manager final compatibility matrix. Preview enable, Credit enable/disable, quota, safe error summaries, message tests, risk checks, and cooldown synchronization have truthful capabilities, strict mode boundaries, durable idempotency, unknown-outcome protection, external-call bounds, typed whitelist results, Legacy regression coverage, and no real provider calls.",
+  "contract_sha256": "22b1056c134672a1a78e3c1719dcd4806019ae1a2544d0162a27042f3b0884d3",
+  "capabilities_added": [
+    "credential.preview.enable",
+    "credential.credit.enable",
+    "credential.credit.disable",
+    "credential.quota",
+    "credential.errors",
+    "credential.test",
+    "credential.risk_check",
+    "credential.cooldown.sync"
+  ],
+  "capabilities_removed": [],
+  "compatibility": "The change is additive schema 1.1. Preview and risk are GeminiCLI-only, Credit is Antigravity-only, Preview disable remains undeclared, risk capability follows SMART 429 runtime availability, provider results and side effects are whitelist-only, manager owns quota caching, and Legacy routes are unchanged. Unconfirmable pending external operations return retryable OUTCOME_UNKNOWN without replay.",
+  "tests": [
+    "Windows Python 3.12: 90 tests passed for active actions, capability truthfulness, mode boundaries, durable replay, unknown outcomes, rate and concurrency bounds, batch result propagation, default panel-operation adapters with stubs, OpenAPI, Legacy registration, and secret exclusion",
+    "Management module coverage reached 89.05%, including 86% for the active-operation adapter",
+    "OpenAPI baseline, sensitive-literal scan, Python compilation, focused Ruff fatal checks, and Git whitespace checks passed",
+    "All Google/provider calls were stubbed; no production resource, real credential, image publication, deployment, or macOS verification was used"
+  ],
+  "artifacts": [
+    "src/management/active_operations.py",
+    "src/management/schemas.py",
+    "src/management/service.py",
+    "docs/openapi/management-v1.openapi.json",
+    "docs/delivery/MGMT-006-gcli-provider.md",
+    "test_management_active_operations.py",
+    "test_management_api.py",
+    "test_management_service.py",
+    "test_management_openapi.py"
+  ],
+  "next_actions": [
+    "On the latest gcli2api-manager main, synchronize the schema 1.1 provider-candidate fixtures and run the final Modern matrix for every active action, mode boundary, capability absence, additive fields, safe results and side effects, provider idempotency reuse, explicit retry keys, and timeout readback.",
+    "Re-run Legacy Current, Legacy Minimal, and Unknown compatibility cases, including active-operation rejection without fallback after authentication or contract failure.",
+    "Verify quota cache age and invalidation, per-node concurrency and start-rate limits, explicit side-effect acknowledgement, audit redaction, and that active operations are never mixed with ordinary state actions in one batch.",
+    "Confirm the shared contract SHA-256 remains identical, merge the manager matrix only after all gates pass, publish a no-counterpart-action reverse handoff, and close MGMT-006."
+  ],
+  "generated_at": "2026-08-11T19:44:26Z"
+}

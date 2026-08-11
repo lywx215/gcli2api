@@ -153,7 +153,7 @@ def test_management_success_envelope_and_validation_are_contract_shaped(monkeypa
     )
 
     assert success.status_code == 200
-    assert success.json()["schema_version"] == "1.0"
+    assert success.json()["schema_version"] == "1.1"
     assert success.headers["cache-control"] == "no-store"
     assert invalid.status_code == 400
     assert invalid.json()["error"]["code"] == "INVALID_ACTION"

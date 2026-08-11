@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
+
 from src.management.auth import ManagementApiError
-from src.management.service import ManagementService
 from src.management.schemas import (
     CredentialActionRequest,
     CredentialBatchActionItem,
     CredentialBatchActionRequest,
 )
+from src.management.service import ManagementService
 from src.storage.sqlite_manager import SQLiteManager
 from src.storage_adapter import StorageAdapter
 
@@ -348,6 +351,130 @@ class FakeWriteBackend:
         return True
 
 
+class FakeActiveBackend(FakeWriteBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.credentials.update(
+            {
+                "ag.json": {
+                    "disabled": False,
+                    "permanent_disabled": False,
+                    "enable_credit": False,
+                    "model_cooldowns": {"fixture-model": 1_786_509_000},
+                },
+                **{
+                    f"active-{index}.json": {
+                        "disabled": False,
+                        "permanent_disabled": False,
+                    }
+                    for index in range(12)
+                },
+            }
+        )
+        self.credential_material = {
+            filename: {
+                "access_token": f"fixture-token-{index}",
+                "refresh_token": f"fixture-refresh-{index}",
+            }
+            for index, filename in enumerate(self.credentials)
+        }
+
+    async def get_credential(self, filename, mode="geminicli"):
+        value = self.credential_material.get(filename)
+        return dict(value) if value is not None else None
+
+    async def store_credential(self, filename, credential, mode="geminicli"):
+        self.credential_material[filename] = dict(credential)
+        return True
+
+    async def clear_all_model_cooldowns(self, filename, mode="geminicli"):
+        if filename not in self.credentials:
+            return False
+        self.credentials[filename]["model_cooldowns"] = {}
+        return True
+
+    async def set_model_cooldown(
+        self, filename, model_name, cooldown_until, mode="geminicli"
+    ):
+        if filename not in self.credentials:
+            return False
+        cooldowns = self.credentials[filename].setdefault("model_cooldowns", {})
+        if cooldown_until is None:
+            cooldowns.pop(model_name, None)
+        else:
+            cooldowns[model_name] = cooldown_until
+        return True
+
+
+class FakeActiveOperations:
+    supported_actions = frozenset(
+        {"enable_preview", "quota", "test", "risk_check", "sync_cooldown"}
+    )
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+        self.active = 0
+        self.max_active = 0
+
+    async def execute(self, *, action, mode, filename, parameters, storage):
+        self.calls.append((action, mode, filename))
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        await asyncio.sleep(0.005)
+        try:
+            if action == "enable_preview":
+                await storage.update_credential_state(
+                    filename, {"preview": True}, mode=mode
+                )
+                payload = {
+                    "success": True,
+                    "preview": True,
+                    "access_token": "must-not-survive",
+                }
+            elif action == "quota":
+                payload = {
+                    "success": True,
+                    "models": {
+                        "fixture-model": {
+                            "remaining": 0.75,
+                            "resetTimeRaw": "2026-08-13T00:00:00Z",
+                            "refresh_token": "must-not-survive",
+                        }
+                    },
+                    "credential": {"access_token": "must-not-survive"},
+                }
+            elif action == "test":
+                payload = {
+                    "success": False,
+                    "status_code": 403,
+                    "error": "Bearer must-not-survive",
+                }
+            elif action == "risk_check":
+                payload = {
+                    "health": {
+                        "status": "normal",
+                        "classification": "verified",
+                        "credential": "must-not-survive",
+                    }
+                }
+            else:
+                payload = {
+                    "success": True,
+                    "model_cooldowns": {
+                        "fixture-model": "2026-08-13T00:00:00Z"
+                    },
+                }
+            return {
+                "payload": payload,
+                "latency_ms": 12,
+                "token_refreshed": False,
+                "state_changed": action == "enable_preview",
+                "cooldown_changed": action == "sync_cooldown",
+            }
+        finally:
+            self.active -= 1
+
+
 def write_service(monkeypatch, backend: FakeWriteBackend) -> ManagementService:
     async def storage():
         backend._backend = backend
@@ -595,3 +722,244 @@ async def test_real_sqlite_write_and_idempotency_survive_service_recreation(
         assert "fixture-secret-refresh" not in serialized
     finally:
         await backend.close()
+
+
+def active_service(monkeypatch, *, starts_per_minute=10, concurrency=3):
+    backend = FakeActiveBackend()
+    operations = FakeActiveOperations()
+
+    async def storage():
+        backend._backend = backend
+        return backend
+
+    monkeypatch.setattr("src.management.service.get_storage_adapter", storage)
+    return (
+        ManagementService(
+            active_operations=operations,
+            active_concurrency=concurrency,
+            active_starts_per_minute=starts_per_minute,
+        ),
+        backend,
+        operations,
+    )
+
+
+@pytest.mark.asyncio
+async def test_active_capabilities_modes_results_and_replay_are_safe(monkeypatch) -> None:
+    service, backend, operations = active_service(monkeypatch)
+    capabilities = (await service.capabilities()).capabilities
+
+    assert "credential.preview.enable" in capabilities
+    assert "credential.preview.disable" not in capabilities
+    assert "credential.credit.enable" in capabilities
+    assert "credential.credit.disable" in capabilities
+    assert "credential.quota" in capabilities
+    assert "credential.errors" in capabilities
+    assert "credential.test" in capabilities
+    assert "credential.risk_check" in capabilities
+    assert "credential.cooldown.sync" in capabilities
+
+    with pytest.raises(ManagementApiError) as wrong_mode:
+        await service.execute_action(
+            mode="antigravity",
+            filename="ag.json",
+            request=CredentialActionRequest(
+                action="enable_preview",
+                parameters={},
+                idempotency_key="active-mode-key-0001",
+            ),
+        )
+    assert wrong_mode.value.status_code == 501
+    assert operations.calls == []
+
+    preview = await service.execute_action(
+        mode="geminicli",
+        filename="one.json",
+        request=CredentialActionRequest(
+            action="enable_preview",
+            parameters={},
+            idempotency_key="active-preview-0001",
+        ),
+    )
+    replay = await service.execute_action(
+        mode="geminicli",
+        filename="one.json",
+        request=CredentialActionRequest(
+            action="enable_preview",
+            parameters={},
+            idempotency_key="active-preview-0001",
+        ),
+    )
+    credit = await service.execute_action(
+        mode="antigravity",
+        filename="ag.json",
+        request=CredentialActionRequest(
+            action="enable_credit",
+            parameters={},
+            idempotency_key="active-credit-0001",
+        ),
+    )
+    quota = await service.execute_action(
+        mode="geminicli",
+        filename="two.json",
+        request=CredentialActionRequest(
+            action="quota",
+            parameters={"refresh": True},
+            idempotency_key="active-quota-0001",
+        ),
+    )
+    errors = await service.execute_action(
+        mode="geminicli",
+        filename="two.json",
+        request=CredentialActionRequest(
+            action="errors",
+            parameters={},
+            idempotency_key="active-errors-0001",
+        ),
+    )
+    tested = await service.execute_action(
+        mode="geminicli",
+        filename="two.json",
+        request=CredentialActionRequest(
+            action="test",
+            parameters={"model_name": "fixture-model"},
+            idempotency_key="active-test-0001",
+        ),
+    )
+    risk = await service.execute_action(
+        mode="geminicli",
+        filename="two.json",
+        request=CredentialActionRequest(
+            action="risk_check",
+            parameters={},
+            idempotency_key="active-risk-0001",
+        ),
+    )
+    synced = await service.execute_action(
+        mode="geminicli",
+        filename="two.json",
+        request=CredentialActionRequest(
+            action="sync_cooldown",
+            parameters={},
+            idempotency_key="active-sync-0001",
+        ),
+    )
+
+    assert replay == preview
+    assert sum(call[0] == "enable_preview" for call in operations.calls) == 1
+    assert preview.result.model_dump() == {"kind": "preview", "enabled": True}
+    assert credit.result.model_dump() == {"kind": "credit", "enabled": True}
+    assert backend.credentials["ag.json"]["model_cooldowns"] == {}
+    assert quota.result.models[0].remaining_percent == 75
+    assert quota.result.models[0].resets_at == "2026-08-13T00:00:00Z"
+    assert errors.result.model_dump() == {"kind": "errors", "entries": []}
+    assert tested.result.outcome == "failed"
+    assert tested.result.model_name == "fixture-model"
+    assert risk.result.model_dump() == {
+        "kind": "risk",
+        "level": "low",
+        "codes": ["normal", "verified"],
+    }
+    assert synced.result.model_cooldowns == {
+        "fixture-model": "2026-08-13T00:00:00Z"
+    }
+    serialized = "".join(
+        response.model_dump_json()
+        for response in (preview, credit, quota, errors, tested, risk, synced)
+    )
+    assert "must-not-survive" not in serialized
+    assert "access_token" not in serialized
+    assert "refresh_token" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_pending_external_action_returns_unknown_without_replay(monkeypatch) -> None:
+    service, backend, operations = active_service(monkeypatch)
+    request = CredentialActionRequest(
+        action="quota",
+        parameters={},
+        idempotency_key="active-pending-0001",
+    )
+    fingerprint = service._fingerprint(
+        "action",
+        {
+            "mode": "geminicli",
+            "filename": "one.json",
+            "action": "quota",
+            "parameters": {},
+        },
+    )
+    backend.config["management_idempotency_v1"] = {
+        request.idempotency_key: {"fingerprint": fingerprint, "state": "pending"}
+    }
+
+    with pytest.raises(ManagementApiError) as unknown:
+        await service.execute_action(
+            mode="geminicli", filename="one.json", request=request
+        )
+
+    assert unknown.value.status_code == 409
+    assert unknown.value.payload["error"]["code"] == "OUTCOME_UNKNOWN"
+    assert unknown.value.payload["error"]["retryable"] is True
+    assert operations.calls == []
+
+
+@pytest.mark.asyncio
+async def test_external_active_operations_are_concurrency_and_start_rate_bounded(
+    monkeypatch,
+) -> None:
+    service, _, operations = active_service(
+        monkeypatch, starts_per_minute=20, concurrency=3
+    )
+
+    async def quota(index: int):
+        return await service.execute_action(
+            mode="geminicli",
+            filename=f"active-{index}.json",
+            request=CredentialActionRequest(
+                action="quota",
+                parameters={},
+                idempotency_key=f"active-concurrency-{index:04d}",
+            ),
+        )
+
+    await asyncio.gather(*(quota(index) for index in range(6)))
+    assert operations.max_active == 3
+
+    limited, _, limited_operations = active_service(
+        monkeypatch, starts_per_minute=2, concurrency=3
+    )
+    await limited.execute_action(
+        mode="geminicli",
+        filename="active-0.json",
+        request=CredentialActionRequest(
+            action="quota", parameters={}, idempotency_key="active-rate-0001"
+        ),
+    )
+    await limited.execute_action(
+        mode="geminicli",
+        filename="active-1.json",
+        request=CredentialActionRequest(
+            action="quota", parameters={}, idempotency_key="active-rate-0002"
+        ),
+    )
+    with pytest.raises(ManagementApiError) as limited_error:
+        await limited.execute_action(
+            mode="geminicli",
+            filename="active-2.json",
+            request=CredentialActionRequest(
+                action="quota", parameters={}, idempotency_key="active-rate-0003"
+            ),
+        )
+    assert limited_error.value.status_code == 429
+    assert limited_error.value.payload["error"]["code"] == "RATE_LIMITED"
+    with pytest.raises(ManagementApiError) as replayed_error:
+        await limited.execute_action(
+            mode="geminicli",
+            filename="active-2.json",
+            request=CredentialActionRequest(
+                action="quota", parameters={}, idempotency_key="active-rate-0003"
+            ),
+        )
+    assert replayed_error.value.payload == limited_error.value.payload
+    assert len(limited_operations.calls) == 2
