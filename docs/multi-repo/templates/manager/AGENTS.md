@@ -1,0 +1,38 @@
+# gcli2api-manager Codex 协作约束
+
+本仓库是多仓库方案中的中央管理端。开始实现节点、凭证、负载、版本兼容或外部集成
+前，必须依次阅读：
+
+1. `docs/multi-repo/COORDINATION_SPEC.md`
+2. `docs/multi-repo/MANAGEMENT_API_CONTRACT.md`
+3. `docs/multi-repo/MANAGER_CODEX_GUIDE.md`
+4. `docs/multi-repo/AUTOMATED_HANDOFF.md`
+
+## 必须遵守
+
+- 只能通过HTTPS API访问gcli2api；不得读取节点SQLite、Volume或源码。
+- 所有节点调用必须经过适配器，UI和领域服务不得直接拼接Legacy端点。
+- 优先使用capability决定行为；未知节点默认只读，缺失能力的操作必须禁用。
+- 缺失字段保留`null`和“未知”语义，不得填0制造假数据。
+- 不得保存、展示或记录完整凭证、Token和节点明文密码。
+- 凭证不得上传、迁移、复制或自动去重；跨节点重复只告警。
+- 写操作必须携带幂等键，耗时操作必须使用任务模型并提供逐项结果。
+- Preview、额度、风险和测试属于主动外部操作，必须限制并发并披露副作用。
+- new-api本阶段不得接入、读取或修改；只能保留通用的只读健康和容量输出。
+- 任何Management API契约变更必须关联gcli2api仓库的同编号工作项。
+- 开始`MGMT-*`任务时，如GitHub访问可用，必须先检查本仓库打开的`codex-ready`交接
+  Issue，并只执行其中属于当前工作项的`next_actions`。
+- 自动handoff只允许`queue_only`且自动运行次数为0；不得建立定时Codex轮询，也不得因
+  Issue创建而自动调用模型。只有用户启动实际任务后才能读取并实施`codex-ready`内容。
+- 范围外发现只记录，不得顺带实施。
+
+## 完成标准
+
+- Modern、Legacy Current、Legacy Minimal和Unknown适配场景测试通过。
+- 当前现网版本Fixture和Docker兼容矩阵通过。
+- 单节点失败不会影响其他节点；未知版本不会执行写操作。
+- 数据库、日志、浏览器响应和Fixture通过敏感信息扫描。
+- 交付说明列出支持矩阵、schema兼容性、迁移、测试、灰度和回滚。
+- 需要gcli2api继续处理时，必须在`coordination/handoffs/`生成符合schema的新交接JSON；
+  其中`execution_policy`保持`queue_only`；禁止要求用户人工复制交接块。无需对端动作时
+  使用`no_counterpart_action`只记录。
