@@ -2,18 +2,23 @@
 
 状态：**Draft for Review**
 
-规范版本：`coordination-1.0`
+规范版本：`coordination-1.1`
 
 ## 1. 目标和边界
 
 两个仓库独立构建、发布和部署，通过稳定HTTP管理协议协同：
 
 ```text
-gcli2api-manager
-      │ HTTPS Management API / Legacy Panel API
-      ▼
-gcli2api节点（每台保留独立SQLite和凭证）
+gcli2api-manager（Zeabur）
+      ├── 腾讯云TDSQL-C MySQL 8（manager独立逻辑库）
+      │
+      └── HTTPS Management API / Legacy Panel API
+                 ▼
+          gcli2api节点（每台保留独立SQLite和凭证）
 ```
+
+桌面端App是定位、任务、数据库和发布流程均独立的产品，不在本协作方案内，也不是
+manager的客户端或数据源。未来若需协同，必须另立方案，不得在本阶段预埋桌面端同步。
 
 本方案当前覆盖节点、凭证、负载、任务、审计和版本兼容。new-api只保留未来所需的
 只读容量接口，不在本阶段读取或修改new-api。
@@ -22,6 +27,8 @@ gcli2api节点（每台保留独立SQLite和凭证）
 
 - Git Submodule或把一个仓库源码复制进另一个仓库运行；
 - manager直接连接节点SQLite、Volume或文件系统；
+- manager连接、迁移或同步桌面端本地数据库；
+- 桌面端直接连接manager MySQL；
 - 在中央数据库保存完整凭证；
 - 节点间迁移、复制或自动重分配凭证；
 - 用`latest`作为生产节点的唯一版本依据；
@@ -41,12 +48,26 @@ gcli2api节点（每台保留独立SQLite和凭证）
 ### gcli2api-manager
 
 - 注册和探测多个节点；
+- 使用腾讯云TDSQL-C MySQL 8中的独立逻辑库`gcli2api_manager`保存manager自身元数据，
+  通过Alembic管理迁移；
+- 只使用一个专用数据库账号供运行时、迁移和人工排障共用，权限仅限manager数据库；
+- 只提供一个Web管理员，不实现注册、RBAC、角色、团队、租户或多用户管理；
 - 加密保存节点管理凭证；
 - 通过适配器兼容Modern和Legacy节点；
 - 聚合凭证元数据和负载指标；
 - 提供单节点及全局管理界面；
 - 编排批量任务、失败重试和审计；
 - 不持有凭证内容，不改变节点业务语义。
+
+manager应用服务保持无状态，生产持久化不得依赖应用容器本地文件或Volume。MySQL只保存
+manager允许的数据，不能改变gcli2api节点对凭证真实状态和管理动作语义的最终所有权。
+manager不共享桌面端数据库、数据库账号或`servers`表，也不建立持续单向或双向同步；
+节点信息由manager独立维护，首次可人工录入或执行经过审核的一次性导入。
+
+manager Web前端采用React、Vite、TypeScript、Ant Design和ProComponents的轻量应用
+骨架，使用紧凑运维控制台风格，提供亮色、暗色和跟随系统三种外观选择并保存用户偏好。
+颜色与层次可参考Cockpit Tools，但不得直接复制完整Ant Design Pro示例工程、Cockpit
+Tools业务模块、品牌资源或未明确授权的源码，也不得引入桌面端业务模块。
 
 ## 3. 版本模型
 
@@ -157,6 +178,8 @@ manager发布物必须包含：
 - 新增或移除的适配器；
 - 已验证的gcli2api标签或revision；
 - 数据库迁移和回滚说明；
+- MySQL备份恢复验证和连接配置变更；
+- 前端Design Token或关键交互规范变化；
 - 对未知节点的降级行为。
 
 ## 7. CI协同
@@ -173,12 +196,18 @@ manager发布物必须包含：
 
 ### manager CI必须执行
 
+- MySQL空库迁移、上一版本升级及回滚或等价恢复验证；
+- 使用运行时与Alembic共用的数据库账号执行`SHOW GRANTS`，确认仅有
+  `gcli2api_manager.*`权限且没有全局权限、`GRANT OPTION`或桌面端数据库权限；
+- 单管理员登录、Argon2id密码哈希、安全Cookie会话、CSRF和登录限流测试，并确认不存在
+  注册、RBAC、角色、团队、租户或多用户管理入口；
 - 各适配器单元测试；
 - 所有现网版本的脱敏Fixture测试；
 - 至少四类Docker矩阵：最老现网版、代表Legacy版、最新稳定版、候选版；
 - 401、404、501、超时、部分字段和未知字段测试；
 - 批量任务幂等、重试和部分失败测试；
-- 前端能力门控和敏感信息测试。
+- 前端能力门控、紧凑表格关键交互和敏感信息测试；
+- 验证亮色、暗色、跟随系统和用户偏好持久化均正常，且不包含桌面端任务或数据库同步代码。
 
 ### 自动交接CI必须执行
 
@@ -221,6 +250,12 @@ Fixture不得包含真实邮箱、文件名、project ID、Token或管理密码�
 
 - 新版节点使用独立`NODE_MANAGEMENT_TOKEN`；
 - manager中的节点Token必须加密保存；
+- manager生产数据库只使用一个专用MySQL账号供运行时、Alembic和人工排障共用；该账号
+  只能访问`gcli2api_manager.*`，不得拥有全局权限、`GRANT OPTION`或桌面端数据库权限；
+- manager只提供一个Web管理员，使用Argon2id密码哈希、安全Cookie会话、CSRF和登录
+  限流；首版不引入注册和RBAC；
+- 数据库备份与应用密钥分离；
+- Zeabur到腾讯云数据库的生产连接必须启用TLS并限制网络来源，不得长期向全网开放端口；
 - 禁止把Authorization头、Token和完整凭证写入日志；
 - 管理接口只返回元数据；
 - 对节点请求禁止跨域名携带认证重定向；
@@ -236,6 +271,7 @@ Fixture不得包含真实邮箱、文件名、project ID、Token或管理密码�
 - gcli2api Legacy接口测试通过；
 - Docker兼容矩阵通过；
 - 安全Review无未解决P0/P1；
+- `SHOW GRANTS`和单管理员认证验收通过；
 - 灰度、监控和回滚步骤明确；
 - 两个仓库的变更说明互相引用。
 - 两仓库中的`COORDINATION_SPEC.md`和`MANAGEMENT_API_CONTRACT.md` SHA-256一致。

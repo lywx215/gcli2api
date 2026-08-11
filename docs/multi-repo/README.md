@@ -2,7 +2,12 @@
 
 状态：**Draft for Review**
 
-更新时间：2026-08-10
+更新时间：2026-08-11
+
+当前方案修订：`manager-architecture-1.2`。manager在腾讯云TDSQL-C MySQL 8中使用
+独立逻辑库、单一受限数据库账号、单一Web管理员和React紧凑Web控制台，支持用户选择
+亮色、暗色或跟随系统；桌面端保持独立，不共享数据库、账号或`servers`表，也不属于
+本阶段范围。
 
 适用仓库：`gcli2api`、`gcli2api-manager`
 
@@ -34,12 +39,9 @@ Zeabur上的多个gcli2api版本。文档同时服务于：
 
 ### gcli2api-manager仓库
 
-新仓库创建后：
-
-1. 将本目录完整复制到manager仓库的`docs/multi-repo/`；
-2. 将`templates/manager/AGENTS.md`复制为manager仓库根目录`AGENTS.md`；
-3. 在manager CI中固定一份已审核的Management API契约副本；
-4. 后续契约更新必须由两个仓库各自PR同步完成。
+manager仓库已经建立。两个仓库各自保留协作文档和`AGENTS.md`，后续使用相同工作项及
+自动handoff同步变更，不再依赖用户手工复制。Management API契约和协调规范在两个仓库
+中的内容必须一致，并由各自PR完成Review。
 
 ## 文档权威性
 
