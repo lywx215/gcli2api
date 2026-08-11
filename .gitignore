@@ -3,6 +3,8 @@
 !package.json
 !package-lock.json
 !tsconfig.json
+!docs/openapi/*.json
+!coordination/handoffs/*.json
 *.toml
 !pyproject.toml
 creds/

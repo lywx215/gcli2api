@@ -1457,7 +1457,7 @@ class MySQLManager:
                             "filename": filename,
                             "disabled": bool(row[1]),
                             "error_codes": error_codes,
-                            "last_success": row[3] or current_time,
+                            "last_success": row[3],
                             "user_email": row[4],
                             "rotation_order": row[5],
                             "model_cooldowns": active_cooldowns,
