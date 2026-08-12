@@ -312,6 +312,20 @@ async def parse_and_log_cooldown(
     """
     try:
         error_data = json.loads(error_text)
+        if mode == "antigravity":
+            # Antigravity also uses generic RESOURCE_EXHAUSTED responses for
+            # temporary upstream pressure.  Persist a model cooldown only when
+            # the response contains explicit quota-exhaustion evidence.
+            from src.smart_429 import Upstream429Kind, classify_upstream_429
+
+            classification = classify_upstream_429(
+                error_data, mode="antigravity"
+            )
+            if classification.kind != Upstream429Kind.QUOTA_EXHAUSTED:
+                log.info(
+                    "[ANTIGRAVITY] 429 未包含明确额度耗尽信息，跳过持久模型冷却"
+                )
+                return None
         cooldown_until = parse_quota_reset_timestamp(error_data)
         if cooldown_until:
             log.info(
