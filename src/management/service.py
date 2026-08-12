@@ -1,26 +1,29 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
-import asyncio
 import hashlib
 import json
 import math
 import os
 import time
 import weakref
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any
 
 from src.storage_adapter import get_storage_adapter
 from src.versioning import load_version_metadata
 
+from .active_operations import ActiveOperationFailure, PanelActiveOperations
 from .auth import ManagementApiError
 from .schemas import (
+    ActiveActionResult,
     CapabilitiesResponse,
+    CredentialActionIdentity,
     CredentialActionRequest,
     CredentialActionResponse,
-    CredentialActionIdentity,
     CredentialBatchActionItem,
     CredentialBatchActionRequest,
     CredentialBatchActionResponse,
@@ -30,10 +33,10 @@ from .schemas import (
     DailyStats,
     ModeSummary,
     PageInfo,
+    SideEffect,
     StatsCounts,
     StatsResponse,
     SummaryResponse,
-    SideEffect,
 )
 
 MODES = ("geminicli", "antigravity")
@@ -49,6 +52,34 @@ _CREDENTIAL_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = (
     weakref.WeakValueDictionary()
 )
 _PERSISTENCE_LOCK = asyncio.Lock()
+ACTIVE_ACTIONS = frozenset(
+    {
+        "enable_preview",
+        "disable_preview",
+        "enable_credit",
+        "disable_credit",
+        "quota",
+        "errors",
+        "test",
+        "risk_check",
+        "sync_cooldown",
+    }
+)
+EXTERNAL_ACTIVE_ACTIONS = frozenset(
+    {"enable_preview", "disable_preview", "quota", "test", "risk_check", "sync_cooldown"}
+)
+ACTION_CAPABILITIES = {
+    "set_remark": "credential.remark",
+    "enable_preview": "credential.preview.enable",
+    "disable_preview": "credential.preview.disable",
+    "enable_credit": "credential.credit.enable",
+    "disable_credit": "credential.credit.disable",
+    "quota": "credential.quota",
+    "errors": "credential.errors",
+    "test": "credential.test",
+    "risk_check": "credential.risk_check",
+    "sync_cooldown": "credential.cooldown.sync",
+}
 
 
 def _keyed_lock(
@@ -174,6 +205,19 @@ def _decode_cursor(cursor: str) -> int:
 
 
 class ManagementService:
+    def __init__(
+        self,
+        *,
+        active_operations: object | None = None,
+        active_concurrency: int = 3,
+        active_starts_per_minute: int = 10,
+    ) -> None:
+        self._active_operations = active_operations or PanelActiveOperations()
+        self._active_semaphore = asyncio.Semaphore(max(1, active_concurrency))
+        self._active_start_lock = asyncio.Lock()
+        self._active_starts: deque[float] = deque()
+        self._active_starts_per_minute = max(1, active_starts_per_minute)
+
     def _metadata(self) -> dict[str, str]:
         version = load_version_metadata()
         return {
@@ -185,8 +229,7 @@ class ManagementService:
     async def _storage(self):
         return await get_storage_adapter()
 
-    @staticmethod
-    def _read_capabilities(backend: object, backend_type: str) -> list[str]:
+    def _read_capabilities(self, backend: object, backend_type: str) -> list[str]:
         capabilities: list[str] = []
         if hasattr(backend, "get_credentials_summary"):
             capabilities.extend(("node.summary", "credential.list"))
@@ -216,6 +259,40 @@ class ManagementService:
                     "credential.batch_action",
                 )
             )
+        active_storage = all(
+            hasattr(backend, name)
+            for name in (
+                "list_credentials",
+                "get_credential",
+                "store_credential",
+                "get_credential_state",
+                "update_credential_state",
+                "get_config",
+                "set_config",
+            )
+        )
+        if active_storage:
+            capabilities.append("credential.errors")
+            if hasattr(backend, "clear_all_model_cooldowns"):
+                capabilities.extend(
+                    ("credential.credit.enable", "credential.credit.disable")
+                )
+            supported = getattr(self._active_operations, "supported_actions", frozenset())
+            supports = getattr(self._active_operations, "supports", None)
+            for action in ("enable_preview", "quota", "test", "risk_check"):
+                if (
+                    supports(action)
+                    if callable(supports)
+                    else action in supported
+                ):
+                    capabilities.append(ACTION_CAPABILITIES[action])
+            sync_supported = (
+                supports("sync_cooldown")
+                if callable(supports)
+                else "sync_cooldown" in supported
+            )
+            if sync_supported and hasattr(backend, "set_model_cooldown"):
+                capabilities.append("credential.cooldown.sync")
         return sorted(set(capabilities))
 
     async def capabilities(self) -> CapabilitiesResponse:
@@ -581,7 +658,21 @@ class ManagementService:
             return cls._credential_status(state) == "permanent_disabled"
         if action == "set_remark":
             return state.get("remark", "") == parameters.get("remark")
+        if action == "enable_preview":
+            return state.get("preview") is True
+        if action == "enable_credit":
+            return state.get("enable_credit") is True
+        if action == "disable_credit":
+            return state.get("enable_credit") is False
         return False
+
+    @staticmethod
+    def _confirmed_active_result(action: str) -> dict[str, object] | None:
+        if action == "enable_preview":
+            return {"kind": "preview", "enabled": True}
+        if action in ("enable_credit", "disable_credit"):
+            return {"kind": "credit", "enabled": action == "enable_credit"}
+        return None
 
     def _action_success(
         self,
@@ -591,6 +682,8 @@ class ManagementService:
         action: str,
         state: dict[str, object],
         no_change: bool,
+        result: ActiveActionResult | dict[str, object] | None = None,
+        side_effects: list[SideEffect] | None = None,
     ) -> CredentialActionResponse:
         return CredentialActionResponse(
             **self._metadata(),
@@ -601,12 +694,255 @@ class ManagementService:
                 filename=filename,
                 status=None if action == "delete" else self._credential_status(state),
             ),
+            result=result,
             side_effects=(
-                []
+                side_effects
+                if side_effects is not None
+                else []
                 if no_change
                 else [SideEffect(kind="credential_state_updated", occurred=True)]
             ),
         )
+
+    async def _reserve_active_start(self) -> None:
+        async with self._active_start_lock:
+            now = time.monotonic()
+            while self._active_starts and self._active_starts[0] <= now - 60:
+                self._active_starts.popleft()
+            if len(self._active_starts) >= self._active_starts_per_minute:
+                retry_after = max(1, math.ceil(60 - (now - self._active_starts[0])))
+                raise ManagementApiError(
+                    status_code=429,
+                    code="RATE_LIMITED",
+                    message="Active operation start rate exceeded",
+                    retryable=True,
+                    details={"retry_after_seconds": retry_after},
+                )
+            self._active_starts.append(now)
+
+    @staticmethod
+    def _quota_result(payload: dict[str, object]) -> dict[str, object]:
+        models = payload.get("models")
+        safe_models: list[dict[str, object]] = []
+        if isinstance(models, dict):
+            for raw_name, raw_value in list(models.items())[:128]:
+                name = _text(raw_name, 200)
+                if name is None or not isinstance(raw_value, dict):
+                    continue
+                remaining = raw_value.get("remaining")
+                remaining_percent: float | None = None
+                if (
+                    isinstance(remaining, (int, float))
+                    and not isinstance(remaining, bool)
+                    and math.isfinite(remaining)
+                    and 0 <= remaining <= 100
+                ):
+                    remaining_percent = float(remaining * 100 if remaining <= 1 else remaining)
+                    remaining_percent = round(min(100.0, remaining_percent), 4)
+                safe_models.append(
+                    {
+                        "model_name": name,
+                        "remaining_percent": remaining_percent,
+                        "resets_at": _utc(raw_value.get("resetTimeRaw")),
+                    }
+                )
+        return {"kind": "quota", "captured_at": _utc_now(), "models": safe_models}
+
+    @staticmethod
+    def _errors_result(state: dict[str, object]) -> dict[str, object]:
+        codes = _error_codes(state.get("error_codes")) or []
+        return {
+            "kind": "errors",
+            "entries": [
+                {
+                    "code": str(code),
+                    "message": f"Recorded HTTP status {code}",
+                    "last_seen": None,
+                }
+                for code in codes
+            ],
+        }
+
+    @staticmethod
+    def _risk_result(payload: dict[str, object]) -> dict[str, object]:
+        health = payload.get("health")
+        if not isinstance(health, dict):
+            health = {}
+        status = _text(health.get("status"), 64)
+        classification = _text(
+            health.get("classification") or payload.get("classification"), 64
+        )
+        normalized = (status or "").lower()
+        if normalized in ("normal", "healthy", "quota_exhausted"):
+            level = "low"
+        elif normalized in ("checking", "cooldown", "rate_limited"):
+            level = "medium"
+        elif normalized in ("invalid", "disabled", "quarantined", "risk_controlled"):
+            level = "high"
+        else:
+            level = "unknown"
+        codes = [item for item in (status, classification) if item is not None]
+        return {"kind": "risk", "level": level, "codes": codes}
+
+    @staticmethod
+    def _cooldown_result(payload: dict[str, object]) -> dict[str, object]:
+        raw = payload.get("model_cooldowns")
+        cooldowns: dict[str, str | None] = {}
+        if isinstance(raw, dict):
+            for raw_model, raw_until in list(raw.items())[:128]:
+                model = _text(raw_model, 200)
+                if model is not None:
+                    cooldowns[model] = _utc(raw_until) if raw_until is not None else None
+        return {"kind": "cooldown_sync", "model_cooldowns": cooldowns}
+
+    async def _execute_external_active(
+        self,
+        *,
+        storage: object,
+        mode: str,
+        filename: str,
+        action: str,
+        parameters: dict[str, object],
+    ) -> tuple[dict[str, object], list[SideEffect]]:
+        async with self._active_semaphore:
+            await self._reserve_active_start()
+            try:
+                raw = await self._active_operations.execute(
+                    action=action,
+                    mode=mode,
+                    filename=filename,
+                    parameters=parameters,
+                    storage=storage,
+                )
+            except ActiveOperationFailure as exc:
+                code = "OUTCOME_UNKNOWN" if exc.code == "UPSTREAM_ERROR" else exc.code
+                status_code = 409 if code == "OUTCOME_UNKNOWN" else exc.status_code
+                raise ManagementApiError(
+                    status_code=status_code,
+                    code=code,
+                    message=(
+                        "Active operation outcome cannot be confirmed"
+                        if code == "OUTCOME_UNKNOWN"
+                        else "Active provider operation failed"
+                    ),
+                    retryable=exc.retryable,
+                    details={"outcome_unknown": code == "OUTCOME_UNKNOWN"},
+                ) from exc
+        if not isinstance(raw, dict):
+            raise ManagementApiError(
+                status_code=409,
+                code="OUTCOME_UNKNOWN",
+                message="Active operation outcome cannot be confirmed",
+                retryable=True,
+                details={"outcome_unknown": True},
+            )
+        payload = raw.get("payload")
+        if not isinstance(payload, dict):
+            payload = {}
+        status_code = payload.get("_status_code")
+        if action in ("enable_preview", "quota", "sync_cooldown") and (
+            payload.get("success") is not True
+            or isinstance(status_code, int) and status_code >= 400
+        ):
+            raise ManagementApiError(
+                status_code=502,
+                code="UPSTREAM_ERROR",
+                message="Active provider operation was not completed",
+                retryable=True,
+                details={"outcome_unknown": False},
+            )
+        if action == "enable_preview":
+            result: dict[str, object] = {"kind": "preview", "enabled": True}
+        elif action == "quota":
+            result = self._quota_result(payload)
+        elif action == "test":
+            result = {
+                "kind": "test",
+                "outcome": "passed" if payload.get("success") is True else "failed",
+                "model_name": _text(parameters.get("model_name"), 200)
+                or "gemini-2.5-flash",
+                "latency_ms": raw.get("latency_ms")
+                if isinstance(raw.get("latency_ms"), (int, float))
+                and not isinstance(raw.get("latency_ms"), bool)
+                else None,
+            }
+        elif action == "risk_check":
+            result = self._risk_result(payload)
+        else:
+            result = self._cooldown_result(payload)
+        effects = [SideEffect(kind="google_api_called", occurred=True)]
+        if raw.get("token_refreshed") is True:
+            effects.append(SideEffect(kind="token_refreshed", occurred=True))
+        if raw.get("state_changed") is True:
+            effects.append(SideEffect(kind="credential_state_updated", occurred=True))
+        if raw.get("cooldown_changed") is True:
+            effects.append(SideEffect(kind="cooldown_updated", occurred=True))
+        return result, effects
+
+    async def _execute_active_action(
+        self,
+        *,
+        storage: object,
+        backend: object,
+        mode: str,
+        filename: str,
+        action: str,
+        parameters: dict[str, object],
+        state: dict[str, object],
+    ) -> tuple[dict[str, object], bool, list[SideEffect]]:
+        if action == "errors":
+            return self._errors_result(state), True, []
+        if action == "enable_preview" and state.get("preview") is True:
+            return {"kind": "preview", "enabled": True}, True, []
+        if action in ("enable_credit", "disable_credit"):
+            target = action == "enable_credit"
+            no_change = state.get("enable_credit") is target
+            effects: list[SideEffect] = []
+            if not no_change:
+                try:
+                    changed = await storage.update_credential_state(
+                        filename, {"enable_credit": target}, mode=mode
+                    )
+                except Exception as exc:
+                    raise ManagementApiError(
+                        status_code=409,
+                        code="OUTCOME_UNKNOWN",
+                        message="Active operation outcome cannot be confirmed",
+                        retryable=True,
+                        details={"outcome_unknown": True},
+                    ) from exc
+                if not changed:
+                    raise ManagementApiError(
+                        status_code=500,
+                        code="INTERNAL_ERROR",
+                        message="Credential credit action failed",
+                    )
+                effects.append(
+                    SideEffect(kind="credential_state_updated", occurred=True)
+                )
+                try:
+                    cleared = await backend.clear_all_model_cooldowns(
+                        filename, mode=mode
+                    )
+                except Exception as exc:
+                    raise ManagementApiError(
+                        status_code=409,
+                        code="OUTCOME_UNKNOWN",
+                        message="Active operation outcome cannot be confirmed",
+                        retryable=True,
+                        details={"outcome_unknown": True},
+                    ) from exc
+                if cleared:
+                    effects.append(SideEffect(kind="cooldown_updated", occurred=True))
+            return {"kind": "credit", "enabled": target}, no_change, effects
+        result, effects = await self._execute_external_active(
+            storage=storage,
+            mode=mode,
+            filename=filename,
+            action=action,
+            parameters=parameters,
+        )
+        return result, False, effects
 
     @staticmethod
     async def _apply_action(
@@ -676,12 +1012,26 @@ class ManagementService:
         self._validate_write_target(mode, filename)
         storage = await self._storage()
         backend = getattr(storage, "_backend", None)
-        capability = f"credential.{request.action if request.action != 'set_remark' else 'remark'}"
+        capability = ACTION_CAPABILITIES.get(
+            request.action, f"credential.{request.action}"
+        )
         if capability not in self._read_capabilities(backend, storage.get_backend_type()):
             raise ManagementApiError(
                 status_code=501,
                 code="CAPABILITY_NOT_SUPPORTED",
                 message="Credential action is unavailable",
+            )
+        if request.action in ("enable_preview", "disable_preview", "risk_check") and mode != "geminicli":
+            raise ManagementApiError(
+                status_code=501,
+                code="CAPABILITY_NOT_SUPPORTED",
+                message="Credential action is unavailable for this mode",
+            )
+        if request.action in ("enable_credit", "disable_credit") and mode != "antigravity":
+            raise ManagementApiError(
+                status_code=501,
+                code="CAPABILITY_NOT_SUPPORTED",
+                message="Credential action is unavailable for this mode",
             )
         fingerprint = self._fingerprint(
             "action",
@@ -728,6 +1078,7 @@ class ManagementService:
                         action=request.action,
                         state=state,
                         no_change=True,
+                        result=self._confirmed_active_result(request.action),
                     )
                 else:
                     if not exists:
@@ -749,6 +1100,17 @@ class ManagementService:
                             },
                         )
                         raise error
+                    if (
+                        recovering
+                        and request.action in EXTERNAL_ACTIVE_ACTIONS
+                    ):
+                        raise ManagementApiError(
+                            status_code=409,
+                            code="OUTCOME_UNKNOWN",
+                            message="Active operation outcome cannot be confirmed",
+                            retryable=True,
+                            details={"outcome_unknown": True},
+                        )
                     if request.action == "disable" and state.get("permanent_disabled") is True:
                         error = ManagementApiError(
                             status_code=409,
@@ -769,34 +1131,95 @@ class ManagementService:
                             },
                         )
                         raise error
-                    no_change = self._target_confirmed(
-                        request.action, request.parameters, exists, state
-                    )
-                    if not no_change:
-                        await self._apply_action(
-                            storage,
-                            mode=mode,
-                            filename=filename,
-                            action=request.action,
-                            parameters=request.parameters,
-                            state=state,
-                        )
+                    if request.action in ACTIVE_ACTIONS:
+                        try:
+                            result, no_change, side_effects = (
+                                await self._execute_active_action(
+                                    storage=storage,
+                                    backend=backend,
+                                    mode=mode,
+                                    filename=filename,
+                                    action=request.action,
+                                    parameters=request.parameters,
+                                    state=state,
+                                )
+                            )
+                        except ManagementApiError as error:
+                            error_detail = error.payload["error"]
+                            details = error_detail.get("details", {})
+                            if (
+                                error_detail["code"] == "RATE_LIMITED"
+                                or isinstance(details, dict)
+                                and details.get("outcome_unknown") is False
+                            ):
+                                await self._save_idempotency(
+                                    storage,
+                                    request.idempotency_key,
+                                    {
+                                        "fingerprint": fingerprint,
+                                        "state": "completed",
+                                        "error": {
+                                            "status_code": error.status_code,
+                                            **error.payload,
+                                        },
+                                    },
+                                )
+                            raise
                         exists, state = await self._current_state(storage, mode, filename)
-                        if not self._target_confirmed(
+                        if request.action in (
+                            "enable_preview",
+                            "enable_credit",
+                            "disable_credit",
+                        ) and not self._target_confirmed(
                             request.action, request.parameters, exists, state
                         ):
                             raise ManagementApiError(
-                                status_code=500,
-                                code="INTERNAL_ERROR",
-                                message="Credential action readback failed",
+                                status_code=409,
+                                code="OUTCOME_UNKNOWN",
+                                message="Active operation outcome cannot be confirmed",
+                                retryable=True,
+                                details={"outcome_unknown": True},
                             )
-                    response = self._action_success(
-                        mode=mode,
-                        filename=filename,
-                        action=request.action,
-                        state=state,
-                        no_change=no_change,
-                    )
+                        response = self._action_success(
+                            mode=mode,
+                            filename=filename,
+                            action=request.action,
+                            state=state,
+                            no_change=no_change,
+                            result=result,
+                            side_effects=side_effects,
+                        )
+                    else:
+                        no_change = self._target_confirmed(
+                            request.action, request.parameters, exists, state
+                        )
+                        if not no_change:
+                            await self._apply_action(
+                                storage,
+                                mode=mode,
+                                filename=filename,
+                                action=request.action,
+                                parameters=request.parameters,
+                                state=state,
+                            )
+                            exists, state = await self._current_state(
+                                storage, mode, filename
+                            )
+                            if not self._target_confirmed(
+                                request.action, request.parameters, exists, state
+                            ):
+                                raise ManagementApiError(
+                                    status_code=500,
+                                    code="INTERNAL_ERROR",
+                                    message="Credential action readback failed",
+                                )
+                        response = self._action_success(
+                            mode=mode,
+                            filename=filename,
+                            action=request.action,
+                            state=state,
+                            no_change=no_change,
+                        )
             await self._save_idempotency(
                 storage,
                 request.idempotency_key,
@@ -828,6 +1251,7 @@ class ManagementService:
                 status="succeeded",
                 no_change=response.no_change,
                 credential_status=response.credential.status,
+                result=response.result,
                 error=None,
                 side_effects=response.side_effects,
             )
@@ -840,6 +1264,7 @@ class ManagementService:
                 status="failed",
                 no_change=False,
                 credential_status=None,
+                result=None,
                 error=detail,
                 side_effects=[],
             )
@@ -851,6 +1276,7 @@ class ManagementService:
                 status="failed",
                 no_change=False,
                 credential_status=None,
+                result=None,
                 error={
                     "code": "INTERNAL_ERROR",
                     "message": "Credential action failed",

@@ -2,7 +2,7 @@
 
 状态：**Draft for Review**
 
-契约版本：`management-schema 1.0`
+契约版本：`management-schema 1.1`
 
 基础路径：`/management/v1`
 
@@ -34,7 +34,7 @@ Authorization: Bearer <NODE_MANAGEMENT_TOKEN>
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z"
@@ -131,7 +131,7 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z",
@@ -155,7 +155,7 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z",
@@ -199,7 +199,7 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z",
@@ -294,6 +294,11 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 | `enable_preview` | 可选且仅允许契约声明的Preview配置字段 |
 | 其余动作 | 必须为空对象`{}` |
 
+模式边界：`enable_preview`、`disable_preview`和`risk_check`只适用于`geminicli`；
+`enable_credit`和`disable_credit`只适用于`antigravity`；额度、错误、测试和冷却同步仅在
+对应mode确实有实现时才可执行。capability必须真实，mode不支持时返回501
+`CAPABILITY_NOT_SUPPORTED`，manager也必须在发送前禁用该操作。
+
 未知参数必须返回400 `INVALID_ACTION`，不得静默忽略。额度、测试和风险动作是否接受
 `model_name`由对应capability和OpenAPI schema进一步限制。
 
@@ -304,7 +309,7 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z",
@@ -316,6 +321,7 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
     "filename": "credential-001.json",
     "status": "disabled"
   },
+  "result": null,
   "error": null,
   "side_effects": []
 }
@@ -323,6 +329,27 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 
 额度、Preview、风险和测试必须通过`side_effects`说明可能发生的Token刷新、冷却同步或
 Google API调用。
+
+主动操作成功时必须返回经过白名单裁剪的`result`；普通状态操作返回`null`。新增字段仍按
+schema 1.x加法兼容处理：
+
+| 动作 | `result.kind` | 允许字段 |
+|---|---|---|
+| `enable_preview`、`disable_preview` | `preview` | `enabled` |
+| `enable_credit`、`disable_credit` | `credit` | `enabled` |
+| `quota` | `quota` | `captured_at`、`models[]`；每项只含`model_name`、`remaining_percent`、`resets_at` |
+| `errors` | `errors` | `entries[]`；每项只含`code`、`message`、`last_seen` |
+| `test` | `test` | `outcome`、`model_name`、`latency_ms` |
+| `risk_check` | `risk` | `level`、`codes[]` |
+| `sync_cooldown` | `cooldown_sync` | `model_cooldowns`（模型名到UTC时间或`null`） |
+
+manager从10分钟额度缓存返回结果时可加`cached=true`；节点不得自行把过期结果标记为缓存
+命中。所有未知、敏感或嵌套上游字段必须丢弃，不得返回Token、项目凭据、完整Google响应、
+请求/响应正文或完整凭证JSON。`remaining_percent`范围为0至100；未知数值和时间使用`null`。
+
+`side_effects`每项只允许`kind`、`description`和`occurred`。主动操作必须按实际情况使用
+`token_refreshed`、`google_api_called`、`cooldown_updated`、`credential_state_updated`或
+`quota_cache_hit`等稳定kind；不得把上游正文塞入`description`。
 
 ## 8. `POST /credentials/batch-actions`
 
@@ -351,7 +378,7 @@ Google API调用。
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z",
@@ -364,6 +391,7 @@ Google API调用。
       "status": "succeeded",
       "no_change": false,
       "credential_status": "disabled",
+      "result": null,
       "error": null,
       "side_effects": []
     }

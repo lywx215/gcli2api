@@ -19,7 +19,7 @@ BASELINE = PROJECT_ROOT / "docs" / "openapi" / "management-v1.openapi.json"
 def build_schema() -> dict[str, object]:
     app = FastAPI(
         title="gcli2api Management API",
-        version="management-schema-1.0",
+        version="management-schema-1.1",
         docs_url=None,
         redoc_url=None,
     )

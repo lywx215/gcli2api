@@ -10,6 +10,15 @@ CredentialAction = Literal[
     "permanent_disable",
     "delete",
     "set_remark",
+    "enable_preview",
+    "disable_preview",
+    "enable_credit",
+    "disable_credit",
+    "quota",
+    "errors",
+    "test",
+    "risk_check",
+    "sync_cooldown",
 ]
 CredentialMode = Literal["geminicli", "antigravity"]
 
@@ -19,7 +28,7 @@ class StrictModel(BaseModel):
 
 
 class CommonMetadata(StrictModel):
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     server_version: str
     revision: str
     generated_at: str
@@ -130,6 +139,22 @@ class CredentialActionRequest(StrictModel):
             remark = self.parameters.get("remark")
             if not isinstance(remark, str) or len(remark) > 500:
                 raise ValueError("remark must be a string of at most 500 characters")
+        elif self.action in ("test", "risk_check"):
+            if not set(self.parameters).issubset({"model_name"}):
+                raise ValueError("only model_name is accepted for this action")
+            model_name = self.parameters.get("model_name")
+            if model_name is not None and (
+                not isinstance(model_name, str)
+                or not model_name.strip()
+                or len(model_name) > 200
+            ):
+                raise ValueError("model_name must be a non-blank string of at most 200 characters")
+        elif self.action == "quota":
+            if not set(self.parameters).issubset({"refresh"}):
+                raise ValueError("quota accepts only refresh")
+            refresh = self.parameters.get("refresh")
+            if refresh is not None and not isinstance(refresh, bool):
+                raise ValueError("refresh must be a boolean")
         elif self.parameters:
             raise ValueError("action does not accept parameters")
         return self
@@ -142,9 +167,77 @@ class CredentialActionIdentity(StrictModel):
 
 
 class SideEffect(StrictModel):
-    kind: str
+    kind: Literal[
+        "credential_state_updated",
+        "token_refreshed",
+        "google_api_called",
+        "cooldown_updated",
+        "quota_cache_hit",
+    ]
     occurred: bool
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=200)
+
+
+class PreviewActionResult(StrictModel):
+    kind: Literal["preview"] = "preview"
+    enabled: bool
+
+
+class CreditActionResult(StrictModel):
+    kind: Literal["credit"] = "credit"
+    enabled: bool
+
+
+class QuotaModelResult(StrictModel):
+    model_name: str = Field(max_length=200)
+    remaining_percent: float | None
+    resets_at: str | None
+
+
+class QuotaActionResult(StrictModel):
+    kind: Literal["quota"] = "quota"
+    captured_at: str
+    models: list[QuotaModelResult] = Field(max_length=128)
+
+
+class ErrorEntryResult(StrictModel):
+    code: str = Field(max_length=64)
+    message: str | None = Field(default=None, max_length=500)
+    last_seen: str | None = None
+
+
+class ErrorsActionResult(StrictModel):
+    kind: Literal["errors"] = "errors"
+    entries: list[ErrorEntryResult] = Field(max_length=128)
+
+
+class TestActionResult(StrictModel):
+    kind: Literal["test"] = "test"
+    outcome: Literal["passed", "failed"]
+    model_name: str | None = Field(default=None, max_length=200)
+    latency_ms: float | None = Field(default=None, ge=0, le=3_600_000)
+
+
+class RiskActionResult(StrictModel):
+    kind: Literal["risk"] = "risk"
+    level: Literal["low", "medium", "high", "unknown"]
+    codes: list[str] = Field(max_length=64)
+
+
+class CooldownSyncActionResult(StrictModel):
+    kind: Literal["cooldown_sync"] = "cooldown_sync"
+    model_cooldowns: dict[str, str | None]
+
+
+ActiveActionResult = (
+    PreviewActionResult
+    | CreditActionResult
+    | QuotaActionResult
+    | ErrorsActionResult
+    | TestActionResult
+    | RiskActionResult
+    | CooldownSyncActionResult
+)
 
 
 class CredentialActionResponse(CommonMetadata):
@@ -152,6 +245,7 @@ class CredentialActionResponse(CommonMetadata):
     status: Literal["succeeded"] = "succeeded"
     no_change: bool
     credential: CredentialActionIdentity
+    result: ActiveActionResult | None = None
     error: None = None
     side_effects: list[SideEffect] = Field(default_factory=list)
 
@@ -196,6 +290,7 @@ class CredentialBatchActionResult(StrictModel):
     status: Literal["succeeded", "failed"]
     no_change: bool
     credential_status: Literal["enabled", "disabled", "permanent_disabled"] | None
+    result: ActiveActionResult | None = None
     error: ErrorDetail | None
     side_effects: list[SideEffect] = Field(default_factory=list)
 
