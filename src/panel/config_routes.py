@@ -2,6 +2,7 @@
 配置路由模块 - 处理 /config/* 相关的HTTP请求
 """
 
+import math
 import os
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,6 +19,28 @@ from .utils import get_env_locked_keys
 
 # 创建路由器
 router = APIRouter(prefix="/config", tags=["config"])
+
+
+def _validate_stream_latency_value(key: str, value):
+    spec = config.STREAM_LATENCY_CONFIG_SPECS[key]
+    if spec["type"] == "bool":
+        if not isinstance(value, bool):
+            raise HTTPException(status_code=400, detail=f"{key} 必须是布尔值")
+        return value
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HTTPException(status_code=400, detail=f"{key} 必须是数字")
+    if not math.isfinite(float(value)):
+        raise HTTPException(status_code=400, detail=f"{key} 必须是有限数字")
+    if spec["type"] == "int" and not isinstance(value, int):
+        raise HTTPException(status_code=400, detail=f"{key} 必须是整数")
+    parsed = int(value) if spec["type"] == "int" else float(value)
+    minimum = spec.get("ui_min", spec["min"])
+    if parsed < minimum or parsed > spec["max"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{key} 必须在 {minimum}–{spec['max']} 之间",
+        )
+    return parsed
 
 
 @router.get("/debug-storage")
@@ -201,7 +224,23 @@ async def get_config(token: str = Depends(verify_panel_token)):
             if key not in env_locked_keys:
                 current_config[key] = value
 
-        return JSONResponse(content={"config": current_config, "env_locked": list(env_locked_keys)})
+        # Stream/network settings are normalized after the generic storage merge.
+        current_config.update(await config.get_stream_latency_config())
+        runtime_effective = config.get_stream_latency_runtime_config()
+        restart_required = [
+            key
+            for key in config.STREAM_LATENCY_CONFIG_SPECS
+            if current_config.get(key) != runtime_effective.get(key)
+        ]
+
+        return JSONResponse(
+            content={
+                "config": current_config,
+                "env_locked": list(env_locked_keys),
+                "runtime_effective": runtime_effective,
+                "restart_required": restart_required,
+            }
+        )
 
     except Exception as e:
         log.error(f"获取配置失败: {e}")
@@ -214,6 +253,61 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
     try:
 
         new_config = request.config
+        env_locked_keys = get_env_locked_keys()
+
+        desired_stream_config = await config.get_stream_latency_config()
+        runtime_stream_config = config.get_stream_latency_runtime_config()
+        changed_stream_keys = set()
+        for key in config.STREAM_LATENCY_CONFIG_SPECS:
+            if key not in new_config or key in env_locked_keys:
+                continue
+            parsed = _validate_stream_latency_value(key, new_config[key])
+            new_config[key] = parsed
+            desired_stream_config[key] = parsed
+            changed_stream_keys.add(key)
+
+        if (
+            changed_stream_keys
+            & {
+                "geminicli_stream_header_hedge_delay",
+                "upstream_response_header_timeout",
+            }
+            and
+            desired_stream_config["geminicli_stream_header_hedge_delay"]
+            >= desired_stream_config["upstream_response_header_timeout"]
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="对冲启动延迟必须小于响应头超时",
+            )
+        if (
+            changed_stream_keys
+            & {
+                "upstream_response_header_timeout",
+                "stream_first_content_timeout",
+            }
+            and
+            desired_stream_config["upstream_response_header_timeout"]
+            > desired_stream_config["stream_first_content_timeout"]
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="响应头超时不得大于首个有效内容总预算",
+            )
+        if (
+            changed_stream_keys
+            & {
+                "upstream_first_event_timeout",
+                "stream_first_content_timeout",
+            }
+            and
+            desired_stream_config["upstream_first_event_timeout"]
+            > desired_stream_config["stream_first_content_timeout"]
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="首个上游事件超时不得大于首个有效内容总预算",
+            )
 
         if "smart_429_protection_enabled" in new_config:
             if not isinstance(new_config["smart_429_protection_enabled"], bool):
@@ -238,8 +332,9 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
             if (
                 not isinstance(new_config["retry_429_max_retries"], int)
                 or new_config["retry_429_max_retries"] < 0
+                or new_config["retry_429_max_retries"] > 50
             ):
-                raise HTTPException(status_code=400, detail="最大429重试次数必须是大于等于0的整数")
+                raise HTTPException(status_code=400, detail="额外状态码重试次数必须是0-50之间的整数")
 
         if "retry_429_enabled" in new_config:
             if not isinstance(new_config["retry_429_enabled"], bool):
@@ -364,7 +459,6 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
                 raise HTTPException(status_code=400, detail="访问密码必须是字符串")
 
         # 获取环境变量锁定的配置键
-        env_locked_keys = get_env_locked_keys()
         diagnostics_saved = (
             "stream_diagnostics_enabled" in new_config
             and "stream_diagnostics_enabled" not in env_locked_keys
@@ -389,6 +483,18 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
             workers = int(os.getenv("WORKERS", "1"))
         except (TypeError, ValueError):
             workers = 1
+        http_restart_keys = {
+            key
+            for key in changed_stream_keys
+            if config.STREAM_LATENCY_CONFIG_SPECS[key].get("restart")
+            and desired_stream_config[key] != runtime_stream_config[key]
+        }
+        hot_stream_keys = {
+            key
+            for key in changed_stream_keys
+            if not config.STREAM_LATENCY_CONFIG_SPECS[key].get("restart")
+            and desired_stream_config[key] != runtime_stream_config[key]
+        }
 
         # 直接使用存储适配器保存配置
         storage_adapter = await get_storage_adapter()
@@ -403,6 +509,8 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
             reload_stream_diagnostics=workers == 1,
             reload_capacity_fast_fail=workers == 1,
             reload_stream_header_hedge=workers == 1,
+            reload_stream_latency=workers == 1,
+            reload_http_transport=False,
         )
         from src.smart_429 import model_capacity_guard, smart_429_service
         await smart_429_service.reconfigure()
@@ -423,56 +531,66 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
         log.debug("配置保存后敏感字段读取验证完成")
 
         # 构建响应消息
+        hot_updated = [
+            key
+            for key, saved in (
+                ("stream_diagnostics_enabled", diagnostics_saved),
+                (
+                    "geminicli_capacity_fast_fail_enabled",
+                    capacity_fast_fail_saved,
+                ),
+                (
+                    "geminicli_stream_header_hedge_enabled",
+                    stream_header_hedge_saved,
+                ),
+                (
+                    "geminicli_stream_header_hedge_sample_rate",
+                    stream_header_hedge_sample_rate_saved,
+                ),
+                (
+                    "geminicli_stream_header_hedge_daily_budget",
+                    stream_header_hedge_daily_budget_saved,
+                ),
+            )
+            if saved and workers == 1
+        ]
+        if workers == 1:
+            hot_updated.extend(sorted(hot_stream_keys))
+
+        restart_required = [
+            key
+            for key, saved in (
+                ("stream_diagnostics_enabled", diagnostics_saved),
+                (
+                    "geminicli_capacity_fast_fail_enabled",
+                    capacity_fast_fail_saved,
+                ),
+                (
+                    "geminicli_stream_header_hedge_enabled",
+                    stream_header_hedge_saved,
+                ),
+                (
+                    "geminicli_stream_header_hedge_sample_rate",
+                    stream_header_hedge_sample_rate_saved,
+                ),
+                (
+                    "geminicli_stream_header_hedge_daily_budget",
+                    stream_header_hedge_daily_budget_saved,
+                ),
+            )
+            if saved and workers > 1
+        ]
+        restart_required.extend(sorted(http_restart_keys))
+        if workers > 1:
+            restart_required.extend(sorted(hot_stream_keys))
+        restart_required = list(dict.fromkeys(restart_required))
+
         response_data = {
             "message": "配置保存成功",
             "saved_config": {k: v for k, v in new_config.items() if k not in env_locked_keys},
             "smart_429": smart_429_service.status(),
-            "hot_updated": [
-                key
-                for key, saved in (
-                    ("stream_diagnostics_enabled", diagnostics_saved),
-                    (
-                        "geminicli_capacity_fast_fail_enabled",
-                        capacity_fast_fail_saved,
-                    ),
-                    (
-                        "geminicli_stream_header_hedge_enabled",
-                        stream_header_hedge_saved,
-                    ),
-                    (
-                        "geminicli_stream_header_hedge_sample_rate",
-                        stream_header_hedge_sample_rate_saved,
-                    ),
-                    (
-                        "geminicli_stream_header_hedge_daily_budget",
-                        stream_header_hedge_daily_budget_saved,
-                    ),
-                )
-                if saved and workers == 1
-            ],
-            "restart_required": [
-                key
-                for key, saved in (
-                    ("stream_diagnostics_enabled", diagnostics_saved),
-                    (
-                        "geminicli_capacity_fast_fail_enabled",
-                        capacity_fast_fail_saved,
-                    ),
-                    (
-                        "geminicli_stream_header_hedge_enabled",
-                        stream_header_hedge_saved,
-                    ),
-                    (
-                        "geminicli_stream_header_hedge_sample_rate",
-                        stream_header_hedge_sample_rate_saved,
-                    ),
-                    (
-                        "geminicli_stream_header_hedge_daily_budget",
-                        stream_header_hedge_daily_budget_saved,
-                    ),
-                )
-                if saved and workers > 1
-            ],
+            "hot_updated": hot_updated,
+            "restart_required": restart_required,
         }
         if (
             diagnostics_saved
@@ -480,9 +598,10 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
             or stream_header_hedge_saved
             or stream_header_hedge_sample_rate_saved
             or stream_header_hedge_daily_budget_saved
-        ) and workers > 1:
+            or changed_stream_keys
+        ) and (workers > 1 or http_restart_keys):
             response_data["restart_notice"] = (
-                "当前为多 Worker 模式，请重启全部 Worker 以统一应用诊断、容量保护和响应头对冲配置。"
+                "存在需要重启后生效的配置；多 Worker 部署必须重启全部 Worker。"
             )
 
         return JSONResponse(content=response_data)

@@ -3086,6 +3086,8 @@ async function loadConfig() {
         if (response.ok) {
             AppState.currentConfig = data.config;
             AppState.envLockedFields = new Set(data.env_locked || []);
+            AppState.runtimeEffective = data.runtime_effective || {};
+            AppState.restartRequiredFields = new Set(data.restart_required || []);
 
             populateConfigForm();
             form.classList.remove('hidden');
@@ -3124,8 +3126,8 @@ function populateConfigForm() {
     setConfigField('callsPerRotation', c.calls_per_rotation || 10);
 
     setConfigCheckbox('retry429Enabled', 'retry_429_enabled', c.retry_429_enabled);
-    setConfigField('retry429MaxRetries', c.retry_429_max_retries || 20);
-    setConfigField('retry429Interval', c.retry_429_interval || 0.1);
+    setConfigField('retry429MaxRetries', c.retry_429_max_retries ?? 5);
+    setConfigField('retry429Interval', c.retry_429_interval ?? 1);
     setConfigCheckbox(
         'smart429ProtectionEnabled',
         'smart_429_protection_enabled',
@@ -3143,6 +3145,40 @@ function populateConfigForm() {
         'streamDiagnosticsEnabled',
         'stream_diagnostics_enabled',
         c.stream_diagnostics_enabled
+    );
+    setConfigCheckbox(
+        'streamLatencyGuardEnabled',
+        'stream_latency_guard_enabled',
+        c.stream_latency_guard_enabled !== false
+    );
+    setConfigField('credentialAcquireTimeout', c.credential_acquire_timeout ?? 10);
+    setConfigField('oauthRefreshTimeout', c.oauth_refresh_timeout ?? 20);
+    setConfigField('upstreamPoolTimeout', c.upstream_pool_timeout ?? 5);
+    setConfigField('upstreamConnectTimeout', c.upstream_connect_timeout ?? 10);
+    setConfigField('upstreamWriteTimeout', c.upstream_write_timeout ?? 30);
+    setConfigField('upstreamResponseHeaderTimeout', c.upstream_response_header_timeout ?? 30);
+    setConfigField('upstreamFirstEventTimeout', c.upstream_first_event_timeout ?? 45);
+    setConfigField('streamFirstContentTimeout', c.stream_first_content_timeout ?? 75);
+    setConfigField('upstreamStreamIdleTimeout', c.upstream_stream_idle_timeout ?? 90);
+    setConfigField('streamTransportMaxAttempts', c.stream_transport_max_attempts ?? 2);
+    setConfigField('nonstreamTransportMaxAttempts', c.nonstream_transport_max_attempts ?? 2);
+    setConfigField(
+        'streamPerfLogSampleRate',
+        Math.round((c.stream_perf_log_sample_rate ?? 0.01) * 100)
+    );
+    setConfigCheckbox(
+        'upstreamHttp2Enabled',
+        'upstream_http2_enabled',
+        c.upstream_http2_enabled
+    );
+    setConfigField('upstreamHttp2ClientMaxAge', c.upstream_http2_client_max_age ?? 2700);
+    setConfigField(
+        'geminicliStreamHeaderHedgeDelay',
+        c.geminicli_stream_header_hedge_delay ?? 15
+    );
+    setConfigField(
+        'geminicliStreamHeaderHedgeMaxInflight',
+        c.geminicli_stream_header_hedge_max_inflight ?? 20
     );
     setConfigCheckbox(
         'geminicliCapacityFastFailEnabled',
@@ -3173,6 +3209,20 @@ function populateConfigForm() {
 
     setConfigField('keepaliveUrl', c.keepalive_url || '');
     setConfigField('keepaliveInterval', c.keepalive_interval || 60);
+
+    const guard = document.getElementById('streamLatencyGuardEnabled');
+    if (guard) guard.onchange = updateStreamLatencyUiState;
+    [
+        'upstreamResponseHeaderTimeout',
+        'streamFirstContentTimeout',
+        'streamTransportMaxAttempts',
+        'upstreamHttp2Enabled',
+        'retry429MaxRetries'
+    ].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.oninput = updateStreamLatencyUiState;
+    });
+    updateStreamLatencyUiState();
 }
 
 function setConfigField(fieldId, value) {
@@ -3207,6 +3257,53 @@ function setConfigCheckbox(fieldId, configKey, value) {
     if (lockNote) lockNote.hidden = !locked;
 }
 
+function updateStreamLatencyUiState() {
+    const guard = document.getElementById('streamLatencyGuardEnabled');
+    if (!guard) return;
+    const enabled = guard.checked;
+    const dependentIds = [
+        'upstreamFirstEventTimeout',
+        'streamFirstContentTimeout',
+        'upstreamStreamIdleTimeout',
+        'streamTransportMaxAttempts',
+        'geminicliStreamHeaderHedgeDelay',
+        'geminicliStreamHeaderHedgeMaxInflight',
+        'geminicliStreamHeaderHedgeEnabled',
+        'geminicliStreamHeaderHedgeSampleRate',
+        'geminicliStreamHeaderHedgeDailyBudget'
+    ];
+    dependentIds.forEach(id => {
+        const element = document.getElementById(id);
+        if (!element) return;
+        const key = id.replace(/([A-Z])/g, '_$1').toLowerCase();
+        element.disabled = !enabled || AppState.envLockedFields.has(key);
+        element.closest('[data-stream-guard-dependent]')?.classList.toggle('config-disabled', !enabled);
+    });
+
+    const warning = document.getElementById('streamLatencyGuardWarning');
+    if (warning) warning.hidden = enabled;
+    const headerTimeout = parseFloat(document.getElementById('upstreamResponseHeaderTimeout')?.value) || 30;
+    const attempts = parseInt(document.getElementById('streamTransportMaxAttempts')?.value) || 2;
+    const firstContent = parseFloat(document.getElementById('streamFirstContentTimeout')?.value) || 75;
+    const http2 = Boolean(document.getElementById('upstreamHttp2Enabled')?.checked);
+    const pending = AppState.restartRequiredFields?.size > 0;
+    const summary = document.getElementById('streamLatencySummary');
+    if (summary) {
+        summary.textContent = `· ${enabled ? '保护开启' : '保护关闭'} · 响应头 ${headerTimeout}s · 流式 ${attempts} 次 · HTTP/2 ${http2 ? '开' : '关'}${pending ? ' · 待重启' : ''}`;
+    }
+    const worstCase = document.getElementById('streamLatencyWorstCase');
+    if (worstCase) {
+        worstCase.textContent = enabled
+            ? `不超过 ${firstContent} 秒；响应头串行预算约 ${Math.min(firstContent, headerTimeout * attempts)} 秒。`
+            : `单次响应头硬超时 ${headerTimeout} 秒，不进行首字慢额外调用。`;
+    }
+    const retryWarning = document.getElementById('retryCallEstimate');
+    if (retryWarning) {
+        const retries = parseInt(document.getElementById('retry429MaxRetries')?.value) || 0;
+        retryWarning.textContent = `状态码总调用上限为 ${retries + 1} 次；该重试独立于首字延迟保护。${retries > 1 ? ' 较高的重试次数可能增加账号额度消耗。' : ''}`;
+    }
+}
+
 async function saveConfig() {
     try {
         const getValue = (id, def = '') => document.getElementById(id)?.value.trim() || def;
@@ -3239,8 +3336,8 @@ async function saveConfig() {
                 .map(c => parseInt(c.trim())).filter(c => !isNaN(c)),
             calls_per_rotation: getInt('callsPerRotation', 10),
             retry_429_enabled: getChecked('retry429Enabled'),
-            retry_429_max_retries: getInt('retry429MaxRetries', 20),
-            retry_429_interval: getFloat('retry429Interval', 0.1),
+            retry_429_max_retries: getInt('retry429MaxRetries', 5),
+            retry_429_interval: getFloat('retry429Interval', 1),
             smart_429_protection_enabled: getChecked('smart429ProtectionEnabled'),
             smart_429_max_attempts: getInt('smart429MaxAttempts', 3),
             smart_429_retry_base_interval: getFloat('smart429RetryBaseInterval', 0.5),
@@ -3250,6 +3347,26 @@ async function saveConfig() {
             antigravity_switch_credential_enabled: getChecked('antigravitySwitchCredentialEnabled'),
             debug_mode: getChecked('debugMode'),
             stream_diagnostics_enabled: getChecked('streamDiagnosticsEnabled'),
+            stream_latency_guard_enabled: getChecked('streamLatencyGuardEnabled'),
+            credential_acquire_timeout: getFloat('credentialAcquireTimeout', 10),
+            oauth_refresh_timeout: getFloat('oauthRefreshTimeout', 20),
+            upstream_pool_timeout: getFloat('upstreamPoolTimeout', 5),
+            upstream_connect_timeout: getFloat('upstreamConnectTimeout', 10),
+            upstream_write_timeout: getFloat('upstreamWriteTimeout', 30),
+            upstream_response_header_timeout: getFloat('upstreamResponseHeaderTimeout', 30),
+            upstream_first_event_timeout: getFloat('upstreamFirstEventTimeout', 45),
+            stream_first_content_timeout: getFloat('streamFirstContentTimeout', 75),
+            upstream_stream_idle_timeout: getFloat('upstreamStreamIdleTimeout', 90),
+            stream_transport_max_attempts: getInt('streamTransportMaxAttempts', 2),
+            nonstream_transport_max_attempts: getInt('nonstreamTransportMaxAttempts', 2),
+            stream_perf_log_sample_rate:
+                Math.min(100, Math.max(0, getFloat('streamPerfLogSampleRate', 1))) / 100,
+            upstream_http2_enabled: getChecked('upstreamHttp2Enabled'),
+            upstream_http2_client_max_age: getFloat('upstreamHttp2ClientMaxAge', 2700),
+            geminicli_stream_header_hedge_delay:
+                getFloat('geminicliStreamHeaderHedgeDelay', 15),
+            geminicli_stream_header_hedge_max_inflight:
+                getInt('geminicliStreamHeaderHedgeMaxInflight', 20),
             geminicli_capacity_fast_fail_enabled: getChecked('geminicliCapacityFastFailEnabled'),
             geminicli_stream_header_hedge_enabled: getChecked('geminicliStreamHeaderHedgeEnabled'),
             geminicli_stream_header_hedge_sample_rate:
@@ -3261,6 +3378,19 @@ async function saveConfig() {
             keepalive_url: getValue('keepaliveUrl'),
             keepalive_interval: getInt('keepaliveInterval', 60)
         };
+
+        if (config.geminicli_stream_header_hedge_delay >= config.upstream_response_header_timeout) {
+            showStatus('保存配置失败：对冲启动延迟必须小于响应头超时', 'error');
+            return;
+        }
+        if (config.upstream_response_header_timeout > config.stream_first_content_timeout) {
+            showStatus('保存配置失败：响应头超时不得大于首个有效内容总预算', 'error');
+            return;
+        }
+        if (config.upstream_first_event_timeout > config.stream_first_content_timeout) {
+            showStatus('保存配置失败：首个上游事件超时不得大于首个有效内容总预算', 'error');
+            return;
+        }
 
         const response = await fetch('./config/save', {
             method: 'POST',

@@ -367,8 +367,10 @@ async def open_stream_post(
     headers_received_event: Optional[asyncio.Event] = None,
 ) -> AsyncGenerator[UpstreamStream, None]:
     """Open a streaming response with a bounded response-header phase."""
-    config = StreamLatencyConfig.from_env()
     trace = trace or current_stream_trace()
+    config = (
+        trace.config_snapshot if trace is not None else StreamLatencyConfig.from_env()
+    )
     headers_started_at = time.perf_counter()
     if trace and "waiting_headers" not in trace.timings_ms:
         trace.mark("waiting_headers", phase=StreamPhase.WAITING_HEADERS)
@@ -510,7 +512,10 @@ async def stream_post_async(
 ):
     """Compatibility iterator used by both upstream API clients."""
     del kwargs
-    config = StreamLatencyConfig.from_env()
+    trace = current_stream_trace()
+    config = (
+        trace.config_snapshot if trace is not None else StreamLatencyConfig.from_env()
+    )
     error_response: Optional[Response] = None
     async with open_stream_post(
         url,

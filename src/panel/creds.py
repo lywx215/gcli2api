@@ -26,7 +26,11 @@ from src.models import (
 from src.storage_adapter import get_storage_adapter
 from src.utils import verify_panel_token, GEMINICLI_USER_AGENT, ANTIGRAVITY_USER_AGENT
 from src.api.antigravity import fetch_quota_info
-from src.api.utils import check_should_auto_ban, parse_and_log_cooldown
+from src.api.utils import (
+    check_should_auto_ban,
+    get_resource_exhausted_fallback_seconds,
+    parse_and_log_cooldown,
+)
 from src.smart_429 import (
     Upstream429Kind,
     classify_upstream_429,
@@ -200,19 +204,7 @@ async def sync_model_cooldowns_from_quota(
         if existing_until is not None and existing_until > now:
             continue
 
-        cooldown_until = None
-        raw_reset_time = info.get("resetTimeRaw") or ""
-        if raw_reset_time:
-            try:
-                cooldown_until = datetime.fromisoformat(
-                    raw_reset_time.replace("Z", "+00:00")
-                ).timestamp()
-                if cooldown_until < now + 60:
-                    cooldown_until = None
-            except (TypeError, ValueError):
-                cooldown_until = None
-        if cooldown_until is None:
-            cooldown_until = now + 4 * 3600
+        cooldown_until = _resolve_quota_cooldown_until(info, mode=mode, now=now)
 
         if await backend.set_model_cooldown(
             filename, model_name, cooldown_until, mode=mode
@@ -220,6 +212,26 @@ async def sync_model_cooldowns_from_quota(
             added.append(model_name)
 
     return {"cleared": cleared, "added": added}
+
+
+def _resolve_quota_cooldown_until(
+    quota_entry: dict,
+    *,
+    mode: str,
+    now: float,
+) -> float:
+    """优先采用 Google reset；缺失时使用对应渠道的缺省冷却。"""
+    raw_reset_time = quota_entry.get("resetTimeRaw") or ""
+    if raw_reset_time:
+        try:
+            cooldown_until = datetime.fromisoformat(
+                raw_reset_time.replace("Z", "+00:00")
+            ).timestamp()
+            if cooldown_until > now + 60:
+                return cooldown_until
+        except (TypeError, ValueError):
+            pass
+    return now + get_resource_exhausted_fallback_seconds(mode)
 
 
 async def _detect_uploaded_geminicli_subscription(
@@ -1708,7 +1720,7 @@ async def batch_refresh_cooldown(
          → 解除冷却（capacity 抖动等误锁）
       3. 加冷方向（补漏锁）：
          实时 quota 里 remaining=0 的模型，如果当前没在冷却 / 冷却已过期
-         → 写入冷却（quotaResetTimeStamp 优先，否则 4h 兜底）
+         → 写入冷却（quotaResetTimeStamp 优先，否则按渠道兜底）
       4. 不再使用 "系列" 粗粒度匹配，flash-lite 等独立 bucket 不会牵连普通 flash
       5. 返回汇总结果
     """
@@ -1761,21 +1773,6 @@ async def batch_refresh_cooldown(
                     cooldown_skipped_active = []  # 不动：模型 quota=0 但已经在冷却中（无需重复）
 
                     now = time.time()
-                    DEFAULT_COOLDOWN_HOURS = 4
-
-                    def _resolve_cooldown_until_for_model(quota_entry: dict) -> float:
-                        # 优先用 Google 给的 resetTimeRaw，必须是未来时间且非 epoch 0
-                        from datetime import datetime as _dt
-                        raw = quota_entry.get("resetTimeRaw") or ""
-                        if raw:
-                            try:
-                                iso = raw.replace("Z", "+00:00")
-                                ts = _dt.fromisoformat(iso).timestamp()
-                                if ts > now + 60:
-                                    return ts
-                            except Exception:
-                                pass
-                        return now + DEFAULT_COOLDOWN_HOURS * 3600
 
                     if can_set_cooldown:
                         # === 解冷方向 ===
@@ -1821,7 +1818,9 @@ async def batch_refresh_cooldown(
                                 cooldown_skipped_active.append(model_name)
                                 continue
 
-                            cooldown_until = _resolve_cooldown_until_for_model(info)
+                            cooldown_until = _resolve_quota_cooldown_until(
+                                info, mode=mode, now=now
+                            )
                             ok = await backend.set_model_cooldown(
                                 filename, model_name, cooldown_until, mode=mode
                             )

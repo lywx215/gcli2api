@@ -86,3 +86,33 @@ def test_hedge_cost_controls_and_card_exist_on_both_panels():
     assert "./creds/hedge-stats?days=7" in common_js
     assert "geminicli_stream_header_hedge_sample_rate:" in common_js
     assert "geminicli_stream_header_hedge_daily_budget:" in common_js
+
+
+def test_stream_latency_advanced_controls_exist_on_both_panels():
+    front_dir = Path(__file__).parent / "front"
+    required_ids = (
+        "streamLatencyGuardEnabled",
+        "upstreamResponseHeaderTimeout",
+        "upstreamFirstEventTimeout",
+        "streamFirstContentTimeout",
+        "upstreamStreamIdleTimeout",
+        "streamTransportMaxAttempts",
+        "nonstreamTransportMaxAttempts",
+        "streamPerfLogSampleRate",
+        "upstreamHttp2Enabled",
+        "upstreamHttp2ClientMaxAge",
+        "geminicliStreamHeaderHedgeDelay",
+        "geminicliStreamHeaderHedgeMaxInflight",
+    )
+    for filename in ("control_panel.html", "control_panel_mobile.html"):
+        html = (front_dir / filename).read_text(encoding="utf-8")
+        for field_id in required_ids:
+            assert html.count(f'id="{field_id}"') == 1
+        assert "流式首字延迟保护（全部渠道）" in html
+        assert "额外状态码重试次数" in html
+
+    common_js = (front_dir / "common.js").read_text(encoding="utf-8")
+    assert "function updateStreamLatencyUiState()" in common_js
+    assert "stream_latency_guard_enabled:" in common_js
+    assert "upstream_response_header_timeout:" in common_js
+    assert "upstream_http2_enabled:" in common_js

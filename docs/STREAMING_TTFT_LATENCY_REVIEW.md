@@ -262,7 +262,7 @@ Antigravity 的全部行为。
 | `UPSTREAM_CONNECT_TIMEOUT` | 10s | 1–60s | DNS/TCP/TLS 建连上限 |
 | `UPSTREAM_POOL_TIMEOUT` | 5s | 1–60s | 本地连接池等待上限 |
 | `UPSTREAM_WRITE_TIMEOUT` | 30s | 1–120s | 上传请求体上限 |
-| `UPSTREAM_RESPONSE_HEADER_TIMEOUT` | 20s | 1–300s | 等待 Google HTTP 响应头 |
+| `UPSTREAM_RESPONSE_HEADER_TIMEOUT` | 30s | 1–300s | 等待 Google HTTP 响应头 |
 | `UPSTREAM_FIRST_EVENT_TIMEOUT` | 45s | 1–300s | 200 后等待首个 SSE event |
 | `STREAM_FIRST_CONTENT_TIMEOUT` | 75s | 1–600s | 等待首段可展示内容 |
 | `UPSTREAM_STREAM_IDLE_TIMEOUT` | 90s | 5–600s | 流中两次上游数据之间的空闲上限 |
@@ -271,6 +271,11 @@ Antigravity 的全部行为。
 超时分类必须保留具体异常：`connect_timeout`、`pool_timeout`、
 `write_timeout`、`response_header_timeout`、`first_event_timeout`、
 `first_content_timeout`、`stream_idle_timeout`、`oauth_refresh_timeout`。
+
+控制面板现在可持久化全部上述 TTFT 与上游传输参数。环境变量命中时对应字段只读；单 Worker 的
+请求级参数保存后热更新，多 Worker 提示重启。HTTP/2 开关及 Client 最大存活时间始终重启生效。
+“流式首字延迟保护”关闭时不执行首事件、首内容、idle、GeminiCLI 传输切换和响应头对冲，但响应头等
+基础硬超时继续生效，因此关闭该开关不会隐藏或消除真实的 502/504。
 
 为保持现有下游重试语义：
 
@@ -795,7 +800,7 @@ Worker 保存后提示重启全部 Worker。若设置 `STREAM_DIAGNOSTICS_ENABLE
 | 凭证获取 | 10 秒 | 504 |
 | OAuth 刷新 | 20 秒 | 排除当前凭证；无替代凭证时 503 |
 | 连接池 / TCP / 写入 | 5 / 10 / 30 秒 | 超时 504，其他连接错误 502 |
-| 响应头 / 首事件 | 20 / 45 秒 | 允许首事件前安全切换一次凭证 |
+| 响应头 / 首事件 | 30 / 45 秒 | 允许首事件前安全切换一次凭证 |
 | 首个下游有效内容 | 总预算 75 秒 | 504 |
 | 流中空闲 | 90 秒 | 协议原生终止错误，不重试 |
 

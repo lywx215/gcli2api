@@ -211,6 +211,8 @@ async def test_panel_reports_single_or_multi_worker_activation(
             "reload_stream_diagnostics": reload_diagnostics,
             "reload_capacity_fast_fail": reload_diagnostics,
             "reload_stream_header_hedge": reload_diagnostics,
+            "reload_stream_latency": reload_diagnostics,
+            "reload_http_transport": False,
         }
     ]
     assert payload[result_key] == ["stream_diagnostics_enabled"]
@@ -334,6 +336,8 @@ async def test_panel_hot_updates_capacity_fast_fail(monkeypatch):
             "reload_stream_diagnostics": True,
             "reload_capacity_fast_fail": True,
             "reload_stream_header_hedge": True,
+            "reload_stream_latency": True,
+            "reload_http_transport": False,
         }
     ]
     assert payload["hot_updated"] == ["geminicli_capacity_fast_fail_enabled"]
@@ -418,6 +422,8 @@ async def test_panel_hot_updates_stream_header_hedge(monkeypatch):
             "reload_stream_diagnostics": True,
             "reload_capacity_fast_fail": True,
             "reload_stream_header_hedge": True,
+            "reload_stream_latency": True,
+            "reload_http_transport": False,
         }
     ]
     assert payload["hot_updated"] == ["geminicli_stream_header_hedge_enabled"]
@@ -469,6 +475,8 @@ async def test_panel_requires_restart_for_stream_header_hedge_with_multiple_work
             "reload_stream_diagnostics": False,
             "reload_capacity_fast_fail": False,
             "reload_stream_header_hedge": False,
+            "reload_stream_latency": False,
+            "reload_http_transport": False,
         }
     ]
     assert payload["hot_updated"] == []
@@ -587,5 +595,7 @@ async def test_panel_hot_updates_hedge_sample_rate_and_budget(monkeypatch):
             "reload_stream_diagnostics": True,
             "reload_capacity_fast_fail": True,
             "reload_stream_header_hedge": True,
+            "reload_stream_latency": True,
+            "reload_http_transport": False,
         }
     ]

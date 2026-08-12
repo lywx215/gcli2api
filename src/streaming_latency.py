@@ -68,7 +68,7 @@ class StreamLatencyConfig:
     pool_timeout: float = 5.0
     connect_timeout: float = 10.0
     write_timeout: float = 30.0
-    response_header_timeout: float = 20.0
+    response_header_timeout: float = 30.0
     first_event_timeout: float = 45.0
     first_content_timeout: float = 75.0
     idle_timeout: float = 90.0
@@ -90,41 +90,41 @@ class StreamLatencyConfig:
         from config import (
             get_cached_geminicli_stream_header_hedge_daily_budget,
             get_cached_geminicli_stream_header_hedge_sample_rate,
+            get_stream_latency_runtime_config,
             is_geminicli_stream_header_hedge_enabled,
             is_stream_diagnostics_enabled,
         )
 
+        runtime = get_stream_latency_runtime_config()
+        guard_enabled = bool(runtime["stream_latency_guard_enabled"])
         return cls(
-            credential_acquire_timeout=_env_float("CREDENTIAL_ACQUIRE_TIMEOUT", 10.0),
-            oauth_refresh_timeout=_env_float("OAUTH_REFRESH_TIMEOUT", 20.0),
-            pool_timeout=_env_float("UPSTREAM_POOL_TIMEOUT", 5.0),
-            connect_timeout=_env_float("UPSTREAM_CONNECT_TIMEOUT", 10.0),
-            write_timeout=_env_float("UPSTREAM_WRITE_TIMEOUT", 30.0),
-            response_header_timeout=_env_float("UPSTREAM_RESPONSE_HEADER_TIMEOUT", 20.0),
-            first_event_timeout=_env_float("UPSTREAM_FIRST_EVENT_TIMEOUT", 45.0),
-            first_content_timeout=_env_float("STREAM_FIRST_CONTENT_TIMEOUT", 75.0),
-            idle_timeout=_env_float("UPSTREAM_STREAM_IDLE_TIMEOUT", 90.0),
-            transport_max_attempts=_env_int("STREAM_TRANSPORT_MAX_ATTEMPTS", 2, 1, 5),
-            nonstream_transport_max_attempts=_env_int(
-                "NONSTREAM_TRANSPORT_MAX_ATTEMPTS", 2, 1, 5
-            ),
-            perf_log_sample_rate=min(1.0, _env_float("STREAM_PERF_LOG_SAMPLE_RATE", 0.01, 0.0)),
-            guard_enabled=_env_bool("STREAM_LATENCY_GUARD_ENABLED", True),
+            credential_acquire_timeout=runtime["credential_acquire_timeout"],
+            oauth_refresh_timeout=runtime["oauth_refresh_timeout"],
+            pool_timeout=runtime["upstream_pool_timeout"],
+            connect_timeout=runtime["upstream_connect_timeout"],
+            write_timeout=runtime["upstream_write_timeout"],
+            response_header_timeout=runtime["upstream_response_header_timeout"],
+            first_event_timeout=runtime["upstream_first_event_timeout"],
+            first_content_timeout=runtime["stream_first_content_timeout"],
+            idle_timeout=runtime["upstream_stream_idle_timeout"],
+            transport_max_attempts=runtime["stream_transport_max_attempts"],
+            nonstream_transport_max_attempts=runtime[
+                "nonstream_transport_max_attempts"
+            ],
+            perf_log_sample_rate=runtime["stream_perf_log_sample_rate"],
+            guard_enabled=guard_enabled,
             diagnostics_enabled=is_stream_diagnostics_enabled(),
-            upstream_http2_enabled=_env_bool("UPSTREAM_HTTP2_ENABLED", False),
-            upstream_http2_client_max_age=_env_float(
-                "UPSTREAM_HTTP2_CLIENT_MAX_AGE", 2700.0, 0.0
+            upstream_http2_enabled=runtime["upstream_http2_enabled"],
+            upstream_http2_client_max_age=runtime[
+                "upstream_http2_client_max_age"
+            ],
+            header_hedge_enabled=(
+                guard_enabled and is_geminicli_stream_header_hedge_enabled()
             ),
-            header_hedge_enabled=is_geminicli_stream_header_hedge_enabled(),
-            header_hedge_delay=_env_float(
-                "GEMINICLI_STREAM_HEADER_HEDGE_DELAY", 15.0
-            ),
-            header_hedge_max_inflight=_env_int(
-                "GEMINICLI_STREAM_HEADER_HEDGE_MAX_INFLIGHT",
-                20,
-                1,
-                100,
-            ),
+            header_hedge_delay=runtime["geminicli_stream_header_hedge_delay"],
+            header_hedge_max_inflight=runtime[
+                "geminicli_stream_header_hedge_max_inflight"
+            ],
             header_hedge_sample_rate=(
                 get_cached_geminicli_stream_header_hedge_sample_rate()
             ),
@@ -206,8 +206,10 @@ class StreamFailure(Exception):
         return render_public_error(self, protocol="gemini", request_id=self.request_id)
 
 
-def _default_hedge_trace() -> Dict[str, Any]:
-    config = StreamLatencyConfig.from_env()
+def _default_hedge_trace(
+    config: Optional[StreamLatencyConfig] = None,
+) -> Dict[str, Any]:
+    config = config or StreamLatencyConfig.from_env()
     return {
         "enabled": config.header_hedge_enabled,
         "sampled": False,
@@ -235,12 +237,12 @@ class StreamRequestTrace:
     upstream_request_id: Optional[str] = None
     client_request_id: Optional[str] = None
     credential_hash: Optional[str] = None
-    diagnostics_enabled: bool = field(
-        default_factory=lambda: StreamLatencyConfig.from_env().diagnostics_enabled
+    config_snapshot: StreamLatencyConfig = field(
+        default_factory=StreamLatencyConfig.from_env,
+        repr=False,
     )
-    perf_log_sample_rate: float = field(
-        default_factory=lambda: StreamLatencyConfig.from_env().perf_log_sample_rate
-    )
+    diagnostics_enabled: Optional[bool] = None
+    perf_log_sample_rate: Optional[float] = None
     timings_ms: Dict[str, float] = field(default_factory=dict)
     retries: Dict[str, Any] = field(
         default_factory=lambda: {
@@ -251,10 +253,8 @@ class StreamRequestTrace:
             "reasons": [],
         }
     )
-    upstream_http2_enabled: bool = field(
-        default_factory=lambda: StreamLatencyConfig.from_env().upstream_http2_enabled
-    )
-    hedge: Dict[str, Any] = field(default_factory=_default_hedge_trace)
+    upstream_http2_enabled: Optional[bool] = None
+    hedge: Dict[str, Any] = field(default_factory=dict)
     last_failure: Optional[Dict[str, Any]] = None
     attempt_details: list[Dict[str, Any]] = field(default_factory=list)
     stream: Dict[str, Any] = field(
@@ -272,6 +272,18 @@ class StreamRequestTrace:
     _attempt_started_at_by_id: Dict[int, float] = field(default_factory=dict, repr=False)
     _last_upstream_event_at: Optional[float] = field(default=None, repr=False)
     _logged: bool = field(default=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.diagnostics_enabled is None:
+            self.diagnostics_enabled = self.config_snapshot.diagnostics_enabled
+        if self.perf_log_sample_rate is None:
+            self.perf_log_sample_rate = self.config_snapshot.perf_log_sample_rate
+        if self.upstream_http2_enabled is None:
+            self.upstream_http2_enabled = (
+                self.config_snapshot.upstream_http2_enabled
+            )
+        if not self.hedge:
+            self.hedge = _default_hedge_trace(self.config_snapshot)
 
     def mark(self, name: str, *, phase: Optional[StreamPhase] = None) -> None:
         now = time.perf_counter()
@@ -465,7 +477,7 @@ class StreamRequestTrace:
             )
 
     def remaining_first_content(self) -> float:
-        configured = StreamLatencyConfig.from_env().first_content_timeout
+        configured = self.config_snapshot.first_content_timeout
         return max(0.0, configured - (time.perf_counter() - self.started_at))
 
     def finish(self, result: str, *, force_log: bool = False) -> None:

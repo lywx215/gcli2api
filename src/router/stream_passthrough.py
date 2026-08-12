@@ -63,7 +63,7 @@ async def build_streaming_response_or_error(
     trace.protocol = protocol
     trace.set_client_request_id(client_request_id)
     token = bind_stream_trace(trace)
-    config = StreamLatencyConfig.from_env()
+    config = trace.config_snapshot
     try:
         if config.guard_enabled:
             remaining = trace.remaining_first_content()

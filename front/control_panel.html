@@ -2382,15 +2382,15 @@
                             <div class="form-group">
                                 <label>
                                     <input type="checkbox" id="retry429Enabled" class="config-checkbox" />
-                                    启用错误重试
+                                    启用上游状态码重试
                                 </label>
-                                <small class="config-note">遇到错误时自动重试</small>
+                                <small class="config-note">处理 429/500/503；独立于流式首字延迟保护</small>
                             </div>
 
                             <div class="form-group">
-                                <label for="retry429MaxRetries">错误重试次数:</label>
-                                <input type="number" id="retry429MaxRetries" class="config-input" min="1" max="50" />
-                                <small class="config-note">遇到错误时的最大重试次数</small>
+                                <label for="retry429MaxRetries">额外状态码重试次数:</label>
+                                <input type="number" id="retry429MaxRetries" class="config-input" min="0" max="50" />
+                                <small id="retryCallEstimate" class="config-note"></small>
                             </div>
 
                             <div class="form-group">
@@ -2411,6 +2411,7 @@
                             <div class="form-group">
                                 <label for="smart429MaxAttempts">单请求最多尝试次数:</label>
                                 <input type="number" id="smart429MaxAttempts" class="config-input" min="1" max="5" value="3" />
+                                <small class="config-note">包含首次上游调用</small>
                             </div>
                             <div class="form-group">
                                 <label for="smart429RetryBaseInterval">退避基准间隔(秒):</label>
@@ -2508,6 +2509,48 @@
                                     <br><strong>采样：</strong>慢请求、失败和重试全量记录，普通成功请求默认采样 1%。
                                 </div>
                             </div>
+
+                            <details id="streamLatencyAdvanced" class="form-group"
+                                style="border:1px solid #90caf9;border-radius:8px;padding:12px;">
+                                <summary style="cursor:pointer;font-weight:600;">
+                                    流式 TTFT 与上游传输高级配置
+                                    <span id="streamLatencySummary" style="font-weight:400;color:#666;margin-left:8px;"></span>
+                                </summary>
+                                <div style="margin-top:12px;">
+                                    <label>
+                                        <input type="checkbox" id="streamLatencyGuardEnabled" class="config-checkbox" />
+                                        流式首字延迟保护（全部渠道）
+                                        <span id="streamLatencyGuardEnabledEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span>
+                                    </label>
+                                    <small class="config-note">关闭后停止首事件、首内容、idle 保护以及 GeminiCLI 首内容前切凭证和对冲；基础硬超时仍生效。</small>
+                                    <div id="streamLatencyGuardWarning" class="config-info" hidden
+                                        style="background:#fff3cd;border:1px solid #ffc107;color:#856404;">
+                                        首字延迟保护已关闭：慢请求不会切换凭证或启动对冲，响应头超时仍会返回 504。
+                                    </div>
+                                </div>
+                                <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px;">
+                                    <label>凭证获取超时（秒）<input type="number" id="credentialAcquireTimeout" class="config-input" min="1" max="60" step="1" /><span id="credentialAcquireTimeoutEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span></label>
+                                    <label>OAuth 刷新超时（秒）<input type="number" id="oauthRefreshTimeout" class="config-input" min="1" max="60" step="1" /><span id="oauthRefreshTimeoutEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span></label>
+                                    <label>连接池等待超时（秒）<input type="number" id="upstreamPoolTimeout" class="config-input" min="1" max="60" step="1" /><span id="upstreamPoolTimeoutEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span></label>
+                                    <label>TCP/代理连接超时（秒）<input type="number" id="upstreamConnectTimeout" class="config-input" min="1" max="60" step="1" /><span id="upstreamConnectTimeoutEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span></label>
+                                    <label>请求写入超时（秒）<input type="number" id="upstreamWriteTimeout" class="config-input" min="1" max="120" step="1" /><span id="upstreamWriteTimeoutEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span></label>
+                                    <label>响应头超时（秒）<input type="number" id="upstreamResponseHeaderTimeout" class="config-input" min="1" max="300" step="1" /><span id="upstreamResponseHeaderTimeoutEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span></label>
+                                    <label data-stream-guard-dependent>首个上游事件超时（秒）<input type="number" id="upstreamFirstEventTimeout" class="config-input" min="1" max="300" step="1" /><span id="upstreamFirstEventTimeoutEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span></label>
+                                    <label data-stream-guard-dependent>首个有效内容总预算（秒）<input type="number" id="streamFirstContentTimeout" class="config-input" min="1" max="600" step="1" /><span id="streamFirstContentTimeoutEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span></label>
+                                    <label data-stream-guard-dependent>流空闲超时（秒）<input type="number" id="upstreamStreamIdleTimeout" class="config-input" min="5" max="600" step="1" /><span id="upstreamStreamIdleTimeoutEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span></label>
+                                    <label data-stream-guard-dependent>流式传输最大尝试（含首次）<input type="number" id="streamTransportMaxAttempts" class="config-input" min="1" max="5" step="1" /><span id="streamTransportMaxAttemptsEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span></label>
+                                    <label>非流式传输最大尝试（含首次）<input type="number" id="nonstreamTransportMaxAttempts" class="config-input" min="1" max="5" step="1" /><span id="nonstreamTransportMaxAttemptsEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span></label>
+                                    <label>成功诊断采样率（%）<input type="number" id="streamPerfLogSampleRate" class="config-input" min="0" max="100" step="1" /><span id="streamPerfLogSampleRateEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span></label>
+                                    <label><input type="checkbox" id="upstreamHttp2Enabled" class="config-checkbox" /> 上游 HTTP/2 <span id="upstreamHttp2EnabledEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span></label>
+                                    <label>HTTP/2 Client 最大存活（秒）<input type="number" id="upstreamHttp2ClientMaxAge" class="config-input" min="0" max="86400" step="1" /><span id="upstreamHttp2ClientMaxAgeEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span></label>
+                                    <label data-stream-guard-dependent>对冲启动延迟（秒）<input type="number" id="geminicliStreamHeaderHedgeDelay" class="config-input" min="0.1" max="300" step="0.1" /><span id="geminicliStreamHeaderHedgeDelayEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span></label>
+                                    <label data-stream-guard-dependent>单 Worker 对冲并发上限<input type="number" id="geminicliStreamHeaderHedgeMaxInflight" class="config-input" min="1" max="100" step="1" /><span id="geminicliStreamHeaderHedgeMaxInflightEnvLock" hidden style="color:#dc3545;">环境变量已锁定</span></label>
+                                </div>
+                                <div class="config-info" style="background:#e3f2fd;border:1px solid #2196f3;color:#0d47a1;">
+                                    <strong>最坏决策估算：</strong><span id="streamLatencyWorstCase"></span>
+                                    <br>HTTP/2 及其 Client 存活时间保存后需要重启；多 Worker 的全部修改均需重启。
+                                </div>
+                            </details>
 
                             <div class="form-group">
                                 <label>

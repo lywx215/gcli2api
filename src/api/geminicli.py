@@ -769,7 +769,7 @@ async def stream_request(
     trace = current_stream_trace() or StreamRequestTrace(
         model=body.get("model", ""), protocol="gemini"
     )
-    latency_config = StreamLatencyConfig.from_env()
+    latency_config = trace.config_snapshot
 
     # 获取有效凭证
     model_name = body.get("model", "")
@@ -789,9 +789,12 @@ async def stream_request(
     credential_started = time.perf_counter()
     trace.phase = StreamPhase.SELECTING_CREDENTIAL
     try:
-        async with asyncio.timeout(
-            min(latency_config.credential_acquire_timeout, trace.remaining_first_content())
-        ):
+        credential_timeout = latency_config.credential_acquire_timeout
+        if latency_config.guard_enabled:
+            credential_timeout = min(
+                credential_timeout, trace.remaining_first_content()
+            )
+        async with asyncio.timeout(credential_timeout):
             cred_result = await credential_manager.get_valid_credential(
                 mode="geminicli", model_name=model_name
             )
@@ -1325,7 +1328,8 @@ async def stream_request(
             transport_failures += 1
             trace.retry_reason = e.stage
             if (
-                e.connection_invalidated
+                latency_config.guard_enabled
+                and e.connection_invalidated
                 and transport_failures < latency_config.transport_max_attempts
                 and attempt < max_total_retries
                 and trace.remaining_first_content() > 0

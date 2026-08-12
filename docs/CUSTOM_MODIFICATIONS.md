@@ -141,30 +141,30 @@ comm -13 <(git diff --name-only "$base"..origin/dev6 | sort) <(git diff --name-o
 | `STORAGE_ENGINE` | 仅在 `.env.example` 中声明的引擎选择项 | 文档默认 `sqlite` | 当前 adapter 未读取，属于已知不一致，不得假定已生效 |
 | `STREAM_DIAGNOSTICS_ENABLED` | `stream_diagnostics_enabled`；TTFT 结构化日志与 `Server-Timing` | `false` | 环境变量锁定优先；单 Worker 可从控制面板热更新，多 Worker 保存后需重启 |
 | `GEMINICLI_STREAM_HEADER_HEDGE_ENABLED` | `geminicli_stream_header_hedge_enabled`；GeminiCLI 真流响应头对冲 | `false` | 环境变量锁定优先；单 Worker 热更新，多 Worker 保存后需重启 |
-| `GEMINICLI_STREAM_HEADER_HEDGE_DELAY` | 首请求无响应头后启动备用请求的延迟 | `15` 秒，正数 | 仅无响应头时触发；已收到响应头不得对冲 |
-| `GEMINICLI_STREAM_HEADER_HEDGE_MAX_INFLIGHT` | 单 Worker 同时存在的备用请求上限 | `20`，范围 1–100 | 非阻塞获取；达到上限时回退原串行策略 |
+| `GEMINICLI_STREAM_HEADER_HEDGE_DELAY` | `geminicli_stream_header_hedge_delay`；首请求无响应头后启动备用请求的延迟 | `15` 秒，页面范围 0.1–300 | 环境变量锁定；必须小于响应头超时；单 Worker 热更新 |
+| `GEMINICLI_STREAM_HEADER_HEDGE_MAX_INFLIGHT` | `geminicli_stream_header_hedge_max_inflight`；单 Worker同时存在的备用请求上限 | `20`，范围 1–100 | 环境变量锁定；达到上限时跳过对冲；单 Worker热更新 |
 | `GEMINICLI_STREAM_HEADER_HEDGE_SAMPLE_RATE` | 满足条件的对冲采样率 | `0.05`，范围 0–1 | 控制面板显示 0–100%；环境变量锁定，单 Worker 热更新 |
 | `GEMINICLI_STREAM_HEADER_HEDGE_DAILY_BUDGET` | 每个备用凭证、每个模型族的北京时间每日预算 | `10`，范围 0–1000 | `0` 禁止备用请求；环境变量锁定，单 Worker 热更新 |
-| `UPSTREAM_HTTP2_ENABLED` | 上游 HTTP/2 连接复用 | `false` | 仅环境变量控制；修改后重启；HTTPX 可自动回退 HTTP/1.1 |
-| `UPSTREAM_HTTP2_CLIENT_MAX_AGE` | HTTP/2 client generation 主动轮换周期 | `2700` 秒；`0` 禁用 | 到期后只让新请求使用新 generation，旧活动流排空后关闭 |
-| `NONSTREAM_TRANSPORT_MAX_ATTEMPTS` | 非流式连接类故障的最大传输尝试次数 | `2`，范围 1–5 | 仅 pool/connect 类故障立即重试；read/write 和业务状态不得重复调用 |
-| `STREAM_LATENCY_GUARD_ENABLED` | 首事件、首内容、idle 超时及安全切换 | `true` | 关闭后仍保留基础连接/OAuth 上限和首事件后禁止重试 |
-| `STREAM_PERF_LOG_SAMPLE_RATE` | 正常成功流的性能摘要采样率 | `0.01`，范围 0–1 | 慢请求、失败和重试不受采样率限制；不得记录请求体、token 或代理凭证 |
+| `UPSTREAM_HTTP2_ENABLED` | `upstream_http2_enabled`；上游 HTTP/2 连接复用 | `false` | 页面或环境变量配置；保存后重启；HTTPX 可自动回退 HTTP/1.1 |
+| `UPSTREAM_HTTP2_CLIENT_MAX_AGE` | `upstream_http2_client_max_age`；HTTP/2 client generation 主动轮换周期 | `2700` 秒；`0` 禁用 | 页面或环境变量配置；保存后重启；旧活动流排空后关闭 |
+| `NONSTREAM_TRANSPORT_MAX_ATTEMPTS` | `nonstream_transport_max_attempts`；非流式连接类故障最大尝试 | `2`，范围 1–5 | 环境变量锁定；单 Worker热更新；仅 pool/connect 类故障立即重试 |
+| `STREAM_LATENCY_GUARD_ENABLED` | `stream_latency_guard_enabled`；全部渠道首字延迟保护总开关 | `true` | 关闭时停止首事件/首内容/idle、GeminiCLI传输切换和对冲；基础硬超时保留 |
+| `STREAM_PERF_LOG_SAMPLE_RATE` | `stream_perf_log_sample_rate`；正常成功流性能摘要采样率 | `0.01`，范围 0–1 | 页面显示百分比；环境变量锁定；慢请求、失败和重试不受采样率限制 |
 | `CREDENTIAL_ACQUIRE_TIMEOUT` | 获取可用凭证的总时限 | `10` 秒，正数 | 超时必须转为有阶段信息的 504；没有合格凭证则保持 503，不能无限等待 |
 | `OAUTH_REFRESH_TIMEOUT` | 阻塞式 OAuth 刷新上限 | `20` 秒，正数 | 超时属于临时失败，不得据此永久禁用凭证 |
 | `UPSTREAM_POOL_TIMEOUT` | 从共享 HTTP 池获取连接的上限 | `5` 秒，正数 | 与 connect/read 阶段分开记录 |
 | `UPSTREAM_CONNECT_TIMEOUT` | 上游 TCP/TLS 连接上限 | `10` 秒，正数 | 仅首个有效事件前允许按预算切换凭证 |
 | `UPSTREAM_WRITE_TIMEOUT` | 向上游写请求的上限 | `30` 秒，正数 | 不得恢复旧的 900 秒通用等待 |
-| `UPSTREAM_RESPONSE_HEADER_TIMEOUT` | 等待上游响应头上限 | `20` 秒，正数 | 到期返回 504；不得收到 200 响应头就提前向客户端提交成功 |
+| `UPSTREAM_RESPONSE_HEADER_TIMEOUT` | `upstream_response_header_timeout`；等待上游响应头上限 | `30` 秒，页面范围 1–300 | 环境变量锁定；到期返回 504；关闭首字保护仍生效 |
 | `UPSTREAM_FIRST_EVENT_TIMEOUT` | 收到首个有效上游事件上限 | `45` 秒，正数 | 首事件前才可重试；首事件后禁止重放 |
 | `STREAM_FIRST_CONTENT_TIMEOUT` | 从请求开始到首个下游内容的总预算 | `75` 秒，正数 | 跨凭证尝试共享预算，不得每次重试重置计时 |
 | `UPSTREAM_STREAM_IDLE_TIMEOUT` | 已开始流的相邻事件空闲上限 | `90` 秒，正数 | HTTP 已提交时只能发送协议原生终止错误并关闭 |
 | `STREAM_TRANSPORT_MAX_ATTEMPTS` | 流式传输最大尝试次数 | `2`，范围 1–5 | 每次必须使用不同凭证；不包含内容开始后的重试 |
 
 配置读取顺序是：命中的环境变量先锁定对应键，存储后端配置只补充未锁定键；
-`config.init_config()`/`reload_config()` 再把 debug、TTFT diagnostics、routing 和 SMART 429 值刷新到同步热路径缓存。
-除诊断、容量快速失败和响应头对冲三个布尔开关外，dev6 的 TTFT 数值参数当前主要由环境变量构造请求级配置快照；
-同步时不得擅自把它们改成数据库配置或改变默认值、单位和范围。
+`config.init_config()`/`reload_config()` 再刷新同步运行时缓存。TTFT 数值、传输尝试、HTTP/2、对冲延迟和并发上限
+均可由控制面板保存；单 Worker 的请求级参数热更新，多 Worker全部提示重启。HTTP/2及 Client 最大存活时间无论
+Worker 数量均在重启后生效。每个请求只读取一次不可变配置快照，进行中的流不得被页面修改影响。
 
 ## 4. 智能 429 保护契约
 
@@ -774,3 +774,26 @@ dev6 v1 明确没有实现以下行为，同步时不能以“优化”为名私
   模型回显继续以 fork 为准。
 - `version.txt` 记录已吸收的上游功能提交 `10b4918`；实际发布版本仍由 fork 构建元数据决定。
 - 完整冲突记录、取舍和验证结果见 `docs/UPSTREAM_SYNC_20260803.md`。
+
+### 18.1 GeminiCLI 缺省额度冷却
+
+- GeminiCLI 的 `RESOURCE_EXHAUSTED` 只有在现有分类规则允许写入持久模型冷却、且 Google
+  未提供 `quotaResetTimeStamp` 或 `quotaResetDelay` 时，才使用 30 分钟缺省兜底。
+- Google 明确返回的绝对重置时间或相对延迟始终优先，不以 30 分钟截断；Antigravity 的缺省
+  兜底继续保持 4 小时。运行时错误解析、单凭证额度同步和批量额度同步必须使用同一渠道规则。
+- 该调整只影响部署后新写入的冷却。已有记录不迁移、不截短，会按原截止时间自然到期，或在实时
+  额度恢复后由现有同步流程清除。
+- SMART 容量短冷却、GeminiCLI 容量快速失败保护器和风险凭证复检周期不属于本规则，不得随之改变。
+
+### 18.2 TTFT 与上游传输控制面板
+
+- 桌面版和移动版控制面板提供统一的“流式 TTFT 与上游传输高级配置”，覆盖凭证、OAuth、连接池、
+  connect、write、响应头、首事件、首内容、idle、流式/非流式传输尝试、诊断采样、HTTP/2 及对冲延迟/并发。
+- “流式首字延迟保护（全部渠道）”与“流式 TTFT 诊断”完全独立。关闭诊断只停止结构化摘要；关闭延迟保护
+  才会停止首事件/首内容/idle 保护、GeminiCLI 首内容前切换凭证及响应头对冲。
+- 延迟保护关闭后仍保留凭证、OAuth、pool、connect、write 和响应头硬超时，因此真实 502/504 及其运行日志
+  仍然存在。状态码重试、容量快速失败和首内容后禁止重试也不受该开关影响。
+- 环境变量优先并锁定对应页面字段。单 Worker 的请求级参数热更新且只影响新请求；多 Worker 全部提示重启。
+  HTTP/2 开关及 Client 最大存活时间始终重启生效，配置接口同时返回期望值、当前 Worker 实际值和待重启字段。
+- 普通状态码重试在页面明确显示为“额外重试次数”，默认 5，即总调用上限为 6；SMART 最大尝试数则包含首次。
+  两者不得再以相同的“重试次数”文案混淆。

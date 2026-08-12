@@ -6,6 +6,7 @@ Centralizes all configuration to avoid duplication across modules.
 - 修改配置时调用 reload_config() 重新从数据库加载
 """
 
+import math
 import os
 from typing import Any, Optional
 
@@ -26,6 +27,10 @@ _geminicli_capacity_fast_fail_enabled_cache: bool = False
 _geminicli_stream_header_hedge_enabled_cache: bool = False
 _geminicli_stream_header_hedge_sample_rate_cache: float = 0.05
 _geminicli_stream_header_hedge_daily_budget_cache: int = 10
+
+# Request-level streaming/network settings. Values are loaded from storage at
+# startup and refreshed only when it is safe for the current worker topology.
+_stream_latency_runtime_cache: dict[str, Any] = {}
 
 # 轮巡模式同步缓存（热路径使用）
 _routing_mode_cache: str = "normal"
@@ -79,7 +84,79 @@ ENV_MAPPINGS = {
     "GEMINICLI_STREAM_HEADER_HEDGE_ENABLED": "geminicli_stream_header_hedge_enabled",
     "GEMINICLI_STREAM_HEADER_HEDGE_SAMPLE_RATE": "geminicli_stream_header_hedge_sample_rate",
     "GEMINICLI_STREAM_HEADER_HEDGE_DAILY_BUDGET": "geminicli_stream_header_hedge_daily_budget",
+    "STREAM_LATENCY_GUARD_ENABLED": "stream_latency_guard_enabled",
+    "CREDENTIAL_ACQUIRE_TIMEOUT": "credential_acquire_timeout",
+    "OAUTH_REFRESH_TIMEOUT": "oauth_refresh_timeout",
+    "UPSTREAM_POOL_TIMEOUT": "upstream_pool_timeout",
+    "UPSTREAM_CONNECT_TIMEOUT": "upstream_connect_timeout",
+    "UPSTREAM_WRITE_TIMEOUT": "upstream_write_timeout",
+    "UPSTREAM_RESPONSE_HEADER_TIMEOUT": "upstream_response_header_timeout",
+    "UPSTREAM_FIRST_EVENT_TIMEOUT": "upstream_first_event_timeout",
+    "STREAM_FIRST_CONTENT_TIMEOUT": "stream_first_content_timeout",
+    "UPSTREAM_STREAM_IDLE_TIMEOUT": "upstream_stream_idle_timeout",
+    "STREAM_TRANSPORT_MAX_ATTEMPTS": "stream_transport_max_attempts",
+    "NONSTREAM_TRANSPORT_MAX_ATTEMPTS": "nonstream_transport_max_attempts",
+    "STREAM_PERF_LOG_SAMPLE_RATE": "stream_perf_log_sample_rate",
+    "UPSTREAM_HTTP2_ENABLED": "upstream_http2_enabled",
+    "UPSTREAM_HTTP2_CLIENT_MAX_AGE": "upstream_http2_client_max_age",
+    "GEMINICLI_STREAM_HEADER_HEDGE_DELAY": "geminicli_stream_header_hedge_delay",
+    "GEMINICLI_STREAM_HEADER_HEDGE_MAX_INFLIGHT": "geminicli_stream_header_hedge_max_inflight",
     "ROUTING_MODE": "routing_mode",
+}
+
+
+STREAM_LATENCY_CONFIG_SPECS: dict[str, dict[str, Any]] = {
+    "stream_latency_guard_enabled": {
+        "env": "STREAM_LATENCY_GUARD_ENABLED", "default": True, "type": "bool"
+    },
+    "credential_acquire_timeout": {
+        "env": "CREDENTIAL_ACQUIRE_TIMEOUT", "default": 10.0, "type": "float", "min": 0.01, "ui_min": 1.0, "max": 60.0
+    },
+    "oauth_refresh_timeout": {
+        "env": "OAUTH_REFRESH_TIMEOUT", "default": 20.0, "type": "float", "min": 0.01, "ui_min": 1.0, "max": 60.0
+    },
+    "upstream_pool_timeout": {
+        "env": "UPSTREAM_POOL_TIMEOUT", "default": 5.0, "type": "float", "min": 0.01, "ui_min": 1.0, "max": 60.0
+    },
+    "upstream_connect_timeout": {
+        "env": "UPSTREAM_CONNECT_TIMEOUT", "default": 10.0, "type": "float", "min": 0.01, "ui_min": 1.0, "max": 60.0
+    },
+    "upstream_write_timeout": {
+        "env": "UPSTREAM_WRITE_TIMEOUT", "default": 30.0, "type": "float", "min": 0.01, "ui_min": 1.0, "max": 120.0
+    },
+    "upstream_response_header_timeout": {
+        "env": "UPSTREAM_RESPONSE_HEADER_TIMEOUT", "default": 30.0, "type": "float", "min": 0.01, "ui_min": 1.0, "max": 300.0
+    },
+    "upstream_first_event_timeout": {
+        "env": "UPSTREAM_FIRST_EVENT_TIMEOUT", "default": 45.0, "type": "float", "min": 0.01, "ui_min": 1.0, "max": 300.0
+    },
+    "stream_first_content_timeout": {
+        "env": "STREAM_FIRST_CONTENT_TIMEOUT", "default": 75.0, "type": "float", "min": 0.01, "ui_min": 1.0, "max": 600.0
+    },
+    "upstream_stream_idle_timeout": {
+        "env": "UPSTREAM_STREAM_IDLE_TIMEOUT", "default": 90.0, "type": "float", "min": 0.01, "ui_min": 5.0, "max": 600.0
+    },
+    "stream_transport_max_attempts": {
+        "env": "STREAM_TRANSPORT_MAX_ATTEMPTS", "default": 2, "type": "int", "min": 1, "max": 5
+    },
+    "nonstream_transport_max_attempts": {
+        "env": "NONSTREAM_TRANSPORT_MAX_ATTEMPTS", "default": 2, "type": "int", "min": 1, "max": 5
+    },
+    "stream_perf_log_sample_rate": {
+        "env": "STREAM_PERF_LOG_SAMPLE_RATE", "default": 0.01, "type": "float", "min": 0.0, "max": 1.0
+    },
+    "upstream_http2_enabled": {
+        "env": "UPSTREAM_HTTP2_ENABLED", "default": False, "type": "bool", "restart": True
+    },
+    "upstream_http2_client_max_age": {
+        "env": "UPSTREAM_HTTP2_CLIENT_MAX_AGE", "default": 2700.0, "type": "float", "min": 0.0, "max": 86400.0, "restart": True
+    },
+    "geminicli_stream_header_hedge_delay": {
+        "env": "GEMINICLI_STREAM_HEADER_HEDGE_DELAY", "default": 15.0, "type": "float", "min": 0.01, "ui_min": 0.1, "max": 300.0
+    },
+    "geminicli_stream_header_hedge_max_inflight": {
+        "env": "GEMINICLI_STREAM_HEADER_HEDGE_MAX_INFLIGHT", "default": 20, "type": "int", "min": 1, "max": 100
+    },
 }
 
 
@@ -92,6 +169,7 @@ async def init_config():
     global _geminicli_stream_header_hedge_enabled_cache
     global _geminicli_stream_header_hedge_sample_rate_cache
     global _geminicli_stream_header_hedge_daily_budget_cache
+    global _stream_latency_runtime_cache
     global _smart_429_enabled_cache, _smart_429_max_attempts_cache, _smart_429_retry_base_interval_cache
 
     if _config_initialized:
@@ -122,6 +200,7 @@ async def init_config():
     _geminicli_stream_header_hedge_daily_budget_cache = (
         await get_geminicli_stream_header_hedge_daily_budget()
     )
+    _stream_latency_runtime_cache = await get_stream_latency_config()
     _routing_mode_cache = await get_routing_mode()
     _smart_429_enabled_cache = await get_smart_429_protection_enabled()
     _smart_429_max_attempts_cache = await get_smart_429_max_attempts()
@@ -133,6 +212,8 @@ async def reload_config(
     reload_stream_diagnostics: bool = True,
     reload_capacity_fast_fail: bool = True,
     reload_stream_header_hedge: bool = True,
+    reload_stream_latency: bool = True,
+    reload_http_transport: bool = False,
 ):
     """重新加载配置（修改配置后调用）"""
     global _config_cache, _config_initialized, _debug_mode_cache, _routing_mode_cache
@@ -140,6 +221,7 @@ async def reload_config(
     global _geminicli_stream_header_hedge_enabled_cache
     global _geminicli_stream_header_hedge_sample_rate_cache
     global _geminicli_stream_header_hedge_daily_budget_cache
+    global _stream_latency_runtime_cache
     global _smart_429_enabled_cache, _smart_429_max_attempts_cache, _smart_429_retry_base_interval_cache
 
     try:
@@ -174,6 +256,15 @@ async def reload_config(
         _geminicli_stream_header_hedge_daily_budget_cache = (
             await get_geminicli_stream_header_hedge_daily_budget()
         )
+    if reload_stream_latency:
+        updated_stream_settings = await get_stream_latency_config()
+        if not reload_http_transport and _stream_latency_runtime_cache:
+            for key, spec in STREAM_LATENCY_CONFIG_SPECS.items():
+                if spec.get("restart"):
+                    updated_stream_settings[key] = _stream_latency_runtime_cache.get(
+                        key, spec["default"]
+                    )
+        _stream_latency_runtime_cache = updated_stream_settings
     _routing_mode_cache = await get_routing_mode()
     _smart_429_enabled_cache = await get_smart_429_protection_enabled()
     _smart_429_max_attempts_cache = await get_smart_429_max_attempts()
@@ -183,6 +274,56 @@ async def reload_config(
 def _get_cached_config(key: str, default: Any = None) -> Any:
     """从内存缓存获取配置（同步）"""
     return _config_cache.get(key, default)
+
+
+def _normalize_stream_latency_value(key: str, value: Any) -> Any:
+    spec = STREAM_LATENCY_CONFIG_SPECS[key]
+    default = spec["default"]
+    value_type = spec["type"]
+    try:
+        if value_type == "bool":
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized in {"true", "1", "yes", "on"}:
+                    return True
+                if normalized in {"false", "0", "no", "off"}:
+                    return False
+            raise ValueError
+        if isinstance(value, bool):
+            raise ValueError
+        parsed = int(value) if value_type == "int" else float(value)
+        if isinstance(parsed, float) and not math.isfinite(parsed):
+            raise ValueError
+        if parsed < spec["min"] or parsed > spec["max"]:
+            raise ValueError
+        return parsed
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+async def get_stream_latency_config() -> dict[str, Any]:
+    """Return desired stream/network settings with environment precedence."""
+    values: dict[str, Any] = {}
+    for key, spec in STREAM_LATENCY_CONFIG_SPECS.items():
+        raw = await get_config_value(key, spec["default"], spec["env"])
+        values[key] = _normalize_stream_latency_value(key, raw)
+    return values
+
+
+def get_stream_latency_runtime_config() -> dict[str, Any]:
+    """Return the current worker's immutable-source settings for new requests."""
+    values = {
+        key: _stream_latency_runtime_cache.get(key, spec["default"])
+        for key, spec in STREAM_LATENCY_CONFIG_SPECS.items()
+    }
+    # Explicit environment settings always win, including false/zero values.
+    for key, spec in STREAM_LATENCY_CONFIG_SPECS.items():
+        raw = os.getenv(spec["env"])
+        if raw is not None:
+            values[key] = _normalize_stream_latency_value(key, raw)
+    return values
 
 
 async def get_config_value(key: str, default: Any = None, env_var: Optional[str] = None) -> Any:
