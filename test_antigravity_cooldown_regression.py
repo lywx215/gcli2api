@@ -128,7 +128,7 @@ async def test_antigravity_explicit_quota_429_keeps_persistent_cooldown():
     )
 
     assert cooldown_until is not None
-    assert before + 4 * 3600 - 1 <= cooldown_until <= time.time() + 4 * 3600 + 1
+    assert before + 30 * 60 - 1 <= cooldown_until <= time.time() + 30 * 60 + 1
 
 
 async def test_positive_live_quota_clears_existing_model_cooldown():

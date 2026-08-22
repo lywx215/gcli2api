@@ -27,7 +27,11 @@ def _response_body(response: Any) -> dict[str, object]:
     return response if isinstance(response, dict) else {}
 
 
-def _future_cooldown(raw: object, now: float) -> float:
+def _future_cooldown(
+    raw: object,
+    now: float,
+    fallback_cooldown_seconds: float,
+) -> float:
     if isinstance(raw, str) and raw:
         try:
             parsed = datetime.fromisoformat(raw)
@@ -38,7 +42,7 @@ def _future_cooldown(raw: object, now: float) -> float:
                 return timestamp
         except ValueError:
             pass
-    return now + 4 * 60 * 60
+    return now + fallback_cooldown_seconds
 
 
 class PanelActiveOperations:
@@ -165,6 +169,7 @@ class PanelActiveOperations:
     async def _sync_cooldown(
         *, filename: str, mode: str, storage: Any
     ) -> dict[str, object]:
+        from config import get_quota_fallback_cooldown_minutes
         from src.panel.creds import _fetch_quota_for_credential
 
         quota = await _fetch_quota_for_credential(filename, mode=mode)
@@ -179,6 +184,9 @@ class PanelActiveOperations:
             cooldowns = {}
         backend = getattr(storage, "_backend", None)
         now = time.time()
+        fallback_cooldown_seconds = (
+            await get_quota_fallback_cooldown_minutes()
+        ) * 60
         for raw_model, raw_info in list(models.items())[:128]:
             if not isinstance(raw_model, str) or not isinstance(raw_info, dict):
                 continue
@@ -198,7 +206,11 @@ class PanelActiveOperations:
                 await backend.set_model_cooldown(
                     filename,
                     raw_model,
-                    _future_cooldown(raw_info.get("resetTimeRaw"), now),
+                    _future_cooldown(
+                        raw_info.get("resetTimeRaw"),
+                        now,
+                        fallback_cooldown_seconds,
+                    ),
                     mode=mode,
                 )
         current = await storage.get_credential_state(filename, mode=mode)

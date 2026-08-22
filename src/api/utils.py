@@ -16,6 +16,7 @@ from config import (
     get_retry_429_enabled,
     get_retry_429_interval,
     get_retry_429_max_retries,
+    get_quota_fallback_cooldown_minutes,
     get_smart_429_max_attempts,
     get_smart_429_retry_base_interval,
     is_smart_429_protection_enabled,
@@ -326,7 +327,11 @@ async def parse_and_log_cooldown(
                     "[ANTIGRAVITY] 429 未包含明确额度耗尽信息，跳过持久模型冷却"
                 )
                 return None
-        cooldown_until = parse_quota_reset_timestamp(error_data)
+        fallback_minutes = await get_quota_fallback_cooldown_minutes()
+        cooldown_until = parse_quota_reset_timestamp(
+            error_data,
+            fallback_cooldown_seconds=fallback_minutes * 60,
+        )
         if cooldown_until:
             log.info(
                 f"[{mode.upper()}] 检测到quota冷却时间: "
@@ -544,17 +549,19 @@ async def collect_streaming_response(stream_generator) -> Response:
     )
 
 
-RESOURCE_EXHAUSTED_COOLDOWN_HOURS = 4  # RESOURCE_EXHAUSTED 错误的默认冷却时间（小时）
-
 # Google 返回的 reason 中表示"服务端容量挤爆"（不是用户额度耗尽）的标记。
-# 这种情况通常几秒就恢复，不应该用 4h 兜底锁死，否则会把可用凭证误判为冷却。
+# 这种情况通常几秒就恢复，不应该用额度兜底冷却锁死，否则会把可用凭证误判为冷却。
 CAPACITY_EXHAUSTED_REASONS = {
     "MODEL_CAPACITY_EXHAUSTED",
     "NO_CAPACITY_AVAILABLE",
 }
 
 
-def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
+def parse_quota_reset_timestamp(
+    error_response: dict,
+    *,
+    fallback_cooldown_seconds: float,
+) -> Optional[float]:
     """
     从Google API错误响应中提取quota重置时间戳
 
@@ -565,7 +572,7 @@ def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
         Unix时间戳（秒），如果无法解析则返回None
 
     设计要点：
-      - QUOTA_EXHAUSTED（用户每日额度耗尽）走 4h 兜底
+      - QUOTA_EXHAUSTED（用户每日额度耗尽）使用统一配置的兜底时间
       - MODEL_CAPACITY_EXHAUSTED（Google 服务端排队挤爆，常见于 preview 模型）
         没有可解析的 reset 字段时直接返回 None，不锁冷却。
         这种 429 通常 2-3 秒就恢复，由调度器重试一次即可。
@@ -633,7 +640,7 @@ def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
                         if delay_sec > 0:
                             return _time.time() + delay_sec
 
-        # 优先级 3: 仅当确认是"用户每日额度耗尽"才兜底 4h。
+        # 优先级 3: 仅当确认是"用户每日额度耗尽"才使用配置的兜底时间。
         # 容量挤爆类 reason（MODEL_CAPACITY_EXHAUSTED 等）不锁冷却。
         if error_obj.get("status") == "RESOURCE_EXHAUSTED":
             if reasons & CAPACITY_EXHAUSTED_REASONS and "QUOTA_EXHAUSTED" not in reasons:
@@ -641,7 +648,7 @@ def parse_quota_reset_timestamp(error_response: dict) -> Optional[float]:
                 return None
             if is_smart_429_protection_enabled() and "QUOTA_EXHAUSTED" not in reasons:
                 return None
-            return _time.time() + RESOURCE_EXHAUSTED_COOLDOWN_HOURS * 3600
+            return _time.time() + fallback_cooldown_seconds
 
         return None
 

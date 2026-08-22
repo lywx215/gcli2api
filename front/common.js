@@ -3129,6 +3129,7 @@ function populateConfigForm() {
     if (smart429Enabled) smart429Enabled.checked = Boolean(c.smart_429_protection_enabled);
     setConfigField('smart429MaxAttempts', c.smart_429_max_attempts || 3);
     setConfigField('smart429RetryBaseInterval', c.smart_429_retry_base_interval || 0.5);
+    setConfigField('quotaFallbackCooldownMinutes', c.quota_fallback_cooldown_minutes || 30);
 
     document.getElementById('compatibilityModeEnabled').checked = Boolean(c.compatibility_mode_enabled);
     document.getElementById('returnThoughtsToFrontend').checked = Boolean(c.return_thoughts_to_frontend !== false);
@@ -3194,6 +3195,7 @@ async function saveConfig() {
             smart_429_protection_enabled: getChecked('smart429ProtectionEnabled'),
             smart_429_max_attempts: getInt('smart429MaxAttempts', 3),
             smart_429_retry_base_interval: getFloat('smart429RetryBaseInterval', 0.5),
+            quota_fallback_cooldown_minutes: getInt('quotaFallbackCooldownMinutes', 30),
             compatibility_mode_enabled: getChecked('compatibilityModeEnabled'),
             return_thoughts_to_frontend: getChecked('returnThoughtsToFrontend'),
             antigravity_stream2nostream: getChecked('antigravityStream2nostream'),

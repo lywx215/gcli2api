@@ -2393,6 +2393,12 @@
                                 <label for="smart429RetryBaseInterval">退避基准间隔(秒):</label>
                                 <input type="number" id="smart429RetryBaseInterval" class="config-input" min="0.1" max="5" step="0.1" value="0.5" />
                             </div>
+                            <div class="form-group">
+                                <label for="quotaFallbackCooldownMinutes">额度耗尽兜底冷却(分钟):</label>
+                                <input type="number" id="quotaFallbackCooldownMinutes" class="config-input"
+                                    min="1" max="1440" step="1" value="30" />
+                                <small class="config-note">仅在 Google 未提供有效恢复时间时使用；真实恢复时间优先。范围 1-1440 分钟，默认 30 分钟，保存后对新冷却立即生效。</small>
+                            </div>
                         </div>
 
                         <div class="config-group">

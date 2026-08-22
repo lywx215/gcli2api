@@ -142,6 +142,7 @@ async def get_config(token: str = Depends(verify_panel_token)):
         current_config["smart_429_protection_enabled"] = await config.get_smart_429_protection_enabled()
         current_config["smart_429_max_attempts"] = await config.get_smart_429_max_attempts()
         current_config["smart_429_retry_base_interval"] = await config.get_smart_429_retry_base_interval()
+        current_config["quota_fallback_cooldown_minutes"] = await config.get_quota_fallback_cooldown_minutes()
         # 抗截断配置
         current_config["anti_truncation_max_attempts"] = await config.get_anti_truncation_max_attempts()
 
@@ -184,6 +185,11 @@ async def get_config(token: str = Depends(verify_panel_token)):
             if key not in env_locked_keys:
                 current_config[key] = value
 
+        # 通用存储合并后再次写入规范化值，避免历史或手工写入的非法值绕过 getter 校验。
+        current_config["quota_fallback_cooldown_minutes"] = (
+            await config.get_quota_fallback_cooldown_minutes()
+        )
+
         return JSONResponse(content={"config": current_config, "env_locked": list(env_locked_keys)})
 
     except Exception as e:
@@ -213,6 +219,19 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
             if not 0.1 <= value <= 5:
                 raise HTTPException(status_code=400, detail="SMART 429 retry interval must be from 0.1 to 5 seconds")
             new_config["smart_429_retry_base_interval"] = value
+        if "quota_fallback_cooldown_minutes" in new_config:
+            value = new_config["quota_fallback_cooldown_minutes"]
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or not config.QUOTA_FALLBACK_COOLDOWN_MIN_MINUTES
+                <= value
+                <= config.QUOTA_FALLBACK_COOLDOWN_MAX_MINUTES
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="额度耗尽兜底冷却必须是 1-1440 之间的整数分钟",
+                )
 
         log.debug(f"收到的配置数据: {list(new_config.keys())}")
         log.debug(f"收到的password值: {new_config.get('password', 'NOT_FOUND')}")

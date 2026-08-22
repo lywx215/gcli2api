@@ -25,6 +25,10 @@ _smart_429_max_attempts_cache: int = 3
 _smart_429_retry_base_interval_cache: float = 0.5
 _smart_429_runtime_blocked_reason: Optional[str] = None
 
+QUOTA_FALLBACK_COOLDOWN_DEFAULT_MINUTES = 30
+QUOTA_FALLBACK_COOLDOWN_MIN_MINUTES = 1
+QUOTA_FALLBACK_COOLDOWN_MAX_MINUTES = 1440
+
 # Client Configuration
 
 # 需要自动封禁的错误码 (默认值，可通过环境变量或配置覆盖)
@@ -50,6 +54,7 @@ ENV_MAPPINGS = {
     "SMART_429_PROTECTION_ENABLED": "smart_429_protection_enabled",
     "SMART_429_MAX_ATTEMPTS": "smart_429_max_attempts",
     "SMART_429_RETRY_BASE_INTERVAL": "smart_429_retry_base_interval",
+    "QUOTA_FALLBACK_COOLDOWN_MINUTES": "quota_fallback_cooldown_minutes",
     "ANTI_TRUNCATION_MAX_ATTEMPTS": "anti_truncation_max_attempts",
     "COMPATIBILITY_MODE": "compatibility_mode_enabled",
     "RETURN_THOUGHTS_TO_FRONTEND": "return_thoughts_to_frontend",
@@ -251,6 +256,31 @@ async def get_smart_429_retry_base_interval() -> float:
         return max(0.1, min(5.0, float(raw)))
     except (TypeError, ValueError):
         return 0.5
+
+
+async def get_quota_fallback_cooldown_minutes() -> int:
+    """Return the shared quota fallback cooldown in minutes.
+
+    Explicit upstream reset timestamps and delays take precedence elsewhere;
+    this value is only used when no valid reset time is available.
+    """
+    raw = os.getenv("QUOTA_FALLBACK_COOLDOWN_MINUTES")
+    if raw is None:
+        raw = await get_config_value(
+            "quota_fallback_cooldown_minutes",
+            QUOTA_FALLBACK_COOLDOWN_DEFAULT_MINUTES,
+        )
+    if isinstance(raw, bool):
+        return QUOTA_FALLBACK_COOLDOWN_DEFAULT_MINUTES
+    if isinstance(raw, float) and not raw.is_integer():
+        return QUOTA_FALLBACK_COOLDOWN_DEFAULT_MINUTES
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return QUOTA_FALLBACK_COOLDOWN_DEFAULT_MINUTES
+    if not QUOTA_FALLBACK_COOLDOWN_MIN_MINUTES <= value <= QUOTA_FALLBACK_COOLDOWN_MAX_MINUTES:
+        return QUOTA_FALLBACK_COOLDOWN_DEFAULT_MINUTES
+    return value
 
 
 def is_smart_429_protection_enabled() -> bool:

@@ -50,6 +50,7 @@ from config import (
     get_code_assist_endpoint,
     get_antigravity_api_url,
     get_oauth_proxy_url,
+    get_quota_fallback_cooldown_minutes,
     is_smart_429_protection_enabled,
 )
 from datetime import datetime, timedelta, timezone
@@ -145,6 +146,9 @@ async def sync_model_cooldowns_from_quota(
     state = await storage_adapter.get_credential_state(filename, mode=mode)
     cooldowns = (state or {}).get("model_cooldowns", {}) or {}
     now = time.time()
+    fallback_cooldown_seconds = (
+        await get_quota_fallback_cooldown_minutes()
+    ) * 60
     cleared = []
     added = []
 
@@ -183,7 +187,7 @@ async def sync_model_cooldowns_from_quota(
             except (TypeError, ValueError):
                 cooldown_until = None
         if cooldown_until is None:
-            cooldown_until = now + 4 * 3600
+            cooldown_until = now + fallback_cooldown_seconds
 
         if await backend.set_model_cooldown(
             filename, model_name, cooldown_until, mode=mode
@@ -1677,7 +1681,7 @@ async def batch_refresh_cooldown(
          → 解除冷却（capacity 抖动等误锁）
       3. 加冷方向（补漏锁）：
          实时 quota 里 remaining=0 的模型，如果当前没在冷却 / 冷却已过期
-         → 写入冷却（quotaResetTimeStamp 优先，否则 4h 兜底）
+         → 写入冷却（quotaResetTimeStamp 优先，否则使用统一配置的兜底时间）
       4. 不再使用 "系列" 粗粒度匹配，flash-lite 等独立 bucket 不会牵连普通 flash
       5. 返回汇总结果
     """
@@ -1692,6 +1696,9 @@ async def batch_refresh_cooldown(
         storage_adapter = await get_storage_adapter()
         backend = getattr(storage_adapter, "_backend", None)
         can_set_cooldown = hasattr(backend, "set_model_cooldown")
+        fallback_cooldown_seconds = (
+            await get_quota_fallback_cooldown_minutes()
+        ) * 60
 
         semaphore = asyncio.Semaphore(
             2 if mode == "geminicli" and is_smart_429_protection_enabled() else 5
@@ -1730,8 +1737,6 @@ async def batch_refresh_cooldown(
                     cooldown_skipped_active = []  # 不动：模型 quota=0 但已经在冷却中（无需重复）
 
                     now = time.time()
-                    DEFAULT_COOLDOWN_HOURS = 4
-
                     def _resolve_cooldown_until_for_model(quota_entry: dict) -> float:
                         # 优先用 Google 给的 resetTimeRaw，必须是未来时间且非 epoch 0
                         from datetime import datetime as _dt
@@ -1744,7 +1749,7 @@ async def batch_refresh_cooldown(
                                     return ts
                             except Exception:
                                 pass
-                        return now + DEFAULT_COOLDOWN_HOURS * 3600
+                        return now + fallback_cooldown_seconds
 
                     if can_set_cooldown:
                         # === 解冷方向 ===
