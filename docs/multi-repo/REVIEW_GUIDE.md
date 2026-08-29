@@ -88,8 +88,8 @@
 ## 8. CI、发布和回滚检查
 
 - [ ] MySQL是否完成空库迁移、上一版本升级和回滚或等价恢复验证？
-- [ ] gcli2api的`dev7`是否确实从`origin/dev5`创建，并在Review后才合并回`dev5`？
-- [ ] 为默认分支启用接收workflow时，是否避免顺带合入未经Review的`dev7`业务提交？
+- [ ] gcli2api的`dev8`是否确实从`origin/dev7@96736b1ea7e222c1a6a5f8e83ab95e0d4e1e3462`创建？
+- [ ] 为默认分支启用接收workflow时，是否避免顺带合入未经Review的`dev8`业务提交？
 - [ ] gcli2api是否发布固定SemVer镜像而非只用`latest`？
 - [ ] manager是否测试最老现网版、Legacy、稳定版和RC？
 - [ ] 跨仓库PR是否使用相同工作项编号？

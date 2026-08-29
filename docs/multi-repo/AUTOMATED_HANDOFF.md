@@ -32,7 +32,7 @@ GitHub Issue是持久交接队列。相同`delivery_id`重复投递只更新同�
 6. 在结束任务前验证JSON且确认无敏感信息。
 
 文件名必须与`delivery_id`完全一致，例如`MGMT-001-G-1.json`对应
-`delivery_id=MGMT-001-G-1`。gcli2api的handoff进入`dev7`或仓库默认分支后投递；manager
+`delivery_id=MGMT-001-G-1`。gcli2api的handoff进入`dev8`或仓库默认分支后投递；manager
 的handoff进入默认分支后投递。普通功能分支和PR上的中间handoff不会提前进入对端队列；
 需要恢复时可手工运行workflow。
 
@@ -81,9 +81,10 @@ Administration、Secrets或其他无关权限。PAT属于回退方案，需要�
 首次启用时，必须先把发送和接收workflow提交到两个仓库的默认分支，再创建测试handoff。
 manager空仓库的第一次提交需要先建立默认分支，否则无法接收`repository_dispatch`。
 
-gcli2api当前管理系统功能在从`origin/dev5`创建的`dev7`分支开发，Review完成后再合并回
-`dev5`。由于GitHub默认分支当前为`master`，至少接收workflow必须同时存在于`master`
-才能接收`repository_dispatch`。不得为了启用交接把`dev7`业务提交未经Review合入master。
+gcli2api当前管理系统功能在从
+`origin/dev7@96736b1ea7e222c1a6a5f8e83ab95e0d4e1e3462`创建的`dev8`分支开发。由于
+GitHub默认分支当前为`master`，至少接收workflow必须同时存在于`master`才能接收
+`repository_dispatch`。不得为了启用交接把`dev8`业务提交未经Review合入master。
 
 接收工作流只接受固定对端仓库，使用目标仓库自身的`GITHUB_TOKEN`创建Issue，并且权限
 仅为`contents: read`和`issues: write`。

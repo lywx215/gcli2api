@@ -2,7 +2,7 @@
 
 状态：**Draft for Review**
 
-路线图版本：`implementation-roadmap-1.0`（2026-08-11）
+路线图版本：`implementation-roadmap-1.1`（2026-08-29）
 
 ## 1. 目的和权威性
 
@@ -53,7 +53,7 @@ Issue用于跟踪状态，PR用于交付实现，handoff用于跨仓库投递，
 
 1. **准备**：核对路线图定义、依赖、GitHub Issue、handoff和工作树。
 2. **定界**：在任务开头列出本次范围、排除项、契约影响、输入和回滚。
-3. **分支**：manager从最新`main`创建短分支；gcli2api从最新`dev7`创建短分支。
+3. **分支**：manager从最新`main`创建短分支；gcli2api从最新`dev8`创建短分支。
 4. **先容忍后提供**：跨仓能力先让manager容忍新旧响应，再实现gcli2api服务端。
 5. **验证**：执行工作项指定的单元、集成、契约、Legacy、安全和UI测试。
 6. **Review**：PR必须关联工作项、对应仓库PR和测试证据，不允许顺带实现范围外发现。
@@ -101,8 +101,8 @@ flowchart LR
 | MGMT-005 | 凭证写操作、任务、幂等、审计和危险确认 | 两仓 | MGMT-004 | `planned` |
 | MGMT-006 | Preview、额度、测试、风险和冷却同步 | 两仓 | MGMT-005 | `planned` |
 | MGMT-007 | 负载快照、趋势、热力图和人工调整建议 | manager | MGMT-006 | `planned` |
-| MGMT-008 | 腾讯云数据库、Zeabur配置、备份恢复和安全验收 | manager/运维 | MGMT-007 | `review`，[manager PR #26](https://github.com/lywx215/gcli2api-manager/pull/26) |
-| MGMT-009 | 20台版本矩阵、RC、2/5/剩余节点灰度 | 两仓/运维 | MGMT-008 | `planned` |
+| MGMT-008 | 腾讯云数据库、Zeabur配置、备份恢复和安全验收 | manager/运维 | MGMT-007 | `done`，[manager PR #26](https://github.com/lywx215/gcli2api-manager/pull/26)、[Issue #10](https://github.com/lywx215/gcli2api-manager/issues/10) |
+| MGMT-009 | dev8、性能、页面化Management Token、版本矩阵和灰度 | 两仓/运维 | MGMT-008 | `ready`，[Issue #11](https://github.com/lywx215/gcli2api-manager/issues/11) |
 | MGMT-010 | 正式发布、运行手册、告警、恢复演练和维护策略 | 两仓/运维 | MGMT-009 | `planned` |
 
 ## 6. 完整工作项定义
@@ -239,8 +239,9 @@ manager范围：
 
 ### MGMT-008：生产基础设施与安全验收
 
-状态：`review`。一体镜像、独立测试库门禁和离线验收已完成；生产迁移、Zeabur部署、
-数据库传输模式、备份/PITR和监控证据仍属于G6运维门禁，不得据此提前启动MGMT-009。
+状态：`done`。一体镜像、独立测试库门禁、生产迁移、Zeabur部署、数据库传输模式、
+备份/PITR、恢复和监控证据已由仓库Owner按脱敏边界验收；实现见manager PR #26，节点
+权威文档同步见gcli2api PR #17，G6已关闭并解锁MGMT-009。
 
 目标：在接入生产节点前完成数据库、Zeabur、安全、恢复和监控准备。
 
@@ -268,20 +269,68 @@ Codex范围：提供一体镜像、首次设置和设置页、脱敏配置示例
 
 ### MGMT-009：20节点兼容矩阵与灰度上线
 
-目标：用可回滚的方式验证所有现网版本并逐步开放管理能力。
+状态：`ready`。
+
+目标：以MGMT-008完成后的`origin/dev7@96736b1ea7e222c1a6a5f8e83ab95e0d4e1e3462`
+创建新的gcli2api集成分支`dev8`，先解决大凭证量性能风险，再交付可由唯一面板管理员管理
+的Management API Token，并用可回滚方式验证现网兼容性和灰度。
+
+gcli2api范围：
+
+- 只在独立worktree中的`dev8`或其`codex/*`短分支开发，不切换现有gcli2api工作目录，
+  不修改或自动合并回dev7、dev6、dev5或master；
+- 移除作用于全部业务请求的Management全局HTTP中间件，把认证、错误与安全头限制在
+  `/management/v1`；实现存储层真实分页和独立计数，summary/stats不得通过完整凭证对象
+  全量扫描；
+- 节点设置页提供Management API启停、至少256位随机Token单次生成与复制、非敏感指纹和
+  创建时间、轮换、关闭和撤销；使用现有唯一面板管理员认证，不增加注册、RBAC、团队、
+  租户或多用户功能；
+- `NODE_MANAGEMENT_TOKEN`保留为优先级最高的可选兼容来源；环境变量不存在时使用控制面板
+  状态。节点数据库通过现有storage/config抽象只保存`enabled`、`token_digest`、
+  `token_fingerprint`和`created_at`，不新增表、不直接访问SQLite、不修改真实凭证；
+- 明文Token只允许出现在生成或轮换成功且带`Cache-Control: no-store`的单次面板响应，
+  不得进入数据库、日志、审计、配置读取/导出、URL或浏览器持久化；认证使用常量时间比较；
+- 无有效Token或关闭后返回503 `MANAGEMENT_API_DISABLED`，错误Token返回401
+  `AUTHENTICATION_FAILED`，轮换后旧Token立即失效；关闭保留摘要，撤销清除摘要；
+- 保持`/management/v1`和schema 1.1，不新增Modern action或capability，不改变Legacy
+  路由、凭证语义或数据库表结构；
+- 候选版本固定为`0.2.0-rc.1`，源码部署自动报告准确Git revision，不要求人工配置
+  `GCLI2API_REVISION`，验收不得使用`latest`或其他无法追踪的浮动版本。
+
+manager范围：
+
+- 兼容环境变量或页面生成的同一种Bearer Token，不改变加密保存和401/403禁止Legacy回退；
+- 一分钟健康/summary采集与凭证元数据同步分离，元数据默认十分钟一次并支持人工刷新，
+  始终逐页读取，不得每分钟全量扫描；
+- 对Modern、Legacy Current、Legacy Minimal和Unknown执行真实HTTP兼容矩阵，并验证
+  schema 1.1、版本、revision、分页和敏感信息边界。
+
+排除：
+
+- 不增加Zeabur人工环境变量，不修改现有节点环境变量或Volume；
+- 不读取、迁移、复制或修改真实凭证，不连接节点SQLite；
+- 不自动执行凭证写操作、额度、测试、风险或其他Google副作用操作；
+- 不改变Management schema 1.1、capability集合、Legacy业务语义或manager数据库边界；
+- 不自动合并PR、删除分支、同时重启全部生产节点或自动扩展到下一灰度节点。
 
 流程：
 
-1. 冻结20台节点清单、版本/revision、镜像标签、适配器和能力；
-2. 对最老现网版、代表Legacy版、最新稳定版和RC运行Docker/真实HTTP矩阵；
-3. 选择2台非关键节点，先只读观察24小时；
-4. 在2台上逐项启用低风险写操作，验证审计、回读和回滚；
-5. 扩展到5台，继续观察错误率、延迟、429和冷却；
-6. 达到门槛后再推广剩余节点；未知或不在矩阵中的版本保持只读；
-7. 任一P0/P1、敏感泄漏、错误写入或不可恢复迁移立即停止并回滚。
+1. 双仓Review并合并dev8基线、MGMT-009范围和认证来源契约；
+2. 以独立性能PR完成全局中间件隔离、真实分页和至少10,000条测试凭证的并发回归；
+3. 以独立功能PR完成安全存储、面板API、桌面/移动UI、版本元数据和测试；
+4. 构建amd64/arm64候选镜像，对四类适配器运行Docker和真实HTTP矩阵；
+5. 自动选择一台低流量、可回滚、Volume健康、没有`NODE_MANAGEMENT_TOKEN`且manager尚未
+   保存Management Token的非关键节点，记录脱敏基线后把GitHub源码分支切到dev8；
+6. 只在该节点启用Management API，写入manager后执行summary、credentials分页、stats及
+   Legacy只读验收并观察24小时；首节点只是预灰度，不自动扩到第二台；
+7. 预灰度通过后仍按2台只读、2台低风险写、5台和剩余节点的原G7流程另行推进；
+8. 任一P0/P1、敏感泄漏、错误写入、版本不匹配或明显性能回退立即恢复原源码分支并重新
+   部署，清除本次manager Token，环境变量和Volume保持原样。
 
-验收：20台均有明确支持等级；2/5/剩余批次证据完整；manager回滚、节点镜像回滚和配置
-回滚均演练；未通过版本不会被标记为完整支持。
+验收：全量pytest、契约/OpenAPI、Legacy Panel API、页面单次Token、重启持久化、环境变量
+优先、无明文Token和大凭证量性能测试通过；amd64/arm64镜像均报告`0.2.0-rc.1`及准确
+revision；四类manager矩阵通过；一台预灰度节点连续24小时无未解决P0/P1。完成预灰度不
+等同于完成2/5/剩余节点G7门禁，未通过版本不得标记为完整支持。
 
 ### MGMT-010：正式发布和持续运维
 
@@ -314,6 +363,7 @@ PR统一修改。
 | 批量写 | 单批最多100项；只重试失败项；成功项不得重放 |
 | 删除 | 功能实现但默认关闭，完成2台写操作灰度后再由管理员显式开启 |
 | 主动操作 | 单节点并发最多3；额度缓存10分钟；额度、风险和测试不做周期调用 |
+| Management认证 | 环境变量优先；不存在时使用面板摘要状态；Token至少256位随机熵且明文只显示一次；关闭保留、撤销清除 |
 | 负载快照 | 默认60秒采集节点内部统计；原始快照保留30天，小时聚合保留180天 |
 | 审计 | 默认保留180天；危险操作不得在保留期内被应用删除 |
 | 数据库 | `utf8mb4`、优先`utf8mb4_0900_ai_ci`、单一库级读写账号；默认TLS，供应商明确不支持时只允许显式无TLS模式并绑定固定Zeabur出口 |
@@ -339,7 +389,7 @@ PR统一修改。
 | MGMT-001 | 回滚manager镜像；按备份策略恢复或降级基础迁移 |
 | MGMT-002 | 停用节点接入路由和探测任务；降级新增表；不触碰节点状态 |
 | MGMT-003 | 停止聚合调度并隐藏只读页面；保留或按迁移回滚快照表 |
-| MGMT-004 | manager切回Legacy/Unknown；关闭`NODE_MANAGEMENT_TOKEN`即关闭Modern API；回滚RC镜像 |
+| MGMT-004 | manager切回Legacy/Unknown；移除环境Token或关闭面板状态即关闭Modern API；回滚RC镜像 |
 | MGMT-005 | 全局关闭写能力并禁用UI；等待在途任务终止；回滚两端镜像，不反向重放动作 |
 | MGMT-006 | 关闭主动操作capability和UI入口；停止队列，不撤销已发生的外部副作用 |
 | MGMT-007 | 停止快照调度并隐藏分析页；不影响节点管理和历史审计 |
@@ -385,7 +435,7 @@ PR统一修改。
 本路线图Review通过后按以下顺序一次性完成项目准备，不再逐个临时设计任务：
 
 1. 将两个仓库的`codex/implementation-roadmap`分别提交PR并完成第三方Review；
-2. manager路线图合入`main`，gcli2api路线图合入`dev7`，复核三份权威共享文档哈希；
+2. manager路线图合入`main`，gcli2api当前路线图合入`dev8`，复核三份权威共享文档哈希；
 3. 在manager一次性创建MGMT-002至MGMT-010的Issue，其中MGMT-002标记`ready`，其余
    标记`planned`并填写依赖；
 4. 在gcli2api一次性创建MGMT-004、MGMT-005、MGMT-006、MGMT-009和MGMT-010对应Issue，
