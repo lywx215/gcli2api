@@ -18,9 +18,10 @@ Codex必须：
 5. 明确本任务对应的`MGMT-*`工作项和manager侧任务。
 6. 如GitHub访问可用，检查打开的`codex-ready`自动交接Issue。
 
-当前管理系统功能统一在`dev7`开发。`dev7`从`origin/dev5`创建，完成Review后再合并回
-`dev5`。`master`只承载经Review的发布内容和自动交接所需控制面文件，不得把`dev7`上的
-其他业务提交顺带合入。
+当前管理系统功能统一在`dev8`开发。`dev8`从MGMT-008完成后的
+`origin/dev7@96736b1ea7e222c1a6a5f8e83ab95e0d4e1e3462`创建。`master`只承载经Review的
+发布内容和自动交接所需控制面文件；未经单独Review和明确授权不得把`dev8`业务提交合入
+旧集成分支或`master`。
 
 不得为了发现handoff建立定时Codex任务。只有当前实际任务需要时才读取Issue，并只处理
 匹配工作项编号的`next_actions`。
@@ -40,7 +41,9 @@ Codex必须：
 - 额度调用可能刷新Token和同步冷却，响应必须披露副作用。
 - 本阶段运行时数据源限定为节点本地SQLite；不得为Management API引入MySQL或中央数据库
   依赖，也不得跨节点访问数据。
-- 未配置`NODE_MANAGEMENT_TOKEN`时整个Management API必须默认关闭，不得回退到面板密码。
+- `NODE_MANAGEMENT_TOKEN`存在时始终优先且页面只读；环境变量不存在时允许使用控制面板
+  通过storage/config抽象保存的启用状态和Token摘要。两种来源都不得回退到面板密码，
+  没有有效Token时整个Management API必须默认关闭。
 
 ## 4. 推荐实施阶段
 
@@ -48,7 +51,7 @@ Codex必须：
 
 - 添加management router、schema和认证依赖；
 - 实现`/capabilities`；
-- 添加`NODE_MANAGEMENT_TOKEN`配置和`.env.example`说明；
+- 保留`NODE_MANAGEMENT_TOKEN`兼容来源并实现页面持久化来源、环境优先和安全状态接口；
 - 为缺少Token返回503、错误Token返回401和能力响应编写测试。
 
 ### G2：只读接口（MGMT-004）
@@ -76,6 +79,9 @@ Codex必须：
 
 ### G5：发布（MGMT-009至MGMT-010）
 
+- 先完成全局Management中间件移除、真实存储分页及大凭证量性能门禁；
+- 在桌面和移动设置页实现Management API启停、至少256位Token单次生成、复制、轮换、
+  撤销、指纹和创建时间；
 - 更新OpenAPI、版本说明和支持矩阵；
 - 在CI中从FastAPI自动导出OpenAPI并与提交的schema基线比较；
 - 发布RC镜像；

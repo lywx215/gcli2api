@@ -15,7 +15,7 @@ on:
     branches:
       - master
       - main
-      - dev7
+      - dev8
   workflow_dispatch:
 
 env:

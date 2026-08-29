@@ -1,0 +1,34 @@
+{
+  "schema_version": "1.0",
+  "delivery_id": "MGMT-009-G-1",
+  "work_item": "MGMT-009",
+  "source_repository": "lywx215/gcli2api",
+  "status": "ready",
+  "execution_policy": {
+    "mode": "queue_only",
+    "max_automatic_runs": 0
+  },
+  "summary": "MGMT-009 establishes dev8 from the accepted MGMT-008 dev7 baseline, adds a performance prerequisite, defines panel-managed Management API authentication with deployment-environment precedence, and limits the first production step to one reversible 24-hour pre-canary. The shared authority changes require matching manager documentation and compatibility work before node implementation can be accepted.",
+  "contract_sha256": "9246008998b0d8924e367d6dadc5c6ecffea18dfb6af5f59ca16dc834865b791",
+  "capabilities_added": [],
+  "capabilities_removed": [],
+  "compatibility": "Management remains at /management/v1 with schema 1.1 and the existing capability set. NODE_MANAGEMENT_TOKEN remains the highest-priority optional source. When it is absent, a panel-generated token digest may enable the same Bearer authentication. Modern 401 and 403 responses still forbid Legacy fallback; Legacy Current, Legacy Minimal and Unknown behavior remains unchanged.",
+  "tests": [
+    "Documentation-only baseline: JSON schema, workflow syntax, sensitive-literal scan and shared-document hash checks are required before merge",
+    "Manager implementation must cover Modern, Legacy Current, Legacy Minimal and Unknown compatibility",
+    "Manager collection must separate one-minute health and summary reads from ten-minute paged credential metadata synchronization"
+  ],
+  "artifacts": [
+    "docs/multi-repo/COORDINATION_SPEC.md",
+    "docs/multi-repo/IMPLEMENTATION_ROADMAP.md",
+    "docs/multi-repo/MANAGEMENT_API_CONTRACT.md",
+    "docs/multi-repo/MANAGER_CODEX_GUIDE.md"
+  ],
+  "next_actions": [
+    "Mirror the reviewed MGMT-009 shared authority documents into gcli2api-manager and verify their hashes match the gcli2api dev8 versions.",
+    "Update the manager roadmap and guide to recognize dev8 as the node integration branch and 0.2.0-rc.1 as the fixed candidate version.",
+    "Implement or verify the ten-minute paged credential metadata schedule, manual refresh path, environment-or-panel token compatibility, and 401/403 no-fallback behavior on a manager branch linked to MGMT-009.",
+    "Run the Modern, Legacy Current, Legacy Minimal and Unknown matrix without credential writes or active quota, test or risk operations, then link the redacted evidence to Issue 11."
+  ],
+  "generated_at": "2026-08-29T15:38:34Z"
+}

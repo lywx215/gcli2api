@@ -114,7 +114,7 @@ test_credential
 探测流程必须遵守以下顺序：
 
 ```text
-GET /management/v1/capabilities（使用独立管理Token）
+GET /management/v1/capabilities（使用独立管理Token；来源可为节点环境变量或面板生成）
 ├─ 2xx且schema可识别 -> ModernV1Adapter
 ├─ 401/403 -> 标记认证失败；禁止降级，等待管理员修正Token
 ├─ 503 MANAGEMENT_API_DISABLED -> 标记管理API关闭；仅在管理员显式允许Legacy且
@@ -139,7 +139,7 @@ GET /management/v1/capabilities（使用独立管理Token）
 | M6 | MGMT-006 | Preview、额度、测试、风险和冷却同步 |
 | M7 | MGMT-007 | 负载快照、趋势、热力图和人工调整建议 |
 | M8 | MGMT-008 | 腾讯云数据库、Zeabur、数据库传输模式、备份恢复和安全验收 |
-| M9 | MGMT-009 | 20台支持矩阵及2台、5台、剩余节点灰度 |
+| M9 | MGMT-009 | dev8基线、节点性能修复、页面化Management Token、20台支持矩阵及灰度 |
 | M10 | MGMT-010 | 正式发布、监控告警、Runbook和持续维护 |
 
 每一项的详细范围、排除项、跨仓顺序、用户输入和验收以

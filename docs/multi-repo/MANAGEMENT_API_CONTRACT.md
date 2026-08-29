@@ -13,14 +13,23 @@
 ### 认证
 
 ```http
-Authorization: Bearer <NODE_MANAGEMENT_TOKEN>
+Authorization: Bearer <MANAGEMENT_TOKEN>
 ```
 
 管理Token必须与普通API密码、面板密码分离。Legacy适配器可继续使用旧面板密码。
 
-未配置或配置为空的`NODE_MANAGEMENT_TOKEN`必须使整个`/management/v1/*`路由默认关闭，
-返回HTTP 503和`MANAGEMENT_API_DISABLED`。禁止接受空Token，也禁止隐式回退到普通API
-密码或面板密码。Token错误返回HTTP 401；该响应不得泄漏节点是否存在某个凭证。
+有效Token来源按以下优先级确定：非空`NODE_MANAGEMENT_TOKEN`环境变量、节点控制面板
+通过现有storage/config抽象保存的启用状态和Token摘要、默认关闭。环境变量存在时页面
+只能显示“由部署环境管理”的非敏感状态，不得覆盖、轮换或撤销该值；环境变量明文及摘要
+不得写入节点数据库。页面生成的Token必须至少包含256位随机熵，节点数据库只保存
+`enabled`、`token_digest`、`token_fingerprint`和`created_at`，明文只允许出现在生成或
+轮换成功且带`Cache-Control: no-store`的单次面板响应中。
+
+没有任何有效Token或页面状态已关闭时，整个`/management/v1/*`路由返回HTTP 503和
+`MANAGEMENT_API_DISABLED`。禁止接受空Token，也禁止隐式回退到普通API密码或面板密码。
+Token错误返回HTTP 401；该响应不得泄漏节点是否存在某个凭证。关闭和轮换必须立即影响
+后续认证；轮换后旧Token失效。页面认证配置接口不属于`/management/v1`，不改变本契约
+的schema 1.1或capability集合。
 
 ### 时间格式
 

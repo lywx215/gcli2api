@@ -2,7 +2,7 @@
 
 状态：**Draft for Review**
 
-规范版本：`coordination-1.2`
+规范版本：`coordination-1.3`
 
 ## 1. 目标和边界
 
@@ -162,15 +162,16 @@ Fixture匹配，不是能力判断的唯一依据。
 
 当前分支基线：
 
-- gcli2api当前管理系统功能统一在`dev7`开发；`dev7`必须从`origin/dev5`创建，完成
-  Review后再合并回`dev5`。不得基于`master`开发当前管理功能。
+- gcli2api当前管理系统功能统一在`dev8`开发；`dev8`以MGMT-008完成后的
+  `origin/dev7@96736b1ea7e222c1a6a5f8e83ab95e0d4e1e3462`为固定创建基线。功能只进入
+  `dev8`或其短分支；未经单独Review和明确授权不得自动合并回旧集成分支或`master`。
 - gcli2api-manager以`main`作为开发基线。
 - 两仓库使用短生命周期`codex/*`、`feat/*`、`fix/*`和必要的`release/*`分支，禁止长期
   分叉的协议开发分支。
 
 gcli2api的GitHub默认分支当前仍为`master`。`repository_dispatch`接收workflow必须存在于
 默认分支，因此自动交接首次启用时，应将纯控制面文件（接收workflow、schema和协作约束）
-同步到`master`；不得为了启用交接把`dev7`中的业务提交提前合入`master`。
+同步到`master`；不得为了启用交接把`dev8`中的业务提交提前合入`master`。
 
 gcli2api发布物必须包含：
 
@@ -256,7 +257,9 @@ Fixture不得包含真实邮箱、文件名、project ID、Token或管理密码�
 
 ## 10. 安全边界
 
-- 新版节点使用独立`NODE_MANAGEMENT_TOKEN`；
+- 新版节点使用与普通API密码、面板密码分离的Management Token。`NODE_MANAGEMENT_TOKEN`
+  保留为优先级最高的部署环境来源；环境变量不存在时可使用节点控制面板生成并通过现有
+  storage/config抽象持久化的摘要状态，明文只允许在生成或轮换成功的单次响应中出现；
 - manager中的节点Token必须加密保存；
 - manager生产数据库只使用一个专用MySQL账号供运行时、Alembic和人工排障共用；该账号
   只能访问`gcli2api_manager.*`，不得拥有全局权限、`GRANT OPTION`或桌面端数据库权限；
