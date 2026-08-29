@@ -4,26 +4,19 @@
 
 方案修订：`manager-architecture-1.2`（2026-08-11）
 
-用途：本文件是manager仓库实施和第三方Review的技术基线。
+## 1. 实施目标
 
-## 1. Codex仓库约束
+构建独立的Zeabur Web管理服务，通过HTTP安全管理多个不同版本gcli2api节点，提供
+单节点、全局凭证管理和负载分析，不持有完整凭证。
 
-- manager只能通过HTTPS API访问gcli2api，不得读取节点SQLite、Volume或源码。
-- manager不得保存、展示或记录完整凭证、Token和节点明文密码。
-- 所有节点操作必须经过适配器，不得在UI或业务服务中直接拼接Legacy端点。
-- 能力判断优先使用`/management/v1/capabilities`；Legacy按安全探测降级。
-- 未知版本默认只读；没有capability的按钮必须禁用。
-- 缺失字段必须保留未知语义，禁止填0制造假数据。
-- 凭证不上传、不迁移、不复制，重复邮箱只提示。
-- new-api本期不接入；只保留节点健康和容量的只读导出接口。
-- 外部额度、测试和风险检查只能由管理员主动触发，并限制并发。
-- 所有写操作必须有幂等键、逐项结果和审计记录。
-- manager Web端与桌面端是定位、任务、数据库和发布流程均独立的产品；本阶段不得引入
-  桌面端数据模型、同步任务、页面或依赖。
-- 开始跨仓库工作项时优先读取打开的`codex-ready`自动交接Issue；范围外内容只记录。
-- 不得为了发现handoff建立定时Codex任务；只在当前实际任务中读取匹配工作项的Issue。
-- 所有工作项必须遵守`IMPLEMENTATION_ROADMAP.md`的定义、依赖和门禁；阶段标题不得替代
-  正式工作项范围。
+桌面端App是定位、任务、数据库和发布流程均独立的另一产品，不属于manager实施范围，
+不得为了未来可能的统一而在本阶段引入桌面端数据模型、同步任务、页面或依赖。未来如需
+协作，必须另立方案和工作项。
+
+开始跨仓库工作项时优先读取打开的`codex-ready`自动交接Issue；范围外内容只记录。
+不得为了发现handoff建立定时Codex任务；只在当前实际任务中读取匹配工作项的Issue。
+所有工作项必须遵守`IMPLEMENTATION_ROADMAP.md`的定义、依赖和门禁；本节只提供技术
+摘要，不得用阶段标题替代正式工作项范围。
 
 ## 2. 技术基线
 
@@ -32,28 +25,34 @@
 - 后端：FastAPI、SQLAlchemy Async、Alembic、httpx；
 - manager生产数据库：腾讯云TDSQL-C MySQL 8，独立逻辑库名固定为`gcli2api_manager`；
 - 数据库连接分别通过`MANAGER_DB_HOST`、`MANAGER_DB_PORT`、`MANAGER_DB_NAME`、
-  `MANAGER_DB_USER`、`MANAGER_DB_PASSWORD`和可选`MANAGER_DB_SSL_CA`注入，禁止把真实值
-  写入仓库、日志、Fixture或交接文件；
+  `MANAGER_DB_USER`、`MANAGER_DB_PASSWORD`、`MANAGER_DB_TLS_MODE`和可选
+  `MANAGER_DB_SSL_CA`注入，禁止把真实值写入仓库、日志、Fixture或交接文件；
 - 只建立一个专用数据库账号，建议名为`u_gcli2api_manager`，供应用运行时、Alembic迁移
   和人工排障共用；该账号只拥有`gcli2api_manager.*`上的业务DML和迁移所需DDL权限，
   不得拥有全局权限、`GRANT OPTION`或桌面端数据库权限；
 - 本地开发和CI：使用与生产主版本一致的MySQL，不以SQLite测试替代MySQL兼容验证；
 - 实时任务：SSE；
 - 密码哈希：Argon2id；
-- 节点密钥：使用环境主密钥加密；
-- 部署：Zeabur无状态manager服务连接腾讯云TDSQL-C；数据库不依赖manager容器Volume；
-- 生产连接必须启用TLS，并把数据库网络访问限制到实际需要的来源；禁止为了省事长期向
-  全网开放数据库端口。
+- 节点密钥：使用环境根密钥解封的应用密钥进行信封加密；
+- 部署：根目录多阶段Dockerfile生成前后端同源的一体镜像；Zeabur无状态manager服务连接
+  腾讯云TDSQL-C，数据库不依赖manager容器Volume；
+- 生产连接默认启用TLS，并把数据库网络访问限制到实际需要的来源；若已选腾讯云
+  Serverless实例控制面明确不支持SSL，可显式使用`MANAGER_DB_TLS_MODE=disabled`并记录
+  剩余风险，但数据库入口必须绑定固定Zeabur出口。禁止长期向全网开放数据库端口。
 
 所有数据库结构变更必须使用Alembic迁移，提交升级、降级或等价恢复步骤，并在空库及
 上一正式版本数据库上验证。领域层通过Repository访问数据库，不允许路由或UI查询代码
 直接依赖MySQL表结构。
 
 由于本系统基本由一人使用，首版只提供一个Web管理员账号，不实现自助注册、RBAC、角色、
-团队、租户或多用户管理。管理员用户名、Argon2id密码哈希和会话密钥分别通过
-`MANAGER_ADMIN_USERNAME`、`MANAGER_ADMIN_PASSWORD_HASH`和`MANAGER_SESSION_SECRET`
-注入；节点密钥加密主密钥使用`MANAGER_MASTER_KEY`。登录必须使用安全Cookie会话、CSRF
-防护和登录限流。若以后确有多人协作需求，必须另立架构修订和迁移方案。
+团队、租户或多用户管理。Zeabur长期只注入数据库连接和`MANAGER_ROOT_SECRET`；首次管理员
+使用临时`MANAGER_SETUP_TOKEN`从页面创建后，用户名和Argon2id密码哈希保存到manager
+数据库并立即删除该临时变量。应用密钥由根密钥加密保存在数据库，会话与节点密钥由应用
+密钥分域派生。登录必须使用安全Cookie会话、CSRF防护和登录限流。若以后确有多人协作
+需求，必须另立架构修订和迁移方案。
+
+生产继续使用现有腾讯云`gcli2api_manager`逻辑库；不得向其导入本地测试数据。所有pytest、
+迁移降级和恢复演练只能连接独立的`*_test`或`*_restore_drill`数据库。
 
 ### 2.2 Web前端
 
@@ -81,8 +80,13 @@ Ant Design Pro示例工程，避免引入Umi、演示页面、AI助手、国际�
 
 ### 2.4 manager数据边界
 
-manager MySQL允许保存节点注册信息及加密后的管理凭证、探测与能力信息、凭证脱敏
-元数据及负载快照、管理任务和审计记录，以及单个管理员账号和系统设置。
+manager MySQL允许保存：
+
+- 节点注册信息及加密后的管理凭证；
+- 探测证据、版本、schema、capability和适配器选择；
+- 凭证标识及脱敏元数据、状态、额度和负载快照；
+- 管理任务、逐项结果、幂等键和审计记录；
+- 单个管理员账号和系统设置。
 
 manager MySQL禁止保存完整凭证JSON、access token、refresh token、client secret、节点
 明文密码或桌面端业务数据。gcli2api节点仍持有凭证真实数据和自己的本地SQLite状态。
@@ -103,14 +107,9 @@ get_errors
 test_credential
 ```
 
-适配器：
-
-- `ModernV1Adapter`
-- `LegacyCurrentAdapter`
-- `LegacyMinimalAdapter`
-- `UnknownAdapter`
-
-选择适配器后保存探测证据、版本、schema和能力。探测失败不得自动尝试危险写操作。
+实现：`ModernV1Adapter`、`LegacyCurrentAdapter`、`LegacyMinimalAdapter`和
+`UnknownAdapter`。选择适配器后保存探测证据、版本、schema和能力。探测失败不得尝试
+危险写操作。
 
 探测流程必须遵守以下顺序：
 
@@ -139,7 +138,7 @@ GET /management/v1/capabilities（使用独立管理Token）
 | M5 | MGMT-005 | 启停、永久禁用、备注、删除、任务、幂等和审计 |
 | M6 | MGMT-006 | Preview、额度、测试、风险和冷却同步 |
 | M7 | MGMT-007 | 负载快照、趋势、热力图和人工调整建议 |
-| M8 | MGMT-008 | 腾讯云数据库、Zeabur、TLS、备份恢复和安全验收 |
+| M8 | MGMT-008 | 腾讯云数据库、Zeabur、数据库传输模式、备份恢复和安全验收 |
 | M9 | MGMT-009 | 20台支持矩阵及2台、5台、剩余节点灰度 |
 | M10 | MGMT-010 | 正式发布、监控告警、Runbook和持续维护 |
 
