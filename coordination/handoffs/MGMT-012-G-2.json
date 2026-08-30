@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0",
+  "delivery_id": "MGMT-012-G-2",
+  "work_item": "MGMT-012",
+  "source_repository": "lywx215/gcli2api",
+  "status": "ready",
+  "execution_policy": {
+    "mode": "queue_only",
+    "max_automatic_runs": 0
+  },
+  "summary": "The reviewed gcli2api MGMT-012 node implementation is complete at revision b8daa693d9be62896eb74146cac917717ad9caff and fixed non-production image ghcr.io/lywx215/gcli2api:sha-b8daa69 (manifest sha256:f9cca0f5e0ebe65b0a110c9338ee48f6c241a85ac4cc8a5cbeb29be984130900). It implements allowlisted #manage routing, atomic exact-HTTPS Origin validation, HTTP CSP frame-ancestors, a version-1 non-sensitive ready message and truthful capability declaration. No production deployment or MGMT-009 work has started.",
+  "contract_sha256": "cd7ecdc83bdaf04d543d0b560775995f34ca2f255c25820c63c2ef0d3e00ecc0",
+  "capabilities_added": [
+    "ui.credential_console.embed"
+  ],
+  "capabilities_removed": [],
+  "compatibility": "Management schema 1.2 is additive and existing Management paths/actions are unchanged. Nodes with an empty or invalid GCLI_EMBED_ALLOWED_ORIGINS fail closed and do not declare the embed capability. Existing Modern capability-missing nodes, Legacy Current, Legacy Minimal and Unknown remain on the manager new-tab fallback. No SSO, secret exchange, credential transfer, reverse proxy, HTML rewriting, SQLite migration, Legacy endpoint change, quota behavior change or version inference is introduced.",
+  "tests": [
+    "Shared SHA-256 values: roadmap 4b6736859bfabfa5a6b549297d4743b410e0db3076af79b8f2a815956d1b14f2; coordination dd7a0375a4d6511a00a3eabdd56493a90c452d15e314a1c38d28c97a81990925; contract cd7ecdc83bdaf04d543d0b560775995f34ca2f255c25820c63c2ef0d3e00ecc0",
+    "Local Python 3.12 full pytest/Legacy regression: 141 passed; focused embed, Management API/service/OpenAPI and frontend suite: 47 passed",
+    "Real browser: unauthenticated #manage preserved, interactive login activated manage, refresh retained manage, unknown hash returned to #oauth, and no console errors were reported",
+    "PR #29 Python 3.13 pytest, OpenAPI baseline, clean sensitive-literal scan and non-publishing multi-architecture Docker build passed",
+    "Fixed candidate publication run 33314116918 built and pushed linux/amd64 and linux/arm64 image ghcr.io/lywx215/gcli2api:sha-b8daa69 with manifest sha256:f9cca0f5e0ebe65b0a110c9338ee48f6c241a85ac4cc8a5cbeb29be984130900",
+    "Rollback removes GCLI_EMBED_ALLOWED_ORIGINS and restores the prior fixed node image; no database restore or action replay is required"
+  ],
+  "artifacts": [
+    "src/embed_policy.py",
+    "src/panel/root.py",
+    "front/common.js",
+    "front/control_panel.html",
+    "front/control_panel_mobile.html",
+    "docs/openapi/management-v1.openapi.json",
+    "docs/delivery/MGMT-012-gcli2api.md",
+    "docs/multi-repo/IMPLEMENTATION_ROADMAP.md",
+    "coordination/handoffs/MGMT-012-G-2.json"
+  ],
+  "next_actions": [
+    "Use only the fixed non-production candidate ghcr.io/lywx215/gcli2api:sha-b8daa69 on the two explicitly approved non-critical nodes, configure the exact reviewed HTTPS manager Origin, and verify the image revision and manifest before testing; do not deploy production nodes.",
+    "Run the manager Modern candidate/current stable/Legacy Current/Legacy Minimal/Unknown compatibility matrix and the two-node G6.6 evidence for exact CSP, allowed and wrong Origin, source/version/tab handshake validation, timeout/new-tab fallback, refresh, restricted browser storage and sensitive-data absence.",
+    "Only after the full G6.6 evidence passes may MGMT-012 be marked done and MGMT-009 be marked ready. Do not automatically start MGMT-009 or any other work item."
+  ],
+  "generated_at": "2026-08-30T13:27:56Z"
+}

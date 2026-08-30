@@ -40,6 +40,128 @@ const AppState = {
     cooldownTimerInterval: null
 };
 
+const PANEL_DEFAULT_TAB = 'oauth';
+const PANEL_TAB_HASHES = new Set([
+    'oauth',
+    'antigravity',
+    'upload',
+    'manage',
+    'antigravity-manage',
+    'config',
+    'status',
+    'logs',
+    'about'
+]);
+
+function getRequestedPanelTab() {
+    const requested = window.location.hash.startsWith('#')
+        ? window.location.hash.slice(1)
+        : '';
+    if (!PANEL_TAB_HASHES.has(requested)) return PANEL_DEFAULT_TAB;
+    return document.getElementById(requested + 'Tab') ? requested : PANEL_DEFAULT_TAB;
+}
+
+function syncPanelHash(tabName) {
+    const safeTab = PANEL_TAB_HASHES.has(tabName) ? tabName : PANEL_DEFAULT_TAB;
+    const nextHash = `#${safeTab}`;
+    if (window.location.hash === nextHash) return;
+    try {
+        window.history.replaceState(null, '', nextHash);
+    } catch (_) {
+        window.location.hash = nextHash;
+    }
+}
+
+function normalizeRequestedPanelTab() {
+    const safeTab = getRequestedPanelTab();
+    syncPanelHash(safeTab);
+    return safeTab;
+}
+
+function readStoredAuthToken() {
+    try {
+        return window.localStorage.getItem('gcli2api_auth_token');
+    } catch (_) {
+        return null;
+    }
+}
+
+function writeStoredAuthToken(token) {
+    try {
+        window.localStorage.setItem('gcli2api_auth_token', token);
+    } catch (_) {
+        // Restricted browser storage must not prevent an in-memory login.
+    }
+}
+
+function clearStoredAuthToken() {
+    try {
+        window.localStorage.removeItem('gcli2api_auth_token');
+    } catch (_) {
+        // The current page can still clear its in-memory authentication state.
+    }
+}
+
+function getEmbedAllowedOrigins() {
+    const element = document.querySelector('meta[name="gcli-embed-allowed-origins"]');
+    if (!element) return [];
+    try {
+        const values = JSON.parse(element.content);
+        if (!Array.isArray(values)) return [];
+        return values.filter(value => {
+            if (typeof value !== 'string') return false;
+            try {
+                const parsed = new URL(value);
+                return parsed.protocol === 'https:' && parsed.origin === value;
+            } catch (_) {
+                return false;
+            }
+        });
+    } catch (_) {
+        return [];
+    }
+}
+
+function getAllowedParentOrigins(allowedOrigins) {
+    const candidates = [];
+    try {
+        if (window.location.ancestorOrigins && window.location.ancestorOrigins.length) {
+            candidates.push(window.location.ancestorOrigins[0]);
+        }
+    } catch (_) {
+        // Some browsers do not expose ancestorOrigins.
+    }
+    try {
+        if (document.referrer) candidates.push(new URL(document.referrer).origin);
+    } catch (_) {
+        // A malformed or unavailable referrer is not trusted.
+    }
+    const matched = candidates.find(origin => allowedOrigins.includes(origin));
+    if (matched) return [matched];
+    // Exact targetOrigin delivery remains non-broadcast when no-referrer embedding
+    // or browser limitations hide the ancestor Origin: only the actual matching
+    // allowlisted parent can receive one of these non-sensitive ready messages.
+    return allowedOrigins;
+}
+
+function notifyParentConsoleReady(tabName) {
+    if (tabName !== 'manage' || !AppState.authToken || window.parent === window) return;
+    const activeContent = document.getElementById('manageTab');
+    if (!activeContent || !activeContent.classList.contains('active')) return;
+    const allowedOrigins = getEmbedAllowedOrigins();
+    const parentOrigins = getAllowedParentOrigins(allowedOrigins);
+    parentOrigins.forEach(parentOrigin => {
+        window.parent.postMessage(
+            { type: 'gcli2api.console.ready', version: 1, tab: 'manage' },
+            parentOrigin
+        );
+    });
+}
+
+function activateRequestedPanelTab() {
+    switchTab(normalizeRequestedPanelTab(), null);
+}
+
 // =====================================================================
 // 凭证管理器工厂
 // =====================================================================
@@ -976,13 +1098,16 @@ async function login() {
 
         if (response.ok) {
             AppState.authToken = data.token;
-            localStorage.setItem('gcli2api_auth_token', AppState.authToken);
+            writeStoredAuthToken(AppState.authToken);
             document.getElementById('loginSection').classList.add('hidden');
             document.getElementById('mainSection').classList.remove('hidden');
             showStatus('登录成功', 'success');
             await fetchAndDisplayVersion();
             // 显示面板后初始化滑块
-            requestAnimationFrame(() => initTabSlider());
+            requestAnimationFrame(() => {
+                initTabSlider();
+                activateRequestedPanelTab();
+            });
         } else {
             showStatus(`登录失败: ${data.detail || data.error || '未知错误'}`, 'error');
         }
@@ -992,7 +1117,7 @@ async function login() {
 }
 
 async function autoLogin() {
-    const savedToken = localStorage.getItem('gcli2api_auth_token');
+    const savedToken = readStoredAuthToken();
     if (!savedToken) return false;
 
     AppState.authToken = savedToken;
@@ -1010,10 +1135,13 @@ async function autoLogin() {
             document.getElementById('mainSection').classList.remove('hidden');
             showStatus('自动登录成功', 'success');
             // 显示面板后初始化滑块
-            requestAnimationFrame(() => initTabSlider());
+            requestAnimationFrame(() => {
+                initTabSlider();
+                activateRequestedPanelTab();
+            });
             return true;
         } else if (response.status === 401) {
-            localStorage.removeItem('gcli2api_auth_token');
+            clearStoredAuthToken();
             AppState.authToken = '';
             return false;
         }
@@ -1024,7 +1152,7 @@ async function autoLogin() {
 }
 
 function logout() {
-    localStorage.removeItem('gcli2api_auth_token');
+    clearStoredAuthToken();
     AppState.authToken = '';
     document.getElementById('loginSection').classList.remove('hidden');
     document.getElementById('mainSection').classList.add('hidden');
@@ -1078,23 +1206,41 @@ function initTabSlider() {
 }
 
 // 页面加载和窗口大小变化时初始化滑块
-document.addEventListener('DOMContentLoaded', initTabSlider);
+document.addEventListener('DOMContentLoaded', () => {
+    normalizeRequestedPanelTab();
+    initTabSlider();
+});
 window.addEventListener('resize', () => {
     const activeTab = document.querySelector('.tab.active');
     if (activeTab) updateTabSlider(activeTab, false);
 });
+window.addEventListener('hashchange', () => {
+    const safeTab = normalizeRequestedPanelTab();
+    if (AppState.authToken) switchTab(safeTab, null);
+});
 
-function switchTab(tabName) {
+function switchTab(tabName, eventOrTarget = null) {
+    const safeTabName = PANEL_TAB_HASHES.has(tabName) && document.getElementById(tabName + 'Tab')
+        ? tabName
+        : PANEL_DEFAULT_TAB;
     // 获取当前活动的内容区域
     const currentContent = document.querySelector('.tab-content.active');
-    const targetContent = document.getElementById(tabName + 'Tab');
+    const targetContent = document.getElementById(safeTabName + 'Tab');
+
+    syncPanelHash(safeTabName);
+
+    const explicitTarget = eventOrTarget && eventOrTarget.target
+        ? eventOrTarget.target
+        : eventOrTarget;
+    const targetTab = explicitTarget && typeof explicitTarget.closest === 'function'
+        ? explicitTarget.closest('.tab')
+        : document.querySelector(`.tab[data-tab="${safeTabName}"]`);
 
     // 如果点击的是当前标签页，不做任何操作
-    if (currentContent === targetContent) return;
-
-    // 找到目标标签按钮
-    const targetTab = event && event.target ? event.target :
-        document.querySelector(`.tab[onclick*="'${tabName}'"]`);
+    if (currentContent === targetContent) {
+        notifyParentConsoleReady(safeTabName);
+        return;
+    }
 
     // 移除所有标签页的active状态
     document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
@@ -1144,7 +1290,8 @@ function switchTab(tabName) {
                             targetContent.style.transform = '';
 
                             // 动画完成后触发数据加载
-                            triggerTabDataLoad(tabName);
+                            triggerTabDataLoad(safeTabName);
+                            notifyParentConsoleReady(safeTabName);
                         }, 260);
                     });
                 });
@@ -1155,7 +1302,8 @@ function switchTab(tabName) {
         if (targetContent) {
             targetContent.classList.add('active');
             // 直接触发数据加载
-            triggerTabDataLoad(tabName);
+            triggerTabDataLoad(safeTabName);
+            notifyParentConsoleReady(safeTabName);
         }
     }
 }

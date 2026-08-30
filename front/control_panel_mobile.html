@@ -985,6 +985,7 @@
             }
         }
     </style>
+    <meta name="gcli-embed-allowed-origins" content="__GCLI_EMBED_ALLOWED_ORIGINS__">
 </head>
 
 <body>
@@ -1025,14 +1026,14 @@
             <!-- 移动端优化的标签页 -->
             <div class="tabs">
                 <div class="tab-slider"></div>
-                <button class="tab active" onclick="switchTab('oauth')">OAuth认证</button>
-                <button class="tab" onclick="switchTab('antigravity')">Antigravity认证</button>
-                <button class="tab" onclick="switchTab('upload')">批量上传</button>
-                <button class="tab" onclick="switchTab('manage')">GCLI凭证</button>
-                <button class="tab" onclick="switchTab('antigravity-manage')">AG凭证</button>
-                <button class="tab" onclick="switchTab('config')">配置管理</button>
-                <button class="tab" onclick="switchTab('logs')">实时日志</button>
-                <button class="tab" onclick="switchTab('about')">项目信息</button>
+                <button class="tab active" data-tab="oauth" onclick="switchTab('oauth', this)">OAuth认证</button>
+                <button class="tab" data-tab="antigravity" onclick="switchTab('antigravity', this)">Antigravity认证</button>
+                <button class="tab" data-tab="upload" onclick="switchTab('upload', this)">批量上传</button>
+                <button class="tab" data-tab="manage" onclick="switchTab('manage', this)">GCLI凭证</button>
+                <button class="tab" data-tab="antigravity-manage" onclick="switchTab('antigravity-manage', this)">AG凭证</button>
+                <button class="tab" data-tab="config" onclick="switchTab('config', this)">配置管理</button>
+                <button class="tab" data-tab="logs" onclick="switchTab('logs', this)">实时日志</button>
+                <button class="tab" data-tab="about" onclick="switchTab('about', this)">项目信息</button>
             </div>
 
             <!-- OAuth认证标签页 -->
