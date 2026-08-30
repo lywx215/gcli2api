@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0",
+  "delivery_id": "MGMT-012-G-1",
+  "work_item": "MGMT-012",
+  "source_repository": "lywx215/gcli2api",
+  "status": "ready",
+  "execution_policy": {
+    "mode": "queue_only",
+    "max_automatic_runs": 0
+  },
+  "summary": "The repository owner explicitly approved the MGMT-012 protocol scope. gcli2api mirrored and reviewed the manager-approved coordination spec, roadmap and additive Management schema 1.2, and created planned Issue #26. This delivery contains documentation and queue metadata only; no node implementation, runtime capability declaration, image publication or deployment has started.",
+  "contract_sha256": "cd7ecdc83bdaf04d543d0b560775995f34ca2f255c25820c63c2ef0d3e00ecc0",
+  "capabilities_added": [
+    "ui.credential_console.embed"
+  ],
+  "capabilities_removed": [],
+  "compatibility": "Schema 1.2 adds the documented ui.credential_console.embed capability without changing existing endpoints or action semantics. No current node declares the new runtime capability in this delivery. Existing Modern nodes, Legacy Current, Legacy Minimal and Unknown remain non-embedded and use the explicit new-tab fallback; no SSO, secret exchange, credential transfer, reverse proxy, HTML rewriting or inferred version behavior is introduced.",
+  "tests": [
+    "COORDINATION_SPEC.md SHA-256 is dd7a0375a4d6511a00a3eabdd56493a90c452d15e314a1c38d28c97a81990925",
+    "IMPLEMENTATION_ROADMAP.md SHA-256 is 5cf7abe86e64a4dc22445fe99d8f8c5cac730b649542a4165ee89671b358d2a4",
+    "MANAGEMENT_API_CONTRACT.md SHA-256 is cd7ecdc83bdaf04d543d0b560775995f34ca2f255c25820c63c2ef0d3e00ecc0",
+    "Handoff schema, queue-only policy, zero automatic runs, sensitive-literal scan, OpenAPI baseline, pytest/Legacy regression and repository CI checks pass"
+  ],
+  "artifacts": [
+    "docs/multi-repo/COORDINATION_SPEC.md",
+    "docs/multi-repo/IMPLEMENTATION_ROADMAP.md",
+    "docs/multi-repo/MANAGEMENT_API_CONTRACT.md",
+    "coordination/handoffs/MGMT-012-G-1.json"
+  ],
+  "next_actions": [
+    "Record the synchronized gcli2api authority documents and planned Issue #26, then update manager MGMT-012 Issue #32 from planned to ready for an explicit user start.",
+    "Do not start implementation automatically. After an explicit user start, implement manager capability tolerance, the server-constructed console entry and safe fallback first; only then send the roadmap-required implementation-ready handoff before any gcli2api node code begins."
+  ],
+  "generated_at": "2026-08-30T12:45:26Z"
+}

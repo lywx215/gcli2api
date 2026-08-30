@@ -2,12 +2,12 @@
 
 状态：**Draft for Review**
 
-路线图版本：`implementation-roadmap-1.1`（2026-08-29）
+路线图版本：`implementation-roadmap-1.2`（2026-08-30）
 
 ## 1. 目的和权威性
 
 本路线图把统一管理系统从基础骨架推进到20台节点生产运行所需的全部工作预先拆分为
-`MGMT-001`至`MGMT-011`。它是工作项范围、依赖、顺序和验收标准的权威来源；GitHub
+`MGMT-001`至`MGMT-012`。它是工作项范围、依赖、顺序和验收标准的权威来源；GitHub
 Issue用于跟踪状态，PR用于交付实现，handoff用于跨仓库投递，均不得静默扩大本文件定义
 的范围。
 
@@ -21,6 +21,10 @@ Issue用于跟踪状态，PR用于交付实现，handoff用于跨仓库投递，
 
 仅创建分支不代表任务已经定义或可以实施。Codex不得根据分支名、阶段名或上一个任务的
 结尾自行推测下一任务范围。
+
+本仓库为单人所有者项目，`Review`不要求额外GitHub reviewer。唯一仓库所有者对指定
+路线图或PR的明确批准可满足人工Review条件；Codex不得自行批准，CI通过也不能替代该批准。
+所有者批准不豁免依赖、共享文档哈希、测试、handoff、安全、灰度和回滚门禁。
 
 ## 2. 已确认的总体方案
 
@@ -74,7 +78,8 @@ flowchart LR
   F --> G["MGMT-007 负载分析与调整建议"]
   G --> H["MGMT-008 生产基础设施与安全验收"]
   H --> K["MGMT-011 算力预算与24小时恢复预测"]
-  K --> I["MGMT-009 20节点兼容矩阵与灰度"]
+  K --> L["MGMT-012 节点控制台嵌入与凭证页直达"]
+  L --> I["MGMT-009 20节点兼容矩阵与灰度"]
   I --> J["MGMT-010 正式发布与持续运维"]
   J -.独立立项.-> N["NAPI-001 new-api规划"]
   J -.独立产品.-> P["DESKTOP-* 桌面端路线"]
@@ -89,7 +94,8 @@ flowchart LR
 | G4 写安全门禁 | 幂等、逐项结果、审计和危险确认通过 | MGMT-006 |
 | G5 外部操作门禁 | 并发、限流、副作用和冷却测试通过 | MGMT-007 |
 | G6 生产门禁 | TLS或已记录的供应商例外、权限、网络限制、备份恢复、监控和安全Review通过 | MGMT-011 |
-| G6.5 算力预算门禁 | 共享额度公式、手动刷新限流、数据覆盖和四类适配降级通过 | MGMT-009 |
+| G6.5 算力预算门禁 | 共享额度公式、手动刷新限流、数据覆盖和四类适配降级通过 | MGMT-012 |
+| G6.6 嵌入安全门禁 | 深链接、Origin白名单、CSP、握手校验和旧节点回退通过 | MGMT-009 |
 | G7 发布门禁 | 2台和5台灰度观察通过，无未解决P0/P1 | 全量与MGMT-010 |
 
 ## 5. 工作项总表
@@ -104,8 +110,9 @@ flowchart LR
 | MGMT-006 | Preview、额度、测试、风险和冷却同步 | 两仓 | MGMT-005 | `planned` |
 | MGMT-007 | 负载快照、趋势、热力图和人工调整建议 | manager | MGMT-006 | `planned` |
 | MGMT-008 | 腾讯云数据库、Zeabur配置、备份恢复和安全验收 | manager/运维 | MGMT-007 | `done`，[manager PR #26](https://github.com/lywx215/gcli2api-manager/pull/26) |
-| MGMT-011 | 算力预算、24小时恢复预测和手动额度刷新 | manager | MGMT-008 | `planned` |
-| MGMT-009 | 20台版本矩阵、RC、2/5/剩余节点灰度 | 两仓/运维 | MGMT-011 | `planned` |
+| MGMT-011 | 算力预算、24小时恢复预测和手动额度刷新 | manager | MGMT-008 | `done`，[manager PR #30](https://github.com/lywx215/gcli2api-manager/pull/30) |
+| MGMT-012 | 节点控制台嵌入、`#manage`直达和安全回退 | 两仓 | MGMT-011 | `planned` |
+| MGMT-009 | 20台版本矩阵、RC、2/5/剩余节点灰度 | 两仓/运维 | MGMT-012 | `planned` |
 | MGMT-010 | 正式发布、运行手册、告警、恢复演练和维护策略 | 两仓/运维 | MGMT-009 | `planned` |
 
 ## 6. 完整工作项定义
@@ -271,8 +278,8 @@ Codex范围：提供一体镜像、首次设置和设置页、脱敏配置示例
 
 ### MGMT-011：算力预算与24小时恢复预测
 
-状态：`planned`。必须先完成本工作项的双仓路线图Review；manager实施完成并通过G6.5后，
-MGMT-009才可标记为`ready`。本工作项不修改gcli2api Management API、schema或capability。
+状态：`done`。manager实现、迁移、四类适配测试和G6.5证据已由PR #30交付；本工作项
+未修改gcli2api Management API、schema或capability。
 
 目标：基于manager已经保存的脱敏Tier、额度快照和模型冷却元数据，计算唯一管理员可复算的
 Pro共享算力预算，并按北京时间展示未来24小时恢复分布；额度查询仍只能由管理员手动触发。
@@ -303,6 +310,59 @@ new-api、自动迁移/复制凭证、根据版本字符串猜测能力，以及
 验收：66%示例在Enterprise/Standard分别得到330/165剩余请求；未来Pro命名可按规则识别；
 北京时间跨日和24小时边界正确；快照覆盖、陈旧与冲突显式展示；手动刷新不会重放成功项，
 单节点失败不影响其他节点；四类适配场景、MySQL迁移、前端三主题、窄窗口和敏感扫描通过。
+
+### MGMT-012：节点控制台嵌入与GCLI凭证页直达
+
+状态：`planned`。必须先完成本工作项的双仓路线图与Management schema 1.2 Review，且
+MGMT-011保持`done`；manager容忍性实现、gcli2api候选实现和G6.6证据全部完成后，
+MGMT-009才可重新标记为`ready`。
+
+目标：让唯一管理员从manager的节点控制台进入对应gcli2api节点的GCLI凭证文件管理
+标签页；已审核节点优先在隔离iframe中展示，不支持或不可达时安全回退到新标签。该功能
+是跨域页面导航，不是凭证迁移、复制、同步或manager代办节点操作。
+
+顺序：
+
+1. 两仓先同步Review路线图、Management schema 1.2和`ui.credential_console.embed`语义；
+2. manager实现未知capability容忍、控制台入口API、状态门控和新标签回退；
+3. manager生成`ready`handoff后，gcli2api实现`#manage`深链接、Origin白名单、CSP和握手；
+4. gcli2api发布固定候选镜像并生成`ready`handoff；
+5. manager对Modern候选、当前稳定版、Legacy Current、Legacy Minimal和Unknown运行兼容矩阵。
+
+manager范围：
+
+- 新增“节点控制台”导航及`/node-console`、`/node-console/:nodeId`页面，列出全部节点并展示
+  在线、离线和停用状态；选择状态进入URL，刷新后可恢复；
+- 通过已登录只读manager API返回经服务端构造的节点入口，固定使用`/#manage`，只接受
+  已注册HTTPS Base URL，不携带认证信息、凭证内容或任意用户URL；
+- 仅对已启用、在线、Modern V1且声明`ui.credential_console.embed`的节点尝试iframe；
+  停用节点禁止打开，离线及缺失能力节点只允许新标签；
+- iframe使用沙箱和`no-referrer`，不允许顶层跳转；manager不得读取iframe DOM、代理节点
+  HTML、注入脚本或直接调用节点业务API；
+- 只接受来源Origin和`event.source`均与所选节点匹配的版本化`postMessage`握手；超时后
+  终止嵌入并展示新标签入口，新标签始终作为显式回退可用。
+
+gcli2api范围：
+
+- `switchTab`显式接收事件或目标按钮，不依赖全局`event`；只从白名单读取URL hash，
+  `#manage`激活GCLI凭证管理，未知hash回到默认页，切换tab同步更新hash；
+- 新增`GCLI_EMBED_ALLOWED_ORIGINS`配置，只接受规范化HTTPS Origin且不得包含路径、查询、
+  用户信息或通配符；为空时不声明嵌入能力；
+- 控制面板响应使用精确`Content-Security-Policy: frame-ancestors ...`，不得被冲突的
+  `X-Frame-Options`阻断，也不得把允许来源扩展到任意HTTPS站点；
+- 成功激活目标tab后，仅向匹配的允许父Origin发送
+  `{"type":"gcli2api.console.ready","version":1,"tab":"manage"}`，消息不包含认证、
+  凭证、配置、节点密码或业务数据；
+- 只有深链接、允许来源、安全头和握手全部启用时声明`ui.credential_console.embed`。
+
+排除：免登录、SSO、共享面板密码或Management Token、manager反向代理或HTML重写、
+跨节点凭证迁移/复制/同步、iframe DOM访问、manager代替用户执行节点页面操作、为Legacy
+或Unknown猜测嵌入能力，以及按版本字符串推断支持。
+
+验收：未登录、已登录和刷新后`/#manage`均保持目标tab；错误hash安全回退；错误Origin、
+伪造消息、HTTP URL、跨域重定向和未授权祖先被拒绝；停用、离线、能力缺失、握手超时及
+浏览器存储受限均有明确回退；数据库、日志、URL和消息无敏感信息；manager先发布，随后
+在2台非关键候选节点验证，再进入MGMT-009的5台和剩余节点灰度。
 
 ### MGMT-009：20节点兼容矩阵与灰度上线
 
@@ -353,6 +413,7 @@ PR统一修改。
 | 删除 | 功能实现但默认关闭，完成2台写操作灰度后再由管理员显式开启 |
 | 主动操作 | 单节点并发最多3；额度缓存10分钟；额度、风险和测试不做周期调用 |
 | 算力预算 | Enterprise 500/24h、Standard 250/24h；Pro共享桶；北京时间24个滚动小时；只允许管理员手动刷新 |
+| 节点控制台 | 固定`/#manage`；独立登录；capability优先；握手超时回退新标签；不代理、不传递凭证 |
 | 负载快照 | 默认60秒采集节点内部统计；原始快照保留30天，小时聚合保留180天 |
 | 审计 | 默认保留180天；危险操作不得在保留期内被应用删除 |
 | 数据库 | `utf8mb4`、优先`utf8mb4_0900_ai_ci`、单一库级读写账号；默认TLS，供应商明确不支持时只允许显式无TLS模式并绑定固定Zeabur出口 |
@@ -364,9 +425,10 @@ PR统一修改。
 
 1. 20台节点的名称、URL、版本/revision和允许Legacy的节点清单；
 2. 用于MGMT-004至MGMT-006的非生产或候选镜像测试节点；
-3. MGMT-009的2台和5台灰度节点名单及回滚负责人；
-4. MGMT-010的正式域名、告警接收方式和维护窗口；
-5. 数据库传输模式、网络来源限制、备份和Zeabur Secret已经配置完成的脱敏证明。
+3. MGMT-012允许嵌入的manager正式HTTPS Origin及2台非关键候选节点；
+4. MGMT-009的2台和5台灰度节点名单及回滚负责人；
+5. MGMT-010的正式域名、告警接收方式和维护窗口；
+6. 数据库传输模式、网络来源限制、备份和Zeabur Secret已经配置完成的脱敏证明。
 
 真实密码、Token、私钥和完整凭证不得通过Issue、handoff、Fixture或提交提供，只能进入
 对应平台Secret。
@@ -384,12 +446,13 @@ PR统一修改。
 | MGMT-007 | 停止快照调度并隐藏分析页；不影响节点管理和历史审计 |
 | MGMT-008 | 停止manager后恢复数据库备份、配置和密钥；未通过门禁不得接入生产节点 |
 | MGMT-011 | 隐藏预算API和页面，停止未开始的刷新波次并等待在途子任务；降级新增迁移，不撤销已发生的额度查询副作用 |
+| MGMT-012 | 隐藏节点控制台入口并回滚manager镜像；节点移除允许Origin、嵌入capability和候选镜像；不涉及数据库恢复 |
 | MGMT-009 | 停止扩批，回滚manager和灰度节点固定镜像，保持未验证节点只读 |
 | MGMT-010 | 回滚到上一个正式SemVer及其兼容数据库版本，按Runbook恢复服务 |
 
 ## 8. GitHub与Codex协调方式
 
-- 在路线图Review通过后，一次性创建MGMT-002至MGMT-011的`planned`Issue，避免临时
+- 在路线图Review通过后，一次性创建MGMT-002至MGMT-012的`planned`Issue，避免临时
   决定下一步；依赖满足时只更新状态，不重写范围；
 - 用户启动任务只需说“按路线图执行MGMT-00X”，Codex必须读取本文件、该Issue和相关
   handoff，不需要用户再次复制完整需求；
@@ -404,7 +467,7 @@ PR统一修改。
 
 只有MGMT-010完成后才可进入规划Review。首个工作项只盘点new-api渠道、权重、健康、容量
 和审计需求，定义只读契约、人工确认、幂等和回滚，不直接实现自动调权。任何new-api实现
-必须使用独立路线图和任务编号，不得回填到MGMT-001至MGMT-011。
+必须使用独立路线图和任务编号，不得回填到MGMT-001至MGMT-012。
 
 ### DESKTOP-*：桌面端
 
@@ -441,4 +504,17 @@ PR统一修改。
 1. manager和gcli2api先同步Review本版本路线图并复核共享文件SHA-256；
 2. manager创建MGMT-011 Issue；MGMT-008为`done`且路线图Review通过后才标记为`ready`；
 3. gcli2api只同步共享路线图并记录`no_counterpart_action`，不得创建服务端实现范围；
-4. MGMT-011实现、迁移、四类适配测试和G6.5证据完成后，才把MGMT-009标记为`ready`。
+4. MGMT-011实现、迁移、四类适配测试和G6.5证据完成后，才把MGMT-012标记为`ready`；
+   MGMT-009仍等待MGMT-012的G6.6门禁。
+
+### 11.2 MGMT-012增量启用
+
+1. manager和gcli2api同步Review本版本路线图、协作规范和Management schema 1.2，复核三份
+   共享文件SHA-256一致；
+2. manager和gcli2api创建同编号MGMT-012 Issue；MGMT-011为`done`且协议Review通过后，
+   manager工作项才标记为`ready`；
+3. manager先实现capability容忍、入口API、控制台页面和安全回退，合并后发送`ready`交接；
+4. gcli2api只执行交接中已定义的深链接、Origin白名单、CSP、握手和capability范围，发布
+   固定候选镜像后回传`ready`交接；
+5. manager完成Modern候选及全部Legacy/Unknown兼容矩阵和G6.6证据后，才把MGMT-009重新
+   标记为`ready`；不得因面板能够人工打开而跳过嵌入安全验收。
