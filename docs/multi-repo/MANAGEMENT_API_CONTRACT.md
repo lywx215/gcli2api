@@ -2,7 +2,7 @@
 
 状态：**Draft for Review**
 
-契约版本：`management-schema 1.1`
+契约版本：`management-schema 1.2`
 
 基础路径：`/management/v1`
 
@@ -34,7 +34,7 @@ Authorization: Bearer <NODE_MANAGEMENT_TOKEN>
 
 ```json
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z"
@@ -97,7 +97,7 @@ HTTP状态映射：
 
 ## 2. Capability命名
 
-首版能力：
+能力清单：
 
 ```text
 node.summary
@@ -120,6 +120,7 @@ credential.cooldown.sync
 stats.daily
 stats.model
 stats.rpm
+ui.credential_console.embed
 ```
 
 Preview启用和关闭必须是两个独立能力。当前只有配置Preview能力的版本不得声明
@@ -131,7 +132,7 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 
 ```json
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z",
@@ -155,7 +156,7 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 
 ```json
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z",
@@ -199,7 +200,7 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 
 ```json
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z",
@@ -309,7 +310,7 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 
 ```json
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z",
@@ -378,7 +379,7 @@ manager从10分钟额度缓存返回结果时可加`cached=true`；节点不得�
 
 ```json
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z",
@@ -410,7 +411,36 @@ manager从10分钟额度缓存返回结果时可加`cached=true`；节点不得�
 - 同一凭证的冲突写操作必须串行化或返回409 `CONFLICT`。
 - manager遇到超时后必须先读取当前状态，再决定是否重试。
 
-## 10. Schema演进
+## 10. `ui.credential_console.embed`
+
+该capability表示节点控制面板同时满足以下嵌入协议：
+
+- 控制面板根路径接受白名单fragment；`/#manage`必须在未登录、已登录和刷新后定位到GCLI
+  凭证管理tab，未知fragment必须回到安全默认tab；
+- 节点配置了一个或多个规范化HTTPS manager Origin；配置不得接受`*`、HTTP、路径、查询、
+  fragment或用户信息；未配置允许Origin时不得声明该capability；
+- 控制面板响应必须通过HTTP响应头发送精确的CSP `frame-ancestors`允许列表；不得仅通过
+  HTML `meta`声明，也不得同时发送会阻断已允许manager的`X-Frame-Options`；
+- 当页面在允许Origin的父页面中完成加载并激活`manage` tab后，必须只向该Origin发送：
+
+```json
+{
+  "type": "gcli2api.console.ready",
+  "version": 1,
+  "tab": "manage"
+}
+```
+
+- 消息不得包含登录状态、Token、密码、凭证、配置、节点内部路径或业务数据；父页面必须
+  同时校验`event.origin`、`event.source`、`version`和`tab`；
+- 该能力不提供SSO、委托会话、面板密码交换、manager反向代理、HTML重写或节点API跨域
+  调用。节点仍独立认证，manager仅负责用户可见导航和失败回退。
+
+缺失该capability时manager不得尝试通过版本字符串、响应外观或当前未设置安全头推断可
+嵌入；只能使用新标签打开已注册节点的HTTPS控制面板。停用节点禁止打开，离线节点只允许
+管理员显式尝试新标签。
+
+## 11. Schema演进
 
 - 新增可选字段：schema minor递增，例如`1.0`到`1.1`。
 - 新增capability：schema minor递增。
