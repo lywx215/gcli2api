@@ -13,6 +13,7 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Any
 
+from src.embed_policy import EMBED_CAPABILITY, embed_protocol_available
 from src.storage_adapter import get_storage_adapter
 from src.versioning import load_version_metadata
 
@@ -231,6 +232,8 @@ class ManagementService:
 
     def _read_capabilities(self, backend: object, backend_type: str) -> list[str]:
         capabilities: list[str] = []
+        if embed_protocol_available():
+            capabilities.append(EMBED_CAPABILITY)
         if hasattr(backend, "get_credentials_summary"):
             capabilities.extend(("node.summary", "credential.list"))
         # MongoDB currently exposes no-op compatibility stubs, not statistics.

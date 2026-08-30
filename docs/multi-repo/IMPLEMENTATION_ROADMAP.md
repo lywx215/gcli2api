@@ -111,7 +111,7 @@ flowchart LR
 | MGMT-007 | 负载快照、趋势、热力图和人工调整建议 | manager | MGMT-006 | `planned` |
 | MGMT-008 | 腾讯云数据库、Zeabur配置、备份恢复和安全验收 | manager/运维 | MGMT-007 | `done`，[manager PR #26](https://github.com/lywx215/gcli2api-manager/pull/26) |
 | MGMT-011 | 算力预算、24小时恢复预测和手动额度刷新 | manager | MGMT-008 | `done`，[manager PR #30](https://github.com/lywx215/gcli2api-manager/pull/30) |
-| MGMT-012 | 节点控制台嵌入、`#manage`直达和安全回退 | 两仓 | MGMT-011 | `planned` |
+| MGMT-012 | 节点控制台嵌入、`#manage`直达和安全回退 | 两仓 | MGMT-011 | `in_progress` |
 | MGMT-009 | 20台版本矩阵、RC、2/5/剩余节点灰度 | 两仓/运维 | MGMT-012 | `planned` |
 | MGMT-010 | 正式发布、运行手册、告警、恢复演练和维护策略 | 两仓/运维 | MGMT-009 | `planned` |
 
@@ -313,9 +313,9 @@ new-api、自动迁移/复制凭证、根据版本字符串猜测能力，以及
 
 ### MGMT-012：节点控制台嵌入与GCLI凭证页直达
 
-状态：`planned`。必须先完成本工作项的双仓路线图与Management schema 1.2 Review，且
-MGMT-011保持`done`；manager容忍性实现、gcli2api候选实现和G6.6证据全部完成后，
-MGMT-009才可重新标记为`ready`。
+状态：`in_progress`。双仓路线图与Management schema 1.2已完成所有者Review，MGMT-011
+保持`done`，manager容忍性实现已完成并等待合并；仍需gcli2api候选实现和G6.6证据全部
+完成后，MGMT-012才能标记为`done`，MGMT-009才能重新标记为`ready`。
 
 目标：让唯一管理员从manager的节点控制台进入对应gcli2api节点的GCLI凭证文件管理
 标签页；已审核节点优先在隔离iframe中展示，不支持或不可达时安全回退到新标签。该功能

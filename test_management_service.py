@@ -130,6 +130,28 @@ async def test_capabilities_are_declared_from_real_backend_methods(service) -> N
 
 
 @pytest.mark.asyncio
+async def test_embed_capability_is_truthful_for_runtime_origin_policy(
+    service, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "GCLI_EMBED_ALLOWED_ORIGINS", "https://manager.example.com"
+    )
+    enabled = await service.capabilities()
+
+    monkeypatch.setenv(
+        "GCLI_EMBED_ALLOWED_ORIGINS", "https://manager.example.com/path"
+    )
+    invalid = await service.capabilities()
+
+    monkeypatch.delenv("GCLI_EMBED_ALLOWED_ORIGINS", raising=False)
+    missing = await service.capabilities()
+
+    assert "ui.credential_console.embed" in enabled.capabilities
+    assert "ui.credential_console.embed" not in invalid.capabilities
+    assert "ui.credential_console.embed" not in missing.capabilities
+
+
+@pytest.mark.asyncio
 async def test_summary_and_credentials_are_whitelisted_paginated_and_nullable(service) -> None:
     summary = await service.summary()
     first = await service.credentials(
