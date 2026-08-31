@@ -39,3 +39,23 @@ def test_quota_fallback_cooldown_field_is_wired_for_both_panels():
     assert config.ENV_MAPPINGS["QUOTA_FALLBACK_COOLDOWN_MINUTES"] == (
         "quota_fallback_cooldown_minutes"
     )
+
+
+def test_management_security_fields_are_wired_for_both_panels():
+    front_dir = Path(__file__).parent / "front"
+    for filename in ("control_panel.html", "control_panel_mobile.html"):
+        html = (front_dir / filename).read_text(encoding="utf-8")
+        assert 'id="nodeManagementToken"' in html
+        assert 'type="password"' in html
+        assert 'id="gcliEmbedMode"' in html
+        assert 'id="gcliEmbedPolicyStatus"' in html
+        assert 'value="any_https"' in html
+        assert 'id="gcliEmbedAllowedOrigins"' in html
+
+    common_js = (front_dir / "common.js").read_text(encoding="utf-8")
+    assert "window.crypto.getRandomValues(bytes)" in common_js
+    assert "method: 'PUT'" in common_js
+    assert "method: 'DELETE'" in common_js
+    assert config.ENV_MAPPINGS["GCLI_EMBED_ALLOWED_ORIGINS"] == (
+        "gcli_embed_allowed_origins"
+    )

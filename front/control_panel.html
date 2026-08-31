@@ -1340,7 +1340,7 @@
             }
         }
     </style>
-    <meta name="gcli-embed-allowed-origins" content="__GCLI_EMBED_ALLOWED_ORIGINS__">
+    <meta name="gcli-embed-policy" content="__GCLI_EMBED_POLICY__">
 </head>
 
 <body>
@@ -2260,6 +2260,41 @@
                                 <label for="configPassword">通用密码:</label>
                                 <input type="text" id="configPassword" class="config-input" placeholder="pwd" />
                                 <small class="config-note">（兼容性保留）设置后将覆盖上述两个密码，留空则使用分开的密码设置</small>
+                            </div>
+                        </div>
+
+                        <div class="config-group">
+                            <h4>Management API 与控制台嵌入</h4>
+
+                            <div class="form-group">
+                                <label for="nodeManagementToken">NODE_MANAGEMENT_TOKEN:</label>
+                                <input type="password" id="nodeManagementToken" class="config-input"
+                                    minlength="32" maxlength="512" autocomplete="new-password"
+                                    placeholder="仅用于设置或轮换，不会回显现有Token" />
+                                <small id="nodeManagementTokenStatus" class="config-note">正在读取配置状态...</small>
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                                    <button type="button" class="btn" data-management-token-action onclick="generateManagementToken()">生成</button>
+                                    <button type="button" class="btn" data-management-token-action onclick="copyManagementToken()">复制</button>
+                                    <button type="button" class="btn" data-management-token-action onclick="saveManagementToken()">设置/轮换</button>
+                                    <button type="button" class="btn" data-management-token-action onclick="clearManagementToken()" style="background:#dc3545;">清除</button>
+                                </div>
+                                <small class="config-note">后端只保存SHA-256摘要；环境变量存在时页面只显示状态并锁定。</small>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="gcliEmbedMode">控制台嵌入策略:</label>
+                                <select id="gcliEmbedMode" class="config-input" onchange="updateEmbedConfigVisibility()">
+                                    <option value="any_https">允许所有HTTPS站点（默认）</option>
+                                    <option value="exact">仅允许指定HTTPS Origin</option>
+                                    <option value="disabled">禁止嵌入</option>
+                                </select>
+                                <small id="gcliEmbedPolicyStatus" class="config-note">来源：正在读取...</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="gcliEmbedAllowedOrigins">GCLI_EMBED_ALLOWED_ORIGINS:</label>
+                                <textarea id="gcliEmbedAllowedOrigins" class="config-input" rows="4"
+                                    placeholder="每行一个，例如 https://manager.example.com"></textarea>
+                                <small class="config-note">精确模式必填；只接受不含路径、查询、fragment、用户信息或通配符的规范HTTPS Origin。非空环境变量会锁定此策略。</small>
                             </div>
                         </div>
 

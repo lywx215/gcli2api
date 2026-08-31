@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from log import log
-from src.embed_policy import frame_ancestors_policy, get_embed_allowed_origins
+from src.embed_policy import frame_ancestors_policy, get_embed_policy
 from src.versioning import get_asset_version
 from .utils import is_mobile_user_agent
 
@@ -30,19 +30,24 @@ async def serve_control_panel(request: Request):
 
         with open(html_file_path, "r", encoding="utf-8") as f:
             html_content = f.read()
-        embed_origins = get_embed_allowed_origins()
+        embed_policy = await get_embed_policy()
         html_content = html_content.replace(
             "__GCLI2API_ASSET_VERSION__", get_asset_version()
         )
         html_content = html_content.replace(
-            "__GCLI_EMBED_ALLOWED_ORIGINS__",
-            html.escape(json.dumps(embed_origins.origins), quote=True),
+            "__GCLI_EMBED_POLICY__",
+            html.escape(
+                json.dumps(
+                    {"mode": embed_policy.mode, "origins": embed_policy.origins}
+                ),
+                quote=True,
+            ),
         )
         return HTMLResponse(
             content=html_content,
             headers={
                 "Cache-Control": "no-store",
-                "Content-Security-Policy": frame_ancestors_policy(embed_origins),
+                "Content-Security-Policy": frame_ancestors_policy(embed_policy),
             },
         )
 

@@ -8,9 +8,13 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import config
 from src.embed_policy import (
+    ANY_HTTPS_EMBED_CAPABILITY,
     EMBED_ALLOWED_ORIGINS_ENV,
+    EMBED_CAPABILITY,
     frame_ancestors_policy,
+    get_embed_policy,
     parse_embed_allowed_origins,
 )
 from src.panel.root import router
@@ -65,7 +69,13 @@ def _panel_client() -> TestClient:
     return TestClient(app)
 
 
+def _reset_embed_storage(monkeypatch) -> None:
+    monkeypatch.setattr(config, "_config_initialized", True)
+    monkeypatch.setattr(config, "_config_cache", {})
+
+
 def test_panel_response_uses_exact_http_csp_and_no_x_frame_options(monkeypatch) -> None:
+    _reset_embed_storage(monkeypatch)
     monkeypatch.setenv(
         EMBED_ALLOWED_ORIGINS_ENV,
         "https://manager.example.com,https://console.example.net:8443",
@@ -81,33 +91,58 @@ def test_panel_response_uses_exact_http_csp_and_no_x_frame_options(monkeypatch) 
     assert "x-frame-options" not in response.headers
     assert "fixture-management-token" not in response.text
     match = re.search(
-        r'<meta name="gcli-embed-allowed-origins" content="([^"]+)">',
+        r'<meta name="gcli-embed-policy" content="([^"]+)">',
         response.text,
     )
     assert match is not None
-    assert json.loads(
-        match.group(1).replace("&quot;", '"')
-    ) == ["https://manager.example.com", "https://console.example.net:8443"]
+    assert json.loads(match.group(1).replace("&quot;", '"')) == {
+        "mode": "exact",
+        "origins": ["https://manager.example.com", "https://console.example.net:8443"],
+    }
 
 
 @pytest.mark.parametrize(
     "value",
-    (None, "", "http://manager.example.com", "https://manager.example.com/path"),
+    ("http://manager.example.com", "https://manager.example.com/path"),
 )
-def test_panel_response_denies_all_ancestors_when_embedding_is_unavailable(
-    monkeypatch, value: str | None
+def test_panel_response_fails_closed_for_invalid_environment(
+    monkeypatch, value: str
 ) -> None:
-    if value is None:
-        monkeypatch.delenv(EMBED_ALLOWED_ORIGINS_ENV, raising=False)
-    else:
-        monkeypatch.setenv(EMBED_ALLOWED_ORIGINS_ENV, value)
+    _reset_embed_storage(monkeypatch)
+    monkeypatch.setenv(EMBED_ALLOWED_ORIGINS_ENV, value)
 
     response = _panel_client().get("/")
 
     assert response.status_code == 200
     assert response.headers["content-security-policy"] == "frame-ancestors 'none'"
     assert "x-frame-options" not in response.headers
-    assert 'content="[]"' in response.text
+    assert '&quot;mode&quot;: &quot;disabled&quot;' in response.text
+
+
+def test_panel_defaults_to_any_https_and_can_be_disabled(monkeypatch) -> None:
+    _reset_embed_storage(monkeypatch)
+    monkeypatch.delenv(EMBED_ALLOWED_ORIGINS_ENV, raising=False)
+
+    enabled = _panel_client().get("/")
+    assert enabled.headers["content-security-policy"] == "frame-ancestors https:"
+    assert '&quot;mode&quot;: &quot;any_https&quot;' in enabled.text
+
+    config._config_cache[config.GCLI_EMBED_MODE_KEY] = "disabled"
+    disabled = _panel_client().get("/")
+    assert disabled.headers["content-security-policy"] == "frame-ancestors 'none'"
+
+
+@pytest.mark.asyncio
+async def test_embed_policy_capability_matches_mode(monkeypatch) -> None:
+    _reset_embed_storage(monkeypatch)
+    monkeypatch.delenv(EMBED_ALLOWED_ORIGINS_ENV, raising=False)
+    assert (await get_embed_policy()).capability == ANY_HTTPS_EMBED_CAPABILITY
+
+    config._config_cache.update({
+        config.GCLI_EMBED_MODE_KEY: "exact",
+        config.GCLI_EMBED_ORIGINS_KEY: ["https://manager.example.com"],
+    })
+    assert (await get_embed_policy()).capability == EMBED_CAPABILITY
 
 
 def test_manage_hash_contract_covers_login_refresh_fallback_and_safe_ready_message() -> None:
@@ -142,4 +177,6 @@ def test_manage_hash_contract_covers_login_refresh_fallback_and_safe_ready_messa
     for filename in ("control_panel.html", "control_panel_mobile.html"):
         html = (root / "front" / filename).read_text(encoding="utf-8")
         assert 'data-tab="manage" onclick="switchTab(\'manage\', this)"' in html
-        assert "__GCLI_EMBED_ALLOWED_ORIGINS__" in html
+        assert "__GCLI_EMBED_POLICY__" in html
+    assert "policy.mode === 'any_https'" in common_js
+    assert "? ['*']" in common_js

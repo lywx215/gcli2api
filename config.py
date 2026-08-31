@@ -28,6 +28,9 @@ _smart_429_runtime_blocked_reason: Optional[str] = None
 QUOTA_FALLBACK_COOLDOWN_DEFAULT_MINUTES = 30
 QUOTA_FALLBACK_COOLDOWN_MIN_MINUTES = 1
 QUOTA_FALLBACK_COOLDOWN_MAX_MINUTES = 1440
+NODE_MANAGEMENT_TOKEN_HASH_KEY = "node_management_token_hash"
+GCLI_EMBED_MODE_KEY = "gcli_embed_mode"
+GCLI_EMBED_ORIGINS_KEY = "gcli_embed_allowed_origins"
 
 # Client Configuration
 
@@ -55,6 +58,7 @@ ENV_MAPPINGS = {
     "SMART_429_MAX_ATTEMPTS": "smart_429_max_attempts",
     "SMART_429_RETRY_BASE_INTERVAL": "smart_429_retry_base_interval",
     "QUOTA_FALLBACK_COOLDOWN_MINUTES": "quota_fallback_cooldown_minutes",
+    "GCLI_EMBED_ALLOWED_ORIGINS": GCLI_EMBED_ORIGINS_KEY,
     "ANTI_TRUNCATION_MAX_ATTEMPTS": "anti_truncation_max_attempts",
     "COMPATIBILITY_MODE": "compatibility_mode_enabled",
     "RETURN_THOUGHTS_TO_FRONTEND": "return_thoughts_to_frontend",

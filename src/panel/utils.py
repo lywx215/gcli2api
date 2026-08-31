@@ -163,4 +163,7 @@ def get_env_locked_keys() -> Set:
         if os.getenv(env_key):
             env_locked_keys.add(config_key)
 
+    if os.getenv("GCLI_EMBED_ALLOWED_ORIGINS"):
+        env_locked_keys.add(config.GCLI_EMBED_MODE_KEY)
+
     return env_locked_keys

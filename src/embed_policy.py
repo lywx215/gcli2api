@@ -6,9 +6,13 @@ import os
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+import config
+
 
 EMBED_ALLOWED_ORIGINS_ENV = "GCLI_EMBED_ALLOWED_ORIGINS"
 EMBED_CAPABILITY = "ui.credential_console.embed"
+ANY_HTTPS_EMBED_CAPABILITY = "ui.credential_console.embed.any_https"
+EMBED_MODES = frozenset(("any_https", "exact", "disabled"))
 
 
 @dataclass(frozen=True)
@@ -19,6 +23,24 @@ class EmbedOrigins:
     @property
     def enabled(self) -> bool:
         return self.valid and bool(self.origins)
+
+
+@dataclass(frozen=True)
+class EmbedPolicy:
+    mode: str
+    origins: tuple[str, ...] = ()
+    valid: bool = True
+    source: str = "default"
+
+    @property
+    def enabled(self) -> bool:
+        return self.valid and self.mode in ("any_https", "exact")
+
+    @property
+    def capability(self) -> str | None:
+        if not self.enabled:
+            return None
+        return ANY_HTTPS_EMBED_CAPABILITY if self.mode == "any_https" else EMBED_CAPABILITY
 
 
 def _canonical_https_origin(value: str) -> str:
@@ -57,31 +79,57 @@ def _canonical_https_origin(value: str) -> str:
     return canonical
 
 
-def parse_embed_allowed_origins(value: str | None) -> EmbedOrigins:
-    """Parse an exact comma-separated allowlist without partially accepting it."""
-    if value is None or value == "":
+def parse_embed_allowed_origins(
+    value: str | list[str] | tuple[str, ...] | None,
+) -> EmbedOrigins:
+    """Parse an exact allowlist without partially accepting invalid input."""
+    if value is None or value == "" or value == [] or value == ():
         return EmbedOrigins(origins=(), valid=True)
-
-    raw_origins = value.split(",")
+    raw_origins = value.split(",") if isinstance(value, str) else list(value)
     try:
         origins = tuple(_canonical_https_origin(item) for item in raw_origins)
-    except ValueError:
+    except (TypeError, ValueError):
         return EmbedOrigins(origins=(), valid=False)
     if len(origins) != len(set(origins)):
         return EmbedOrigins(origins=(), valid=False)
     return EmbedOrigins(origins=origins, valid=True)
 
 
-def get_embed_allowed_origins() -> EmbedOrigins:
-    return parse_embed_allowed_origins(os.getenv(EMBED_ALLOWED_ORIGINS_ENV))
+async def get_embed_policy() -> EmbedPolicy:
+    raw_env = os.getenv(EMBED_ALLOWED_ORIGINS_ENV)
+    if raw_env:
+        parsed = parse_embed_allowed_origins(raw_env)
+        if not parsed.enabled:
+            return EmbedPolicy(mode="disabled", valid=False, source="environment")
+        return EmbedPolicy(mode="exact", origins=parsed.origins, source="environment")
+
+    missing = object()
+    raw_mode = await config.get_config_value(config.GCLI_EMBED_MODE_KEY, missing)
+    source = "storage"
+    if raw_mode is missing:
+        raw_mode = "any_https"
+        source = "default"
+    if not isinstance(raw_mode, str) or raw_mode not in EMBED_MODES:
+        return EmbedPolicy(mode="disabled", valid=False, source="storage")
+    if raw_mode == "any_https":
+        return EmbedPolicy(mode="any_https", source=source)
+    if raw_mode == "disabled":
+        return EmbedPolicy(mode="disabled", source=source)
+
+    raw_origins = await config.get_config_value(config.GCLI_EMBED_ORIGINS_KEY, [])
+    parsed = parse_embed_allowed_origins(raw_origins)
+    if not parsed.enabled:
+        return EmbedPolicy(mode="disabled", valid=False, source="storage")
+    return EmbedPolicy(mode="exact", origins=parsed.origins, source="storage")
 
 
-def embed_protocol_available() -> bool:
-    """Return whether every runtime-configurable protocol prerequisite is present."""
-    return get_embed_allowed_origins().enabled
-
-
-def frame_ancestors_policy(origins: EmbedOrigins) -> str:
-    if not origins.enabled:
+def frame_ancestors_policy(policy: EmbedPolicy | EmbedOrigins) -> str:
+    if isinstance(policy, EmbedOrigins):
+        if not policy.enabled:
+            return "frame-ancestors 'none'"
+        return "frame-ancestors " + " ".join(policy.origins)
+    if not policy.enabled:
         return "frame-ancestors 'none'"
-    return "frame-ancestors " + " ".join(origins.origins)
+    if policy.mode == "any_https":
+        return "frame-ancestors https:"
+    return "frame-ancestors " + " ".join(policy.origins)

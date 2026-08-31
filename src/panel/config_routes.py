@@ -2,13 +2,17 @@
 配置路由模块 - 处理 /config/* 相关的HTTP请求
 """
 
+import os
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
 import config
 from log import log
 from src.keeplive import keepalive_service
-from src.models import ConfigSaveRequest
+from src.embed_policy import EMBED_MODES, get_embed_policy, parse_embed_allowed_origins
+from src.management.auth import hash_management_token, management_token_status
+from src.models import ConfigSaveRequest, ManagementTokenRequest
 from src.storage_adapter import get_storage_adapter
 from src.utils import verify_panel_token
 from .utils import get_env_locked_keys
@@ -16,6 +20,7 @@ from .utils import get_env_locked_keys
 
 # 创建路由器
 router = APIRouter(prefix="/config", tags=["config"])
+SENSITIVE_CONFIG_KEYS = frozenset((config.NODE_MANAGEMENT_TOKEN_HASH_KEY,))
 
 
 @router.get("/debug-storage")
@@ -182,7 +187,7 @@ async def get_config(token: str = Depends(verify_panel_token)):
 
         # 合并存储系统配置（不覆盖环境变量）
         for key, value in storage_config.items():
-            if key not in env_locked_keys:
+            if key not in env_locked_keys and key not in SENSITIVE_CONFIG_KEYS:
                 current_config[key] = value
 
         # 通用存储合并后再次写入规范化值，避免历史或手工写入的非法值绕过 getter 校验。
@@ -190,7 +195,24 @@ async def get_config(token: str = Depends(verify_panel_token)):
             await config.get_quota_fallback_cooldown_minutes()
         )
 
-        return JSONResponse(content={"config": current_config, "env_locked": list(env_locked_keys)})
+        embed_policy = await get_embed_policy()
+        current_config[config.GCLI_EMBED_MODE_KEY] = embed_policy.mode
+        current_config[config.GCLI_EMBED_ORIGINS_KEY] = list(embed_policy.origins)
+
+        return JSONResponse(
+            content={
+                "config": current_config,
+                "env_locked": list(env_locked_keys),
+                "security": {
+                    "node_management_token": await management_token_status(),
+                    "embed_policy": {
+                        "source": embed_policy.source,
+                        "locked": embed_policy.source == "environment",
+                        "valid": embed_policy.valid,
+                    },
+                },
+            }
+        )
 
     except Exception as e:
         log.error(f"获取配置失败: {e}")
@@ -203,6 +225,8 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
     try:
 
         new_config = request.config
+        if SENSITIVE_CONFIG_KEYS.intersection(new_config):
+            raise HTTPException(status_code=400, detail="敏感配置只能通过专用接口修改")
 
         if "smart_429_protection_enabled" in new_config:
             if not isinstance(new_config["smart_429_protection_enabled"], bool):
@@ -232,6 +256,36 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
                     status_code=400,
                     detail="额度耗尽兜底冷却必须是 1-1440 之间的整数分钟",
                 )
+        if config.GCLI_EMBED_MODE_KEY in new_config:
+            mode = new_config[config.GCLI_EMBED_MODE_KEY]
+            if mode not in EMBED_MODES:
+                raise HTTPException(
+                    status_code=400,
+                    detail="嵌入策略必须是 any_https、exact 或 disabled",
+                )
+        if config.GCLI_EMBED_ORIGINS_KEY in new_config:
+            origins = new_config[config.GCLI_EMBED_ORIGINS_KEY]
+            if not isinstance(origins, list) or not all(
+                isinstance(origin, str) for origin in origins
+            ):
+                raise HTTPException(status_code=400, detail="嵌入Origin必须是字符串列表")
+            parsed_origins = parse_embed_allowed_origins(origins)
+            if not parsed_origins.valid:
+                raise HTTPException(status_code=400, detail="嵌入Origin必须是规范化HTTPS Origin")
+            new_config[config.GCLI_EMBED_ORIGINS_KEY] = list(parsed_origins.origins)
+
+        requested_mode = new_config.get(
+            config.GCLI_EMBED_MODE_KEY,
+            await config.get_config_value(config.GCLI_EMBED_MODE_KEY, "any_https"),
+        )
+        requested_origins = new_config.get(
+            config.GCLI_EMBED_ORIGINS_KEY,
+            await config.get_config_value(config.GCLI_EMBED_ORIGINS_KEY, []),
+        )
+        if requested_mode == "exact" and not parse_embed_allowed_origins(
+            requested_origins
+        ).enabled:
+            raise HTTPException(status_code=400, detail="精确嵌入模式至少需要一个HTTPS Origin")
 
         log.debug(f"收到的配置数据: {list(new_config.keys())}")
         log.debug(f"收到的password值: {new_config.get('password', 'NOT_FOUND')}")
@@ -360,7 +414,11 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
         # 构建响应消息
         response_data = {
             "message": "配置保存成功",
-            "saved_config": {k: v for k, v in new_config.items() if k not in env_locked_keys},
+            "saved_config": {
+                k: v
+                for k, v in new_config.items()
+                if k not in env_locked_keys and k not in SENSITIVE_CONFIG_KEYS
+            },
             "smart_429": smart_429_service.status(),
         }
 
@@ -371,6 +429,44 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
     except Exception as e:
         log.error(f"保存配置失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/management-token")
+async def set_management_token(
+    request: ManagementTokenRequest,
+    token: str = Depends(verify_panel_token),
+):
+    """Set or rotate the write-only Management API bearer token."""
+    if os.getenv("NODE_MANAGEMENT_TOKEN", "").strip():
+        raise HTTPException(status_code=409, detail="Management Token由环境变量管理")
+    if request.token != request.token.strip():
+        raise HTTPException(status_code=400, detail="Management Token不能包含首尾空白")
+    storage_adapter = await get_storage_adapter()
+    stored = await storage_adapter.set_config(
+        config.NODE_MANAGEMENT_TOKEN_HASH_KEY,
+        hash_management_token(request.token),
+    )
+    if not stored:
+        raise HTTPException(status_code=500, detail="Management Token保存失败")
+    await config.reload_config()
+    return JSONResponse(
+        content={"message": "Management Token已更新", "status": await management_token_status()}
+    )
+
+
+@router.delete("/management-token")
+async def clear_management_token(token: str = Depends(verify_panel_token)):
+    """Clear the stored Management API token without exposing its digest."""
+    if os.getenv("NODE_MANAGEMENT_TOKEN", "").strip():
+        raise HTTPException(status_code=409, detail="Management Token由环境变量管理")
+    storage_adapter = await get_storage_adapter()
+    stored = await storage_adapter.set_config(config.NODE_MANAGEMENT_TOKEN_HASH_KEY, None)
+    if not stored:
+        raise HTTPException(status_code=500, detail="Management Token清除失败")
+    await config.reload_config()
+    return JSONResponse(
+        content={"message": "Management Token已清除", "status": await management_token_status()}
+    )
 
 
 @router.get("/storage-engine")

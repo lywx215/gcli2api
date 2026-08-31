@@ -2,7 +2,7 @@
 
 状态：**Draft for Review**
 
-规范版本：`coordination-1.3`
+规范版本：`coordination-1.4`
 
 ## 1. 目标和边界
 
@@ -37,9 +37,10 @@ manager的客户端或数据源。未来若需协同，必须另立方案，不�
 MGMT-012允许一个严格受限的例外：已登录manager页面可把经过服务端校验的节点HTTPS
 控制面板作为跨域顶层导航或隔离iframe打开，但只能用于用户可见导航。manager不得代理或
 改写节点HTML，不得读取iframe DOM、调用iframe内函数、注入认证信息或绕过节点自身登录，
-也不得把该例外扩展为前端直接调用节点业务API。是否内嵌必须由
-`ui.credential_console.embed` capability、精确Origin白名单和握手共同决定；缺失任一条件
-时只允许安全回退，不得按版本猜测。
+也不得把该例外扩展为前端直接调用节点业务API。节点必须通过capability明确声明其策略：
+`ui.credential_console.embed`表示精确Origin白名单，
+`ui.credential_console.embed.any_https`表示允许任意HTTPS父页面；manager只在识别对应
+capability且握手通过时确认内嵌就绪，不得按版本猜测。
 
 ## 2. 仓库职责
 
@@ -84,7 +85,7 @@ Tools业务模块、品牌资源或未明确授权的源码，也不得引入桌
 |---|---|---|
 | gcli2api应用 | `v1.3.0` | 节点发布版本 |
 | manager应用 | `v0.5.0` | 管理系统发布版本 |
-| Management schema | `1.2` | HTTP协议兼容判断 |
+| Management schema | `1.3` | HTTP协议兼容判断 |
 
 规则：
 
@@ -174,15 +175,16 @@ handoff、灰度、安全和回滚门禁。
 
 当前分支基线：
 
-- gcli2api当前管理系统功能统一在`dev7`开发；`dev7`必须从`origin/dev5`创建，完成
-  Review后再合并回`dev5`。不得基于`master`开发当前管理功能。
+- gcli2api当前管理系统功能统一在`dev8`开发；`dev8`继承已Review的`dev7`完整历史，后续
+  短分支必须从最新`dev8`创建，完成Review后再合并回`dev5`。不得基于`master`开发当前
+  管理功能。
 - gcli2api-manager以`main`作为开发基线。
 - 两仓库使用短生命周期`codex/*`、`feat/*`、`fix/*`和必要的`release/*`分支，禁止长期
   分叉的协议开发分支。
 
 gcli2api的GitHub默认分支当前仍为`master`。`repository_dispatch`接收workflow必须存在于
 默认分支，因此自动交接首次启用时，应将纯控制面文件（接收workflow、schema和协作约束）
-同步到`master`；不得为了启用交接把`dev7`中的业务提交提前合入`master`。
+同步到`master`；不得为了启用交接把`dev8`中的业务提交提前合入`master`。
 
 gcli2api发布物必须包含：
 

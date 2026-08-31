@@ -26,6 +26,7 @@ const AppState = {
     // 配置管理
     currentConfig: {},
     envLockedFields: new Set(),
+    securityConfig: {},
 
     // 日志管理
     logWebSocket: null,
@@ -102,23 +103,26 @@ function clearStoredAuthToken() {
     }
 }
 
-function getEmbedAllowedOrigins() {
-    const element = document.querySelector('meta[name="gcli-embed-allowed-origins"]');
-    if (!element) return [];
+function getEmbedPolicy() {
+    const element = document.querySelector('meta[name="gcli-embed-policy"]');
+    if (!element) return { mode: 'disabled', origins: [] };
     try {
-        const values = JSON.parse(element.content);
-        if (!Array.isArray(values)) return [];
-        return values.filter(value => {
-            if (typeof value !== 'string') return false;
+        const value = JSON.parse(element.content);
+        if (!value || !['any_https', 'exact', 'disabled'].includes(value.mode)) {
+            return { mode: 'disabled', origins: [] };
+        }
+        const origins = Array.isArray(value.origins) ? value.origins.filter(origin => {
+            if (typeof origin !== 'string') return false;
             try {
-                const parsed = new URL(value);
-                return parsed.protocol === 'https:' && parsed.origin === value;
+                const parsed = new URL(origin);
+                return parsed.protocol === 'https:' && parsed.origin === origin;
             } catch (_) {
                 return false;
             }
-        });
+        }) : [];
+        return { mode: value.mode, origins };
     } catch (_) {
-        return [];
+        return { mode: 'disabled', origins: [] };
     }
 }
 
@@ -148,8 +152,11 @@ function notifyParentConsoleReady(tabName) {
     if (tabName !== 'manage' || !AppState.authToken || window.parent === window) return;
     const activeContent = document.getElementById('manageTab');
     if (!activeContent || !activeContent.classList.contains('active')) return;
-    const allowedOrigins = getEmbedAllowedOrigins();
-    const parentOrigins = getAllowedParentOrigins(allowedOrigins);
+    const policy = getEmbedPolicy();
+    if (policy.mode === 'disabled') return;
+    const parentOrigins = policy.mode === 'any_https'
+        ? ['*']
+        : getAllowedParentOrigins(policy.origins);
     parentOrigins.forEach(parentOrigin => {
         window.parent.postMessage(
             { type: 'gcli2api.console.ready', version: 1, tab: 'manage' },
@@ -3233,6 +3240,7 @@ async function loadConfig() {
         if (response.ok) {
             AppState.currentConfig = data.config;
             AppState.envLockedFields = new Set(data.env_locked || []);
+            AppState.securityConfig = data.security || {};
 
             populateConfigForm();
             form.classList.remove('hidden');
@@ -3278,6 +3286,10 @@ function populateConfigForm() {
     setConfigField('smart429MaxAttempts', c.smart_429_max_attempts || 3);
     setConfigField('smart429RetryBaseInterval', c.smart_429_retry_base_interval || 0.5);
     setConfigField('quotaFallbackCooldownMinutes', c.quota_fallback_cooldown_minutes || 30);
+    setConfigField('gcliEmbedMode', c.gcli_embed_mode || 'any_https');
+    setConfigField('gcliEmbedAllowedOrigins', (c.gcli_embed_allowed_origins || []).join('\n'));
+    updateEmbedConfigVisibility();
+    updateManagementTokenStatus();
 
     document.getElementById('compatibilityModeEnabled').checked = Boolean(c.compatibility_mode_enabled);
     document.getElementById('returnThoughtsToFrontend').checked = Boolean(c.return_thoughts_to_frontend !== false);
@@ -3344,6 +3356,9 @@ async function saveConfig() {
             smart_429_max_attempts: getInt('smart429MaxAttempts', 3),
             smart_429_retry_base_interval: getFloat('smart429RetryBaseInterval', 0.5),
             quota_fallback_cooldown_minutes: getInt('quotaFallbackCooldownMinutes', 30),
+            gcli_embed_mode: getValue('gcliEmbedMode', 'any_https'),
+            gcli_embed_allowed_origins: getValue('gcliEmbedAllowedOrigins').split(/\r?\n/)
+                .filter(value => value.length > 0),
             compatibility_mode_enabled: getChecked('compatibilityModeEnabled'),
             return_thoughts_to_frontend: getChecked('returnThoughtsToFrontend'),
             antigravity_stream2nostream: getChecked('antigravityStream2nostream'),
@@ -3384,6 +3399,81 @@ async function saveConfig() {
     } catch (error) {
         showStatus(`网络错误: ${error.message}`, 'error');
     }
+}
+
+function updateEmbedConfigVisibility() {
+    const mode = document.getElementById('gcliEmbedMode');
+    const origins = document.getElementById('gcliEmbedAllowedOrigins');
+    if (!mode || !origins) return;
+    const envLocked = AppState.envLockedFields.has('gcli_embed_allowed_origins');
+    origins.disabled = envLocked || mode.value !== 'exact';
+    origins.classList.toggle('env-locked', envLocked);
+    const status = document.getElementById('gcliEmbedPolicyStatus');
+    const policyStatus = AppState.securityConfig.embed_policy || {};
+    if (status) {
+        const sourceLabels = { environment: '环境变量', storage: '页面配置', default: '系统默认' };
+        const validity = policyStatus.valid === false ? '（配置非法，已失败关闭）' : '';
+        status.textContent = `来源：${sourceLabels[policyStatus.source] || '系统默认'}${validity}`;
+    }
+}
+
+function updateManagementTokenStatus() {
+    const status = AppState.securityConfig.node_management_token || {};
+    const label = document.getElementById('nodeManagementTokenStatus');
+    const input = document.getElementById('nodeManagementToken');
+    const controls = document.querySelectorAll('[data-management-token-action]');
+    if (label) {
+        const source = status.source === 'environment' ? '环境变量' : '页面存储';
+        label.textContent = status.configured ? `已配置（${source}）` : '未配置（Management API关闭）';
+    }
+    if (input) input.disabled = Boolean(status.locked);
+    controls.forEach(control => { control.disabled = Boolean(status.locked); });
+}
+
+function generateManagementToken() {
+    const input = document.getElementById('nodeManagementToken');
+    if (!input || input.disabled) return;
+    const bytes = new Uint8Array(32);
+    window.crypto.getRandomValues(bytes);
+    input.value = btoa(String.fromCharCode(...bytes))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    input.type = 'text';
+    showStatus('已生成高强度Token；请复制并保存，保存后页面不会再次回显。', 'info');
+}
+
+async function copyManagementToken() {
+    const input = document.getElementById('nodeManagementToken');
+    if (!input?.value) return showStatus('请先生成或输入Token', 'info');
+    await navigator.clipboard.writeText(input.value);
+    showStatus('Management Token已复制', 'success');
+}
+
+async function saveManagementToken() {
+    const input = document.getElementById('nodeManagementToken');
+    const token = input?.value || '';
+    if (token.length < 32 || token.length > 512 || token !== token.trim()) {
+        return showStatus('Management Token必须是32-512字符且不能包含首尾空白', 'error');
+    }
+    const response = await fetch('./config/management-token', {
+        method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ token })
+    });
+    const data = await response.json();
+    if (!response.ok) return showStatus(data.detail || 'Management Token保存失败', 'error');
+    input.value = '';
+    input.type = 'password';
+    showStatus(data.message, 'success');
+    await loadConfig();
+}
+
+async function clearManagementToken() {
+    if (!confirm('确定清除页面保存的Management Token并关闭Management API吗？')) return;
+    const response = await fetch('./config/management-token', {
+        method: 'DELETE', headers: getAuthHeaders()
+    });
+    const data = await response.json();
+    if (!response.ok) return showStatus(data.detail || 'Management Token清除失败', 'error');
+    showStatus(data.message, 'success');
+    await loadConfig();
 }
 
 // 镜像网址配置

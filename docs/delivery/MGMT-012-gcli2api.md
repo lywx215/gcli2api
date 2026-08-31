@@ -1,71 +1,75 @@
-# MGMT-012 gcli2api secure console embedding
+# MGMT-012 gcli2api configurable security delivery
 
-Status: node candidate complete; manager compatibility-matrix and two-node G6.6
-validation remain the next explicit cross-repository step. No production node
-was deployed and MGMT-009 was not started.
+Status: schema 1.3 node implementation is complete on the reviewed `dev8`
+feature branch. Fixed candidate publication and manager compatibility rollout
+remain release gates; no production node was changed and MGMT-009 was not
+started.
 
 ## Delivered
 
-- `/#manage` is read only from an explicit tab allowlist. It remains requested
-  while logged out, activates after interactive or stored-session login, and
-  remains active after refresh. Unknown hashes return to `#oauth`.
-- `switchTab` receives an explicit event or target and updates the hash without
-  relying on the browser global `event`.
-- `GCLI_EMBED_ALLOWED_ORIGINS` is parsed atomically as unique, canonical HTTPS
-  Origins. Wildcards, HTTP, whitespace padding, paths, queries, fragments,
-  user information, duplicate values and non-canonical default ports fail
-  closed; no partial allowlist is accepted.
-- The panel root sends an HTTP `Content-Security-Policy` with only the exact
-  configured `frame-ancestors`. Missing or invalid configuration returns
-  `frame-ancestors 'none'`; the application sends no `X-Frame-Options`.
-- After authenticated `manage` activation, the panel uses exact allowlisted
-  `targetOrigin` delivery for only
-  `{type: "gcli2api.console.ready", version: 1, tab: "manage"}`. The message
-  contains no login state, token, password, credential, config, internal path
-  or business data.
-- `ui.credential_console.embed` is declared only when a valid non-empty Origin
-  policy is available. Management response metadata and its reviewed OpenAPI
-  baseline are additive schema 1.2; endpoint paths and action semantics remain
-  unchanged.
+- `dev8` fast-forwards to the complete reviewed `origin/dev7` history and is
+  now the management integration branch. CI, image, handoff and review rules
+  follow `dev8`.
+- `NODE_MANAGEMENT_TOKEN` keeps environment priority. Without that environment
+  value, authenticated desktop and mobile panels can set, rotate or clear a
+  32-512 character Token and can generate a 32-byte Web Crypto base64url value.
+  The backend stores only `sha256:<digest>`, authenticates in constant time and
+  never returns the Token or digest. Clearing the stored digest disables the
+  Management API with `503 MANAGEMENT_API_DISABLED`.
+- `GET /config/get` returns only Token `{configured, source, locked}` status.
+  `PUT /config/management-token` and `DELETE /config/management-token` are the
+  only page routes allowed to change it; the generic config route rejects the
+  internal digest key.
+- Embedding has three panel-configurable modes: `any_https` (default), `exact`
+  and `disabled`. They emit `frame-ancestors https:`, the canonical exact HTTPS
+  Origins, or `frame-ancestors 'none'`, respectively.
+- A non-empty `GCLI_EMBED_ALLOWED_ORIGINS` atomically overrides storage as
+  locked `exact` mode. HTTP, wildcard, padding, path, query, fragment, userinfo,
+  duplicate and non-canonical Origins fail closed and declare no embed
+  capability. Empty or absent environment values use persisted page settings;
+  no persisted setting defaults to `any_https`.
+- Schema 1.3 declares exactly one of `ui.credential_console.embed` for exact
+  mode or `ui.credential_console.embed.any_https` for any-HTTPS mode. Disabled
+  or invalid policies declare neither.
+- The ready message remains limited to
+  `{type: "gcli2api.console.ready", version: 1, tab: "manage"}`. Any-HTTPS mode
+  sends it only to the immediate parent with `targetOrigin="*"`; its HTTPS
+  parent restriction is enforced by the response CSP. Exact mode retains
+  allowlisted target Origins.
 
 ## Compatibility and safety
 
-Modern nodes without a configured allowlist do not declare the capability.
-Legacy Current, Legacy Minimal and Unknown remain unchanged and must use the
-manager new-tab fallback; nothing is inferred from a version string. There is
-no SSO, password or Management Token exchange, reverse proxy, HTML rewriting,
-iframe DOM access, credential migration/copy/synchronization, SQLite migration,
-Legacy endpoint change or quota behavior change.
+Management schema 1.3 is additive. Existing schema 1.2 exact-capability nodes,
+Legacy Current, Legacy Minimal and Unknown behavior are unchanged. There is no
+database table or migration, credential transfer, SSO, reverse proxy, HTML
+rewriting, Legacy endpoint change or quota behavior change.
+
+The Token input is write-only after save. Responses, logs, config merges and
+the sensitive-literal gate exclude both raw Tokens and stored digests. Desktop
+and mobile panels expose the same mode validation, source indication and
+environment lock state.
 
 ## Verification
 
 - Shared SHA-256: roadmap
-  `4b6736859bfabfa5a6b549297d4743b410e0db3076af79b8f2a815956d1b14f2`;
+  `b0101481d53dfbde15fd25c58774258570ffc852f1797561ca04c33062ae3d38`;
   coordination spec
-  `dd7a0375a4d6511a00a3eabdd56493a90c452d15e314a1c38d28c97a81990925`;
+  `2277de941d106f5c891e065c8174c6d18f1aec18369758485e15a4ae212c968a`;
   Management contract
-  `cd7ecdc83bdaf04d543d0b560775995f34ca2f255c25820c63c2ef0d3e00ecc0`.
-- Local Python 3.12 full suite: 141 passed. Focused panel, Management API,
-  Management service, OpenAPI and frontend/Legacy suite: 47 passed.
-- A real browser preserved unauthenticated `#manage`, activated it after login,
-  retained it after refresh, normalized an unknown hash to `#oauth`, and
-  reported no console errors.
-- PR #29 Python 3.13 tests, OpenAPI check, sensitive scan and non-publishing
-  multi-architecture build passed.
-- Fixed non-production candidate:
-  `ghcr.io/lywx215/gcli2api:sha-b8daa69`, revision
-  `b8daa693d9be62896eb74146cac917717ad9caff`, manifest digest
-  `sha256:f9cca0f5e0ebe65b0a110c9338ee48f6c241a85ac4cc8a5cbeb29be984130900`.
-  Publication run: <https://github.com/lywx215/gcli2api/actions/runs/33314116918>.
+  `4aed44bde7843a72c1ee3c2add02de3a3bdd17b3c12044d3cd4c23196ee16177`.
+- Local full pytest: 150 passed. Focused Token, embedding, Management, OpenAPI
+  and desktop/mobile static coverage: 54 passed.
+- Management OpenAPI baseline, sensitive-literal scan and Git whitespace check
+  pass.
 
-## Rollback and next step
+## Rollback and release gate
 
-Rollback removes `GCLI_EMBED_ALLOWED_ORIGINS` (immediately suppressing the
-capability and returning `frame-ancestors 'none'`) and returns candidate nodes
-to the previous fixed image. No database restore or action replay is required.
+First select `disabled` in the panel, then return nodes to the previous fixed
+image. Environment-managed exact mode can instead be disabled by removing the
+environment value and selecting `disabled`. No database restore or action
+replay is required.
 
-Manager must explicitly run its Modern candidate, current stable, Legacy
-Current, Legacy Minimal and Unknown compatibility matrix plus the two
-non-critical-node G6.6 validation. Only after that evidence is complete may
-MGMT-012 become `done` and MGMT-009 become `ready`; neither step starts
-automatically.
+Manager must publish schema 1.3 capability tolerance before the node candidate
+is deployed. After fixed candidate publication, run the Modern schema 1.2 exact,
+schema 1.3 any-HTTPS, capability-missing, Legacy Current, Legacy Minimal and
+Unknown matrix plus forged-message, wrong-origin and two-node G6.6 checks.

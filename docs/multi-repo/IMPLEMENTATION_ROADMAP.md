@@ -2,7 +2,7 @@
 
 状态：**Draft for Review**
 
-路线图版本：`implementation-roadmap-1.2`（2026-08-30）
+路线图版本：`implementation-roadmap-1.3`（2026-08-31）
 
 ## 1. 目的和权威性
 
@@ -57,7 +57,7 @@ Issue用于跟踪状态，PR用于交付实现，handoff用于跨仓库投递，
 
 1. **准备**：核对路线图定义、依赖、GitHub Issue、handoff和工作树。
 2. **定界**：在任务开头列出本次范围、排除项、契约影响、输入和回滚。
-3. **分支**：manager从最新`main`创建短分支；gcli2api从最新`dev7`创建短分支。
+3. **分支**：manager从最新`main`创建短分支；gcli2api从最新`dev8`创建短分支。
 4. **先容忍后提供**：跨仓能力先让manager容忍新旧响应，再实现gcli2api服务端。
 5. **验证**：执行工作项指定的单元、集成、契约、Legacy、安全和UI测试。
 6. **Review**：PR必须关联工作项、对应仓库PR和测试证据，不允许顺带实现范围外发现。
@@ -313,9 +313,10 @@ new-api、自动迁移/复制凭证、根据版本字符串猜测能力，以及
 
 ### MGMT-012：节点控制台嵌入与GCLI凭证页直达
 
-状态：`in_progress`。双仓路线图与Management schema 1.2已完成所有者Review，MGMT-011
-保持`done`，manager容忍性实现已完成并等待合并；仍需gcli2api候选实现和G6.6证据全部
-完成后，MGMT-012才能标记为`done`，MGMT-009才能重新标记为`ready`。
+状态：`in_progress`。双仓路线图与Management schema 1.3已完成所有者Review；本增量将
+`dev8`设为gcli2api管理功能基线，增加页面可配置的Management Token和双模式嵌入策略。
+仍需manager先完成新capability容忍、gcli2api候选实现和G6.6证据后，MGMT-012才能标记为
+`done`，MGMT-009才能重新标记为`ready`。
 
 目标：让唯一管理员从manager的节点控制台进入对应gcli2api节点的GCLI凭证文件管理
 标签页；已审核节点优先在隔离iframe中展示，不支持或不可达时安全回退到新标签。该功能
@@ -323,8 +324,8 @@ new-api、自动迁移/复制凭证、根据版本字符串猜测能力，以及
 
 顺序：
 
-1. 两仓先同步Review路线图、Management schema 1.2和`ui.credential_console.embed`语义；
-2. manager实现未知capability容忍、控制台入口API、状态门控和新标签回退；
+1. 两仓先同步Review路线图、Management schema 1.3和两种嵌入capability语义；
+2. manager实现未知capability容忍、两种嵌入策略门控、控制台入口API和新标签回退；
 3. manager生成`ready`handoff后，gcli2api实现`#manage`深链接、Origin白名单、CSP和握手；
 4. gcli2api发布固定候选镜像并生成`ready`handoff；
 5. manager对Modern候选、当前稳定版、Legacy Current、Legacy Minimal和Unknown运行兼容矩阵。
@@ -335,7 +336,8 @@ manager范围：
   在线、离线和停用状态；选择状态进入URL，刷新后可恢复；
 - 通过已登录只读manager API返回经服务端构造的节点入口，固定使用`/#manage`，只接受
   已注册HTTPS Base URL，不携带认证信息、凭证内容或任意用户URL；
-- 仅对已启用、在线、Modern V1且声明`ui.credential_console.embed`的节点尝试iframe；
+- 仅对已启用、在线、Modern V1且声明`ui.credential_console.embed`或
+  `ui.credential_console.embed.any_https`的节点尝试iframe；
   停用节点禁止打开，离线及缺失能力节点只允许新标签；
 - iframe使用沙箱和`no-referrer`，不允许顶层跳转；manager不得读取iframe DOM、代理节点
   HTML、注入脚本或直接调用节点业务API；
@@ -346,14 +348,17 @@ gcli2api范围：
 
 - `switchTab`显式接收事件或目标按钮，不依赖全局`event`；只从白名单读取URL hash，
   `#manage`激活GCLI凭证管理，未知hash回到默认页，切换tab同步更新hash；
-- 新增`GCLI_EMBED_ALLOWED_ORIGINS`配置，只接受规范化HTTPS Origin且不得包含路径、查询、
-  用户信息或通配符；为空时不声明嵌入能力；
-- 控制面板响应使用精确`Content-Security-Policy: frame-ancestors ...`，不得被冲突的
-  `X-Frame-Options`阻断，也不得把允许来源扩展到任意HTTPS站点；
+- `NODE_MANAGEMENT_TOKEN`支持环境变量优先和控制面板只写配置；存储层只保存摘要，页面、
+  日志和响应不得回显Token或摘要；
+- `GCLI_EMBED_ALLOWED_ORIGINS`支持环境变量优先和控制面板持久化。默认策略为允许任意HTTPS
+  父页面，管理员可改为精确Origin白名单或完全禁用；非法环境值必须失败关闭；
+- 控制面板响应按策略使用`frame-ancestors https:`、精确Origin列表或
+  `frame-ancestors 'none'`，不得发送冲突的`X-Frame-Options`；
 - 成功激活目标tab后，仅向匹配的允许父Origin发送
   `{"type":"gcli2api.console.ready","version":1,"tab":"manage"}`，消息不包含认证、
   凭证、配置、节点密码或业务数据；
-- 只有深链接、允许来源、安全头和握手全部启用时声明`ui.credential_console.embed`。
+- 精确模式只声明`ui.credential_console.embed`；任意HTTPS模式只声明
+  `ui.credential_console.embed.any_https`；禁用或配置非法时两者都不声明。
 
 排除：免登录、SSO、共享面板密码或Management Token、manager反向代理或HTML重写、
 跨节点凭证迁移/复制/同步、iframe DOM访问、manager代替用户执行节点页面操作、为Legacy
@@ -413,7 +418,7 @@ PR统一修改。
 | 删除 | 功能实现但默认关闭，完成2台写操作灰度后再由管理员显式开启 |
 | 主动操作 | 单节点并发最多3；额度缓存10分钟；额度、风险和测试不做周期调用 |
 | 算力预算 | Enterprise 500/24h、Standard 250/24h；Pro共享桶；北京时间24个滚动小时；只允许管理员手动刷新 |
-| 节点控制台 | 固定`/#manage`；独立登录；capability优先；握手超时回退新标签；不代理、不传递凭证 |
+| 节点控制台 | 固定`/#manage`；默认允许HTTPS父页面；可切换精确白名单或禁用；独立登录；capability优先；握手超时回退新标签；不代理、不传递凭证 |
 | 负载快照 | 默认60秒采集节点内部统计；原始快照保留30天，小时聚合保留180天 |
 | 审计 | 默认保留180天；危险操作不得在保留期内被应用删除 |
 | 数据库 | `utf8mb4`、优先`utf8mb4_0900_ai_ci`、单一库级读写账号；默认TLS，供应商明确不支持时只允许显式无TLS模式并绑定固定Zeabur出口 |
@@ -488,7 +493,7 @@ PR统一修改。
 本路线图Review通过后按以下顺序一次性完成项目准备，不再逐个临时设计任务：
 
 1. 将两个仓库的`codex/implementation-roadmap`分别提交PR并完成第三方Review；
-2. manager路线图合入`main`，gcli2api路线图合入`dev7`，复核三份权威共享文档哈希；
+2. manager路线图合入`main`，gcli2api路线图合入`dev8`，复核三份权威共享文档哈希；
 3. 在manager一次性创建MGMT-002至MGMT-010的Issue，其中MGMT-002标记`ready`，其余
    标记`planned`并填写依赖；
 4. 在gcli2api一次性创建MGMT-004、MGMT-005、MGMT-006、MGMT-009和MGMT-010对应Issue，
@@ -509,7 +514,7 @@ PR统一修改。
 
 ### 11.2 MGMT-012增量启用
 
-1. manager和gcli2api同步Review本版本路线图、协作规范和Management schema 1.2，复核三份
+1. manager和gcli2api同步Review本版本路线图、协作规范和Management schema 1.3，复核三份
    共享文件SHA-256一致；
 2. manager和gcli2api创建同编号MGMT-012 Issue；MGMT-011为`done`且协议Review通过后，
    manager工作项才标记为`ready`；

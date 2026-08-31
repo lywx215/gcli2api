@@ -28,7 +28,7 @@ class StrictModel(BaseModel):
 
 
 class CommonMetadata(StrictModel):
-    schema_version: Literal["1.2"] = "1.2"
+    schema_version: Literal["1.3"] = "1.3"
     server_version: str
     revision: str
     generated_at: str

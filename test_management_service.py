@@ -126,6 +126,7 @@ async def test_capabilities_are_declared_from_real_backend_methods(service) -> N
         "stats.daily",
         "stats.model",
         "stats.rpm",
+        "ui.credential_console.embed.any_https",
     ]
 
 
@@ -230,7 +231,11 @@ async def test_stats_are_501_when_backend_does_not_implement_them(monkeypatch) -
     service = ManagementService()
     capabilities = await service.capabilities()
 
-    assert capabilities.capabilities == ["credential.list", "node.summary"]
+    assert capabilities.capabilities == [
+        "credential.list",
+        "node.summary",
+        "ui.credential_console.embed.any_https",
+    ]
     with pytest.raises(ManagementApiError) as exc:
         await service.stats(mode="geminicli", window="24h", group_by="mode")
     assert exc.value.status_code == 501
@@ -245,7 +250,11 @@ async def test_mongodb_noop_stats_stubs_are_not_declared(monkeypatch) -> None:
     service = ManagementService()
 
     capabilities = await service.capabilities()
-    assert capabilities.capabilities == ["credential.list", "node.summary"]
+    assert capabilities.capabilities == [
+        "credential.list",
+        "node.summary",
+        "ui.credential_console.embed.any_https",
+    ]
     with pytest.raises(ManagementApiError) as exc:
         await service.stats(mode="geminicli", window="24h", group_by="model")
     assert exc.value.status_code == 501
