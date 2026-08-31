@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "delivery_id": "MGMT-012-G-3",
+  "work_item": "MGMT-012",
+  "source_repository": "lywx215/gcli2api",
+  "status": "blocked",
+  "execution_policy": {
+    "mode": "queue_only",
+    "max_automatic_runs": 0
+  },
+  "summary": "Schema 1.3 configurable security is merged to dev8 after manager compatibility landed first. NODE_MANAGEMENT_TOKEN is write-only and page-manageable with environment priority and digest-only storage; embedding supports default any_https, exact and disabled modes with truthful capabilities. Fixed candidate publication is blocked because repository GitHub Actions permission is disabled; the single queued run must not be duplicated.",
+  "contract_sha256": "4aed44bde7843a72c1ee3c2add02de3a3bdd17b3c12044d3cd4c23196ee16177",
+  "capabilities_added": [
+    "ui.credential_console.embed.any_https"
+  ],
+  "capabilities_removed": [],
+  "compatibility": "Management schema 1.3 is additive. Exact mode retains ui.credential_console.embed for schema 1.2-compatible manager behavior; any_https declares only ui.credential_console.embed.any_https; disabled or invalid configuration declares neither. Environment Token and non-empty exact-Origin settings remain highest priority and page-locked. Legacy endpoints, credentials, SQLite schema and quota behavior are unchanged.",
+  "tests": [
+    "Shared SHA-256 values: roadmap b0101481d53dfbde15fd25c58774258570ffc852f1797561ca04c33062ae3d38; coordination 2277de941d106f5c891e065c8174c6d18f1aec18369758485e15a4ae212c968a; contract 4aed44bde7843a72c1ee3c2add02de3a3bdd17b3c12044d3cd4c23196ee16177",
+    "Local Python 3.12 full pytest and Legacy regression: 150 passed; focused security, embedding, Management, OpenAPI and static panel suite: 54 passed",
+    "Management OpenAPI baseline, sensitive-literal scan and Git whitespace checks passed",
+    "Manager PR 38 merged first; manager local backend 181 passed with 10 environment skips, frontend 25 passed, Playwright 5 passed, lint and build passed",
+    "Candidate run 33397536006 targets revision 7f5d2899d3330cb3efc0ce3f84fd9f1a382d7d1f but has no assigned job because GitHub Actions permission reports enabled=false"
+  ],
+  "artifacts": [
+    "src/management/auth.py",
+    "src/panel/config_routes.py",
+    "src/embed_policy.py",
+    "front/common.js",
+    "front/control_panel.html",
+    "front/control_panel_mobile.html",
+    "docs/openapi/management-v1.openapi.json",
+    "docs/delivery/MGMT-012-gcli2api.md",
+    "coordination/handoffs/MGMT-012-G-3.json"
+  ],
+  "next_actions": [
+    "Repository owner must explicitly enable GitHub Actions for lywx215/gcli2api and lywx215/gcli2api-manager, or approve another fixed-image publication mechanism. Do not create a duplicate run while run 33397536006 remains queued.",
+    "After the existing run succeeds, record the immutable ghcr.io/lywx215/gcli2api:sha-7f5d289 manifest digest in a new MGMT-012-G-4 ready handoff and run the schema 1.2 exact, schema 1.3 any-HTTPS, capability-missing, Legacy Current, Legacy Minimal and Unknown manager matrix.",
+    "Keep production nodes unchanged and do not start MGMT-009 until fixed-candidate and two-node G6.6 evidence passes."
+  ],
+  "generated_at": "2026-08-31T13:39:06Z"
+}

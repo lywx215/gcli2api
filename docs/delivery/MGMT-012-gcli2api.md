@@ -1,9 +1,9 @@
 # MGMT-012 gcli2api configurable security delivery
 
-Status: schema 1.3 node implementation is complete on the reviewed `dev8`
-feature branch. Fixed candidate publication and manager compatibility rollout
-remain release gates; no production node was changed and MGMT-009 was not
-started.
+Status: schema 1.3 node implementation is merged to `dev8` at
+`b743394`. Manager compatibility was merged first. Fixed candidate publication
+is blocked because GitHub Actions is disabled for both repositories; no
+production node was changed and MGMT-009 was not started.
 
 ## Delivered
 
@@ -73,3 +73,10 @@ Manager must publish schema 1.3 capability tolerance before the node candidate
 is deployed. After fixed candidate publication, run the Modern schema 1.2 exact,
 schema 1.3 any-HTTPS, capability-missing, Legacy Current, Legacy Minimal and
 Unknown matrix plus forged-message, wrong-origin and two-node G6.6 checks.
+
+The single candidate workflow run
+`https://github.com/lywx215/gcli2api/actions/runs/33397536006` targets verified
+revision `7f5d2899d3330cb3efc0ce3f84fd9f1a382d7d1f` and remains queued while
+repository Actions permission is `enabled=false`. Do not create a duplicate
+publication run. Enabling Actions or approving another publication mechanism is
+an explicit repository-owner action.
