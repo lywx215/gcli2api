@@ -59,3 +59,13 @@ def test_management_security_fields_are_wired_for_both_panels():
     assert config.ENV_MAPPINGS["GCLI_EMBED_ALLOWED_ORIGINS"] == (
         "gcli_embed_allowed_origins"
     )
+
+
+def test_project_info_and_system_status_are_not_navigation_items():
+    front_dir = Path(__file__).parent / "front"
+    for filename in ("control_panel.html", "control_panel_mobile.html"):
+        html = (front_dir / filename).read_text(encoding="utf-8")
+        assert 'data-tab="about"' not in html
+        assert '>项目信息</button>' not in html
+        assert 'data-tab="status"' not in html
+        assert '>系统状态</button>' not in html
