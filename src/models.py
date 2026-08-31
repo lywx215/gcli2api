@@ -402,3 +402,7 @@ class RefreshTokenBatchAddRequest(BaseModel):
 
 class ConfigSaveRequest(BaseModel):
     config: dict
+
+
+class ManagementTokenRequest(BaseModel):
+    token: str = Field(min_length=32, max_length=512)

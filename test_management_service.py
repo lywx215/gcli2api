@@ -126,7 +126,30 @@ async def test_capabilities_are_declared_from_real_backend_methods(service) -> N
         "stats.daily",
         "stats.model",
         "stats.rpm",
+        "ui.credential_console.embed.any_https",
     ]
+
+
+@pytest.mark.asyncio
+async def test_embed_capability_is_truthful_for_runtime_origin_policy(
+    service, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "GCLI_EMBED_ALLOWED_ORIGINS", "https://manager.example.com"
+    )
+    enabled = await service.capabilities()
+
+    monkeypatch.setenv(
+        "GCLI_EMBED_ALLOWED_ORIGINS", "https://manager.example.com/path"
+    )
+    invalid = await service.capabilities()
+
+    monkeypatch.delenv("GCLI_EMBED_ALLOWED_ORIGINS", raising=False)
+    missing = await service.capabilities()
+
+    assert "ui.credential_console.embed" in enabled.capabilities
+    assert "ui.credential_console.embed" not in invalid.capabilities
+    assert "ui.credential_console.embed" not in missing.capabilities
 
 
 @pytest.mark.asyncio
@@ -208,7 +231,11 @@ async def test_stats_are_501_when_backend_does_not_implement_them(monkeypatch) -
     service = ManagementService()
     capabilities = await service.capabilities()
 
-    assert capabilities.capabilities == ["credential.list", "node.summary"]
+    assert capabilities.capabilities == [
+        "credential.list",
+        "node.summary",
+        "ui.credential_console.embed.any_https",
+    ]
     with pytest.raises(ManagementApiError) as exc:
         await service.stats(mode="geminicli", window="24h", group_by="mode")
     assert exc.value.status_code == 501
@@ -223,7 +250,11 @@ async def test_mongodb_noop_stats_stubs_are_not_declared(monkeypatch) -> None:
     service = ManagementService()
 
     capabilities = await service.capabilities()
-    assert capabilities.capabilities == ["credential.list", "node.summary"]
+    assert capabilities.capabilities == [
+        "credential.list",
+        "node.summary",
+        "ui.credential_console.embed.any_https",
+    ]
     with pytest.raises(ManagementApiError) as exc:
         await service.stats(mode="geminicli", window="24h", group_by="model")
     assert exc.value.status_code == 501

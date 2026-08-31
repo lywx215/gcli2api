@@ -18,8 +18,8 @@ Codex必须：
 5. 明确本任务对应的`MGMT-*`工作项和manager侧任务。
 6. 如GitHub访问可用，检查打开的`codex-ready`自动交接Issue。
 
-当前管理系统功能统一在`dev7`开发。`dev7`从`origin/dev5`创建，完成Review后再合并回
-`dev5`。`master`只承载经Review的发布内容和自动交接所需控制面文件，不得把`dev7`上的
+当前管理系统功能统一在`dev8`开发。`dev8`继承已Review的`dev7`完整历史，后续短分支从
+最新`dev8`创建，完成Review后再合并回`dev5`。`master`只承载经Review的发布内容和自动交接所需控制面文件，不得把`dev8`上的
 其他业务提交顺带合入。
 
 不得为了发现handoff建立定时Codex任务。只有当前实际任务需要时才读取Issue，并只处理

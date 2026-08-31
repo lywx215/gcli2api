@@ -13,6 +13,7 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Any
 
+from src.embed_policy import get_embed_policy
 from src.storage_adapter import get_storage_adapter
 from src.versioning import load_version_metadata
 
@@ -229,8 +230,15 @@ class ManagementService:
     async def _storage(self):
         return await get_storage_adapter()
 
-    def _read_capabilities(self, backend: object, backend_type: str) -> list[str]:
+    def _read_capabilities(
+        self,
+        backend: object,
+        backend_type: str,
+        embed_capability: str | None = None,
+    ) -> list[str]:
         capabilities: list[str] = []
+        if embed_capability:
+            capabilities.append(embed_capability)
         if hasattr(backend, "get_credentials_summary"):
             capabilities.extend(("node.summary", "credential.list"))
         # MongoDB currently exposes no-op compatibility stubs, not statistics.
@@ -299,10 +307,13 @@ class ManagementService:
         storage = await self._storage()
         backend = getattr(storage, "_backend", None)
         backend_type = storage.get_backend_type()
+        embed_policy = await get_embed_policy()
         return CapabilitiesResponse(
             **self._metadata(),
             storage_backend=backend_type,
-            capabilities=self._read_capabilities(backend, backend_type),
+            capabilities=self._read_capabilities(
+                backend, backend_type, embed_policy.capability
+            ),
         )
 
     async def _all_summaries(self, mode: str) -> dict[str, object]:

@@ -2,9 +2,9 @@ name: gcli2api-ci
 
 on:
   push:
-    branches: [dev7]
+    branches: [dev8]
   pull_request:
-    branches: [dev7, master, main]
+    branches: [dev8, master, main]
 
 permissions:
   contents: read

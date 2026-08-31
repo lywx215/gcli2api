@@ -6,7 +6,7 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SKIP_PARTS = {".git", ".venv", "__pycache__", ".pytest_cache", "creds"}
+SKIP_PARTS = {".git", ".venv", "__pycache__", ".pytest_cache", "build", "creds"}
 SKIP_NAMES = {"log.txt", "run.stdout.log", "run.stderr.log"}
 PATTERNS = {
     "Google OAuth secret": re.compile(r"GOCSPX-[0-9A-Za-z_-]{12,}"),

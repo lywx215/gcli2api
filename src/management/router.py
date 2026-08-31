@@ -183,7 +183,7 @@ async def management_exception_boundary(request: Request, call_next):
             scheme, separator, supplied = request.headers.get(
                 "authorization", ""
             ).partition(" ")
-            validate_management_token(
+            await validate_management_token(
                 scheme if separator else None,
                 supplied if separator else None,
             )

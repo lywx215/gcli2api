@@ -26,6 +26,7 @@ const AppState = {
     // 配置管理
     currentConfig: {},
     envLockedFields: new Set(),
+    securityConfig: {},
 
     // 日志管理
     logWebSocket: null,
@@ -39,6 +40,134 @@ const AppState = {
     // 冷却倒计时
     cooldownTimerInterval: null
 };
+
+const PANEL_DEFAULT_TAB = 'oauth';
+const PANEL_TAB_HASHES = new Set([
+    'oauth',
+    'antigravity',
+    'upload',
+    'manage',
+    'antigravity-manage',
+    'config',
+    'status',
+    'logs',
+    'about'
+]);
+
+function getRequestedPanelTab() {
+    const requested = window.location.hash.startsWith('#')
+        ? window.location.hash.slice(1)
+        : '';
+    if (!PANEL_TAB_HASHES.has(requested)) return PANEL_DEFAULT_TAB;
+    return document.getElementById(requested + 'Tab') ? requested : PANEL_DEFAULT_TAB;
+}
+
+function syncPanelHash(tabName) {
+    const safeTab = PANEL_TAB_HASHES.has(tabName) ? tabName : PANEL_DEFAULT_TAB;
+    const nextHash = `#${safeTab}`;
+    if (window.location.hash === nextHash) return;
+    try {
+        window.history.replaceState(null, '', nextHash);
+    } catch (_) {
+        window.location.hash = nextHash;
+    }
+}
+
+function normalizeRequestedPanelTab() {
+    const safeTab = getRequestedPanelTab();
+    syncPanelHash(safeTab);
+    return safeTab;
+}
+
+function readStoredAuthToken() {
+    try {
+        return window.localStorage.getItem('gcli2api_auth_token');
+    } catch (_) {
+        return null;
+    }
+}
+
+function writeStoredAuthToken(token) {
+    try {
+        window.localStorage.setItem('gcli2api_auth_token', token);
+    } catch (_) {
+        // Restricted browser storage must not prevent an in-memory login.
+    }
+}
+
+function clearStoredAuthToken() {
+    try {
+        window.localStorage.removeItem('gcli2api_auth_token');
+    } catch (_) {
+        // The current page can still clear its in-memory authentication state.
+    }
+}
+
+function getEmbedPolicy() {
+    const element = document.querySelector('meta[name="gcli-embed-policy"]');
+    if (!element) return { mode: 'disabled', origins: [] };
+    try {
+        const value = JSON.parse(element.content);
+        if (!value || !['any_https', 'exact', 'disabled'].includes(value.mode)) {
+            return { mode: 'disabled', origins: [] };
+        }
+        const origins = Array.isArray(value.origins) ? value.origins.filter(origin => {
+            if (typeof origin !== 'string') return false;
+            try {
+                const parsed = new URL(origin);
+                return parsed.protocol === 'https:' && parsed.origin === origin;
+            } catch (_) {
+                return false;
+            }
+        }) : [];
+        return { mode: value.mode, origins };
+    } catch (_) {
+        return { mode: 'disabled', origins: [] };
+    }
+}
+
+function getAllowedParentOrigins(allowedOrigins) {
+    const candidates = [];
+    try {
+        if (window.location.ancestorOrigins && window.location.ancestorOrigins.length) {
+            candidates.push(window.location.ancestorOrigins[0]);
+        }
+    } catch (_) {
+        // Some browsers do not expose ancestorOrigins.
+    }
+    try {
+        if (document.referrer) candidates.push(new URL(document.referrer).origin);
+    } catch (_) {
+        // A malformed or unavailable referrer is not trusted.
+    }
+    const matched = candidates.find(origin => allowedOrigins.includes(origin));
+    if (matched) return [matched];
+    // Exact targetOrigin delivery remains non-broadcast when no-referrer embedding
+    // or browser limitations hide the ancestor Origin: only the actual matching
+    // allowlisted parent can receive one of these non-sensitive ready messages.
+    return allowedOrigins;
+}
+
+function notifyParentConsoleReady(tabName) {
+    if (tabName !== 'manage' || !AppState.authToken || window.parent === window) return;
+    const activeContent = document.getElementById('manageTab');
+    if (!activeContent || !activeContent.classList.contains('active')) return;
+    const policy = getEmbedPolicy();
+    if (policy.mode === 'disabled') return;
+    const parentOrigins = policy.mode === 'any_https'
+        ? ['*']
+        : getAllowedParentOrigins(policy.origins);
+    parentOrigins.forEach(parentOrigin => {
+        window.parent.postMessage(
+            { type: 'gcli2api.console.ready', version: 1, tab: 'manage' },
+            parentOrigin
+        );
+    });
+}
+
+function activateRequestedPanelTab() {
+    switchTab(normalizeRequestedPanelTab(), null);
+}
 
 // =====================================================================
 // 凭证管理器工厂
@@ -976,13 +1105,16 @@ async function login() {
 
         if (response.ok) {
             AppState.authToken = data.token;
-            localStorage.setItem('gcli2api_auth_token', AppState.authToken);
+            writeStoredAuthToken(AppState.authToken);
             document.getElementById('loginSection').classList.add('hidden');
             document.getElementById('mainSection').classList.remove('hidden');
             showStatus('登录成功', 'success');
             await fetchAndDisplayVersion();
             // 显示面板后初始化滑块
-            requestAnimationFrame(() => initTabSlider());
+            requestAnimationFrame(() => {
+                initTabSlider();
+                activateRequestedPanelTab();
+            });
         } else {
             showStatus(`登录失败: ${data.detail || data.error || '未知错误'}`, 'error');
         }
@@ -992,7 +1124,7 @@ async function login() {
 }
 
 async function autoLogin() {
-    const savedToken = localStorage.getItem('gcli2api_auth_token');
+    const savedToken = readStoredAuthToken();
     if (!savedToken) return false;
 
     AppState.authToken = savedToken;
@@ -1010,10 +1142,13 @@ async function autoLogin() {
             document.getElementById('mainSection').classList.remove('hidden');
             showStatus('自动登录成功', 'success');
             // 显示面板后初始化滑块
-            requestAnimationFrame(() => initTabSlider());
+            requestAnimationFrame(() => {
+                initTabSlider();
+                activateRequestedPanelTab();
+            });
             return true;
         } else if (response.status === 401) {
-            localStorage.removeItem('gcli2api_auth_token');
+            clearStoredAuthToken();
             AppState.authToken = '';
             return false;
         }
@@ -1024,7 +1159,7 @@ async function autoLogin() {
 }
 
 function logout() {
-    localStorage.removeItem('gcli2api_auth_token');
+    clearStoredAuthToken();
     AppState.authToken = '';
     document.getElementById('loginSection').classList.remove('hidden');
     document.getElementById('mainSection').classList.add('hidden');
@@ -1078,23 +1213,41 @@ function initTabSlider() {
 }
 
 // 页面加载和窗口大小变化时初始化滑块
-document.addEventListener('DOMContentLoaded', initTabSlider);
+document.addEventListener('DOMContentLoaded', () => {
+    normalizeRequestedPanelTab();
+    initTabSlider();
+});
 window.addEventListener('resize', () => {
     const activeTab = document.querySelector('.tab.active');
     if (activeTab) updateTabSlider(activeTab, false);
 });
+window.addEventListener('hashchange', () => {
+    const safeTab = normalizeRequestedPanelTab();
+    if (AppState.authToken) switchTab(safeTab, null);
+});
 
-function switchTab(tabName) {
+function switchTab(tabName, eventOrTarget = null) {
+    const safeTabName = PANEL_TAB_HASHES.has(tabName) && document.getElementById(tabName + 'Tab')
+        ? tabName
+        : PANEL_DEFAULT_TAB;
     // 获取当前活动的内容区域
     const currentContent = document.querySelector('.tab-content.active');
-    const targetContent = document.getElementById(tabName + 'Tab');
+    const targetContent = document.getElementById(safeTabName + 'Tab');
+
+    syncPanelHash(safeTabName);
+
+    const explicitTarget = eventOrTarget && eventOrTarget.target
+        ? eventOrTarget.target
+        : eventOrTarget;
+    const targetTab = explicitTarget && typeof explicitTarget.closest === 'function'
+        ? explicitTarget.closest('.tab')
+        : document.querySelector(`.tab[data-tab="${safeTabName}"]`);
 
     // 如果点击的是当前标签页，不做任何操作
-    if (currentContent === targetContent) return;
-
-    // 找到目标标签按钮
-    const targetTab = event && event.target ? event.target :
-        document.querySelector(`.tab[onclick*="'${tabName}'"]`);
+    if (currentContent === targetContent) {
+        notifyParentConsoleReady(safeTabName);
+        return;
+    }
 
     // 移除所有标签页的active状态
     document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
@@ -1144,7 +1297,8 @@ function switchTab(tabName) {
                             targetContent.style.transform = '';
 
                             // 动画完成后触发数据加载
-                            triggerTabDataLoad(tabName);
+                            triggerTabDataLoad(safeTabName);
+                            notifyParentConsoleReady(safeTabName);
                         }, 260);
                     });
                 });
@@ -1155,7 +1309,8 @@ function switchTab(tabName) {
         if (targetContent) {
             targetContent.classList.add('active');
             // 直接触发数据加载
-            triggerTabDataLoad(tabName);
+            triggerTabDataLoad(safeTabName);
+            notifyParentConsoleReady(safeTabName);
         }
     }
 }
@@ -3085,6 +3240,7 @@ async function loadConfig() {
         if (response.ok) {
             AppState.currentConfig = data.config;
             AppState.envLockedFields = new Set(data.env_locked || []);
+            AppState.securityConfig = data.security || {};
 
             populateConfigForm();
             form.classList.remove('hidden');
@@ -3130,6 +3286,10 @@ function populateConfigForm() {
     setConfigField('smart429MaxAttempts', c.smart_429_max_attempts || 3);
     setConfigField('smart429RetryBaseInterval', c.smart_429_retry_base_interval || 0.5);
     setConfigField('quotaFallbackCooldownMinutes', c.quota_fallback_cooldown_minutes || 30);
+    setConfigField('gcliEmbedMode', c.gcli_embed_mode || 'any_https');
+    setConfigField('gcliEmbedAllowedOrigins', (c.gcli_embed_allowed_origins || []).join('\n'));
+    updateEmbedConfigVisibility();
+    updateManagementTokenStatus();
 
     document.getElementById('compatibilityModeEnabled').checked = Boolean(c.compatibility_mode_enabled);
     document.getElementById('returnThoughtsToFrontend').checked = Boolean(c.return_thoughts_to_frontend !== false);
@@ -3196,6 +3356,9 @@ async function saveConfig() {
             smart_429_max_attempts: getInt('smart429MaxAttempts', 3),
             smart_429_retry_base_interval: getFloat('smart429RetryBaseInterval', 0.5),
             quota_fallback_cooldown_minutes: getInt('quotaFallbackCooldownMinutes', 30),
+            gcli_embed_mode: getValue('gcliEmbedMode', 'any_https'),
+            gcli_embed_allowed_origins: getValue('gcliEmbedAllowedOrigins').split(/\r?\n/)
+                .filter(value => value.length > 0),
             compatibility_mode_enabled: getChecked('compatibilityModeEnabled'),
             return_thoughts_to_frontend: getChecked('returnThoughtsToFrontend'),
             antigravity_stream2nostream: getChecked('antigravityStream2nostream'),
@@ -3236,6 +3399,81 @@ async function saveConfig() {
     } catch (error) {
         showStatus(`网络错误: ${error.message}`, 'error');
     }
+}
+
+function updateEmbedConfigVisibility() {
+    const mode = document.getElementById('gcliEmbedMode');
+    const origins = document.getElementById('gcliEmbedAllowedOrigins');
+    if (!mode || !origins) return;
+    const envLocked = AppState.envLockedFields.has('gcli_embed_allowed_origins');
+    origins.disabled = envLocked || mode.value !== 'exact';
+    origins.classList.toggle('env-locked', envLocked);
+    const status = document.getElementById('gcliEmbedPolicyStatus');
+    const policyStatus = AppState.securityConfig.embed_policy || {};
+    if (status) {
+        const sourceLabels = { environment: '环境变量', storage: '页面配置', default: '系统默认' };
+        const validity = policyStatus.valid === false ? '（配置非法，已失败关闭）' : '';
+        status.textContent = `来源：${sourceLabels[policyStatus.source] || '系统默认'}${validity}`;
+    }
+}
+
+function updateManagementTokenStatus() {
+    const status = AppState.securityConfig.node_management_token || {};
+    const label = document.getElementById('nodeManagementTokenStatus');
+    const input = document.getElementById('nodeManagementToken');
+    const controls = document.querySelectorAll('[data-management-token-action]');
+    if (label) {
+        const source = status.source === 'environment' ? '环境变量' : '页面存储';
+        label.textContent = status.configured ? `已配置（${source}）` : '未配置（Management API关闭）';
+    }
+    if (input) input.disabled = Boolean(status.locked);
+    controls.forEach(control => { control.disabled = Boolean(status.locked); });
+}
+
+function generateManagementToken() {
+    const input = document.getElementById('nodeManagementToken');
+    if (!input || input.disabled) return;
+    const bytes = new Uint8Array(32);
+    window.crypto.getRandomValues(bytes);
+    input.value = btoa(String.fromCharCode(...bytes))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    input.type = 'text';
+    showStatus('已生成高强度Token；请复制并保存，保存后页面不会再次回显。', 'info');
+}
+
+async function copyManagementToken() {
+    const input = document.getElementById('nodeManagementToken');
+    if (!input?.value) return showStatus('请先生成或输入Token', 'info');
+    await navigator.clipboard.writeText(input.value);
+    showStatus('Management Token已复制', 'success');
+}
+
+async function saveManagementToken() {
+    const input = document.getElementById('nodeManagementToken');
+    const token = input?.value || '';
+    if (token.length < 32 || token.length > 512 || token !== token.trim()) {
+        return showStatus('Management Token必须是32-512字符且不能包含首尾空白', 'error');
+    }
+    const response = await fetch('./config/management-token', {
+        method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ token })
+    });
+    const data = await response.json();
+    if (!response.ok) return showStatus(data.detail || 'Management Token保存失败', 'error');
+    input.value = '';
+    input.type = 'password';
+    showStatus(data.message, 'success');
+    await loadConfig();
+}
+
+async function clearManagementToken() {
+    if (!confirm('确定清除页面保存的Management Token并关闭Management API吗？')) return;
+    const response = await fetch('./config/management-token', {
+        method: 'DELETE', headers: getAuthHeaders()
+    });
+    const data = await response.json();
+    if (!response.ok) return showStatus(data.detail || 'Management Token清除失败', 'error');
+    showStatus(data.message, 'success');
+    await loadConfig();
 }
 
 // 镜像网址配置
