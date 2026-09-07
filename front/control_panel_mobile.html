@@ -374,8 +374,8 @@
         /* 移动端优化的统计样式 */
         .stats-container {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
-            gap: 10px;
+            grid-template-columns: repeat(auto-fit, minmax(85px, 1fr));
+            gap: 8px;
             margin-bottom: 15px;
         }
 
@@ -383,7 +383,7 @@
             background: white;
             border: 1px solid #dee2e6;
             border-radius: 8px;
-            padding: 12px;
+            padding: 8px;
             text-align: center;
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
         }
@@ -1422,6 +1422,12 @@
                     </div>
                 </div>
 
+                <details class="credential-help-details" data-panel-help="gcli"
+                    style="margin:8px 0 15px;">
+                    <summary
+                        style="cursor:pointer;padding:10px 14px;border:1px solid #b8d4f0;border-radius:6px;background:#f0f7ff;font-weight:600;">
+                        📖 API地址与功能说明
+                    </summary>
                 <div
                     style="background:#f0f7ff;border:1px solid #b8d4f0;border-radius:6px;padding:10px 14px;margin:8px 0;font-size:13px;">
                     <strong>📡 API地址（点击复制）：</strong>
@@ -1466,6 +1472,7 @@
                         建议在调用gemini-3-pro-preview等模型遇到404错误时使用此功能。
                     </p>
                 </div>
+                </details>
 
                 <!-- 状态统计 -->
                 <div class="stats-container" id="statsContainer">
@@ -1480,6 +1487,14 @@
                     <div class="stat-item" style="border-left: 4px solid #6c757d;">
                         <span class="stat-number" id="statDisabled">0</span>
                         <span class="stat-label">禁用</span>
+                    </div>
+                    <div class="stat-item" style="border-left: 4px solid #17a2b8;">
+                        <span class="stat-number" id="statNoCooldown">0</span>
+                        <span class="stat-label">未CD</span>
+                    </div>
+                    <div class="stat-item" style="border-left: 4px solid #fd7e14;">
+                        <span class="stat-number" id="statInCooldown">0</span>
+                        <span class="stat-label">CD中</span>
                     </div>
                 </div>
 
@@ -1517,6 +1532,8 @@
                             disabled>额度检测/双向同步</button>
                         <button class="btn btn-small" id="batchPreviewBtn" onclick="batchConfigurePreview()"
                             disabled>批量设置预览</button>
+                        <button class="btn btn-small" id="batchCopyEmailsBtn" onclick="copySelectedEmails()"
+                            disabled>批量复制邮箱</button>
                         <button class="btn btn-small" onclick="refreshAllEmails()">刷新所有邮箱</button>
                         <button class="btn btn-small" onclick="deduplicateByEmail()">凭证一键去重</button>
                     </div>
@@ -1541,7 +1558,10 @@
                             <option value="all">全部</option>
                             <option value="none">无错误</option>
                             <option value="400">400</option>
-                            <option value="403">403</option>
+                            <option value="403">403（全部）</option>
+                            <option value="403_tos_violation">403（封）</option>
+                            <option value="403_subscription_required">403（赋权）</option>
+                            <option value="403_other">403（其他）</option>
                             <option value="429">429</option>
                             <option value="500">500</option>
                         </select>
@@ -1589,7 +1609,8 @@
                         <label for="pageSizeSelect">每页显示：</label>
                         <select id="pageSizeSelect" onchange="changePageSize()">
                             <option value="10">10</option>
-                            <option value="20" selected>20</option>
+                            <option value="20">20</option>
+                            <option value="25" selected>25</option>
                             <option value="50">50</option>
                             <option value="100">100</option>
                         </select>
@@ -1664,6 +1685,12 @@
                     </div>
                 </div>
 
+                <details class="credential-help-details" data-panel-help="antigravity"
+                    style="margin:8px 0 15px;">
+                    <summary
+                        style="cursor:pointer;padding:10px 14px;border:1px solid #b8d4f0;border-radius:6px;background:#f0f7ff;font-weight:600;">
+                        📖 API地址与功能说明
+                    </summary>
                 <div
                     style="background:#f0f7ff;border:1px solid #b8d4f0;border-radius:6px;padding:10px 14px;margin:8px 0;font-size:13px;">
                     <strong>📡 API地址（点击复制）：</strong>
@@ -1701,6 +1728,7 @@
                         建议在遇到403错误时使用此功能。
                     </p>
                 </div>
+                </details>
 
                 <!-- 状态统计 -->
                 <div class="stats-container" id="antigravityStatsContainer">
@@ -1715,6 +1743,14 @@
                     <div class="stat-item" style="border-left: 4px solid #6c757d;">
                         <span class="stat-number" id="antigravityStatDisabled">0</span>
                         <span class="stat-label">禁用</span>
+                    </div>
+                    <div class="stat-item" style="border-left: 4px solid #17a2b8;">
+                        <span class="stat-number" id="antigravityStatNoCooldown">0</span>
+                        <span class="stat-label">未CD</span>
+                    </div>
+                    <div class="stat-item" style="border-left: 4px solid #fd7e14;">
+                        <span class="stat-number" id="antigravityStatInCooldown">0</span>
+                        <span class="stat-label">CD中</span>
                     </div>
                 </div>
 
@@ -1758,6 +1794,8 @@
                             onclick="batchTestSelectedAntigravityCredentials()" disabled>批量消息测试</button>
                         <button class="btn btn-small" id="antigravityBatchRefreshCooldownBtn"
                             onclick="batchRefreshCooldownSelectedAntigravityCredentials()" disabled>额度检测/双向同步</button>
+                        <button class="btn btn-small" id="antigravityBatchCopyEmailsBtn"
+                            onclick="copySelectedAntigravityEmails()" disabled>批量复制邮箱</button>
                         <button class="btn btn-small" onclick="refreshAllAntigravityEmails()">刷新所有邮箱</button>
                         <button class="btn btn-small" onclick="deduplicateAntigravityByEmail()">凭证一键去重</button>
                     </div>
@@ -1782,7 +1820,10 @@
                             <option value="all">全部</option>
                             <option value="none">无错误</option>
                             <option value="400">400</option>
-                            <option value="403">403</option>
+                            <option value="403">403（全部）</option>
+                            <option value="403_tos_violation">403（封）</option>
+                            <option value="403_subscription_required">403（赋权）</option>
+                            <option value="403_other">403（其他）</option>
                             <option value="429">429</option>
                             <option value="500">500</option>
                         </select>
@@ -1818,7 +1859,8 @@
                         <label for="antigravityPageSizeSelect">每页显示：</label>
                         <select id="antigravityPageSizeSelect" onchange="changeAntigravityPageSize()">
                             <option value="10">10</option>
-                            <option value="20" selected>20</option>
+                            <option value="20">20</option>
+                            <option value="25" selected>25</option>
                             <option value="50">50</option>
                             <option value="100">100</option>
                         </select>

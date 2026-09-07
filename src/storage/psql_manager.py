@@ -12,7 +12,20 @@ from typing import Any, Dict, List, Optional, Tuple
 import asyncpg
 
 from log import log
-from src.storage._stats_common import MODEL_FAMILY_RULES, normalize_model_family, _today_beijing_str
+from src.error_classification import (
+    has_error_code,
+    is_http_403_classification_filter,
+    matches_error_code_filter,
+    paginate_and_classify_summaries,
+    safe_json_list,
+    safe_json_object,
+)
+from src.storage._stats_common import (
+    MODEL_FAMILY_RULES,
+    _today_beijing_str,
+    has_active_model_cooldown,
+    normalize_model_family,
+)
 from src.subscription_tiers import (
     default_tier_for_mode,
     required_tiers_for_geminicli_model,
@@ -848,7 +861,8 @@ class PSQLManager:
         cooldown_filter: Optional[str] = None,
         preview_filter: Optional[str] = None,
         tier_filter: Optional[str] = None,
-        remark_filter: Optional[str] = None
+        remark_filter: Optional[str] = None,
+        include_error_classifications: bool = False,
     ) -> Dict[str, Any]:
         """获取凭证的摘要信息，支持分页和状态筛选"""
         self._ensure_initialized()
@@ -862,7 +876,14 @@ class PSQLManager:
                 stats_rows = await conn.fetch(
                     f"SELECT disabled, permanent_disabled, COUNT(*) AS cnt FROM {table_name} GROUP BY disabled, permanent_disabled"
                 )
-                global_stats = {"total": 0, "normal": 0, "disabled": 0, "permanent_disabled": 0}
+                global_stats = {
+                    "total": 0,
+                    "normal": 0,
+                    "disabled": 0,
+                    "permanent_disabled": 0,
+                    "in_cooldown": 0,
+                    "no_cooldown": 0,
+                }
                 for r in stats_rows:
                     global_stats["total"] += r["cnt"]
                     if r["permanent_disabled"]:
@@ -906,47 +927,43 @@ class PSQLManager:
                         ORDER BY rotation_order
                     """)
 
-                # 错误码筛选
-                filter_value = None
-                filter_int = None
-                filter_none = False
-                if error_code_filter and str(error_code_filter).strip().lower() != "all":
-                    if str(error_code_filter).strip().lower() == "none":
-                        filter_none = True
-                    else:
-                        filter_value = str(error_code_filter).strip()
-                        try:
-                            filter_int = int(filter_value)
-                        except ValueError:
-                            filter_int = None
-
                 all_summaries = []
+                count_cooldowns_from_rows = status_filter not in {
+                    "enabled", "disabled", "permanent_disabled"
+                }
+                if not count_cooldowns_from_rows:
+                    cooldown_rows = await conn.fetch(
+                        f"SELECT model_cooldowns FROM {table_name}"
+                    )
+                    for cooldown_row in cooldown_rows:
+                        cooldown_key = (
+                            "in_cooldown"
+                            if has_active_model_cooldown(
+                                cooldown_row["model_cooldowns"], current_time
+                            )
+                            else "no_cooldown"
+                        )
+                        global_stats[cooldown_key] += 1
                 for row in all_rows:
                     error_codes_json = row["error_codes"] or "[]"
-                    model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
+                    model_cooldowns_raw = row["model_cooldowns"] or "{}"
+                    if count_cooldowns_from_rows:
+                        cooldown_key = (
+                            "in_cooldown"
+                            if has_active_model_cooldown(model_cooldowns_raw, current_time)
+                            else "no_cooldown"
+                        )
+                        global_stats[cooldown_key] += 1
+                    model_cooldowns = json.loads(model_cooldowns_raw)
                     active_cooldowns = {k: v for k, v in model_cooldowns.items() if v > current_time}
-                    error_codes = json.loads(error_codes_json)
-
-                    # 筛选无错误的凭证
-                    if filter_none:
-                        if error_codes:
+                    error_codes = safe_json_list(error_codes_json)
+                    if is_http_403_classification_filter(error_code_filter):
+                        if not has_error_code(error_codes, 403):
                             continue
-
-                    if filter_value:
-                        match = False
-                        for code in error_codes:
-                            if code == filter_value or code == filter_int:
-                                match = True
-                                break
-                            if isinstance(code, str) and filter_int is not None:
-                                try:
-                                    if int(code) == filter_int:
-                                        match = True
-                                        break
-                                except ValueError:
-                                    pass
-                        if not match:
-                            continue
+                    elif not matches_error_code_filter(
+                        error_codes, {}, error_code_filter
+                    ):
+                        continue
 
                     row_remark = row["remark"] or ""
                     if remark_filter is not None and row_remark != remark_filter:
@@ -1012,11 +1029,29 @@ class PSQLManager:
                     else:
                         all_summaries.append(summary)
 
-                total_count = len(all_summaries)
-                if limit is not None:
-                    summaries = all_summaries[offset:offset + limit]
-                else:
-                    summaries = all_summaries[offset:]
+                async def load_error_messages(filenames: list[str]) -> dict[str, Any]:
+                    messages: dict[str, Any] = {}
+                    for start in range(0, len(filenames), 500):
+                        chunk = filenames[start:start + 500]
+                        rows = await conn.fetch(
+                            f"SELECT filename, error_messages FROM {table_name} "
+                            "WHERE filename = ANY($1::text[])",
+                            chunk,
+                        )
+                        for error_row in rows:
+                            messages[error_row["filename"]] = safe_json_object(
+                                error_row["error_messages"]
+                            )
+                    return messages
+
+                summaries, total_count = await paginate_and_classify_summaries(
+                    all_summaries,
+                    offset=offset,
+                    limit=limit,
+                    error_code_filter=error_code_filter,
+                    include_error_classifications=include_error_classifications,
+                    load_error_messages=load_error_messages,
+                )
 
                 return {
                     "items": summaries,
@@ -1033,7 +1068,7 @@ class PSQLManager:
                 "total": 0,
                 "offset": offset,
                 "limit": limit,
-                "stats": {"total": 0, "normal": 0, "disabled": 0, "permanent_disabled": 0},
+                "stats": {"total": 0, "normal": 0, "disabled": 0, "permanent_disabled": 0, "in_cooldown": 0, "no_cooldown": 0},
             }
 
     async def get_duplicate_credentials_by_email(self, mode: str = "geminicli") -> Dict[str, Any]:
@@ -1161,8 +1196,8 @@ class PSQLManager:
             if row:
                 return {
                     "filename": filename,
-                    "error_codes": json.loads(row["error_codes"] or "[]"),
-                    "error_messages": json.loads(row["error_messages"] or "[]"),
+                    "error_codes": safe_json_list(row["error_codes"]),
+                    "error_messages": safe_json_object(row["error_messages"]),
                 }
 
             return {"filename": filename, "error_codes": [], "error_messages": []}

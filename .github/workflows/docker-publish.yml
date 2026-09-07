@@ -38,6 +38,29 @@ jobs:
           # workflow_run 触发时需要获取最新的代码（包括 version.txt 的更新）
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref }}
 
+      - name: Resolve source version metadata
+        id: source-version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          PR_BRANCH: ${{ github.head_ref }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          SOURCE_REF="$REF_NAME"
+          SOURCE_REF_TYPE="$REF_TYPE"
+          if [[ "$EVENT_NAME" == "workflow_run" && -n "$WORKFLOW_BRANCH" ]]; then
+            SOURCE_REF="$WORKFLOW_BRANCH"
+            SOURCE_REF_TYPE="branch"
+          elif [[ "$EVENT_NAME" == "pull_request" && -n "$PR_BRANCH" ]]; then
+            SOURCE_REF="$PR_BRANCH"
+            SOURCE_REF_TYPE="branch"
+          fi
+          echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
+          echo "source_ref_type=$SOURCE_REF_TYPE" >> "$GITHUB_OUTPUT"
+          echo "commit_date=$(git log -1 --format=%cI)" >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -81,3 +104,6 @@ jobs:
             BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
             VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
             REVISION=${{ github.sha }}
+            SOURCE_REF=${{ steps.source-version.outputs.source_ref }}
+            SOURCE_REF_TYPE=${{ steps.source-version.outputs.source_ref_type }}
+            SOURCE_COMMIT_DATE=${{ steps.source-version.outputs.commit_date }}

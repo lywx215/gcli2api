@@ -14,6 +14,15 @@ from urllib.parse import urlparse, parse_qs
 import aiomysql
 
 from log import log
+from src.error_classification import (
+    has_error_code,
+    is_http_403_classification_filter,
+    matches_error_code_filter,
+    paginate_and_classify_summaries,
+    safe_json_list,
+    safe_json_object,
+)
+from src.storage._stats_common import has_active_model_cooldown
 from src.subscription_tiers import (
     default_tier_for_mode,
     required_tiers_for_geminicli_model,
@@ -1352,7 +1361,9 @@ class MySQLManager:
         error_code_filter: Optional[str] = None,
         cooldown_filter: Optional[str] = None,
         preview_filter: Optional[str] = None,
-        tier_filter: Optional[str] = None
+        tier_filter: Optional[str] = None,
+        remark_filter: Optional[str] = None,
+        include_error_classifications: bool = False,
     ) -> Dict[str, Any]:
         """获取凭证的摘要信息（支持分页和状态筛选）"""
         self._ensure_initialized()
@@ -1363,7 +1374,13 @@ class MySQLManager:
             async with self._pool.acquire() as conn:
                 async with conn.cursor() as cur:
                     # 全局统计
-                    global_stats = {"total": 0, "normal": 0, "disabled": 0}
+                    global_stats = {
+                        "total": 0,
+                        "normal": 0,
+                        "disabled": 0,
+                        "in_cooldown": 0,
+                        "no_cooldown": 0,
+                    }
                     await cur.execute(f"""
                         SELECT disabled, COUNT(*) FROM {table_name}
                         WHERE server_name = %s
@@ -1386,15 +1403,6 @@ class MySQLManager:
                     elif status_filter == "disabled":
                         where_clauses.append("disabled = 1")
 
-                    filter_value = None
-                    filter_int = None
-                    if error_code_filter and str(error_code_filter).strip().lower() != "all":
-                        filter_value = str(error_code_filter).strip()
-                        try:
-                            filter_int = int(filter_value)
-                        except ValueError:
-                            filter_int = None
-
                     where_clause = "WHERE " + " AND ".join(where_clauses)
 
                     if mode == "geminicli":
@@ -1403,7 +1411,8 @@ class MySQLManager:
                                    user_email, rotation_order, model_cooldowns, preview, tier,
                                    tier_raw_id, tier_raw_name, tier_detected_at,
                                    health_status, quarantine_reason, probe_stage, next_probe_at,
-                                   last_health_check_at, health_check_started_at, health_state_version
+                                   last_health_check_at, health_check_started_at, health_state_version,
+                                   remark
                             FROM {table_name}
                             {where_clause}
                             ORDER BY rotation_order
@@ -1411,7 +1420,8 @@ class MySQLManager:
                     else:
                         query = f"""
                             SELECT filename, disabled, error_codes, last_success,
-                                   user_email, rotation_order, model_cooldowns, tier
+                                   user_email, rotation_order, model_cooldowns, tier,
+                                   remark
                             FROM {table_name}
                             {where_clause}
                             ORDER BY rotation_order
@@ -1422,11 +1432,34 @@ class MySQLManager:
 
                     current_time = time.time()
                     all_summaries = []
+                    count_cooldowns_from_rows = status_filter not in {
+                        "enabled", "disabled"
+                    }
+                    if not count_cooldowns_from_rows:
+                        await cur.execute(f"""
+                            SELECT model_cooldowns FROM {table_name}
+                            WHERE server_name = %s
+                        """, (self._server_name,))
+                        cooldown_rows = await cur.fetchall()
+                        for (model_cooldowns,) in cooldown_rows:
+                            cooldown_key = (
+                                "in_cooldown"
+                                if has_active_model_cooldown(model_cooldowns, current_time)
+                                else "no_cooldown"
+                            )
+                            global_stats[cooldown_key] += 1
 
                     for row in all_rows:
                         filename = row[0]
                         error_codes_json = row[2] or '[]'
                         model_cooldowns_json = row[6] or '{}'
+                        if count_cooldowns_from_rows:
+                            cooldown_key = (
+                                "in_cooldown"
+                                if has_active_model_cooldown(model_cooldowns_json, current_time)
+                                else "no_cooldown"
+                            )
+                            global_stats[cooldown_key] += 1
                         model_cooldowns = json.loads(model_cooldowns_json)
 
                         active_cooldowns = {}
@@ -1436,22 +1469,17 @@ class MySQLManager:
                                 if v > current_time
                             }
 
-                        error_codes = json.loads(error_codes_json)
-                        if filter_value:
-                            match = False
-                            for code in error_codes:
-                                if code == filter_value or code == filter_int:
-                                    match = True
-                                    break
-                                if isinstance(code, str) and filter_int is not None:
-                                    try:
-                                        if int(code) == filter_int:
-                                            match = True
-                                            break
-                                    except ValueError:
-                                        pass
-                            if not match:
+                        error_codes = safe_json_list(error_codes_json)
+                        if is_http_403_classification_filter(error_code_filter):
+                            if not has_error_code(error_codes, 403):
                                 continue
+                        elif not matches_error_code_filter(
+                            error_codes, {}, error_code_filter
+                        ):
+                            continue
+                        row_remark = row[-1] or ""
+                        if remark_filter is not None and row_remark != remark_filter:
+                            continue
 
                         summary = {
                             "filename": filename,
@@ -1461,6 +1489,7 @@ class MySQLManager:
                             "user_email": row[4],
                             "rotation_order": row[5],
                             "model_cooldowns": active_cooldowns,
+                            "remark": row_remark,
                         }
 
                         if mode == "geminicli":
@@ -1502,12 +1531,28 @@ class MySQLManager:
                         else:
                             all_summaries.append(summary)
 
-                    # 分页
-                    total_count = len(all_summaries)
-                    if limit is not None:
-                        summaries = all_summaries[offset:offset + limit]
-                    else:
-                        summaries = all_summaries[offset:]
+                    async def load_error_messages(filenames: list[str]) -> dict[str, Any]:
+                        messages: dict[str, Any] = {}
+                        for start in range(0, len(filenames), 500):
+                            chunk = filenames[start:start + 500]
+                            placeholders = ",".join("%s" for _ in chunk)
+                            await cur.execute(
+                                f"SELECT filename, error_messages FROM {table_name} "
+                                f"WHERE server_name = %s AND filename IN ({placeholders})",
+                                tuple([self._server_name, *chunk]),
+                            )
+                            for error_row in await cur.fetchall():
+                                messages[error_row[0]] = safe_json_object(error_row[1])
+                        return messages
+
+                    summaries, total_count = await paginate_and_classify_summaries(
+                        all_summaries,
+                        offset=offset,
+                        limit=limit,
+                        error_code_filter=error_code_filter,
+                        include_error_classifications=include_error_classifications,
+                        load_error_messages=load_error_messages,
+                    )
 
                     return {
                         "items": summaries,
@@ -1521,7 +1566,7 @@ class MySQLManager:
             log.error(f"Error getting credentials summary: {e}")
             return {
                 "items": [], "total": 0, "offset": offset,
-                "limit": limit, "stats": {"total": 0, "normal": 0, "disabled": 0},
+                "limit": limit, "stats": {"total": 0, "normal": 0, "disabled": 0, "in_cooldown": 0, "no_cooldown": 0},
             }
 
     async def get_duplicate_credentials_by_email(self, mode: str = "geminicli") -> Dict[str, Any]:
@@ -1665,8 +1710,8 @@ class MySQLManager:
                     if row:
                         return {
                             "filename": filename,
-                            "error_codes": json.loads(row[0] or '[]'),
-                            "error_messages": json.loads(row[1] or '[]'),
+                            "error_codes": safe_json_list(row[0]),
+                            "error_messages": safe_json_object(row[1]),
                         }
 
             return {"filename": filename, "error_codes": [], "error_messages": []}

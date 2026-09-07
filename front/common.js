@@ -180,8 +180,9 @@ function createCredsManager(type) {
         data: {},
         filteredData: {},
         currentPage: 1,
-        pageSize: 20,
+        pageSize: 25,
         selectedFiles: new Set(),
+        emailByFilename: new Map(),
         totalCount: 0,
         currentStatusFilter: 'all',
         currentErrorCodeFilter: 'all',
@@ -189,7 +190,14 @@ function createCredsManager(type) {
         currentPreviewFilter: 'all',
         currentTierFilter: 'all',
         currentRemarkFilter: '__all__',
-        statsData: { total: 0, normal: 0, disabled: 0, permanent_disabled: 0 },
+        statsData: {
+            total: 0,
+            normal: 0,
+            disabled: 0,
+            permanent_disabled: 0,
+            no_cooldown: 0,
+            in_cooldown: 0
+        },
 
         // API端点
         getEndpoint: (action) => {
@@ -250,12 +258,18 @@ function createCredsManager(type) {
                 if (response.ok) {
                     this.data = {};
                     data.items.forEach(item => {
+                        if (typeof item.user_email === 'string' && item.user_email.trim()) {
+                            this.emailByFilename.set(item.filename, item.user_email.trim());
+                        } else {
+                            this.emailByFilename.delete(item.filename);
+                        }
                         this.data[item.filename] = {
                             filename: item.filename,
                             status: {
                                 disabled: item.disabled,
                                 permanent_disabled: item.permanent_disabled || false,
                                 error_codes: item.error_codes || [],
+                                error_classifications: item.error_classifications || {},
                                 last_success: item.last_success,
                             },
                             remark: item.remark || '',
@@ -308,7 +322,14 @@ function createCredsManager(type) {
 
         // 计算统计数据（仅用于兼容旧版本后端）
         calculateStats() {
-            this.statsData = { total: this.totalCount, normal: 0, disabled: 0, permanent_disabled: 0 };
+            this.statsData = {
+                total: this.totalCount,
+                normal: 0,
+                disabled: 0,
+                permanent_disabled: 0,
+                no_cooldown: 0,
+                in_cooldown: 0
+            };
             Object.values(this.data).forEach(credInfo => {
                 if (credInfo.status.permanent_disabled) {
                     this.statsData.permanent_disabled++;
@@ -316,6 +337,11 @@ function createCredsManager(type) {
                     this.statsData.disabled++;
                 } else {
                     this.statsData.normal++;
+                }
+                if (Object.keys(credInfo.model_cooldowns || {}).length > 0) {
+                    this.statsData.in_cooldown++;
+                } else {
+                    this.statsData.no_cooldown++;
                 }
             });
         },
@@ -327,6 +353,10 @@ function createCredsManager(type) {
             document.getElementById(this.getElementId('StatDisabled')).textContent = this.statsData.disabled;
             const permanentEl = document.getElementById(this.getElementId('StatPermanentDisabled'));
             if (permanentEl) permanentEl.textContent = this.statsData.permanent_disabled || 0;
+            const noCooldownEl = document.getElementById(this.getElementId('StatNoCooldown'));
+            if (noCooldownEl) noCooldownEl.textContent = this.statsData.no_cooldown || 0;
+            const inCooldownEl = document.getElementById(this.getElementId('StatInCooldown'));
+            if (inCooldownEl) inCooldownEl.textContent = this.statsData.in_cooldown || 0;
         },
 
         // 渲染凭证列表
@@ -409,7 +439,7 @@ function createCredsManager(type) {
             const selectedCount = this.selectedFiles.size;
             document.getElementById(this.getElementId('SelectedCount')).textContent = `已选择 ${selectedCount} 项`;
 
-            const batchBtnNames = ['Enable', 'Disable', 'PermanentDisable', 'Delete', 'Verify', 'Test', 'Preview', 'RefreshCooldown'];
+            const batchBtnNames = ['Enable', 'Disable', 'PermanentDisable', 'Delete', 'Verify', 'Test', 'Preview', 'RefreshCooldown', 'CopyEmails'];
             if (this.type === 'antigravity') {
                 batchBtnNames.push('EnableCredit');
                 batchBtnNames.push('DisableCredit');
@@ -439,6 +469,31 @@ function createCredsManager(type) {
             checkboxes.forEach(cb => {
                 cb.checked = this.selectedFiles.has(cb.getAttribute('data-filename'));
             });
+        },
+
+        async copySelectedEmails() {
+            const selectedFiles = Array.from(this.selectedFiles);
+            if (selectedFiles.length === 0) {
+                showStatus('请先选择要复制邮箱的账号', 'error');
+                return;
+            }
+
+            const emails = selectedFiles
+                .map(filename => this.emailByFilename.get(filename))
+                .filter(email => typeof email === 'string' && email.length > 0);
+            if (emails.length === 0) {
+                showStatus('选中的账号尚未获取邮箱，请先刷新邮箱', 'error');
+                return;
+            }
+
+            try {
+                await navigator.clipboard.writeText(emails.join('\n'));
+                const missingCount = selectedFiles.length - emails.length;
+                const suffix = missingCount > 0 ? `，跳过 ${missingCount} 个未获取邮箱的账号` : '';
+                showStatus(`已复制 ${emails.length} 个选中账号的邮箱${suffix}`, missingCount > 0 ? 'warning' : 'success');
+            } catch (error) {
+                showStatus(`复制邮箱失败: ${error.message}`, 'error');
+            }
         },
 
         // 凭证操作
@@ -782,6 +837,17 @@ function formatCooldownTime(remainingSeconds) {
     return `${seconds}s`;
 }
 
+function formatErrorCodeLabel(errorCode, classifications = {}) {
+    if (String(errorCode) !== '403') return String(errorCode);
+
+    const labels = {
+        tos_violation: '403（封）',
+        subscription_required: '403（赋权）',
+        other: '403（其他）'
+    };
+    return labels[classifications['403']] || labels.other;
+}
+
 // =====================================================================
 // 凭证卡片创建（通用）
 // =====================================================================
@@ -802,8 +868,11 @@ function createCredCard(credInfo, manager) {
             : '<span class="status-badge enabled">已启用</span>');
 
     if (status.error_codes && status.error_codes.length > 0) {
-        statusBadges += `<span class="error-codes">错误码: ${status.error_codes.join(', ')}</span>`;
-        const autoBan = status.error_codes.filter(c => c === 400 || c === 403);
+        const displayedErrorCodes = status.error_codes
+            .map(code => escapeHtml(formatErrorCodeLabel(code, status.error_classifications)))
+            .join(', ');
+        statusBadges += `<span class="error-codes">错误码: ${displayedErrorCodes}</span>`;
+        const autoBan = status.error_codes.filter(c => Number(c) === 400 || Number(c) === 403);
         if (autoBan.length > 0 && status.disabled) {
             statusBadges += '<span class="status-badge" style="background-color: #e74c3c; color: white;">AUTO_BAN</span>';
         }
@@ -1713,6 +1782,7 @@ function toggleSelectAll() {
     AppState.creds.updateBatchControls();
 }
 function batchAction(action) { AppState.creds.batchAction(action); }
+function copySelectedEmails() { return AppState.creds.copySelectedEmails(); }
 function downloadCred(filename) {
     fetch(`./creds/download/${filename}`, { headers: { 'Authorization': `Bearer ${AppState.authToken}` } })
         .then(r => r.ok ? r.blob() : Promise.reject())
@@ -1773,6 +1843,7 @@ function toggleSelectAllAntigravity() {
     AppState.antigravityCreds.updateBatchControls();
 }
 function batchAntigravityAction(action) { AppState.antigravityCreds.batchAction(action); }
+function copySelectedAntigravityEmails() { return AppState.antigravityCreds.copySelectedEmails(); }
 function downloadAntigravityCred(filename) {
     fetch(`./creds/download/${filename}?mode=antigravity`, { headers: getAuthHeaders() })
         .then(r => r.ok ? r.blob() : Promise.reject())
@@ -1830,6 +1901,10 @@ function uploadAntigravityFiles() { AppState.antigravityUploadFiles.upload(); }
 // 邮箱相关
 // 辅助函数：根据文件名更新卡片中的邮箱显示
 function updateEmailDisplay(filename, email, managerType = 'normal') {
+    const manager = managerType === 'antigravity' ? AppState.antigravityCreds : AppState.creds;
+    manager.emailByFilename.set(filename, email);
+    if (manager.data[filename]) manager.data[filename].user_email = email;
+
     // 查找对应的凭证卡片
     const containerId = managerType === 'antigravity' ? 'antigravityCredsList' : 'credsList';
     const container = document.getElementById(containerId);
@@ -2491,6 +2566,7 @@ async function toggleErrorDetailsCommon(pathId, manager) {
                 if (response.ok) {
                     const errorCodes = data.error_codes || [];
                     const errorMessages = data.error_messages || {};
+                    const errorClassifications = data.error_classifications || {};
 
                     if (errorCodes.length === 0) {
                         contentDiv.innerHTML = `
@@ -2572,10 +2648,13 @@ async function toggleErrorDetailsCommon(pathId, manager) {
 
                             // 对消息中的HTTP链接进行高亮处理
                             const highlightedMsg = highlightHttpLinks(escapeHtml(displayMsg));
+                            const displayedErrorCode = formatErrorCodeLabel(
+                                errorCode, errorClassifications
+                            );
 
                             errorHTML += `
                                 <div style="padding: 12px; margin-bottom: 10px; border-left: 3px solid #dc3545; background-color: #f8f9fa;">
-                                    <div style="font-weight: bold; color: #dc3545; margin-bottom: 8px;">错误码: ${errorCode}</div>
+                                    <div style="font-weight: bold; color: #dc3545; margin-bottom: 8px;">错误码: ${escapeHtml(displayedErrorCode)}</div>
                                     <div style="line-height: 1.6; color: #333; white-space: pre-wrap; word-break: break-word;">
                                         ${highlightedMsg}
                                     </div>
@@ -3725,9 +3804,9 @@ async function fetchAndDisplayVersion() {
         const versionText = document.getElementById('versionText');
 
         if (data.success) {
-            // 只显示版本号
-            versionText.textContent = `v${data.version}`;
-            versionText.title = `完整版本: ${data.full_hash}\n提交信息: ${data.message}\n提交时间: ${data.date}`;
+            const displayVersion = data.display_version || `v${data.version}`;
+            versionText.textContent = displayVersion;
+            versionText.title = `来源: ${data.source_ref || '未知'}\n完整版本: ${data.full_hash}\n提交信息: ${data.message}\n提交时间: ${data.commit_date || data.date}`;
             versionText.style.cursor = 'help';
         } else {
             versionText.textContent = '未知版本';

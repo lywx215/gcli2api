@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from log import log
-from src.versioning import load_version_metadata
+from src.versioning import load_panel_version_metadata
 
 
 # 创建路由器
@@ -20,7 +20,7 @@ async def get_version_info(check_update: bool = False):
     可选参数 check_update: 是否检查GitHub上的最新版本
     """
     try:
-        version_data = load_version_metadata()
+        version_data = load_panel_version_metadata()
         if version_data["version"] == "unknown":
             return JSONResponse({
                 "success": False,
@@ -32,7 +32,10 @@ async def get_version_info(check_update: bool = False):
             "version": version_data.get('version', 'unknown'),
             "full_hash": version_data.get('full_hash', ''),
             "message": version_data.get('message', ''),
-            "date": version_data.get('date', '')
+            "date": version_data.get('date', ''),
+            "display_version": version_data.get('display_version', version_data.get('version', 'unknown')),
+            "source_ref": version_data.get('source_ref', ''),
+            "commit_date": version_data.get('commit_date', '')
         }
 
         # 如果需要检查更新

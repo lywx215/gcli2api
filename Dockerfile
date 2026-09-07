@@ -4,6 +4,9 @@ FROM python:3.13-slim as base
 ARG BUILD_DATE=unknown
 ARG VERSION=unknown
 ARG REVISION=unknown
+ARG SOURCE_REF=unknown
+ARG SOURCE_REF_TYPE=unknown
+ARG SOURCE_COMMIT_DATE=unknown
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -33,6 +36,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
+
+# Persist immutable panel display metadata without adding runtime configuration.
+RUN printf 'source_ref=%s\nsource_type=%s\ncommit_date=%s\n' "$SOURCE_REF" "$SOURCE_REF_TYPE" "$SOURCE_COMMIT_DATE" \
+    > /app/.gcli2api-build-info
 
 # Expose port
 EXPOSE 7861

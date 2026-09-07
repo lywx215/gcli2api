@@ -11,7 +11,19 @@ from typing import Any, Dict, List, Optional, Tuple
 import aiosqlite
 
 from log import log
-from src.storage._stats_common import normalize_model_family, _today_beijing_str
+from src.error_classification import (
+    has_error_code,
+    is_http_403_classification_filter,
+    matches_error_code_filter,
+    paginate_and_classify_summaries,
+    safe_json_list,
+    safe_json_object,
+)
+from src.storage._stats_common import (
+    _today_beijing_str,
+    has_active_model_cooldown,
+    normalize_model_family,
+)
 from src.subscription_tiers import (
     default_tier_for_mode,
     required_tiers_for_geminicli_model,
@@ -1089,7 +1101,8 @@ class SQLiteManager:
         cooldown_filter: Optional[str] = None,
         preview_filter: Optional[str] = None,
         tier_filter: Optional[str] = None,
-        remark_filter: Optional[str] = None
+        remark_filter: Optional[str] = None,
+        include_error_classifications: bool = False,
     ) -> Dict[str, Any]:
         """
         获取凭证的摘要信息（不包含完整凭证数据）- 支持分页和状态筛选
@@ -1115,7 +1128,14 @@ class SQLiteManager:
 
             async with aiosqlite.connect(self._db_path) as db:
                 # 先计算全局统计数据（不受筛选条件影响）
-                global_stats = {"total": 0, "normal": 0, "disabled": 0, "permanent_disabled": 0}
+                global_stats = {
+                    "total": 0,
+                    "normal": 0,
+                    "disabled": 0,
+                    "permanent_disabled": 0,
+                    "in_cooldown": 0,
+                    "no_cooldown": 0,
+                }
                 async with db.execute(f"""
                     SELECT disabled, permanent_disabled, COUNT(*) FROM {table_name} GROUP BY disabled, permanent_disabled
                 """) as stats_cursor:
@@ -1139,19 +1159,6 @@ class SQLiteManager:
                     where_clauses.append("disabled = 1 AND COALESCE(permanent_disabled, 0) = 0")
                 elif status_filter == "permanent_disabled":
                     where_clauses.append("COALESCE(permanent_disabled, 0) = 1")
-
-                filter_value = None
-                filter_int = None
-                filter_none = False
-                if error_code_filter and str(error_code_filter).strip().lower() != "all":
-                    if str(error_code_filter).strip().lower() == "none":
-                        filter_none = True
-                    else:
-                        filter_value = str(error_code_filter).strip()
-                        try:
-                            filter_int = int(filter_value)
-                        except ValueError:
-                            filter_int = None
 
                 # 构建WHERE子句
                 where_clause = ""
@@ -1186,11 +1193,32 @@ class SQLiteManager:
 
                     current_time = time.time()
                     all_summaries = []
+                    count_cooldowns_from_rows = status_filter not in {
+                        "enabled", "disabled", "permanent_disabled"
+                    }
+                    if not count_cooldowns_from_rows:
+                        async with db.execute(
+                            f"SELECT model_cooldowns FROM {table_name}"
+                        ) as cooldown_stats_cursor:
+                            for (model_cooldowns,) in await cooldown_stats_cursor.fetchall():
+                                cooldown_key = (
+                                    "in_cooldown"
+                                    if has_active_model_cooldown(model_cooldowns, current_time)
+                                    else "no_cooldown"
+                                )
+                                global_stats[cooldown_key] += 1
 
                     for row in all_rows:
                         filename = row[0]
                         error_codes_json = row[2] or '[]'
                         model_cooldowns_json = row[6] or '{}'
+                        if count_cooldowns_from_rows:
+                            cooldown_key = (
+                                "in_cooldown"
+                                if has_active_model_cooldown(model_cooldowns_json, current_time)
+                                else "no_cooldown"
+                            )
+                            global_stats[cooldown_key] += 1
                         model_cooldowns = json.loads(model_cooldowns_json)
 
                         # 自动过滤掉已过期的模型CD
@@ -1201,28 +1229,14 @@ class SQLiteManager:
                                 if v > current_time
                             }
 
-                        error_codes = json.loads(error_codes_json)
-
-                        # 筛选无错误的凭证
-                        if filter_none:
-                            if error_codes:
+                        error_codes = safe_json_list(error_codes_json)
+                        if is_http_403_classification_filter(error_code_filter):
+                            if not has_error_code(error_codes, 403):
                                 continue
-
-                        if filter_value:
-                            match = False
-                            for code in error_codes:
-                                if code == filter_value or code == filter_int:
-                                    match = True
-                                    break
-                                if isinstance(code, str) and filter_int is not None:
-                                    try:
-                                        if int(code) == filter_int:
-                                            match = True
-                                            break
-                                    except ValueError:
-                                        pass
-                            if not match:
-                                continue
+                        elif not matches_error_code_filter(
+                            error_codes, {}, error_code_filter
+                        ):
+                            continue
 
                         row_remark = row[14] or "" if len(row) > 14 else ""
                         if remark_filter is not None and row_remark != remark_filter:
@@ -1297,12 +1311,28 @@ class SQLiteManager:
                             # 不筛选冷却状态
                             all_summaries.append(summary)
 
-                    # 应用分页
-                    total_count = len(all_summaries)
-                    if limit is not None:
-                        summaries = all_summaries[offset:offset + limit]
-                    else:
-                        summaries = all_summaries[offset:]
+                    async def load_error_messages(filenames: list[str]) -> dict[str, Any]:
+                        messages: dict[str, Any] = {}
+                        for start in range(0, len(filenames), 500):
+                            chunk = filenames[start:start + 500]
+                            placeholders = ",".join("?" for _ in chunk)
+                            async with db.execute(
+                                f"SELECT filename, error_messages FROM {table_name} "
+                                f"WHERE filename IN ({placeholders})",
+                                chunk,
+                            ) as error_cursor:
+                                for error_row in await error_cursor.fetchall():
+                                    messages[error_row[0]] = safe_json_object(error_row[1])
+                        return messages
+
+                    summaries, total_count = await paginate_and_classify_summaries(
+                        all_summaries,
+                        offset=offset,
+                        limit=limit,
+                        error_code_filter=error_code_filter,
+                        include_error_classifications=include_error_classifications,
+                        load_error_messages=load_error_messages,
+                    )
 
                     return {
                         "items": summaries,
@@ -1319,7 +1349,7 @@ class SQLiteManager:
                 "total": 0,
                 "offset": offset,
                 "limit": limit,
-                "stats": {"total": 0, "normal": 0, "disabled": 0, "permanent_disabled": 0},
+                "stats": {"total": 0, "normal": 0, "disabled": 0, "permanent_disabled": 0, "in_cooldown": 0, "no_cooldown": 0},
             }
 
     async def get_duplicate_credentials_by_email(self, mode: str = "geminicli") -> Dict[str, Any]:
@@ -1488,8 +1518,8 @@ class SQLiteManager:
                         error_messages_json = row[1] or '[]'
                         return {
                             "filename": filename,
-                            "error_codes": json.loads(error_codes_json),
-                            "error_messages": json.loads(error_messages_json),
+                            "error_codes": safe_json_list(error_codes_json),
+                            "error_messages": safe_json_object(error_messages_json),
                         }
 
                 # 凭证不存在，返回空错误信息

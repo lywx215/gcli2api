@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 from log import log
 from src.credential_manager import credential_manager
+from src.error_classification import get_error_classifications
 from src.models import (
     CredFileActionRequest,
     CredFileBatchActionRequest,
@@ -448,8 +449,8 @@ async def get_creds_status_common(
     # 验证分页参数
     if offset < 0:
         raise HTTPException(status_code=400, detail="offset 必须大于等于 0")
-    if limit not in [20, 50, 100, 200, 500, 1000]:
-        raise HTTPException(status_code=400, detail="limit 只能是 20、50、100、200、500 或 1000")
+    if limit not in [20, 25, 50, 100, 200, 500, 1000]:
+        raise HTTPException(status_code=400, detail="limit 只能是 20、25、50、100、200、500 或 1000")
     if status_filter not in ["all", "enabled", "disabled", "permanent_disabled"]:
         raise HTTPException(status_code=400, detail="status_filter 只能是 all、enabled、disabled 或 permanent_disabled")
     if cooldown_filter and cooldown_filter not in ["all", "in_cooldown", "no_cooldown", "pro_no_cooldown", "flash_no_cooldown"]:
@@ -477,7 +478,8 @@ async def get_creds_status_common(
         cooldown_filter=cooldown_filter if cooldown_filter and cooldown_filter != "all" else None,
         preview_filter=preview_filter if preview_filter and preview_filter != "all" else None,
         tier_filter=tier_filter if tier_filter and tier_filter != "all" else None,
-        remark_filter=remark_filter if remark_filter is not None and remark_filter != "__all__" else None
+        remark_filter=remark_filter if remark_filter is not None and remark_filter != "__all__" else None,
+        include_error_classifications=True,
     )
 
     creds_list = []
@@ -487,6 +489,7 @@ async def get_creds_status_common(
             "user_email": summary["user_email"],
             "disabled": summary["disabled"],
             "error_codes": summary["error_codes"],
+            "error_classifications": summary.get("error_classifications", {}),
             "last_success": summary["last_success"],
             "backend_type": backend_type,
             "model_cooldowns": summary.get("model_cooldowns", {}),
@@ -926,9 +929,9 @@ async def get_creds_status(
 
     Args:
         offset: 跳过的记录数（默认0）
-        limit: 每页返回的记录数（默认50，可选：20, 50, 100, 200, 500, 1000）
+        limit: 每页返回的记录数（默认50，可选：20, 25, 50, 100, 200, 500, 1000）
         status_filter: 状态筛选（all=全部, enabled=仅启用, disabled=仅禁用）
-        error_code_filter: 错误码筛选（all=全部, 或具体错误码如"400", "403"）
+        error_code_filter: 错误码筛选（all、none、具体错误码，或403细分类）
         cooldown_filter: 冷却状态筛选（all=全部, in_cooldown=冷却中, no_cooldown=未冷却）
         preview_filter: Preview筛选（all=全部, preview=支持preview, no_preview=不支持preview，仅geminicli模式有效）
         tier_filter: tier筛选（all=全部, free/pro/ultra）
@@ -1444,6 +1447,9 @@ async def get_credential_errors(
 
         # 获取错误信息
         error_info = await storage_adapter._backend.get_credential_errors(filename, mode=mode)
+        error_info["error_classifications"] = get_error_classifications(
+            error_info.get("error_codes", []), error_info.get("error_messages", {})
+        )
 
         return JSONResponse(content=error_info)
 

@@ -9,6 +9,15 @@ import time
 from typing import Any, Dict, List, Optional
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from src.error_classification import (
+    has_error_code,
+    is_http_403_classification_filter,
+    matches_error_code_filter,
+    paginate_and_classify_summaries,
+    safe_json_list,
+    safe_json_object,
+)
+from src.storage._stats_common import has_active_model_cooldown
 from src.subscription_tiers import (
     default_tier_for_mode,
     required_tiers_for_geminicli_model,
@@ -1180,7 +1189,8 @@ class MongoDBManager:
         cooldown_filter: Optional[str] = None,
         preview_filter: Optional[str] = None,
         tier_filter: Optional[str] = None,
-        remark_filter: Optional[str] = None
+        remark_filter: Optional[str] = None,
+        include_error_classifications: bool = False,
     ) -> Dict[str, Any]:
         """
         获取凭证的摘要信息（不包含完整凭证数据）- 支持分页和状态筛选
@@ -1213,8 +1223,9 @@ class MongoDBManager:
                 query["disabled"] = True
 
             # 错误码筛选 - 兼容存储为数字或字符串的情况
-            if error_code_filter and str(error_code_filter).strip().lower() != "all":
-                if str(error_code_filter).strip().lower() == "none":
+            normalized_error_filter = str(error_code_filter or "all").strip().lower()
+            if normalized_error_filter != "all":
+                if normalized_error_filter == "none":
                     # 筛选无错误的凭证：error_codes 为空数组、不存在、或为 null
                     query["$or"] = [
                         {"error_codes": {"$exists": False}},
@@ -1222,8 +1233,10 @@ class MongoDBManager:
                         {"error_codes": []},
                         {"error_codes": "[]"},
                     ]
+                elif is_http_403_classification_filter(normalized_error_filter):
+                    query["error_codes"] = {"$in": [403, "403"]}
                 else:
-                    filter_value = str(error_code_filter).strip()
+                    filter_value = normalized_error_filter
                     query_values = [filter_value]
                     try:
                         query_values.append(int(filter_value))
@@ -1232,7 +1245,13 @@ class MongoDBManager:
                     query["error_codes"] = {"$in": query_values}
 
             # 计算全局统计数据（不受筛选条件影响）
-            global_stats = {"total": 0, "normal": 0, "disabled": 0}
+            global_stats = {
+                "total": 0,
+                "normal": 0,
+                "disabled": 0,
+                "in_cooldown": 0,
+                "no_cooldown": 0,
+            }
             stats_pipeline = [
                 {
                     "$group": {
@@ -1283,8 +1302,27 @@ class MongoDBManager:
 
             all_summaries = []
             current_time = time.time()
+            count_cooldowns_from_cursor = not query
 
             async for doc in cursor:
+                if count_cooldowns_from_cursor:
+                    cooldown_key = (
+                        "in_cooldown"
+                        if has_active_model_cooldown(
+                            doc.get("model_cooldowns"), current_time
+                        )
+                        else "no_cooldown"
+                    )
+                    global_stats[cooldown_key] += 1
+                error_codes = safe_json_list(doc.get("error_codes", []))
+                if is_http_403_classification_filter(error_code_filter):
+                    if not has_error_code(error_codes, 403):
+                        continue
+                elif not matches_error_code_filter(
+                    error_codes, {}, error_code_filter
+                ):
+                    continue
+
                 model_cooldowns = doc.get("model_cooldowns", {})
 
                 # 自动过滤掉已过期的模型CD
@@ -1298,7 +1336,7 @@ class MongoDBManager:
                 summary = {
                     "filename": doc["filename"],
                     "disabled": doc.get("disabled", False),
-                    "error_codes": doc.get("error_codes", []),
+                    "error_codes": error_codes,
                     "last_success": doc.get("last_success"),
                     "user_email": doc.get("user_email"),
                     "rotation_order": doc.get("rotation_order", 0),
@@ -1363,12 +1401,42 @@ class MongoDBManager:
                     # 不筛选冷却状态
                     all_summaries.append(summary)
 
-            # 应用分页
-            total_count = len(all_summaries)
-            if limit is not None:
-                summaries = all_summaries[offset:offset + limit]
-            else:
-                summaries = all_summaries[offset:]
+            async def load_error_messages(filenames: list[str]) -> dict[str, Any]:
+                messages: dict[str, Any] = {}
+                for start in range(0, len(filenames), 500):
+                    chunk = filenames[start:start + 500]
+                    error_cursor = collection.find(
+                        {"filename": {"$in": chunk}},
+                        {"filename": 1, "error_messages": 1, "_id": 0},
+                    )
+                    async for error_doc in error_cursor:
+                        messages[error_doc["filename"]] = safe_json_object(
+                            error_doc.get("error_messages", {})
+                        )
+                return messages
+
+            summaries, total_count = await paginate_and_classify_summaries(
+                all_summaries,
+                offset=offset,
+                limit=limit,
+                error_code_filter=error_code_filter,
+                include_error_classifications=include_error_classifications,
+                load_error_messages=load_error_messages,
+            )
+
+            if not count_cooldowns_from_cursor:
+                cooldown_cursor = collection.find(
+                    {}, projection={"model_cooldowns": 1, "_id": 0}
+                )
+                async for cooldown_doc in cooldown_cursor:
+                    cooldown_key = (
+                        "in_cooldown"
+                        if has_active_model_cooldown(
+                            cooldown_doc.get("model_cooldowns"), current_time
+                        )
+                        else "no_cooldown"
+                    )
+                    global_stats[cooldown_key] += 1
 
             return {
                 "items": summaries,
@@ -1385,7 +1453,7 @@ class MongoDBManager:
                 "total": 0,
                 "offset": offset,
                 "limit": limit,
-                "stats": {"total": 0, "normal": 0, "disabled": 0},
+                "stats": {"total": 0, "normal": 0, "disabled": 0, "in_cooldown": 0, "no_cooldown": 0},
             }
 
     # ============ 配置管理（内存缓存 + 可选 Redis）============
@@ -1534,8 +1602,8 @@ class MongoDBManager:
             if doc:
                 return {
                     "filename": filename,
-                    "error_codes": doc.get("error_codes", []),
-                    "error_messages": doc.get("error_messages", []),
+                    "error_codes": safe_json_list(doc.get("error_codes", [])),
+                    "error_messages": safe_json_object(doc.get("error_messages", {})),
                 }
 
             # 凭证不存在，返回空错误信息

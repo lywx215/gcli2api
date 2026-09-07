@@ -4,13 +4,39 @@
 从 psql_manager.py 提取，供 SQLite / PostgreSQL / MongoDB 等后端共用。
 """
 
+import json
+import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 
 def _today_beijing_str() -> str:
     """返回当前北京时间 yyyy-mm-dd。"""
     return (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
+
+
+def has_active_model_cooldown(value: Any, current_time: Optional[float] = None) -> bool:
+    """Return whether a persisted cooldown mapping contains an active deadline."""
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+    if isinstance(value, str):
+        try:
+            value = json.loads(value or "{}")
+        except (TypeError, ValueError):
+            return False
+    if not isinstance(value, dict):
+        return False
+
+    now = time.time() if current_time is None else current_time
+    return any(
+        not isinstance(deadline, bool)
+        and isinstance(deadline, (int, float))
+        and deadline > now
+        for deadline in value.values()
+    )
 
 
 # 模型家族归一化：各种变种（-search / -thinking / -lite / preview / pro / flash 等）
