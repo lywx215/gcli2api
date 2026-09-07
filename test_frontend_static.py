@@ -112,6 +112,14 @@ def test_credential_stats_include_compact_cooldown_counts():
     common_js = (front_dir / "common.js").read_text(encoding="utf-8")
     assert "this.statsData.no_cooldown" in common_js
     assert "this.statsData.in_cooldown" in common_js
+    assert """else {
+                    this.statsData.normal++;
+                    if (Object.keys(credInfo.model_cooldowns || {}).length > 0) {
+                        this.statsData.in_cooldown++;
+                    } else {
+                        this.statsData.no_cooldown++;
+                    }
+                }""" in common_js
 
 
 def test_credential_page_size_and_selected_email_copy_are_wired_for_both_panels():

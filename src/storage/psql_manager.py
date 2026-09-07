@@ -933,7 +933,9 @@ class PSQLManager:
                 }
                 if not count_cooldowns_from_rows:
                     cooldown_rows = await conn.fetch(
-                        f"SELECT model_cooldowns FROM {table_name}"
+                        f"SELECT model_cooldowns FROM {table_name} "
+                        "WHERE COALESCE(disabled, FALSE) = FALSE "
+                        "AND COALESCE(permanent_disabled, FALSE) = FALSE"
                     )
                     for cooldown_row in cooldown_rows:
                         cooldown_key = (
@@ -947,7 +949,10 @@ class PSQLManager:
                 for row in all_rows:
                     error_codes_json = row["error_codes"] or "[]"
                     model_cooldowns_raw = row["model_cooldowns"] or "{}"
-                    if count_cooldowns_from_rows:
+                    is_normal = not bool(row["disabled"]) and not bool(
+                        row["permanent_disabled"]
+                    )
+                    if count_cooldowns_from_rows and is_normal:
                         cooldown_key = (
                             "in_cooldown"
                             if has_active_model_cooldown(model_cooldowns_raw, current_time)

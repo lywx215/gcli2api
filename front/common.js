@@ -337,11 +337,11 @@ function createCredsManager(type) {
                     this.statsData.disabled++;
                 } else {
                     this.statsData.normal++;
-                }
-                if (Object.keys(credInfo.model_cooldowns || {}).length > 0) {
-                    this.statsData.in_cooldown++;
-                } else {
-                    this.statsData.no_cooldown++;
+                    if (Object.keys(credInfo.model_cooldowns || {}).length > 0) {
+                        this.statsData.in_cooldown++;
+                    } else {
+                        this.statsData.no_cooldown++;
+                    }
                 }
             });
         },

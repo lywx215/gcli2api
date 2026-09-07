@@ -1198,7 +1198,9 @@ class SQLiteManager:
                     }
                     if not count_cooldowns_from_rows:
                         async with db.execute(
-                            f"SELECT model_cooldowns FROM {table_name}"
+                            f"SELECT model_cooldowns FROM {table_name} "
+                            "WHERE COALESCE(disabled, 0) = 0 "
+                            "AND COALESCE(permanent_disabled, 0) = 0"
                         ) as cooldown_stats_cursor:
                             for (model_cooldowns,) in await cooldown_stats_cursor.fetchall():
                                 cooldown_key = (
@@ -1212,7 +1214,10 @@ class SQLiteManager:
                         filename = row[0]
                         error_codes_json = row[2] or '[]'
                         model_cooldowns_json = row[6] or '{}'
-                        if count_cooldowns_from_rows:
+                        is_normal = not bool(row[1]) and not (
+                            bool(row[11]) if len(row) > 11 else False
+                        )
+                        if count_cooldowns_from_rows and is_normal:
                             cooldown_key = (
                                 "in_cooldown"
                                 if has_active_model_cooldown(model_cooldowns_json, current_time)

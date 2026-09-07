@@ -1305,7 +1305,7 @@ class MongoDBManager:
             count_cooldowns_from_cursor = not query
 
             async for doc in cursor:
-                if count_cooldowns_from_cursor:
+                if count_cooldowns_from_cursor and not bool(doc.get("disabled", False)):
                     cooldown_key = (
                         "in_cooldown"
                         if has_active_model_cooldown(
@@ -1426,7 +1426,8 @@ class MongoDBManager:
 
             if not count_cooldowns_from_cursor:
                 cooldown_cursor = collection.find(
-                    {}, projection={"model_cooldowns": 1, "_id": 0}
+                    {"disabled": {"$ne": True}},
+                    projection={"model_cooldowns": 1, "_id": 0},
                 )
                 async for cooldown_doc in cooldown_cursor:
                     cooldown_key = (

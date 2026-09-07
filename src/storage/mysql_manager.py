@@ -1438,7 +1438,7 @@ class MySQLManager:
                     if not count_cooldowns_from_rows:
                         await cur.execute(f"""
                             SELECT model_cooldowns FROM {table_name}
-                            WHERE server_name = %s
+                            WHERE server_name = %s AND disabled = 0
                         """, (self._server_name,))
                         cooldown_rows = await cur.fetchall()
                         for (model_cooldowns,) in cooldown_rows:
@@ -1453,7 +1453,7 @@ class MySQLManager:
                         filename = row[0]
                         error_codes_json = row[2] or '[]'
                         model_cooldowns_json = row[6] or '{}'
-                        if count_cooldowns_from_rows:
+                        if count_cooldowns_from_rows and not bool(row[1]):
                             cooldown_key = (
                                 "in_cooldown"
                                 if has_active_model_cooldown(model_cooldowns_json, current_time)
