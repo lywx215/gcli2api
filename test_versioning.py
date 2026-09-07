@@ -113,10 +113,12 @@ def test_panel_metadata_recognizes_an_exact_git_release_tag(tmp_path: Path, monk
     assert metadata["source_ref"] == "v1.3.0"
 
 
-def test_panel_metadata_prefers_immutable_build_info(tmp_path: Path, monkeypatch):
+def test_panel_metadata_prefers_user_generated_version_file(tmp_path: Path, monkeypatch):
     _write_version_file(tmp_path)
-    (tmp_path / ".gcli2api-build-info").write_text(
-        "source_ref=dev8\nsource_type=branch\ncommit_date=2026-09-07T04:16:00Z\n",
+    (tmp_path / "panel-version.txt").write_text(
+        "display_version=dev8-20260907-1216\n"
+        "source_ref=dev8\n"
+        "commit_date=2026-09-07T04:16:00Z\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -157,12 +159,12 @@ def test_panel_metadata_uses_local_git_and_detached_fallback(tmp_path: Path, mon
     assert metadata["message"] == "local commit"
 
 
-def test_panel_metadata_handles_invalid_build_info_and_legacy_fallback(
+def test_panel_metadata_handles_invalid_manual_version_and_legacy_fallback(
     tmp_path: Path, monkeypatch
 ):
     _write_version_file(tmp_path)
-    (tmp_path / ".gcli2api-build-info").write_text(
-        "source_ref=dev8\ncommit_date=not-a-date\n",
+    (tmp_path / "panel-version.txt").write_text(
+        "display_version=<invalid>\nsource_ref=dev8\ncommit_date=not-a-date\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(versioning, "_read_git_metadata", lambda _root: {})
@@ -220,25 +222,16 @@ def test_panel_version_info_adds_display_fields_without_replacing_legacy_fields(
     assert payload["commit_date"] == "2026-09-07T12:16:00+08:00"
 
 
-def test_docker_build_metadata_uses_build_args_not_runtime_configuration():
+def test_source_build_uses_committed_user_generated_version_without_git_lookup():
     project_root = Path(__file__).resolve().parent
     dockerfile = (project_root / "Dockerfile").read_text(encoding="utf-8")
     workflow = (project_root / ".github/workflows/docker-publish.yml").read_text(
         encoding="utf-8"
     )
 
-    assert "ARG SOURCE_REF=unknown" in dockerfile
-    assert "ARG SOURCE_REF_TYPE=unknown" in dockerfile
-    assert "ARG SOURCE_COMMIT_DATE=unknown" in dockerfile
-    assert "/app/.gcli2api-build-info" in dockerfile
-    assert "GCLI2API_SOURCE_REF" not in dockerfile
-    assert "GCLI2API_SOURCE_REF_TYPE" not in dockerfile
-    assert "GCLI2API_SOURCE_COMMIT_DATE" not in dockerfile
-    assert "SOURCE_REF=${{ steps.source-version.outputs.source_ref }}" in workflow
-    assert (
-        "SOURCE_REF_TYPE=${{ steps.source-version.outputs.source_ref_type }}" in workflow
-    )
-    assert (
-        "SOURCE_COMMIT_DATE=${{ steps.source-version.outputs.commit_date }}" in workflow
-    )
-    assert "git log -1 --format=%cI" in workflow
+    assert "COPY . ." in dockerfile
+    assert "ZEABUR_GIT_" not in dockerfile
+    assert "scripts/write_build_info.py" not in dockerfile
+    assert "Resolve source version metadata" not in workflow
+    assert "SOURCE_COMMIT_DATE=" not in workflow
+    assert (project_root / "panel-version.txt").exists()

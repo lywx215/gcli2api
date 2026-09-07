@@ -31,6 +31,9 @@
 - 自动handoff只允许`queue_only`且自动运行次数为0；不得建立定时Codex轮询，也不得因
   Issue创建而自动调用模型。只有用户启动实际任务后才能读取并实施`codex-ready`内容。
 - 范围外发现只记录，不得顺带实施。
+- 本地仓库使用`.githooks/pre-commit`在每次提交前询问是否生成新的控制面板版本号；
+  只有用户明确确认时才更新并暂存`panel-version.txt`，否则版本号保持不变。首次克隆后需执行
+  `git config core.hooksPath .githooks`启用该提示。
 
 ## 完成标准
 

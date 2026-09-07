@@ -15,7 +15,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _RELEASE_VERSION_RE = re.compile(r"^v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?$")
 _SAFE_ASSET_VERSION_RE = re.compile(r"[^0-9A-Za-z._-]+")
 _SAFE_SOURCE_REF_RE = re.compile(r"[^0-9A-Za-z._-]+")
-_BUILD_INFO_FILE = ".gcli2api-build-info"
+_SAFE_PANEL_VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$")
+_PANEL_VERSION_FILE = "panel-version.txt"
 _BEIJING_TIMEZONE = timezone(timedelta(hours=8))
 
 
@@ -186,43 +187,60 @@ def load_panel_version_metadata(
     root = project_root or PROJECT_ROOT
     env = os.environ if environ is None else environ
     base = load_version_metadata(project_root=root, environ=env)
-    build_info = _read_key_value_file(root / _BUILD_INFO_FILE)
+    manual_info = _read_key_value_file(root / _PANEL_VERSION_FILE)
     git_info = _read_git_metadata(root)
 
-    build_source_ref = build_info.get("source_ref", "").strip()
-    build_source_type = build_info.get("source_type", "").strip()
     git_source_ref = git_info.get("source_ref", "").strip()
     git_source_type = git_info.get("source_type", "").strip()
-    release_ref = ""
-    if build_source_type == "tag" and _RELEASE_VERSION_RE.fullmatch(build_source_ref):
-        release_ref = build_source_ref
-    elif git_source_type == "tag" and _RELEASE_VERSION_RE.fullmatch(git_source_ref):
+    environment_release = env.get("GCLI2API_VERSION", "").strip()
+    release_ref = (
+        environment_release
+        if _RELEASE_VERSION_RE.fullmatch(environment_release)
+        else ""
+    )
+    if not release_ref and git_source_type == "tag" and _RELEASE_VERSION_RE.fullmatch(git_source_ref):
         release_ref = git_source_ref
-    elif not build_source_ref and not git_source_ref:
-        legacy_release = env.get("GCLI2API_VERSION", "").strip()
-        if _RELEASE_VERSION_RE.fullmatch(legacy_release):
-            release_ref = legacy_release
+
+    manual_display_version = manual_info.get("display_version", "").strip()
+    manual_source_ref = manual_info.get("source_ref", "").strip()
+    manual_commit_date = manual_info.get("commit_date", "").strip()
+    has_manual_version = bool(
+        _SAFE_PANEL_VERSION_RE.fullmatch(manual_display_version)
+        and manual_source_ref
+        and _parse_commit_date(manual_commit_date)
+    )
 
     if release_ref:
         source_ref = release_ref
         source_type = "tag"
         commit_date = (
-            build_info.get("commit_date", "")
-            or git_info.get("commit_date", "")
+            git_info.get("commit_date", "")
+            or manual_commit_date
             or base.get("date", "")
         )
-    elif build_source_ref and _parse_commit_date(
-        build_info.get("commit_date", "")
-    ):
-        source_ref = build_source_ref
-        source_type = build_source_type or "branch"
-        commit_date = build_info["commit_date"]
+        display_version = format_panel_display_version(
+            source_ref,
+            commit_date,
+            fallback_version=base.get("version", "unknown"),
+            source_type=source_type,
+        )
+    elif has_manual_version:
+        source_ref = manual_source_ref
+        source_type = "branch"
+        commit_date = manual_commit_date
+        display_version = manual_display_version
     elif git_source_ref and _parse_commit_date(
         git_info.get("commit_date", "")
     ):
         source_ref = git_source_ref
         source_type = git_source_type
         commit_date = git_info["commit_date"]
+        display_version = format_panel_display_version(
+            source_ref,
+            commit_date,
+            fallback_version=base.get("version", "unknown"),
+            source_type=source_type,
+        )
     else:
         source_ref = env.get("GCLI2API_VERSION", "").strip()
         source_type = ""
@@ -230,6 +248,12 @@ def load_panel_version_metadata(
         if not source_ref:
             short_hash = base.get("version", "")
             source_ref = f"detached-{short_hash}" if short_hash else ""
+        display_version = format_panel_display_version(
+            source_ref,
+            commit_date,
+            fallback_version=base.get("version", "unknown"),
+            source_type=source_type,
+        )
 
     parsed_commit_date = _parse_commit_date(commit_date)
     normalized_commit_date = (
@@ -239,12 +263,7 @@ def load_panel_version_metadata(
     )
     return {
         **base,
-        "display_version": format_panel_display_version(
-            source_ref,
-            commit_date,
-            fallback_version=base.get("version", "unknown"),
-            source_type=source_type,
-        ),
+        "display_version": display_version,
         "source_ref": _normalize_source_ref(source_ref) if source_ref else "",
         "commit_date": normalized_commit_date,
         "full_hash": git_info.get("full_hash") or base.get("full_hash", ""),

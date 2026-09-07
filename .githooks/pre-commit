@@ -1,0 +1,3 @@
+#!/bin/sh
+
+python scripts/generate_panel_version.py --stage
