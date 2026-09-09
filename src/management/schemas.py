@@ -28,7 +28,7 @@ class StrictModel(BaseModel):
 
 
 class CommonMetadata(StrictModel):
-    schema_version: Literal["1.3"] = "1.3"
+    schema_version: Literal["1.4"] = "1.4"
     server_version: str
     revision: str
     generated_at: str
@@ -88,11 +88,20 @@ class PageInfo(StrictModel):
     limit: int
     has_more: bool
     next_cursor: str | None
+    next_after: str | None = None
 
 
 class CredentialListResponse(CommonMetadata):
     credentials: list[CredentialSummary]
     page: PageInfo
+
+
+class CredentialDetailResponse(CommonMetadata):
+    credential: CredentialSummary
+    state_token: str = Field(pattern=r"^[0-9a-f]{64}$")
+    observed_at: str
+    metadata_complete: bool
+    missing_fields: list[str] = Field(max_length=32)
 
 
 class StatsCounts(StrictModel):
@@ -139,6 +148,34 @@ class CredentialActionRequest(StrictModel):
             remark = self.parameters.get("remark")
             if not isinstance(remark, str) or len(remark) > 500:
                 raise ValueError("remark must be a string of at most 500 characters")
+        elif self.action == "enable":
+            if not self.parameters:
+                return self
+            if set(self.parameters) != {"expected_state_token", "required_models"}:
+                raise ValueError(
+                    "conditional enable requires expected_state_token and required_models"
+                )
+            token = self.parameters.get("expected_state_token")
+            models = self.parameters.get("required_models")
+            if (
+                not isinstance(token, str)
+                or len(token) != 64
+                or any(character not in "0123456789abcdef" for character in token)
+            ):
+                raise ValueError("expected_state_token must be a lowercase sha256 digest")
+            if (
+                not isinstance(models, list)
+                or not 1 <= len(models) <= 32
+                or any(
+                    not isinstance(model, str)
+                    or not model.strip()
+                    or len(model) > 200
+                    for model in models
+                )
+                or len({model.strip() for model in models}) != len(models)
+            ):
+                raise ValueError("required_models must contain 1 to 32 unique model names")
+            self.parameters["required_models"] = [model.strip() for model in models]
         elif self.action in ("test", "risk_check"):
             if not set(self.parameters).issubset({"model_name"}):
                 raise ValueError("only model_name is accepted for this action")
@@ -216,6 +253,16 @@ class TestActionResult(StrictModel):
     outcome: Literal["passed", "failed"]
     model_name: str | None = Field(default=None, max_length=200)
     latency_ms: float | None = Field(default=None, ge=0, le=3_600_000)
+    upstream_status: int | None = Field(default=None, ge=100, le=599)
+    classification: Literal[
+        "success",
+        "rate_limited",
+        "authentication_failed",
+        "rejected",
+        "upstream_error",
+        "unknown",
+    ]
+    call_succeeded: bool
 
 
 class RiskActionResult(StrictModel):

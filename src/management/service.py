@@ -29,6 +29,7 @@ from .schemas import (
     CredentialBatchActionRequest,
     CredentialBatchActionResponse,
     CredentialBatchActionResult,
+    CredentialDetailResponse,
     CredentialListResponse,
     CredentialSummary,
     DailyStats,
@@ -241,6 +242,12 @@ class ManagementService:
             capabilities.append(embed_capability)
         if hasattr(backend, "get_credentials_summary"):
             capabilities.extend(("node.summary", "credential.list"))
+        if hasattr(backend, "management_list_credentials_bounded"):
+            capabilities.append("credential.list.bounded")
+        if hasattr(backend, "management_credential_detail"):
+            capabilities.append("credential.detail")
+        if hasattr(backend, "management_conditional_enable"):
+            capabilities.append("credential.enable.conditional")
         # MongoDB currently exposes no-op compatibility stubs, not statistics.
         if backend_type != "mongodb" and hasattr(backend, "get_recent_daily_stats"):
             capabilities.append("stats.daily")
@@ -294,6 +301,8 @@ class ManagementService:
                     else action in supported
                 ):
                     capabilities.append(ACTION_CAPABILITIES[action])
+                    if action == "test":
+                        capabilities.append("credential.test.precise")
             sync_supported = (
                 supports("sync_cooldown")
                 if callable(supports)
@@ -399,6 +408,7 @@ class ManagementService:
         mode: str,
         cursor: str | None,
         offset: int | None,
+        after: str | None = None,
         limit: int,
         status: str | None,
         error_code: int | None,
@@ -411,17 +421,65 @@ class ManagementService:
             raise ManagementApiError(
                 status_code=400, code="INVALID_MODE", message="Invalid credential mode"
             )
-        if cursor is not None and offset is not None:
+        if sum(value is not None for value in (cursor, offset, after)) > 1:
             raise ManagementApiError(
                 status_code=400,
                 code="INVALID_ACTION",
-                message="cursor and offset cannot be combined",
+                message="after, cursor and offset cannot be combined",
             )
         if limit < 1 or limit > 1000 or (offset is not None and offset < 0):
             raise ManagementApiError(
                 status_code=400,
                 code="INVALID_ACTION",
                 message="Invalid pagination parameters",
+            )
+        if after is not None:
+            if (
+                len(after) > 512
+                or after != os.path.basename(after)
+                or after and not after.endswith(".json")
+            ):
+                raise ManagementApiError(
+                    status_code=400,
+                    code="INVALID_ACTION",
+                    message="Invalid keyset position",
+                )
+            storage = await self._storage()
+            backend = getattr(storage, "_backend", None)
+            method = getattr(backend, "management_list_credentials_bounded", None)
+            if not callable(method):
+                raise ManagementApiError(
+                    status_code=501,
+                    code="CAPABILITY_NOT_SUPPORTED",
+                    message="Bounded credential listing is unavailable",
+                )
+            result = await method(
+                mode=mode,
+                after=after,
+                limit=limit,
+                status=status,
+                error_code=error_code,
+                cooldown=cooldown,
+                preview=preview,
+                tier=tier,
+                remark=remark,
+            )
+            raw_items = result.get("items") if isinstance(result, dict) else []
+            items = [
+                item
+                for raw in raw_items
+                if (item := self._credential(mode, raw)) is not None
+            ] if isinstance(raw_items, list) else []
+            return CredentialListResponse(
+                **self._metadata(),
+                credentials=items,
+                page=PageInfo(
+                    total=result.get("total") if isinstance(result, dict) else None,
+                    limit=limit,
+                    has_more=result.get("has_more") is True if isinstance(result, dict) else False,
+                    next_cursor=None,
+                    next_after=result.get("next_after") if isinstance(result, dict) else None,
+                ),
             )
         start = _decode_cursor(cursor) if cursor is not None else (offset or 0)
         result = await self._all_summaries(mode)
@@ -458,6 +516,42 @@ class ManagementService:
                 has_more=has_more,
                 next_cursor=_encode_cursor(start + limit) if has_more else None,
             ),
+        )
+
+    async def credential_detail(
+        self, *, mode: str, filename: str
+    ) -> CredentialDetailResponse:
+        self._validate_write_target(mode, filename)
+        storage = await self._storage()
+        backend = getattr(storage, "_backend", None)
+        method = getattr(backend, "management_credential_detail", None)
+        if not callable(method):
+            raise ManagementApiError(
+                status_code=501,
+                code="CAPABILITY_NOT_SUPPORTED",
+                message="Credential detail is unavailable",
+            )
+        raw = await method(mode=mode, filename=filename)
+        if not isinstance(raw, dict):
+            raise ManagementApiError(
+                status_code=404,
+                code="CREDENTIAL_NOT_FOUND",
+                message="Credential was not found",
+            )
+        credential = self._credential(mode, raw.get("credential"))
+        if credential is None:
+            raise ManagementApiError(
+                status_code=500,
+                code="INTERNAL_ERROR",
+                message="Credential metadata is invalid",
+            )
+        return CredentialDetailResponse(
+            **self._metadata(),
+            credential=credential,
+            state_token=raw["state_token"],
+            observed_at=raw["observed_at"],
+            metadata_complete=raw.get("metadata_complete") is True,
+            missing_fields=raw.get("missing_fields", []),
         )
 
     async def stats(self, *, mode: str, window: str, group_by: str) -> StatsResponse:
@@ -867,6 +961,23 @@ class ManagementService:
         elif action == "quota":
             result = self._quota_result(payload)
         elif action == "test":
+            upstream_status = (
+                status_code
+                if isinstance(status_code, int) and 100 <= status_code <= 599
+                else None
+            )
+            if upstream_status == 200:
+                classification = "success"
+            elif upstream_status == 429:
+                classification = "rate_limited"
+            elif upstream_status in (401, 403):
+                classification = "authentication_failed"
+            elif upstream_status is not None and upstream_status >= 500:
+                classification = "upstream_error"
+            elif upstream_status is not None:
+                classification = "rejected"
+            else:
+                classification = "unknown"
             result = {
                 "kind": "test",
                 "outcome": "passed" if payload.get("success") is True else "failed",
@@ -876,6 +987,9 @@ class ManagementService:
                 if isinstance(raw.get("latency_ms"), (int, float))
                 and not isinstance(raw.get("latency_ms"), bool)
                 else None,
+                "upstream_status": upstream_status,
+                "classification": classification,
+                "call_succeeded": upstream_status == 200,
             }
         elif action == "risk_check":
             result = self._risk_result(payload)
@@ -1044,6 +1158,21 @@ class ManagementService:
                 code="CAPABILITY_NOT_SUPPORTED",
                 message="Credential action is unavailable for this mode",
             )
+        if request.action == "enable" and request.parameters and mode != "geminicli":
+            raise ManagementApiError(
+                status_code=501,
+                code="CAPABILITY_NOT_SUPPORTED",
+                message="Conditional enable is unavailable for this mode",
+            )
+        conditional_enable = request.action == "enable" and bool(request.parameters)
+        if conditional_enable and "credential.enable.conditional" not in self._read_capabilities(
+            backend, storage.get_backend_type()
+        ):
+            raise ManagementApiError(
+                status_code=501,
+                code="CAPABILITY_NOT_SUPPORTED",
+                message="Conditional credential enable is unavailable",
+            )
         fingerprint = self._fingerprint(
             "action",
             {
@@ -1080,7 +1209,7 @@ class ManagementService:
             credential_key = f"{mode}:{filename}"
             async with _keyed_lock(_CREDENTIAL_LOCKS, credential_key):
                 exists, state = await self._current_state(storage, mode, filename)
-                if recovering and self._target_confirmed(
+                if recovering and not conditional_enable and self._target_confirmed(
                     request.action, request.parameters, exists, state
                 ):
                     response = self._action_success(
@@ -1142,7 +1271,60 @@ class ManagementService:
                             },
                         )
                         raise error
-                    if request.action in ACTIVE_ACTIONS:
+                    if conditional_enable:
+                        outcome = await backend.management_conditional_enable(
+                            mode=mode,
+                            filename=filename,
+                            expected_state_token=request.parameters["expected_state_token"],
+                            required_models=request.parameters["required_models"],
+                        )
+                        if not isinstance(outcome, dict) or outcome.get("status") != "enabled":
+                            reason = (
+                                outcome.get("reason")
+                                if isinstance(outcome, dict)
+                                and isinstance(outcome.get("reason"), str)
+                                else "precondition_failed"
+                            )
+                            if reason == "credential_not_found":
+                                error = ManagementApiError(
+                                    status_code=404,
+                                    code="CREDENTIAL_NOT_FOUND",
+                                    message="Credential was not found",
+                                )
+                            else:
+                                error = ManagementApiError(
+                                    status_code=409,
+                                    code="CONFLICT",
+                                    message="Conditional enable precondition failed",
+                                    retryable=reason
+                                    in {"state_token_mismatch", "active_cooldown"},
+                                    details={"reason": reason},
+                                )
+                            await self._save_idempotency(
+                                storage,
+                                request.idempotency_key,
+                                {
+                                    "fingerprint": fingerprint,
+                                    "state": "completed",
+                                    "error": {
+                                        "status_code": error.status_code,
+                                        **error.payload,
+                                    },
+                                },
+                            )
+                            raise error
+                        exists, state = await self._current_state(storage, mode, filename)
+                        response = self._action_success(
+                            mode=mode,
+                            filename=filename,
+                            action=request.action,
+                            state=state,
+                            no_change=False,
+                            side_effects=[
+                                SideEffect(kind="credential_state_updated", occurred=True)
+                            ],
+                        )
+                    elif request.action in ACTIVE_ACTIONS:
                         try:
                             result, no_change, side_effects = (
                                 await self._execute_active_action(

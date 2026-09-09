@@ -886,6 +886,9 @@ async def test_active_capabilities_modes_results_and_replay_are_safe(monkeypatch
     assert errors.result.model_dump() == {"kind": "errors", "entries": []}
     assert tested.result.outcome == "failed"
     assert tested.result.model_name == "fixture-model"
+    assert tested.result.upstream_status is None
+    assert tested.result.classification == "unknown"
+    assert tested.result.call_succeeded is False
     assert risk.result.model_dump() == {
         "kind": "risk",
         "level": "low",

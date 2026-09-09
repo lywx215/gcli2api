@@ -20,8 +20,8 @@
             "type": "string"
           },
           "schema_version": {
-            "const": "1.3",
-            "default": "1.3",
+            "const": "1.4",
+            "default": "1.4",
             "title": "Schema Version",
             "type": "string"
           },
@@ -228,8 +228,8 @@
             "type": "string"
           },
           "schema_version": {
-            "const": "1.3",
-            "default": "1.3",
+            "const": "1.4",
+            "default": "1.4",
             "title": "Schema Version",
             "type": "string"
           },
@@ -365,8 +365,8 @@
             "type": "string"
           },
           "schema_version": {
-            "const": "1.3",
-            "default": "1.3",
+            "const": "1.4",
+            "default": "1.4",
             "title": "Schema Version",
             "type": "string"
           },
@@ -516,6 +516,65 @@
         "title": "CredentialBatchActionResult",
         "type": "object"
       },
+      "CredentialDetailResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "credential": {
+            "$ref": "#/components/schemas/CredentialSummary"
+          },
+          "generated_at": {
+            "title": "Generated At",
+            "type": "string"
+          },
+          "metadata_complete": {
+            "title": "Metadata Complete",
+            "type": "boolean"
+          },
+          "missing_fields": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Missing Fields",
+            "type": "array"
+          },
+          "observed_at": {
+            "title": "Observed At",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "1.4",
+            "default": "1.4",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "server_version": {
+            "title": "Server Version",
+            "type": "string"
+          },
+          "state_token": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "State Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "server_version",
+          "revision",
+          "generated_at",
+          "credential",
+          "state_token",
+          "observed_at",
+          "metadata_complete",
+          "missing_fields"
+        ],
+        "title": "CredentialDetailResponse",
+        "type": "object"
+      },
       "CredentialListResponse": {
         "additionalProperties": false,
         "properties": {
@@ -538,8 +597,8 @@
             "type": "string"
           },
           "schema_version": {
-            "const": "1.3",
-            "default": "1.3",
+            "const": "1.4",
+            "default": "1.4",
             "title": "Schema Version",
             "type": "string"
           },
@@ -1032,6 +1091,17 @@
             "title": "Limit",
             "type": "integer"
           },
+          "next_after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next After"
+          },
           "next_cursor": {
             "anyOf": [
               {
@@ -1325,8 +1395,8 @@
             "type": "string"
           },
           "schema_version": {
-            "const": "1.3",
-            "default": "1.3",
+            "const": "1.4",
+            "default": "1.4",
             "title": "Schema Version",
             "type": "string"
           },
@@ -1388,8 +1458,8 @@
             "type": "string"
           },
           "schema_version": {
-            "const": "1.3",
-            "default": "1.3",
+            "const": "1.4",
+            "default": "1.4",
             "title": "Schema Version",
             "type": "string"
           },
@@ -1415,6 +1485,22 @@
       "TestActionResult": {
         "additionalProperties": false,
         "properties": {
+          "call_succeeded": {
+            "title": "Call Succeeded",
+            "type": "boolean"
+          },
+          "classification": {
+            "enum": [
+              "success",
+              "rate_limited",
+              "authentication_failed",
+              "rejected",
+              "upstream_error",
+              "unknown"
+            ],
+            "title": "Classification",
+            "type": "string"
+          },
           "kind": {
             "const": "test",
             "default": "test",
@@ -1453,10 +1539,25 @@
             ],
             "title": "Outcome",
             "type": "string"
+          },
+          "upstream_status": {
+            "anyOf": [
+              {
+                "maximum": 599.0,
+                "minimum": 100.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upstream Status"
           }
         },
         "required": [
-          "outcome"
+          "outcome",
+          "classification",
+          "call_succeeded"
         ],
         "title": "TestActionResult",
         "type": "object"
@@ -1511,7 +1612,7 @@
   },
   "info": {
     "title": "gcli2api Management API",
-    "version": "management-schema-1.3"
+    "version": "management-schema-1.4"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -1674,6 +1775,22 @@
                 }
               ],
               "title": "Offset"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
             }
           },
           {
@@ -2017,6 +2134,142 @@
           }
         ],
         "summary": "Credential Batch Action",
+        "tags": [
+          "Management API v1"
+        ]
+      }
+    },
+    "/management/v1/credentials/{mode}/{filename}": {
+      "get": {
+        "operationId": "credential_detail_management_v1_credentials__mode___filename__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "mode",
+            "required": true,
+            "schema": {
+              "title": "Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "filename",
+            "required": true,
+            "schema": {
+              "title": "Filename",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Implemented"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Credential Detail",
         "tags": [
           "Management API v1"
         ]

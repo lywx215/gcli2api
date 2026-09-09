@@ -8,6 +8,7 @@ from src.management.schemas import (
     CapabilitiesResponse,
     CredentialActionResponse,
     CredentialBatchActionResponse,
+    CredentialDetailResponse,
     CredentialListResponse,
     PageInfo,
     StatsCounts,
@@ -71,6 +72,34 @@ class FakeManagementService:
             daily=[],
         )
 
+    async def credential_detail(self, *, mode: str, filename: str) -> CredentialDetailResponse:
+        return CredentialDetailResponse(
+            **self.metadata,
+            credential={
+                "id": f"{mode}:{filename}",
+                "mode": mode,
+                "filename": filename,
+                "user_email": "fixture@example.invalid",
+                "status": "disabled",
+                "health_status": "healthy",
+                "error_codes": [],
+                "last_success": None,
+                "model_cooldowns": {},
+                "tier": "enterprise",
+                "preview": True,
+                "enable_credit": None,
+                "success_count": 0,
+                "failure_count": 0,
+                "cycle_stats": {},
+                "last_cycle_stats": {},
+                "remark": "",
+            },
+            state_token="a" * 64,
+            observed_at="2026-09-09T12:00:00Z",
+            metadata_complete=True,
+            missing_fields=[],
+        )
+
     async def execute_action(self, *, mode, filename, request) -> CredentialActionResponse:
         return CredentialActionResponse(
             **self.metadata,
@@ -112,9 +141,11 @@ def test_management_api_is_disabled_for_every_path_without_token(monkeypatch) ->
     client = build_client()
 
     capabilities = client.get("/management/v1/capabilities")
+    detail = client.get("/management/v1/credentials/geminicli/fixture.json")
     unknown = client.get("/management/v1/not-implemented")
 
     assert capabilities.status_code == 503
+    assert detail.status_code == 503
     assert capabilities.json()["error"]["code"] == "MANAGEMENT_API_DISABLED"
     assert unknown.status_code == 503
     for method in ("head", "options", "post", "put", "patch", "delete"):
@@ -153,7 +184,7 @@ def test_management_success_envelope_and_validation_are_contract_shaped(monkeypa
     )
 
     assert success.status_code == 200
-    assert success.json()["schema_version"] == "1.3"
+    assert success.json()["schema_version"] == "1.4"
     assert success.headers["cache-control"] == "no-store"
     assert invalid.status_code == 400
     assert invalid.json()["error"]["code"] == "INVALID_ACTION"
@@ -249,3 +280,25 @@ def test_management_batch_is_limited_to_one_hundred_items(monkeypatch) -> None:
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "INVALID_ACTION"
+
+
+def test_detail_and_after_are_additive_and_pagination_modes_are_exclusive(monkeypatch) -> None:
+    monkeypatch.setenv("NODE_MANAGEMENT_TOKEN", "fixture-management-token")
+    client = build_client()
+    headers = {"Authorization": "Bearer fixture-management-token"}
+
+    detail = client.get(
+        "/management/v1/credentials/geminicli/fixture.json", headers=headers
+    )
+    first_page = client.get(
+        "/management/v1/credentials?mode=geminicli&after=", headers=headers
+    )
+    invalid = client.get(
+        "/management/v1/credentials?mode=geminicli&after=a.json&offset=0",
+        headers=headers,
+    )
+
+    assert detail.status_code == 200
+    assert detail.json()["state_token"] == "a" * 64
+    assert first_page.status_code == 200
+    assert invalid.status_code == 400

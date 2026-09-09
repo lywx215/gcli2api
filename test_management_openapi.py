@@ -16,6 +16,7 @@ def test_management_openapi_has_reviewed_paths_and_no_secret_fields() -> None:
         "/management/v1/capabilities",
         "/management/v1/summary",
         "/management/v1/credentials",
+        "/management/v1/credentials/{mode}/{filename}",
         "/management/v1/stats",
         "/management/v1/credentials/{mode}/{filename}/actions",
         "/management/v1/credentials/batch-actions",

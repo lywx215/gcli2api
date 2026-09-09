@@ -18,6 +18,7 @@ from .schemas import (
     CredentialActionResponse,
     CredentialBatchActionRequest,
     CredentialBatchActionResponse,
+    CredentialDetailResponse,
     CredentialListResponse,
     ErrorResponse,
     StatsResponse,
@@ -72,6 +73,7 @@ async def credentials(
     mode: str,
     cursor: str | None = None,
     offset: int | None = None,
+    after: str | None = None,
     limit: int = 100,
     status: str | None = None,
     error_code: int | None = None,
@@ -80,6 +82,12 @@ async def credentials(
     tier: str | None = None,
     remark: str | None = None,
 ) -> CredentialListResponse:
+    if sum(value is not None for value in (cursor, offset, after)) > 1:
+        raise ManagementApiError(
+            status_code=400,
+            code="INVALID_ACTION",
+            message="after, cursor and offset cannot be combined",
+        )
     if status not in (None, "enabled", "disabled", "permanent_disabled"):
         raise ManagementApiError(
             status_code=400,
@@ -96,6 +104,7 @@ async def credentials(
         mode=mode,
         cursor=cursor,
         offset=offset,
+        after=after,
         limit=limit,
         status=status,
         error_code=error_code,
@@ -104,6 +113,19 @@ async def credentials(
         tier=tier,
         remark=remark,
     )
+
+
+@router.get(
+    "/credentials/{mode}/{filename}",
+    response_model=CredentialDetailResponse,
+    responses=ERROR_RESPONSES,
+)
+async def credential_detail(
+    mode: str,
+    filename: str,
+    service: Annotated[ManagementService, Depends(get_management_service)],
+) -> CredentialDetailResponse:
+    return await service.credential_detail(mode=mode, filename=filename)
 
 
 @router.get("/stats", response_model=StatsResponse, responses=ERROR_RESPONSES)

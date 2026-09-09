@@ -2,7 +2,7 @@
 
 状态：**Draft for Review**
 
-路线图版本：`implementation-roadmap-1.3`（2026-08-31）
+路线图版本：`implementation-roadmap-1.4`（2026-09-09）
 
 ## 1. 目的和权威性
 
@@ -467,6 +467,38 @@ PR统一修改。
 - 范围外发现进入单独记录，不能塞进当前任务或下一任务的可执行动作。
 
 ## 9. 独立后续轨道
+
+### SUBS-LINK-20260909：桌面订阅管理节点安全增量
+
+状态：`in_progress`。用户已明确启动；节点实现从`dev8`提交`7b1c0f8`创建，使用临时SQLite
+和provider mock验证，删除提交即可回滚。该工作项独立于既有Web manager的`MGMT-*`范围，
+不会把桌面数据库、任务或运行时并入manager。
+
+目标：为独立桌面订阅管理模块提供有界读取、精确状态观察、数据库原子条件启用和精确测试
+结果，使桌面编排器无需读取节点SQLite或凭证正文即可安全挑选并复核候选凭证。
+
+gcli2api范围：
+
+- Management schema 1.4以可选字段、可选参数、新GET路径和独立capability向后兼容扩展；
+- SQLite实现按稳定`filename`排序的真正SQL keyset分页，不先把全表装入内存；
+- 提供只含安全摘要的单凭证详情、状态令牌、观察时间和元数据完整性；
+- SQLite在单一`BEGIN IMMEDIATE`事务内校验状态令牌、凭证替换、禁用/永久禁用、403、
+  健康/隔离状态及所有`required_models`冷却，再执行启用；
+- 测试结果保留旧`outcome`，并增加真实上游HTTP状态、分类和仅HTTP 200为真的
+  `call_succeeded`；
+- 只有具备实际安全实现的后端声明`credential.list.bounded`、`credential.detail`、
+  `credential.enable.conditional`；精确测试实现声明`credential.test.precise`。
+
+排除：修改既有`MGMT-*`目标、GitHub Actions、部署、生产数据库或Volume、真实Token/凭证、
+Google调用、删除凭证、清除冷却、购买席位、项目创建、自动浏览器授权，以及为无原子实现的
+PostgreSQL/MySQL/MongoDB提前声明数据库能力。
+
+验收：临时SQLite覆盖分页稳定性、旧offset/cursor客户端、详情脱敏、状态及凭证替换竞态、
+并发条件启用、缺失字段、403、永久禁用、检查/风险/人工隔离、目标模型冷却、API禁用和
+测试200/429；Legacy`/creds/*`与原Management请求保持兼容；OpenAPI与本契约一致。
+
+回滚：回滚本工作项提交；旧客户端因不请求新字段、参数和路径而不受影响；其他存储后端从未
+声明前三项新能力，无需数据迁移或恢复。
 
 ### NAPI-001：new-api集成规划
 

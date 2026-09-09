@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiosqlite
@@ -766,6 +767,331 @@ class SQLiteManager:
         except Exception as e:
             log.error(f"Error listing credentials: {e}")
             return []
+
+    @staticmethod
+    def _management_summary_row(mode: str, row: aiosqlite.Row) -> Dict[str, Any]:
+        def parsed_json(name: str, fallback: Any) -> Any:
+            raw = row[name]
+            try:
+                return json.loads(raw) if isinstance(raw, str) else fallback
+            except (TypeError, ValueError):
+                return fallback
+
+        cooldowns = parsed_json("model_cooldowns", {})
+        now = time.time()
+        active_cooldowns = {
+            str(model): until
+            for model, until in cooldowns.items()
+            if isinstance(until, (int, float))
+            and not isinstance(until, bool)
+            and until > now
+        } if isinstance(cooldowns, dict) else {}
+        result: Dict[str, Any] = {
+            "filename": row["filename"],
+            "disabled": bool(row["disabled"]),
+            "permanent_disabled": bool(row["permanent_disabled"]),
+            "error_codes": parsed_json("error_codes", []),
+            "last_success": row["last_success"],
+            "user_email": row["user_email"],
+            "model_cooldowns": active_cooldowns,
+            "tier": row["tier"],
+            "success_count": row["success_count"],
+            "failure_count": row["failure_count"],
+            "cycle_stats": parsed_json("cycle_stats", {}),
+            "last_cycle_stats": parsed_json("last_cycle_stats", {}),
+            "remark": row["remark"],
+        }
+        if mode == "geminicli":
+            result.update(
+                preview=bool(row["preview"]),
+                health_status=row["health_status"],
+                quarantine_reason=row["quarantine_reason"],
+                probe_stage=row["probe_stage"],
+                next_probe_at=row["next_probe_at"],
+                health_check_started_at=row["health_check_started_at"],
+                health_state_version=row["health_state_version"],
+            )
+        else:
+            result["enable_credit"] = bool(row["enable_credit"])
+        return result
+
+    async def management_list_credentials_bounded(
+        self,
+        *,
+        mode: str,
+        after: str,
+        limit: int,
+        status: Optional[str] = None,
+        error_code: Optional[int] = None,
+        cooldown: Optional[bool] = None,
+        preview: Optional[bool] = None,
+        tier: Optional[str] = None,
+        remark: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """SQL keyset page used only by the bounded Management capability."""
+        self._ensure_initialized()
+        table_name = self._get_table_name(mode)
+        predicates: list[str] = []
+        params: list[Any] = []
+        if status == "enabled":
+            predicates.append("COALESCE(disabled, 0) = 0 AND COALESCE(permanent_disabled, 0) = 0")
+        elif status == "disabled":
+            predicates.append("COALESCE(disabled, 0) = 1 AND COALESCE(permanent_disabled, 0) = 0")
+        elif status == "permanent_disabled":
+            predicates.append("COALESCE(permanent_disabled, 0) = 1")
+        if error_code is not None:
+            predicates.append(
+                "json_valid(error_codes) AND EXISTS "
+                "(SELECT 1 FROM json_each(error_codes) "
+                "WHERE type = 'integer' AND value = ?)"
+            )
+            params.append(error_code)
+        if cooldown is not None:
+            expression = (
+                "json_valid(model_cooldowns) AND EXISTS "
+                "(SELECT 1 FROM json_each(model_cooldowns) "
+                "WHERE typeof(value) IN ('integer','real') AND value > ?)"
+            )
+            predicates.append(
+                expression
+                if cooldown
+                else "json_valid(model_cooldowns) AND NOT EXISTS "
+                "(SELECT 1 FROM json_each(model_cooldowns) "
+                "WHERE typeof(value) IN ('integer','real') AND value > ?)"
+            )
+            params.append(time.time())
+        if preview is not None:
+            if mode != "geminicli":
+                predicates.append("0 = 1")
+            else:
+                predicates.append("COALESCE(preview, 1) = ?")
+                params.append(int(preview))
+        if tier is not None:
+            predicates.append("tier = ?")
+            params.append(tier)
+        if remark is not None:
+            predicates.append("remark = ?")
+            params.append(remark)
+        filter_sql = " AND ".join(predicates) if predicates else "1 = 1"
+        if mode == "geminicli":
+            columns = """
+                filename, disabled, permanent_disabled, error_codes, last_success,
+                user_email, model_cooldowns, tier, success_count, failure_count,
+                cycle_stats, last_cycle_stats, remark, preview,
+                health_status, quarantine_reason, probe_stage, next_probe_at,
+                health_check_started_at, health_state_version,
+                NULL AS enable_credit
+            """
+        else:
+            columns = """
+                filename, disabled, permanent_disabled, error_codes, last_success,
+                user_email, model_cooldowns, tier, success_count, failure_count,
+                cycle_stats, last_cycle_stats, remark, NULL AS preview,
+                NULL AS health_status, NULL AS quarantine_reason,
+                NULL AS probe_stage, NULL AS next_probe_at,
+                NULL AS health_check_started_at, NULL AS health_state_version,
+                enable_credit
+            """
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                f"SELECT COUNT(*) AS amount FROM {table_name} WHERE {filter_sql}",
+                params,
+            ) as cursor:
+                total_row = await cursor.fetchone()
+            page_params = [*params, after, limit + 1]
+            async with db.execute(
+                f"SELECT {columns} FROM {table_name} "
+                f"WHERE {filter_sql} AND filename > ? "
+                "ORDER BY filename COLLATE BINARY LIMIT ?",
+                page_params,
+            ) as cursor:
+                rows = await cursor.fetchall()
+        has_more = len(rows) > limit
+        selected = rows[:limit]
+        return {
+            "items": [self._management_summary_row(mode, row) for row in selected],
+            "total": int(total_row["amount"]) if total_row is not None else None,
+            "has_more": has_more,
+            "next_after": selected[-1]["filename"] if has_more and selected else None,
+        }
+
+    async def management_credential_detail(
+        self, *, mode: str, filename: str
+    ) -> Optional[Dict[str, Any]]:
+        self._ensure_initialized()
+        table_name = self._get_table_name(mode)
+        columns = """
+            filename, credential_data, disabled, permanent_disabled, error_codes,
+            last_success, user_email, model_cooldowns, tier, success_count,
+            failure_count, cycle_stats, last_cycle_stats, remark
+        """
+        if mode == "geminicli":
+            columns += """, preview, health_status, quarantine_reason, probe_stage,
+                next_probe_at, health_check_started_at, health_state_version,
+                NULL AS enable_credit"""
+        else:
+            columns += """, NULL AS preview, NULL AS health_status,
+                NULL AS quarantine_reason, NULL AS probe_stage,
+                NULL AS next_probe_at, NULL AS health_check_started_at,
+                NULL AS health_state_version, enable_credit"""
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                f"SELECT {columns} FROM {table_name} WHERE filename = ?", (filename,)
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        state = self._management_summary_row(mode, row)
+        missing: list[str] = []
+        try:
+            credential = json.loads(row["credential_data"])
+            if not isinstance(credential, dict):
+                missing.append("credential_identity")
+        except (TypeError, ValueError):
+            missing.append("credential_identity")
+        email = row["user_email"]
+        if not isinstance(email, str) or email.count("@") != 1:
+            missing.append("user_email")
+        for name, expected_type in (("error_codes", list), ("model_cooldowns", dict)):
+            try:
+                value = json.loads(row[name])
+            except (TypeError, ValueError):
+                value = None
+            if not isinstance(value, expected_type):
+                missing.append(name)
+        if mode == "geminicli" and (
+            not isinstance(row["health_status"], str)
+            or not isinstance(row["health_state_version"], int)
+            or row["health_state_version"] <= 0
+        ):
+            missing.append("health_status")
+        from src.management.state_token import credential_state_token
+
+        observed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
+            "+00:00", "Z"
+        )
+        return {
+            "credential": state,
+            "state_token": credential_state_token(
+                mode=mode,
+                filename=filename,
+                credential_data=row["credential_data"],
+                state=state,
+            ),
+            "observed_at": observed_at,
+            "metadata_complete": not missing,
+            "missing_fields": sorted(set(missing)),
+        }
+
+    async def management_conditional_enable(
+        self,
+        *,
+        mode: str,
+        filename: str,
+        expected_state_token: str,
+        required_models: list[str],
+    ) -> Dict[str, str]:
+        """Validate and enable in one SQLite write transaction."""
+        if mode != "geminicli":
+            return {"reason": "unsupported_mode"}
+        self._ensure_initialized()
+        table_name = self._get_table_name(mode)
+        columns = """
+            filename, credential_data, disabled, permanent_disabled, error_codes,
+            last_success, user_email, model_cooldowns, tier, success_count,
+            failure_count, cycle_stats, last_cycle_stats, remark, preview,
+            health_status, quarantine_reason, probe_stage, next_probe_at,
+            health_check_started_at, health_state_version,
+            NULL AS enable_credit
+        """
+        from src.management.state_token import credential_state_token
+
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            try:
+                await db.execute("BEGIN IMMEDIATE")
+                async with db.execute(
+                    f"SELECT {columns} FROM {table_name} WHERE filename = ?", (filename,)
+                ) as cursor:
+                    row = await cursor.fetchone()
+                if row is None:
+                    await db.rollback()
+                    return {"reason": "credential_not_found"}
+                state = self._management_summary_row(mode, row)
+                token = credential_state_token(
+                    mode=mode,
+                    filename=filename,
+                    credential_data=row["credential_data"],
+                    state=state,
+                )
+                if token != expected_state_token:
+                    await db.rollback()
+                    return {"reason": "state_token_mismatch"}
+                try:
+                    material = json.loads(row["credential_data"])
+                    error_codes = json.loads(row["error_codes"])
+                    cooldowns = json.loads(row["model_cooldowns"])
+                except (TypeError, ValueError):
+                    await db.rollback()
+                    return {"reason": "incomplete_metadata"}
+                email = row["user_email"]
+                if (
+                    not isinstance(material, dict)
+                    or not isinstance(email, str)
+                    or email.count("@") != 1
+                    or not isinstance(error_codes, list)
+                    or any(not isinstance(code, int) or isinstance(code, bool) for code in error_codes)
+                    or not isinstance(cooldowns, dict)
+                ):
+                    await db.rollback()
+                    return {"reason": "incomplete_metadata"}
+                if not bool(row["disabled"]):
+                    await db.rollback()
+                    return {"reason": "not_disabled"}
+                if bool(row["permanent_disabled"]):
+                    await db.rollback()
+                    return {"reason": "permanently_disabled"}
+                if 403 in error_codes:
+                    await db.rollback()
+                    return {"reason": "forbidden_error"}
+                if row["health_status"] != "healthy" or row["quarantine_reason"] not in (None, ""):
+                    await db.rollback()
+                    return {"reason": "unsafe_health"}
+                if not isinstance(row["health_state_version"], int) or row["health_state_version"] <= 0:
+                    await db.rollback()
+                    return {"reason": "incomplete_metadata"}
+                now = time.time()
+                for model in required_models:
+                    cooldown = cooldowns.get(model)
+                    if cooldown is None:
+                        continue
+                    if (
+                        isinstance(cooldown, bool)
+                        or not isinstance(cooldown, (int, float))
+                    ):
+                        await db.rollback()
+                        return {"reason": "incomplete_metadata"}
+                    if cooldown > now:
+                        await db.rollback()
+                        return {"reason": "active_cooldown"}
+                result = await db.execute(
+                    f"""UPDATE {table_name}
+                        SET disabled = 0,
+                            health_state_version = COALESCE(health_state_version, 0) + 1,
+                            updated_at = unixepoch()
+                        WHERE filename = ?""",
+                    (filename,),
+                )
+                if result.rowcount != 1:
+                    await db.rollback()
+                    return {"reason": "state_token_mismatch"}
+                await db.commit()
+                return {"status": "enabled"}
+            except Exception:
+                await db.rollback()
+                raise
 
     async def delete_credential(self, filename: str, mode: str = "geminicli") -> bool:
         """删除凭证"""

@@ -2,7 +2,7 @@
 
 状态：**Draft for Review**
 
-契约版本：`management-schema 1.3`
+契约版本：`management-schema 1.4`
 
 基础路径：`/management/v1`
 
@@ -34,7 +34,7 @@ Authorization: Bearer <NODE_MANAGEMENT_TOKEN>
 
 ```json
 {
-  "schema_version": "1.3",
+  "schema_version": "1.4",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z"
@@ -102,7 +102,10 @@ HTTP状态映射：
 ```text
 node.summary
 credential.list
+credential.list.bounded
+credential.detail
 credential.enable
+credential.enable.conditional
 credential.disable
 credential.permanent_disable
 credential.delete
@@ -114,6 +117,7 @@ credential.credit.disable
 credential.quota
 credential.errors
 credential.test
+credential.test.precise
 credential.risk_check
 credential.batch_action
 credential.cooldown.sync
@@ -133,7 +137,7 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 
 ```json
 {
-  "schema_version": "1.3",
+  "schema_version": "1.4",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z",
@@ -157,7 +161,7 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 
 ```json
 {
-  "schema_version": "1.3",
+  "schema_version": "1.4",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z",
@@ -189,6 +193,7 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 
 - `mode=geminicli|antigravity`
 - `cursor`或`offset`
+- `after`：按稳定`filename`二进制顺序的exclusive keyset；空字符串表示第一页
 - `limit`，最大1000
 - `status`
 - `error_code`
@@ -201,7 +206,7 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 
 ```json
 {
-  "schema_version": "1.3",
+  "schema_version": "1.4",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z",
@@ -215,7 +220,11 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 }
 ```
 
-使用`offset`时`next_cursor`仍可为`null`；使用`cursor`时不得同时传`offset`。`total`无法
+`after`、`cursor`和`offset`任意两个不得同时出现。`after`模式必须由声明
+`credential.list.bounded`的后端在数据库执行`filename > after`、稳定升序及`limit + 1`
+有界查询，不得先加载全表；此时`next_cursor`为`null`，有下一页时可选`next_after`必须是
+本页最后一行filename，否则为`null`。使用`offset`时`next_cursor`仍可为`null`；使用
+`cursor`时不得同时传`offset`。`total`无法
 低成本准确计算时允许为`null`，但`has_more`必须准确。
 
 `credentials`中的标准凭证摘要：
@@ -243,6 +252,28 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
   "remark": ""
 }
 ```
+
+### 5.1 `GET /credentials/{mode}/{filename}`
+
+仅在声明`credential.detail`时可用。返回单个标准凭证摘要及安全并发元数据：
+
+```json
+{
+  "schema_version": "1.4",
+  "server_version": "1.3.0",
+  "revision": "0123456789abcdef",
+  "generated_at": "2026-09-09T12:00:00Z",
+  "credential": {},
+  "state_token": "64位小写十六进制SHA-256摘要",
+  "observed_at": "2026-09-09T12:00:00Z",
+  "metadata_complete": true,
+  "missing_fields": []
+}
+```
+
+`state_token`必须域分离，并覆盖mode、filename、凭证payload摘要、身份和所有条件启用相关
+状态；不得由可逆内容构成，也不得泄漏凭证正文。凭证payload被替换时令牌必须变化。
+`metadata_complete=false`时`missing_fields`只列安全字段名，调用方不得把未知值视为健康。
 
 状态枚举：`enabled`、`disabled`、`permanent_disabled`。未知健康、Tier或计数使用`null`。
 
@@ -291,6 +322,7 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 | 动作 | parameters |
 |---|---|
 | `set_remark` | `{"remark": "string"}`，最大500字符 |
+| `enable` | 默认`{}`；条件启用为`{"expected_state_token":"sha256", "required_models":["model"]}`，两字段必须同时出现 |
 | `test`、`risk_check` | 可选`{"model_name": "string"}` |
 | `quota` | 可选`{"refresh": true}`，默认`false` |
 | `enable_preview` | 可选且仅允许契约声明的Preview配置字段 |
@@ -311,7 +343,7 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 
 ```json
 {
-  "schema_version": "1.3",
+  "schema_version": "1.4",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z",
@@ -353,6 +385,19 @@ manager从10分钟额度缓存返回结果时可加`cached=true`；节点不得�
 `token_refreshed`、`google_api_called`、`cooldown_updated`、`credential_state_updated`或
 `quota_cache_hit`等稳定kind；不得把上游正文塞入`description`。
 
+声明`credential.test.precise`时，`test`结果在旧`outcome`、`model_name`、`latency_ms`
+之外增加`upstream_status`、`classification`和`call_succeeded`。`classification`为
+`success`、`rate_limited`、`authentication_failed`、`rejected`、`upstream_error`或
+`unknown`；只有实际HTTP 200可令`call_succeeded=true`。为兼容旧客户端，旧`outcome`
+保持原判定，因此历史上payload标记成功的429仍可为`passed`，但新字段必须明确其并未成功。
+
+声明`credential.enable.conditional`时，条件`enable`必须在一个数据库事务内读取并锁定
+当前行、重算`state_token`、确认凭证未替换，并校验：当前明确禁用、非永久禁用、错误码
+完整且不含403、健康明确为`healthy`、不在checking/risk_quarantined/manual_review等隔离
+状态、`required_models`非空且每个目标模型均无有效冷却。任何缺失或未知字段均失败关闭；
+不得用进程内锁替代数据库原子性。状态令牌不匹配或前置条件失败返回409 `CONFLICT`，
+`details.reason`只能返回安全稳定原因；凭证不存在仍返回404。
+
 ## 8. `POST /credentials/batch-actions`
 
 该端点仅在节点声明`credential.batch_action`时可用。单批最多100项；manager仍应按节点
@@ -380,7 +425,7 @@ manager从10分钟额度缓存返回结果时可加`cached=true`；节点不得�
 
 ```json
 {
-  "schema_version": "1.3",
+  "schema_version": "1.4",
   "server_version": "1.3.0",
   "revision": "0123456789abcdef",
   "generated_at": "2026-08-10T12:00:00Z",
