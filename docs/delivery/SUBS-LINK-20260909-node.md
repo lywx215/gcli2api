@@ -36,16 +36,23 @@ permanent disable, active target-model cooldown, non-healthy or isolated state, 
 replacement. No schema migration is required and no production storage was accessed.
 
 Existing `/creds/*`, cursor/offset list requests, empty-parameter enable requests and legacy
-test `outcome` remain supported. Rollback is the single code commit; no data rollback is
-required.
+test `outcome` remain supported. Roll back both feature commits (`4f1e1da`, `d562e3c`) or use
+the original `7b1c0f8` baseline; no data rollback is required.
 
 ## Verification
 
-- Focused Management/OpenAPI/Legacy suite: 44 passed.
-- Full repository suite: 220 passed before the final idempotency-only hardening; the focused
-  suite was rerun after that hardening.
+- Focused Management/OpenAPI/Legacy suite after metadata fix: 45 passed.
+- Parent integration full repository suite at `d562e3c`: 222 passed.
 - OpenAPI baseline check: current.
-- Warnings: existing Pydantic v2 class-config and Starlette/httpx deprecations only.
+- Warnings: existing Pydantic v2 class-config and Starlette/httpx deprecations; local pytest
+  cache permission warning did not affect the 222 passing tests.
+
+Desktop counterpart: `G:/code/gemini30/gemini-manager`, branch
+`codex/subscription-link-integration`, work item `SUBS-LINK-20260909`. Desktop protocol
+and operations are in `docs/SUBSCRIPTION_MANAGEMENT_IMPLEMENTATION.md` and
+`docs/SUBSCRIPTION_MANAGEMENT_OPERATIONS.md`. This is not a handoff to the separate Web
+manager and does not dispatch an MGMT workflow. Both repositories are integrated locally;
+the original `dev8` branch and panel version remain unchanged.
 
 No image was built, no deployment or GitHub Actions was run, and no real token, credential,
 provider, Google account or production database was accessed.
