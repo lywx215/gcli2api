@@ -714,6 +714,32 @@
             ],
             "title": "Last Success"
           },
+          "metadata_complete": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata Complete"
+          },
+          "missing_fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missing Fields"
+          },
           "mode": {
             "enum": [
               "geminicli",
@@ -736,6 +762,17 @@
             ],
             "title": "Model Cooldowns"
           },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
           "preview": {
             "anyOf": [
               {
@@ -757,6 +794,18 @@
               }
             ],
             "title": "Remark"
+          },
+          "state_token": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State Token"
           },
           "status": {
             "enum": [

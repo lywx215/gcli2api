@@ -12,7 +12,9 @@ Status: implementation complete on a short branch created from `dev8` commit `7b
   those backends.
 - `GET /credentials?mode=...&after=&limit=...` uses an exclusive filename keyset. `after`,
   `cursor` and `offset` are mutually exclusive. When another page exists, `page.next_after`
-  is the last filename returned; `page.next_cursor` is null.
+  is the last filename returned; `page.next_cursor` is null. Each bounded SQLite row also
+  includes `metadata_complete`, `observed_at`, `missing_fields`, and `state_token=null`;
+  callers still fetch detail immediately before a conditional write.
 - `GET /credentials/{mode}/{filename}` returns the safe `CredentialSummary` plus
   `state_token`, `observed_at`, `metadata_complete` and `missing_fields`.
 - Conditional enable uses the existing action route with both `expected_state_token` and

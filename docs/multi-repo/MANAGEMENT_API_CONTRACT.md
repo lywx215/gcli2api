@@ -249,7 +249,11 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
   "failure_count": 101,
   "cycle_stats": {},
   "last_cycle_stats": {},
-  "remark": ""
+  "remark": "",
+  "metadata_complete": true,
+  "observed_at": "2026-09-09T12:00:00Z",
+  "missing_fields": [],
+  "state_token": null
 }
 ```
 
@@ -276,6 +280,12 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 `metadata_complete=false`时`missing_fields`只列安全字段名，调用方不得把未知值视为健康。
 
 状态枚举：`enabled`、`disabled`、`permanent_disabled`。未知健康、Tier或计数使用`null`。
+`metadata_complete`、`observed_at`、`missing_fields`和`state_token`均为schema 1.4可选字段；
+旧后端或Legacy响应可返回`null`，调用方必须视为unknown。声明`credential.list.bounded`的
+SQLite响应必须逐行返回前三项；完整性由同一SQL行内已读取的原始状态和凭证JSON有效性
+派生，未观察健康、无效身份、无效错误码或冷却结构均不得标为完整。列表无需返回
+`state_token`，写操作前仍必须读取单凭证详情。实现不得为这些字段执行N+1详情查询，也不得
+把原始凭证内容加入HTTP响应。
 
 ## 6. `GET /stats`
 

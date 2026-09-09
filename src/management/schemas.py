@@ -81,6 +81,10 @@ class CredentialSummary(StrictModel):
     cycle_stats: dict[str, int] | None
     last_cycle_stats: dict[str, int] | None
     remark: str | None
+    metadata_complete: bool | None = None
+    observed_at: str | None = None
+    missing_fields: list[str] | None = Field(default=None, max_length=32)
+    state_token: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class PageInfo(StrictModel):

@@ -92,6 +92,10 @@ async def test_sqlite_keyset_page_is_stable_bounded_and_filterable(sqlite_servic
     assert first.page.has_more is True
     assert first.page.next_after == "b.json"
     assert first.page.next_cursor is None
+    assert all(item.metadata_complete is True for item in first.credentials)
+    assert all(item.observed_at.endswith("Z") for item in first.credentials)
+    assert all(item.missing_fields == [] for item in first.credentials)
+    assert all(item.state_token is None for item in first.credentials)
     assert [item.filename for item in second.credentials] == ["c.json"]
     assert second.page.has_more is False
     assert second.page.next_after is None
@@ -106,6 +110,8 @@ async def test_detail_is_safe_and_payload_replacement_invalidates_token(sqlite_s
     )
     assert detail.metadata_complete is True
     assert detail.missing_fields == []
+    assert detail.credential.metadata_complete is True
+    assert detail.credential.observed_at is not None
     assert len(detail.state_token) == 64
     assert "fixture-candidate" not in detail.model_dump_json()
 
@@ -129,6 +135,38 @@ async def test_detail_is_safe_and_payload_replacement_invalidates_token(sqlite_s
         )
     assert error.value.status_code == 409
     assert error.value.payload["error"]["details"]["reason"] == "state_token_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_bounded_list_does_not_invent_health_from_unobserved_state(
+    sqlite_service,
+) -> None:
+    service, backend = sqlite_service
+    await store_candidate(
+        backend,
+        "unknown.json",
+        user_email=None,
+        health_status=None,
+        health_state_version=0,
+    )
+    page = await service.credentials(
+        mode="geminicli",
+        after="",
+        cursor=None,
+        offset=None,
+        limit=10,
+        status="disabled",
+        error_code=None,
+        cooldown=False,
+        preview=None,
+        tier=None,
+        remark=None,
+    )
+
+    item = page.credentials[0]
+    assert item.metadata_complete is False
+    assert item.health_status is None
+    assert item.missing_fields == ["health_status", "user_email"]
 
 
 @pytest.mark.asyncio

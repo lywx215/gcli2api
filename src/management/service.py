@@ -400,6 +400,24 @@ class ManagementService:
             cycle_stats=_count_map(raw.get("cycle_stats")),
             last_cycle_stats=_count_map(raw.get("last_cycle_stats")),
             remark=_text(raw.get("remark"), 500),
+            metadata_complete=_bool(raw.get("metadata_complete")),
+            observed_at=_utc(raw.get("observed_at")),
+            missing_fields=(
+                [
+                    value
+                    for value in raw.get("missing_fields", [])[:32]
+                    if isinstance(value, str) and value
+                ]
+                if isinstance(raw.get("missing_fields"), list)
+                else None
+            ),
+            state_token=(
+                raw.get("state_token")
+                if isinstance(raw.get("state_token"), str)
+                and len(raw.get("state_token")) == 64
+                and all(character in "0123456789abcdef" for character in raw.get("state_token"))
+                else None
+            ),
         )
 
     async def credentials(

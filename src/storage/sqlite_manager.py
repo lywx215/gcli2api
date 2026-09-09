@@ -769,7 +769,51 @@ class SQLiteManager:
             return []
 
     @staticmethod
-    def _management_summary_row(mode: str, row: aiosqlite.Row) -> Dict[str, Any]:
+    def _management_missing_fields(mode: str, row: aiosqlite.Row) -> list[str]:
+        missing: list[str] = []
+        if row["credential_identity_complete"] != 1:
+            missing.append("credential_identity")
+        email = row["user_email"]
+        if not isinstance(email, str) or email.count("@") != 1:
+            missing.append("user_email")
+        if row["disabled"] not in (0, 1):
+            missing.append("disabled")
+        if row["permanent_disabled"] not in (0, 1):
+            missing.append("permanent_disabled")
+        try:
+            error_codes = json.loads(row["error_codes"])
+        except (TypeError, ValueError):
+            error_codes = None
+        if not isinstance(error_codes, list) or any(
+            not isinstance(code, int) or isinstance(code, bool) for code in error_codes
+        ):
+            missing.append("error_codes")
+        try:
+            cooldowns = json.loads(row["model_cooldowns"])
+        except (TypeError, ValueError):
+            cooldowns = None
+        if not isinstance(cooldowns, dict) or any(
+            value is not None
+            and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+            )
+            for value in cooldowns.values()
+        ):
+            missing.append("model_cooldowns")
+        if mode == "geminicli" and (
+            not isinstance(row["health_status"], str)
+            or not row["health_status"]
+            or not isinstance(row["health_state_version"], int)
+            or row["health_state_version"] <= 0
+        ):
+            missing.append("health_status")
+        return sorted(set(missing))
+
+    @classmethod
+    def _management_summary_row(
+        cls, mode: str, row: aiosqlite.Row, *, include_observation: bool = False
+    ) -> Dict[str, Any]:
         def parsed_json(name: str, fallback: Any) -> Any:
             raw = row[name]
             try:
@@ -813,6 +857,17 @@ class SQLiteManager:
             )
         else:
             result["enable_credit"] = bool(row["enable_credit"])
+        if include_observation:
+            missing = cls._management_missing_fields(mode, row)
+            result.update(
+                metadata_complete=not missing,
+                observed_at=datetime.now(timezone.utc)
+                .replace(microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                missing_fields=missing,
+                state_token=None,
+            )
         return result
 
     async def management_list_credentials_bounded(
@@ -880,7 +935,10 @@ class SQLiteManager:
                 cycle_stats, last_cycle_stats, remark, preview,
                 health_status, quarantine_reason, probe_stage, next_probe_at,
                 health_check_started_at, health_state_version,
-                NULL AS enable_credit
+                NULL AS enable_credit,
+                CASE WHEN json_valid(credential_data)
+                     THEN json_type(credential_data) = 'object' ELSE 0 END
+                     AS credential_identity_complete
             """
         else:
             columns = """
@@ -890,7 +948,10 @@ class SQLiteManager:
                 NULL AS health_status, NULL AS quarantine_reason,
                 NULL AS probe_stage, NULL AS next_probe_at,
                 NULL AS health_check_started_at, NULL AS health_state_version,
-                enable_credit
+                enable_credit,
+                CASE WHEN json_valid(credential_data)
+                     THEN json_type(credential_data) = 'object' ELSE 0 END
+                     AS credential_identity_complete
             """
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -910,7 +971,10 @@ class SQLiteManager:
         has_more = len(rows) > limit
         selected = rows[:limit]
         return {
-            "items": [self._management_summary_row(mode, row) for row in selected],
+            "items": [
+                self._management_summary_row(mode, row, include_observation=True)
+                for row in selected
+            ],
             "total": int(total_row["amount"]) if total_row is not None else None,
             "has_more": has_more,
             "next_after": selected[-1]["filename"] if has_more and selected else None,
@@ -929,12 +993,18 @@ class SQLiteManager:
         if mode == "geminicli":
             columns += """, preview, health_status, quarantine_reason, probe_stage,
                 next_probe_at, health_check_started_at, health_state_version,
-                NULL AS enable_credit"""
+                NULL AS enable_credit,
+                CASE WHEN json_valid(credential_data)
+                     THEN json_type(credential_data) = 'object' ELSE 0 END
+                     AS credential_identity_complete"""
         else:
             columns += """, NULL AS preview, NULL AS health_status,
                 NULL AS quarantine_reason, NULL AS probe_stage,
                 NULL AS next_probe_at, NULL AS health_check_started_at,
-                NULL AS health_state_version, enable_credit"""
+                NULL AS health_state_version, enable_credit,
+                CASE WHEN json_valid(credential_data)
+                     THEN json_type(credential_data) = 'object' ELSE 0 END
+                     AS credential_identity_complete"""
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
@@ -943,30 +1013,8 @@ class SQLiteManager:
                 row = await cursor.fetchone()
         if row is None:
             return None
-        state = self._management_summary_row(mode, row)
-        missing: list[str] = []
-        try:
-            credential = json.loads(row["credential_data"])
-            if not isinstance(credential, dict):
-                missing.append("credential_identity")
-        except (TypeError, ValueError):
-            missing.append("credential_identity")
-        email = row["user_email"]
-        if not isinstance(email, str) or email.count("@") != 1:
-            missing.append("user_email")
-        for name, expected_type in (("error_codes", list), ("model_cooldowns", dict)):
-            try:
-                value = json.loads(row[name])
-            except (TypeError, ValueError):
-                value = None
-            if not isinstance(value, expected_type):
-                missing.append(name)
-        if mode == "geminicli" and (
-            not isinstance(row["health_status"], str)
-            or not isinstance(row["health_state_version"], int)
-            or row["health_state_version"] <= 0
-        ):
-            missing.append("health_status")
+        state = self._management_summary_row(mode, row, include_observation=True)
+        missing = state["missing_fields"]
         from src.management.state_token import credential_state_token
 
         observed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
@@ -1004,7 +1052,10 @@ class SQLiteManager:
             failure_count, cycle_stats, last_cycle_stats, remark, preview,
             health_status, quarantine_reason, probe_stage, next_probe_at,
             health_check_started_at, health_state_version,
-            NULL AS enable_credit
+            NULL AS enable_credit,
+            CASE WHEN json_valid(credential_data)
+                 THEN json_type(credential_data) = 'object' ELSE 0 END
+                 AS credential_identity_complete
         """
         from src.management.state_token import credential_state_token
 
