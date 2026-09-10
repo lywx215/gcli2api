@@ -194,6 +194,67 @@ async def test_conditional_enable_returns_legacy_action_envelope(sqlite_service)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error_codes", [[403], [403, 403]])
+async def test_conditional_enable_accepts_only_forbidden_candidate_codes(
+    sqlite_service, error_codes
+) -> None:
+    service, backend = sqlite_service
+    await store_candidate(backend, "forbidden-candidate.json", error_codes=error_codes)
+    detail = await service.credential_detail(
+        mode="geminicli", filename="forbidden-candidate.json"
+    )
+
+    response = await service.execute_action(
+        mode="geminicli",
+        filename="forbidden-candidate.json",
+        request=CredentialActionRequest(
+            action="enable",
+            parameters={
+                "expected_state_token": detail.state_token,
+                "required_models": ["gemini-pro"],
+            },
+            idempotency_key=f"conditional-forbidden-{len(error_codes)}-0001",
+        ),
+    )
+
+    assert response.status == "succeeded"
+    assert response.credential.status == "enabled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_codes",
+    [[429], [403, 429], ["403"], [True], {"code": 403}, None, "not-a-list"],
+)
+async def test_conditional_enable_rejects_unsafe_error_codes(
+    sqlite_service, error_codes
+) -> None:
+    service, backend = sqlite_service
+    await store_candidate(backend, "unsafe-errors.json", error_codes=error_codes)
+    detail = await service.credential_detail(
+        mode="geminicli", filename="unsafe-errors.json"
+    )
+
+    with pytest.raises(ManagementApiError) as error:
+        await service.execute_action(
+            mode="geminicli",
+            filename="unsafe-errors.json",
+            request=CredentialActionRequest(
+                action="enable",
+                parameters={
+                    "expected_state_token": detail.state_token,
+                    "required_models": ["gemini-pro"],
+                },
+                idempotency_key=f"conditional-unsafe-{type(error_codes).__name__}-0001",
+            ),
+        )
+
+    assert error.value.status_code == 409
+    assert error.value.payload["error"]["retryable"] is False
+    assert error.value.payload["error"]["details"] == {"reason": "unsafe_error_codes"}
+
+
+@pytest.mark.asyncio
 async def test_conditional_enable_is_atomic_and_only_one_racer_succeeds(sqlite_service) -> None:
     service, backend = sqlite_service
     await store_candidate(backend, "race.json")
@@ -218,7 +279,6 @@ async def test_conditional_enable_is_atomic_and_only_one_racer_succeeds(sqlite_s
     ("updates", "reason"),
     [
         ({"user_email": None}, "incomplete_metadata"),
-        ({"error_codes": [403]}, "forbidden_error"),
         ({"health_status": "checking"}, "unsafe_health"),
         ({"health_status": "risk_quarantined"}, "unsafe_health"),
         ({"quarantine_reason": "manual_review"}, "unsafe_health"),

@@ -482,7 +482,8 @@ gcli2api范围：
 - Management schema 1.4以可选字段、可选参数、新GET路径和独立capability向后兼容扩展；
 - SQLite实现按稳定`filename`排序的真正SQL keyset分页，不先把全表装入内存；
 - 提供只含安全摘要的单凭证详情、状态令牌、观察时间和元数据完整性；
-- SQLite在单一`BEGIN IMMEDIATE`事务内校验状态令牌、凭证替换、禁用/永久禁用、403、
+- SQLite在单一`BEGIN IMMEDIATE`事务内校验状态令牌、凭证替换、禁用/永久禁用、错误码为空
+  或全部为整数403，
   健康/隔离状态及所有`required_models`冷却，再执行启用；
 - 测试结果保留旧`outcome`，并增加真实上游HTTP状态、分类和仅HTTP 200为真的
   `call_succeeded`；
@@ -494,8 +495,9 @@ Google调用、删除凭证、清除冷却、购买席位、项目创建、自�
 PostgreSQL/MySQL/MongoDB提前声明数据库能力。
 
 验收：临时SQLite覆盖分页稳定性、旧offset/cursor客户端、详情脱敏、状态及凭证替换竞态、
-并发条件启用、缺失字段、403、永久禁用、检查/风险/人工隔离、目标模型冷却、API禁用和
-测试200/429；Legacy`/creds/*`与原Management请求保持兼容；OpenAPI与本契约一致。
+并发条件启用、缺失字段、空错误码、仅403、其他或非法错误码、永久禁用、检查/风险/人工
+隔离、目标模型冷却、API禁用和测试200/429；Legacy`/creds/*`与原Management请求保持兼容；
+OpenAPI与本契约一致。
 
 回滚：回滚本工作项提交；旧客户端因不请求新字段、参数和路径而不受影响；其他存储后端从未
 声明前三项新能力，无需数据迁移或恢复。

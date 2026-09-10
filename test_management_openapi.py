@@ -35,3 +35,13 @@ def test_management_openapi_has_reviewed_paths_and_no_secret_fields() -> None:
         for operation in path.values():
             assert "422" not in operation["responses"]
             assert operation["security"] == [{"HTTPBearer": []}]
+
+
+def test_openapi_documents_conditional_enable_error_code_contract() -> None:
+    schema = build_schema()
+
+    description = schema["components"]["schemas"]["CredentialSummary"]["properties"][
+        "error_codes"
+    ]["description"]
+    assert "empty list" in description
+    assert "exclusively integer 403" in description

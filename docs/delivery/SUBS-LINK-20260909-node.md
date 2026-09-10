@@ -1,6 +1,7 @@
 # SUBS-LINK-20260909 node delivery
 
-Status: implementation complete on a short branch created from `dev8` commit `7b1c0f8`.
+Status: the original implementation was created from `dev8` commit `7b1c0f8`, integrated into
+`dev9`, and this compatibility correction is based on `dev9` commit `d971a3f`.
 
 ## Contract
 
@@ -31,18 +32,22 @@ Status: implementation complete on a short branch created from `dev8` commit `7b
 
 SQLite conditional enable executes `BEGIN IMMEDIATE`, reads and validates the current row,
 recomputes the domain-separated state token, and updates the row before committing the same
-transaction. It fails closed for missing identity/health/error/cooldown metadata, 403,
-permanent disable, active target-model cooldown, non-healthy or isolated state, and payload
-replacement. No schema migration is required and no production storage was accessed.
+transaction. It accepts error codes only when the list is empty or every entry is the integer
+403, matching the desktop candidate contract. Any other integer, non-integer or unknown error
+code structure fails closed with the stable safe reason `unsafe_error_codes`. Missing identity,
+health or cooldown metadata, permanent disable, active target-model cooldown, non-healthy or
+isolated state, and payload replacement also fail closed. No schema migration is required and
+no production storage was accessed.
 
 Existing `/creds/*`, cursor/offset list requests, empty-parameter enable requests and legacy
 test `outcome` remain supported. Roll back both feature commits (`4f1e1da`, `d562e3c`) or use
-the original `7b1c0f8` baseline; no data rollback is required.
+the original `7b1c0f8` baseline; the 403 compatibility correction can be reverted independently
+and requires no data rollback.
 
 ## Verification
 
-- Focused Management/OpenAPI/Legacy suite after metadata fix: 45 passed.
-- Parent integration full repository suite at `d562e3c`: 222 passed.
+- Focused conditional-enable, Management API and OpenAPI suite: 34 passed.
+- Full repository suite: 231 passed.
 - OpenAPI baseline check: current.
 - Warnings: existing Pydantic v2 class-config and Starlette/httpx deprecations; local pytest
   cache permission warning did not affect the 222 passing tests.
