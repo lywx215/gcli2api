@@ -403,10 +403,12 @@ manager从10分钟额度缓存返回结果时可加`cached=true`；节点不得�
 
 声明`credential.enable.conditional`时，条件`enable`必须在一个数据库事务内读取并锁定
 当前行、重算`state_token`、确认凭证未替换，并校验：当前明确禁用、非永久禁用、错误码
-完整且不含403、健康明确为`healthy`、不在checking/risk_quarantined/manual_review等隔离
-状态、`required_models`非空且每个目标模型均无有效冷却。任何缺失或未知字段均失败关闭；
+结构完整且为空或全部为整数403、健康明确为`healthy`、不在checking、risk_quarantined、
+manual_review等隔离状态、`required_models`非空且每个目标模型均无有效冷却。任何缺失或
+未知字段均失败关闭；
 不得用进程内锁替代数据库原子性。状态令牌不匹配或前置条件失败返回409 `CONFLICT`，
-`details.reason`只能返回安全稳定原因；凭证不存在仍返回404。
+`details.reason`只能返回安全稳定原因；错误码包含任何非403值、非整数值或未知结构时使用
+`unsafe_error_codes`；凭证不存在仍返回404。
 
 ## 8. `POST /credentials/batch-actions`
 

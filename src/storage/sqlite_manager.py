@@ -1082,31 +1082,38 @@ class SQLiteManager:
                     return {"reason": "state_token_mismatch"}
                 try:
                     material = json.loads(row["credential_data"])
-                    error_codes = json.loads(row["error_codes"])
                     cooldowns = json.loads(row["model_cooldowns"])
                 except (TypeError, ValueError):
                     await db.rollback()
                     return {"reason": "incomplete_metadata"}
+                try:
+                    error_codes = json.loads(row["error_codes"])
+                except (TypeError, ValueError):
+                    await db.rollback()
+                    return {"reason": "unsafe_error_codes"}
                 email = row["user_email"]
                 if (
                     not isinstance(material, dict)
                     or not isinstance(email, str)
                     or email.count("@") != 1
-                    or not isinstance(error_codes, list)
-                    or any(not isinstance(code, int) or isinstance(code, bool) for code in error_codes)
                     or not isinstance(cooldowns, dict)
                 ):
                     await db.rollback()
                     return {"reason": "incomplete_metadata"}
+                if not isinstance(error_codes, list) or any(
+                    not isinstance(code, int)
+                    or isinstance(code, bool)
+                    or code != 403
+                    for code in error_codes
+                ):
+                    await db.rollback()
+                    return {"reason": "unsafe_error_codes"}
                 if not bool(row["disabled"]):
                     await db.rollback()
                     return {"reason": "not_disabled"}
                 if bool(row["permanent_disabled"]):
                     await db.rollback()
                     return {"reason": "permanently_disabled"}
-                if 403 in error_codes:
-                    await db.rollback()
-                    return {"reason": "forbidden_error"}
                 if row["health_status"] != "healthy" or row["quarantine_reason"] not in (None, ""):
                     await db.rollback()
                     return {"reason": "unsafe_health"}

@@ -70,7 +70,12 @@ class CredentialSummary(StrictModel):
     user_email: str | None
     status: Literal["enabled", "disabled", "permanent_disabled"]
     health_status: str | None
-    error_codes: list[int] | None
+    error_codes: list[int] | None = Field(
+        description=(
+            "Observed HTTP error codes. Conditional enable accepts only an empty list "
+            "or a list containing exclusively integer 403 values."
+        )
+    )
     last_success: str | None
     model_cooldowns: dict[str, str] | None
     tier: str | None
