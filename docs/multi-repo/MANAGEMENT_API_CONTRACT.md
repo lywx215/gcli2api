@@ -276,14 +276,16 @@ Preview启用和关闭必须是两个独立能力。当前只有配置Preview能
 ```
 
 `state_token`必须域分离，并覆盖mode、filename、凭证payload摘要、身份和所有条件启用相关
-状态；不得由可逆内容构成，也不得泄漏凭证正文。凭证payload被替换时令牌必须变化。
+状态（禁用、永久禁用和模型冷却）；历史错误、健康与隔离诊断不纳入令牌。不得由可逆内容
+构成，也不得泄漏凭证正文。凭证payload被替换时令牌必须变化。
 `metadata_complete=false`时`missing_fields`只列安全字段名，调用方不得把未知值视为健康。
 
 状态枚举：`enabled`、`disabled`、`permanent_disabled`。未知健康、Tier或计数使用`null`。
 `metadata_complete`、`observed_at`、`missing_fields`和`state_token`均为schema 1.4可选字段；
 旧后端或Legacy响应可返回`null`，调用方必须视为unknown。声明`credential.list.bounded`的
 SQLite响应必须逐行返回前三项；完整性由同一SQL行内已读取的原始状态和凭证JSON有效性
-派生，未观察健康、无效身份、无效错误码或冷却结构均不得标为完整。列表无需返回
+派生，未观察健康、无效身份或冷却结构均不得标为完整；错误码只作诊断，不影响完整性。
+列表无需返回
 `state_token`，写操作前仍必须读取单凭证详情。实现不得为这些字段执行N+1详情查询，也不得
 把原始凭证内容加入HTTP响应。
 
@@ -402,13 +404,12 @@ manager从10分钟额度缓存返回结果时可加`cached=true`；节点不得�
 保持原判定，因此历史上payload标记成功的429仍可为`passed`，但新字段必须明确其并未成功。
 
 声明`credential.enable.conditional`时，条件`enable`必须在一个数据库事务内读取并锁定
-当前行、重算`state_token`、确认凭证未替换，并校验：当前明确禁用、非永久禁用、错误码
-结构完整且为空或全部为整数403、健康明确为`healthy`、不在checking、risk_quarantined、
-manual_review等隔离状态、`required_models`非空且每个目标模型均无有效冷却。任何缺失或
-未知字段均失败关闭；
+当前行、重算`state_token`、确认凭证未替换，并校验：当前明确禁用、非永久禁用、身份和
+元数据完整、`required_models`非空且每个目标模型及`*`、`all`均无有效冷却。历史
+`error_codes`、`health_status`和隔离标记仅用于诊断，不能单独阻止条件启用；启用后的真实
+业务请求仍按节点既有自动禁用和冷却机制处理。任何身份、元数据或冷却未知字段均失败关闭；
 不得用进程内锁替代数据库原子性。状态令牌不匹配或前置条件失败返回409 `CONFLICT`，
-`details.reason`只能返回安全稳定原因；错误码包含任何非403值、非整数值或未知结构时使用
-`unsafe_error_codes`；凭证不存在仍返回404。
+`details.reason`只能返回安全稳定原因；凭证不存在仍返回404。
 
 ## 8. `POST /credentials/batch-actions`
 

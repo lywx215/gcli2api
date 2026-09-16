@@ -657,7 +657,7 @@
                 "type": "null"
               }
             ],
-            "description": "Observed HTTP error codes. Conditional enable accepts only an empty list or a list containing exclusively integer 403 values.",
+            "description": "Observed HTTP error codes for diagnostics. They do not affect conditional-enable eligibility.",
             "title": "Error Codes"
           },
           "failure_count": {

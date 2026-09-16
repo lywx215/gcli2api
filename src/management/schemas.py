@@ -72,8 +72,8 @@ class CredentialSummary(StrictModel):
     health_status: str | None
     error_codes: list[int] | None = Field(
         description=(
-            "Observed HTTP error codes. Conditional enable accepts only an empty list "
-            "or a list containing exclusively integer 403 values."
+            "Observed HTTP error codes for diagnostics. They do not affect "
+            "conditional-enable eligibility."
         )
     )
     last_success: str | None

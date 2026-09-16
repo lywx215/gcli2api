@@ -32,12 +32,11 @@ Status: the original implementation was created from `dev8` commit `7b1c0f8`, in
 
 SQLite conditional enable executes `BEGIN IMMEDIATE`, reads and validates the current row,
 recomputes the domain-separated state token, and updates the row before committing the same
-transaction. It accepts error codes only when the list is empty or every entry is the integer
-403, matching the desktop candidate contract. Any other integer, non-integer or unknown error
-code structure fails closed with the stable safe reason `unsafe_error_codes`. Missing identity,
-health or cooldown metadata, permanent disable, active target-model cooldown, non-healthy or
-isolated state, and payload replacement also fail closed. No schema migration is required and
-no production storage was accessed.
+transaction. The token covers only the actual enable predicate, so error codes, health and
+isolation changes remain diagnostic historical state and do not invalidate or block an enable
+request. Missing identity or metadata, permanent disable, an active required model/`*`/`all`
+cooldown, and payload replacement still fail closed. No schema migration is required and no
+production storage was accessed.
 
 Existing `/creds/*`, cursor/offset list requests, empty-parameter enable requests and legacy
 test `outcome` remain supported. Roll back both feature commits (`4f1e1da`, `d562e3c`) or use
@@ -46,7 +45,7 @@ and requires no data rollback.
 
 ## Verification
 
-- Focused conditional-enable, Management API and OpenAPI suite: 34 passed.
+- Focused conditional-enable, Management API and OpenAPI suite: 39 passed.
 - Full repository suite: 231 passed.
 - OpenAPI baseline check: current.
 - Warnings: existing Pydantic v2 class-config and Starlette/httpx deprecations; local pytest

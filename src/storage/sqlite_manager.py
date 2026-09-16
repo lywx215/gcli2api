@@ -781,14 +781,6 @@ class SQLiteManager:
         if row["permanent_disabled"] not in (0, 1):
             missing.append("permanent_disabled")
         try:
-            error_codes = json.loads(row["error_codes"])
-        except (TypeError, ValueError):
-            error_codes = None
-        if not isinstance(error_codes, list) or any(
-            not isinstance(code, int) or isinstance(code, bool) for code in error_codes
-        ):
-            missing.append("error_codes")
-        try:
             cooldowns = json.loads(row["model_cooldowns"])
         except (TypeError, ValueError):
             cooldowns = None
@@ -1086,11 +1078,6 @@ class SQLiteManager:
                 except (TypeError, ValueError):
                     await db.rollback()
                     return {"reason": "incomplete_metadata"}
-                try:
-                    error_codes = json.loads(row["error_codes"])
-                except (TypeError, ValueError):
-                    await db.rollback()
-                    return {"reason": "unsafe_error_codes"}
                 email = row["user_email"]
                 if (
                     not isinstance(material, dict)
@@ -1100,40 +1087,30 @@ class SQLiteManager:
                 ):
                     await db.rollback()
                     return {"reason": "incomplete_metadata"}
-                if not isinstance(error_codes, list) or any(
-                    not isinstance(code, int)
-                    or isinstance(code, bool)
-                    or code != 403
-                    for code in error_codes
-                ):
-                    await db.rollback()
-                    return {"reason": "unsafe_error_codes"}
                 if not bool(row["disabled"]):
                     await db.rollback()
                     return {"reason": "not_disabled"}
                 if bool(row["permanent_disabled"]):
                     await db.rollback()
                     return {"reason": "permanently_disabled"}
-                if row["health_status"] != "healthy" or row["quarantine_reason"] not in (None, ""):
-                    await db.rollback()
-                    return {"reason": "unsafe_health"}
                 if not isinstance(row["health_state_version"], int) or row["health_state_version"] <= 0:
                     await db.rollback()
                     return {"reason": "incomplete_metadata"}
                 now = time.time()
                 for model in required_models:
-                    cooldown = cooldowns.get(model)
-                    if cooldown is None:
-                        continue
-                    if (
-                        isinstance(cooldown, bool)
-                        or not isinstance(cooldown, (int, float))
-                    ):
-                        await db.rollback()
-                        return {"reason": "incomplete_metadata"}
-                    if cooldown > now:
-                        await db.rollback()
-                        return {"reason": "active_cooldown"}
+                    for cooldown_model in (model, "*", "all"):
+                        cooldown = cooldowns.get(cooldown_model)
+                        if cooldown is None:
+                            continue
+                        if (
+                            isinstance(cooldown, bool)
+                            or not isinstance(cooldown, (int, float))
+                        ):
+                            await db.rollback()
+                            return {"reason": "incomplete_metadata"}
+                        if cooldown > now:
+                            await db.rollback()
+                            return {"reason": "active_cooldown"}
                 result = await db.execute(
                     f"""UPDATE {table_name}
                         SET disabled = 0,

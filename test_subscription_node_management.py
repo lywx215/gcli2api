@@ -6,7 +6,11 @@ import time
 import pytest
 
 from src.management.auth import ManagementApiError
-from src.management.schemas import CredentialActionRequest
+from src.management.schemas import (
+    CredentialActionRequest,
+    CredentialBatchActionItem,
+    CredentialBatchActionRequest,
+)
 from src.management.service import ManagementService
 from src.storage.sqlite_manager import SQLiteManager
 from src.storage_adapter import StorageAdapter
@@ -194,26 +198,29 @@ async def test_conditional_enable_returns_legacy_action_envelope(sqlite_service)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error_codes", [[403], [403, 403]])
-async def test_conditional_enable_accepts_only_forbidden_candidate_codes(
+@pytest.mark.parametrize(
+    "error_codes",
+    [[], [403], [401], [429], [403, 429], ["403"], [True], {"code": 403}, None, "not-a-list"],
+)
+async def test_conditional_enable_ignores_historical_error_code_diagnostics(
     sqlite_service, error_codes
 ) -> None:
     service, backend = sqlite_service
-    await store_candidate(backend, "forbidden-candidate.json", error_codes=error_codes)
+    await store_candidate(backend, "diagnostic-candidate.json", error_codes=error_codes)
     detail = await service.credential_detail(
-        mode="geminicli", filename="forbidden-candidate.json"
+        mode="geminicli", filename="diagnostic-candidate.json"
     )
 
     response = await service.execute_action(
         mode="geminicli",
-        filename="forbidden-candidate.json",
+        filename="diagnostic-candidate.json",
         request=CredentialActionRequest(
             action="enable",
             parameters={
                 "expected_state_token": detail.state_token,
                 "required_models": ["gemini-pro"],
             },
-            idempotency_key=f"conditional-forbidden-{len(error_codes)}-0001",
+            idempotency_key=f"conditional-diagnostic-{type(error_codes).__name__}-0001",
         ),
     )
 
@@ -223,35 +230,114 @@ async def test_conditional_enable_accepts_only_forbidden_candidate_codes(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "error_codes",
-    [[429], [403, 429], ["403"], [True], {"code": 403}, None, "not-a-list"],
+    "updates",
+    [
+        {"health_status": "checking"},
+        {"health_status": "risk_quarantined"},
+        {"quarantine_reason": "manual_review"},
+    ],
 )
-async def test_conditional_enable_rejects_unsafe_error_codes(
-    sqlite_service, error_codes
+async def test_conditional_enable_ignores_historical_health_and_isolation_diagnostics(
+    sqlite_service, updates
 ) -> None:
     service, backend = sqlite_service
-    await store_candidate(backend, "unsafe-errors.json", error_codes=error_codes)
+    await store_candidate(backend, "diagnostic-health.json", **updates)
     detail = await service.credential_detail(
-        mode="geminicli", filename="unsafe-errors.json"
+        mode="geminicli", filename="diagnostic-health.json"
     )
 
-    with pytest.raises(ManagementApiError) as error:
-        await service.execute_action(
-            mode="geminicli",
-            filename="unsafe-errors.json",
-            request=CredentialActionRequest(
+    response = await service.execute_action(
+        mode="geminicli",
+        filename="diagnostic-health.json",
+        request=CredentialActionRequest(
+            action="enable",
+            parameters={
+                "expected_state_token": detail.state_token,
+                "required_models": ["gemini-pro"],
+            },
+            idempotency_key=f"conditional-health-{updates!r}",
+        ),
+    )
+
+    assert response.status == "succeeded"
+    assert response.credential.status == "enabled"
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_state_changes_do_not_invalidate_conditional_enable_token(
+    sqlite_service,
+) -> None:
+    service, backend = sqlite_service
+    await store_candidate(backend, "changing-diagnostics.json", error_codes=[])
+    detail = await service.credential_detail(
+        mode="geminicli", filename="changing-diagnostics.json"
+    )
+    await backend.update_credential_state(
+        "changing-diagnostics.json",
+        {
+            "error_codes": [401, 429],
+            "health_status": "risk_quarantined",
+            "quarantine_reason": "manual_review",
+            "health_state_version": 2,
+        },
+        mode="geminicli",
+    )
+
+    response = await service.execute_action(
+        mode="geminicli",
+        filename="changing-diagnostics.json",
+        request=CredentialActionRequest(
+            action="enable",
+            parameters={
+                "expected_state_token": detail.state_token,
+                "required_models": ["gemini-pro"],
+            },
+            idempotency_key="conditional-changing-diagnostics-0001",
+        ),
+    )
+
+    assert response.status == "succeeded"
+    assert response.credential.status == "enabled"
+
+
+@pytest.mark.asyncio
+async def test_batch_conditional_enable_uses_the_same_diagnostic_predicate(
+    sqlite_service,
+) -> None:
+    service, backend = sqlite_service
+    codes_by_filename = {
+        "batch-empty.json": [],
+        "batch-401.json": [401],
+        "batch-403.json": [403],
+        "batch-429.json": [429],
+        "batch-mixed.json": [403, 429],
+    }
+    items = []
+    for index, (filename, error_codes) in enumerate(codes_by_filename.items()):
+        await store_candidate(backend, filename, error_codes=error_codes)
+        detail = await service.credential_detail(mode="geminicli", filename=filename)
+        items.append(
+            CredentialBatchActionItem(
+                mode="geminicli",
+                filename=filename,
                 action="enable",
                 parameters={
                     "expected_state_token": detail.state_token,
                     "required_models": ["gemini-pro"],
                 },
-                idempotency_key=f"conditional-unsafe-{type(error_codes).__name__}-0001",
-            ),
+                idempotency_key=f"conditional-batch-item-{index:02d}",
+            )
         )
 
-    assert error.value.status_code == 409
-    assert error.value.payload["error"]["retryable"] is False
-    assert error.value.payload["error"]["details"] == {"reason": "unsafe_error_codes"}
+    response = await service.execute_batch(
+        CredentialBatchActionRequest(
+            idempotency_key="conditional-batch-diagnostics-0001", items=items
+        )
+    )
+
+    assert response.status == "succeeded"
+    assert [item.status for item in response.results] == ["succeeded"] * len(items)
+    assert [item.credential_status for item in response.results] == ["enabled"] * len(items)
 
 
 @pytest.mark.asyncio
@@ -279,11 +365,10 @@ async def test_conditional_enable_is_atomic_and_only_one_racer_succeeds(sqlite_s
     ("updates", "reason"),
     [
         ({"user_email": None}, "incomplete_metadata"),
-        ({"health_status": "checking"}, "unsafe_health"),
-        ({"health_status": "risk_quarantined"}, "unsafe_health"),
-        ({"quarantine_reason": "manual_review"}, "unsafe_health"),
         ({"permanent_disabled": True}, "permanently_disabled"),
         ({"model_cooldowns": {"gemini-pro": time.time() + 3600}}, "active_cooldown"),
+        ({"model_cooldowns": {"*": time.time() + 3600}}, "active_cooldown"),
+        ({"model_cooldowns": {"all": time.time() + 3600}}, "active_cooldown"),
     ],
 )
 async def test_conditional_enable_fails_closed(sqlite_service, updates, reason) -> None:
