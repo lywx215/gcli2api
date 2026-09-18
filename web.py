@@ -34,15 +34,9 @@ from src.panel import router as panel_router
 from src.keeplive import keepalive_service
 from src.management import install_management_api
 
-# 全局凭证管理器
-global_credential_manager = None
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    global global_credential_manager
-
     log.info("启动 GCLI2API 主服务")
 
     # 初始化配置缓存（优先执行，带超时）
@@ -63,10 +57,8 @@ async def lifespan(app: FastAPI):
         log.info("凭证管理器初始化成功")
     except asyncio.TimeoutError:
         log.error("凭证管理器初始化超时(15s)，将在首次使用时重试")
-        global_credential_manager = None
     except Exception as e:
         log.error(f"凭证管理器初始化失败: {e}")
-        global_credential_manager = None
         # 严格模式下 storage_adapter 已经 os._exit, 不会到这里。
         # 这里的 except 兜底处理非严格模式的非致命错误。
 
@@ -116,14 +108,6 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-    # 关闭 httpx 持久化连接池
-    try:
-        from src.httpx_client import http_client
-        await http_client.close()
-        log.info("HTTP连接池已关闭")
-    except Exception as e:
-        log.error(f"关闭HTTP连接池时出错: {e}")
-
     # 停止保活服务
     try:
         await keepalive_service.stop()
@@ -143,13 +127,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.error(f"关闭异步任务时出错: {e}")
 
-    # 然后关闭凭证管理器
-    if global_credential_manager:
-        try:
-            await global_credential_manager.close()
-            log.info("凭证管理器已关闭")
-        except Exception as e:
-            log.error(f"关闭凭证管理器时出错: {e}")
+    # 关闭凭证管理器和存储后端；SQLite 会在 close 中最终刷写统计缓冲。
+    try:
+        await credential_manager.close()
+        from src.storage_adapter import close_storage_adapter
+        await close_storage_adapter()
+        log.info("凭证管理器已关闭")
+    except Exception as e:
+        log.error(f"关闭凭证管理器时出错: {e}")
 
     log.info("GCLI2API 主服务已停止")
 
@@ -202,13 +187,9 @@ app.include_router(geminicli_anthropic_router, prefix="", tags=["Geminicli Anthr
 # Panel路由 - 包含认证、凭证管理和控制面板功能
 app.include_router(panel_router, prefix="", tags=["Panel Interface"])
 
-# Vertex AI 路由 - Gemini 原生格式
+# Vertex AI 路由
 app.include_router(vertex_gemini_router, prefix="", tags=["Vertex Gemini API"])
-
-# Vertex AI 路由 - OpenAI 兼容格式
 app.include_router(vertex_openai_router, prefix="", tags=["Vertex OpenAI API"])
-
-# Vertex AI 路由 - 模型列表
 app.include_router(vertex_model_list_router, prefix="", tags=["Vertex Model List"])
 
 # 静态文件路由 - 服务docs目录下的文件

@@ -175,6 +175,43 @@ def test_explicit_reset_timestamp_and_delay_take_precedence(monkeypatch):
     assert parsed == 1_300.0
 
 
+def test_invalid_timestamp_continues_to_later_delay(monkeypatch):
+    payload = _quota_error(metadata={"quotaResetTimeStamp": "not-a-time"})
+    payload["error"]["details"].append({
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "QUOTA_EXHAUSTED",
+        "metadata": {"quotaResetDelay": "1h2m3.5s"},
+    })
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+
+    parsed = api_utils.parse_quota_reset_timestamp(
+        payload, fallback_cooldown_seconds=30 * 60
+    )
+
+    assert parsed == 1_000.0 + 3_723.5
+
+
+def test_reset_message_supports_decimal_duration_without_period(monkeypatch):
+    payload = _quota_error(reason="RATE_LIMIT_EXCEEDED")
+    payload["error"]["message"] = "Your quota will reset after 1m 2.5s"
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+
+    parsed = api_utils.parse_quota_reset_timestamp(
+        payload, fallback_cooldown_seconds=30 * 60
+    )
+
+    assert parsed == 1_062.5
+
+
+def test_capacity_reason_does_not_use_fallback():
+    parsed = api_utils.parse_quota_reset_timestamp(
+        _quota_error(reason="MODEL_CAPACITY_EXHAUSTED"),
+        fallback_cooldown_seconds=30 * 60,
+    )
+
+    assert parsed is None
+
+
 class _FakeCooldownStorage:
     def __init__(self, cooldowns=None):
         self.state = {"model_cooldowns": dict(cooldowns or {})}

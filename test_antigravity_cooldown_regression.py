@@ -4,7 +4,10 @@ import json
 import time
 
 from src import httpx_client
-from src.api.utils import parse_and_log_cooldown
+from src.api.utils import (
+    parse_and_log_cooldown,
+    parse_antigravity_quota_reset_timestamp,
+)
 from src.panel import creds as creds_panel
 
 
@@ -129,6 +132,26 @@ async def test_antigravity_explicit_quota_429_keeps_persistent_cooldown():
 
     assert cooldown_until is not None
     assert before + 30 * 60 - 1 <= cooldown_until <= time.time() + 30 * 60 + 1
+
+
+def test_antigravity_parser_checks_all_error_info_and_retry_info(monkeypatch):
+    payload = {
+        "error": {
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "metadata": {"quotaResetTimeStamp": "invalid"},
+                },
+                {
+                    "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                    "retryDelay": "2.5s",
+                },
+            ]
+        }
+    }
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+
+    assert parse_antigravity_quota_reset_timestamp(payload) == 1_002.5
 
 
 async def test_positive_live_quota_clears_existing_model_cooldown():
