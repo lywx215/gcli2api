@@ -7,7 +7,7 @@
 import json
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 
 def _today_beijing_str() -> str:
@@ -15,28 +15,41 @@ def _today_beijing_str() -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
 
 
-def has_active_model_cooldown(value: Any, current_time: Optional[float] = None) -> bool:
-    """Return whether a persisted cooldown mapping contains an active deadline."""
+def active_model_cooldowns(
+    value: Any, current_time: Optional[float] = None
+) -> Tuple[dict[Any, float], int]:
+    """Return active numeric cooldowns and the number of malformed values ignored."""
+    if value in (None, "", b""):
+        return {}, 0
     if isinstance(value, bytes):
         try:
             value = value.decode("utf-8")
         except UnicodeDecodeError:
-            return False
+            return {}, 1
     if isinstance(value, str):
         try:
-            value = json.loads(value or "{}")
+            value = json.loads(value)
         except (TypeError, ValueError):
-            return False
+            return {}, 1
     if not isinstance(value, dict):
-        return False
+        return {}, 1
 
     now = time.time() if current_time is None else current_time
-    return any(
-        not isinstance(deadline, bool)
-        and isinstance(deadline, (int, float))
-        and deadline > now
-        for deadline in value.values()
-    )
+    active: dict[Any, float] = {}
+    invalid_count = 0
+    for model_name, deadline in value.items():
+        if isinstance(deadline, bool) or not isinstance(deadline, (int, float)):
+            invalid_count += 1
+            continue
+        if deadline > now:
+            active[model_name] = deadline
+    return active, invalid_count
+
+
+def has_active_model_cooldown(value: Any, current_time: Optional[float] = None) -> bool:
+    """Return whether a persisted cooldown mapping contains an active deadline."""
+    active, _ = active_model_cooldowns(value, current_time)
+    return bool(active)
 
 
 # 模型家族归一化：各种变种（-search / -thinking / -lite / preview / pro / flash 等）

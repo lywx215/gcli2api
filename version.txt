@@ -1,4 +1,4 @@
-full_hash=296cbf0d5652bfcf8b26bcbc6af7476bb22854f3
-short_hash=296cbf0
-message=fix: preserve raw Gemini quota model names
-date=2026-07-17 18:20:13 +0800
+full_hash=46e0b42a9d359b2f06aa1f02b73dc413f5d8ff10
+short_hash=46e0b42
+message=优化抗截断
+date=2026-09-14 22:42:06 +0800

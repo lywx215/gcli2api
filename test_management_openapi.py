@@ -43,5 +43,5 @@ def test_openapi_documents_conditional_enable_error_code_contract() -> None:
     description = schema["components"]["schemas"]["CredentialSummary"]["properties"][
         "error_codes"
     ]["description"]
-    assert "empty list" in description
-    assert "exclusively integer 403" in description
+    assert "diagnostics" in description
+    assert "do not affect" in description

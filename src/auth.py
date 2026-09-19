@@ -246,13 +246,22 @@ class AuthCallbackHandler(BaseHTTPRequestHandler):
             self.end_headers()
             # 成功页面
             self.wfile.write(
-                b"<h1>OAuth authentication successful!</h1><p>You can close this window. Please return to the original page and click 'Get Credentials' button.</p>"
+                b'<!DOCTYPE html><html lang="en" class="notranslate" translate="no">'
+                b'<head><meta name="google" content="notranslate"></head><body>'
+                b'<h1>OAuth authentication successful!</h1>'
+                b"<p>You can close this window. Please return to the original page "
+                b"and click 'Get Credentials' button.</p></body></html>"
             )
         else:
             self.send_response(400)
             self.send_header("Content-type", "text/html")
             self.end_headers()
-            self.wfile.write(b"<h1>Authentication failed.</h1><p>Please try again.</p>")
+            self.wfile.write(
+                b'<!DOCTYPE html><html lang="en" class="notranslate" translate="no">'
+                b'<head><meta name="google" content="notranslate"></head><body>'
+                b"<h1>Authentication failed.</h1><p>Please try again.</p>"
+                b"</body></html>"
+            )
 
     def log_message(self, format, *args):
         # 减少日志噪音

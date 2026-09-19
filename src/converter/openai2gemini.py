@@ -6,6 +6,7 @@ OpenAI Transfer Module - Handles conversion between OpenAI and Gemini API format
 import json
 import time
 import uuid
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pypinyin import Style, lazy_pinyin
@@ -19,6 +20,39 @@ from src.converter.thoughtSignature_fix import (
 from src.converter.utils import merge_system_messages
 
 from log import log
+
+#: 流式响应里每个 (response_id, candidate_index) 已分配到的工具调用序号。
+#: Gemini 的并行 functionCall 是「一个 chunk 一个 part」，若用 chunk 内 parts
+#: 下标当 OpenAI 的 tool_calls[].index，每个调用都会拿到 0；而按 OpenAI 流式规范
+#: 归并分片的客户端会把它们并进同一个 slot，arguments 拼成 `{"a":1}{"b":2}` 这种
+#: 非法 JSON。这里改按流内递增序号分配。
+_STREAM_TOOL_INDEX: "OrderedDict[Tuple[str, int], Tuple[int, float]]" = OrderedDict()
+
+#: 流被中途放弃时没有收尾块可供回收。按最后活动时间清理，避免高并发时
+#: 仅因条目数量达到上限而误删仍在进行的流。
+_STREAM_TOOL_INDEX_TTL_SECONDS = 6 * 60 * 60
+
+
+def _stream_tool_key(response_id: str, candidate_index: int) -> Tuple[str, int]:
+    return response_id, candidate_index
+
+
+def _next_stream_tool_call_indices(
+    response_id: str, candidate_index: int, count: int
+) -> List[int]:
+    """为本 chunk 内的 count 个工具调用分配连续的流内序号。"""
+    now = time.monotonic()
+    stale_before = now - _STREAM_TOOL_INDEX_TTL_SECONDS
+    for key, (_, last_seen) in list(_STREAM_TOOL_INDEX.items()):
+        if last_seen >= stale_before:
+            break
+        _STREAM_TOOL_INDEX.pop(key, None)
+
+    key = _stream_tool_key(response_id, candidate_index)
+    base = _STREAM_TOOL_INDEX.get(key, (0, now))[0]
+    _STREAM_TOOL_INDEX[key] = (base + count, now)
+    _STREAM_TOOL_INDEX.move_to_end(key)
+    return list(range(base, base + count))
 
 def _convert_usage_metadata(usage_metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
@@ -1355,8 +1389,52 @@ async def convert_openai_to_gemini_request(openai_request: Dict[str, Any]) -> Di
 
                     parts.append(function_call_part)
                 except (json.JSONDecodeError, KeyError) as e:
-                    log.error(f"Failed to parse tool call: {e}")
-                    continue
+                    # 不能直接丢掉这个 functionCall：历史里它后面必然跟着一条
+                    # functionResponse，父调用一消失它就成了孤儿，Gemini 会返回
+                    # 空 candidate（0 completion token、finishReason=STOP）。
+                    # 降级保留：能救出第一个 JSON 对象就用它，否则用空参数。
+                    degraded_name = ""
+                    try:
+                        degraded_name = tool_call["function"]["name"]
+                    except (KeyError, TypeError):
+                        degraded_name = ""
+                    if not degraded_name:
+                        log.error(f"Failed to parse tool call (dropped, no name): {e}")
+                        continue
+
+                    try:
+                        raw_args = tool_call["function"]["arguments"]
+                    except (KeyError, TypeError):
+                        raw_args = ""
+                    degraded_args = {}
+                    if isinstance(raw_args, str) and raw_args:
+                        try:
+                            recovered, _ = json.JSONDecoder().raw_decode(raw_args.lstrip())
+                        except ValueError:
+                            recovered = None
+                        if isinstance(recovered, dict):
+                            degraded_args = recovered
+                    if degraded_args and degraded_name in tool_schemas:
+                        degraded_args = fix_tool_call_args_types(
+                            degraded_args, tool_schemas[degraded_name]
+                        )
+
+                    original_id, _signature = decode_tool_id_and_signature(
+                        tool_call.get("id", "")
+                    )
+                    log.warning(
+                        f"Failed to parse tool call: {e} - keeping degraded functionCall "
+                        f"name={degraded_name} "
+                        f"args={'partial' if degraded_args else 'empty'}"
+                    )
+                    parts.append({
+                        "functionCall": {
+                            "id": original_id,
+                            "name": degraded_name,
+                            "args": degraded_args,
+                        },
+                        "thoughtSignature": SKIP_THOUGHT_SIGNATURE_VALIDATOR,
+                    })
 
             if parts:
                 contents.append({"role": role, "parts": parts})
@@ -1391,6 +1469,17 @@ async def convert_openai_to_gemini_request(openai_request: Dict[str, Any]) -> Di
     # 循环结束后，flush 剩余的 tool parts（如果消息列表以 tool 消息结尾）
     flush_pending_tool_parts()
     _sanitize_openai_roundtrip_signatures(contents)
+
+    # 强化修复: 合并相邻相同 role 的 contents (Gemini 强制要求交替角色，避免多轮 tool 后紧跟 user 导致 0-token 空回)
+    merged_contents = []
+    for c in contents:
+        if not c.get("parts"):
+            continue
+        if merged_contents and merged_contents[-1]["role"] == c["role"]:
+            merged_contents[-1]["parts"].extend(c["parts"])
+        else:
+            merged_contents.append(c)
+    contents = merged_contents
 
     # 构建生成配置
     generation_config = {}
@@ -1735,6 +1824,8 @@ def convert_gemini_to_openai_stream(
     choices = []
 
     for candidate in gemini_response.get("candidates", []):
+        candidate_index = candidate.get("index", 0)
+        stream_tool_key = _stream_tool_key(response_id, candidate_index)
         role = candidate.get("content", {}).get("role", "assistant")
 
         # 将Gemini角色映射回OpenAI角色
@@ -1746,6 +1837,17 @@ def convert_gemini_to_openai_stream(
 
         # 提取工具调用和文本内容 (流式需要 index)
         tool_calls, text_content = extract_tool_calls_from_parts(parts, is_streaming=True)
+
+        # extract_tool_calls_from_parts 给出的 index 是 chunk 内 parts 下标，
+        # 对并行调用恒为 0。改用流内递增序号，客户端才能把它们归并成独立调用。
+        if tool_calls:
+            for tool_call, stream_index in zip(
+                tool_calls,
+                _next_stream_tool_call_indices(
+                    response_id, candidate_index, len(tool_calls)
+                ),
+            ):
+                tool_call["index"] = stream_index
 
         # 提取多种类型的内容
         content_parts = []
@@ -1815,18 +1917,32 @@ def convert_gemini_to_openai_stream(
 
         # 获取 Gemini 的 finishReason
         gemini_finish_reason = candidate.get("finishReason")
-        finish_reason = _map_finish_reason(gemini_finish_reason)
+        # 流式响应中，Gemini 仅在最后一个 chunk 设置 finishReason；
+        # 中间 chunk（思考/工具调用）的 finishReason 为 None，此时必须返回 null，
+        # 否则 OpenAI 兼容客户端（如 DeepSeek Harness）会在第一个 chunk 后提前停止，
+        # 导致只输出思考内容或只返回第一个工具调用就结束。
+        if gemini_finish_reason:
+            finish_reason = _map_finish_reason(gemini_finish_reason)
+        else:
+            finish_reason = None
         
         # 只有在正常停止（STOP）且有工具调用时才设为 tool_calls
         # 避免在 SAFETY、MAX_TOKENS 等情况下仍然返回 tool_calls 导致循环
-        if tool_calls and gemini_finish_reason == "STOP":
+        # 注意: 流式响应中 tool_calls 通常在前序 chunk，收尾 chunk 的 tool_calls 为空，
+        # 需检查当前流 (response_id) 之前是否分配过工具调用序号 (_STREAM_TOOL_INDEX > 0)。
+        had_tools = bool(
+            tool_calls or _STREAM_TOOL_INDEX.get(stream_tool_key, (0, 0.0))[0] > 0
+        )
+        if had_tools and gemini_finish_reason == "STOP":
             finish_reason = "tool_calls"
 
         choices.append({
-            "index": candidate.get("index", 0),
+            "index": candidate_index,
             "delta": delta,
             "finish_reason": finish_reason,
         })
+        if gemini_finish_reason:
+            _STREAM_TOOL_INDEX.pop(stream_tool_key, None)
 
     # 转换 usageMetadata (只在流结束时存在)
     usage = _convert_usage_metadata(gemini_response.get("usageMetadata"))

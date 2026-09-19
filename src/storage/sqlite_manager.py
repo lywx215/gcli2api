@@ -22,6 +22,7 @@ from src.error_classification import (
 )
 from src.storage._stats_common import (
     _today_beijing_str,
+    active_model_cooldowns,
     has_active_model_cooldown,
     normalize_model_family,
 )
@@ -127,6 +128,8 @@ class SQLiteManager:
         # 内存配置缓存 - 初始化时加载一次
         self._config_cache: Dict[str, Any] = {}
         self._config_loaded = False
+        self._invalid_cooldown_warning_emitted = False
+        self._invalid_summary_flag_warning_emitted = False
 
         # ---- 统计缓冲区 ----
         # (date, mode) -> {"success": N, "failure": M}
@@ -781,14 +784,6 @@ class SQLiteManager:
         if row["permanent_disabled"] not in (0, 1):
             missing.append("permanent_disabled")
         try:
-            error_codes = json.loads(row["error_codes"])
-        except (TypeError, ValueError):
-            error_codes = None
-        if not isinstance(error_codes, list) or any(
-            not isinstance(code, int) or isinstance(code, bool) for code in error_codes
-        ):
-            missing.append("error_codes")
-        try:
             cooldowns = json.loads(row["model_cooldowns"])
         except (TypeError, ValueError):
             cooldowns = None
@@ -1086,11 +1081,6 @@ class SQLiteManager:
                 except (TypeError, ValueError):
                     await db.rollback()
                     return {"reason": "incomplete_metadata"}
-                try:
-                    error_codes = json.loads(row["error_codes"])
-                except (TypeError, ValueError):
-                    await db.rollback()
-                    return {"reason": "unsafe_error_codes"}
                 email = row["user_email"]
                 if (
                     not isinstance(material, dict)
@@ -1100,40 +1090,30 @@ class SQLiteManager:
                 ):
                     await db.rollback()
                     return {"reason": "incomplete_metadata"}
-                if not isinstance(error_codes, list) or any(
-                    not isinstance(code, int)
-                    or isinstance(code, bool)
-                    or code != 403
-                    for code in error_codes
-                ):
-                    await db.rollback()
-                    return {"reason": "unsafe_error_codes"}
                 if not bool(row["disabled"]):
                     await db.rollback()
                     return {"reason": "not_disabled"}
                 if bool(row["permanent_disabled"]):
                     await db.rollback()
                     return {"reason": "permanently_disabled"}
-                if row["health_status"] != "healthy" or row["quarantine_reason"] not in (None, ""):
-                    await db.rollback()
-                    return {"reason": "unsafe_health"}
                 if not isinstance(row["health_state_version"], int) or row["health_state_version"] <= 0:
                     await db.rollback()
                     return {"reason": "incomplete_metadata"}
                 now = time.time()
                 for model in required_models:
-                    cooldown = cooldowns.get(model)
-                    if cooldown is None:
-                        continue
-                    if (
-                        isinstance(cooldown, bool)
-                        or not isinstance(cooldown, (int, float))
-                    ):
-                        await db.rollback()
-                        return {"reason": "incomplete_metadata"}
-                    if cooldown > now:
-                        await db.rollback()
-                        return {"reason": "active_cooldown"}
+                    for cooldown_model in (model, "*", "all"):
+                        cooldown = cooldowns.get(cooldown_model)
+                        if cooldown is None:
+                            continue
+                        if (
+                            isinstance(cooldown, bool)
+                            or not isinstance(cooldown, (int, float))
+                        ):
+                            await db.rollback()
+                            return {"reason": "incomplete_metadata"}
+                        if cooldown > now:
+                            await db.rollback()
+                            return {"reason": "active_cooldown"}
                 result = await db.execute(
                     f"""UPDATE {table_name}
                         SET disabled = 0,
@@ -1475,7 +1455,386 @@ class SQLiteManager:
             log.error(f"Error getting all credential states: {e}")
             return {}
 
+    def _bounded_summary_enabled(self) -> bool:
+        raw = os.getenv("CREDENTIAL_SUMMARY_BOUNDED_FAST_PATH")
+        if raw is None:
+            return True
+        normalized = raw.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        if not self._invalid_summary_flag_warning_emitted:
+            log.warning(
+                "Invalid CREDENTIAL_SUMMARY_BOUNDED_FAST_PATH value; "
+                "SQLite bounded credential summary is disabled"
+            )
+            self._invalid_summary_flag_warning_emitted = True
+        return False
+
+    def _report_invalid_cooldowns(self, invalid_count: int) -> None:
+        if invalid_count <= 0:
+            return
+        message = (
+            "SQLite credential summary ignored "
+            f"{invalid_count} malformed model cooldown value(s)"
+        )
+        if self._invalid_cooldown_warning_emitted:
+            log.debug(message)
+        else:
+            log.warning(message)
+            self._invalid_cooldown_warning_emitted = True
+
+    def _supports_bounded_summary_path(
+        self,
+        *,
+        offset: int,
+        limit: Optional[int],
+        status_filter: Optional[str],
+        mode: str,
+        error_code_filter: Optional[str],
+        cooldown_filter: Optional[str],
+        preview_filter: Optional[str],
+        tier_filter: Optional[str],
+        remark_filter: Optional[str],
+    ) -> bool:
+        if not self._bounded_summary_enabled():
+            return False
+        if (
+            isinstance(offset, bool)
+            or not isinstance(offset, int)
+            or offset < 0
+            or isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or limit < 0
+        ):
+            return False
+        if mode not in {"geminicli", "antigravity"}:
+            return False
+        if error_code_filter not in {None, "all"}:
+            return False
+        if cooldown_filter not in {None, "all"}:
+            return False
+        if status_filter not in {
+            None,
+            "all",
+            "enabled",
+            "disabled",
+            "permanent_disabled",
+        }:
+            return False
+        if preview_filter not in {None, "all", "preview", "no_preview"}:
+            return False
+        if tier_filter not in {None, "all", *valid_tiers_for_mode(mode)}:
+            return False
+        return remark_filter is None or isinstance(remark_filter, str)
+
+    @staticmethod
+    def _build_bounded_summary_where(
+        *,
+        status_filter: Optional[str],
+        mode: str,
+        preview_filter: Optional[str],
+        tier_filter: Optional[str],
+        remark_filter: Optional[str],
+    ) -> Tuple[str, List[Any], bool]:
+        predicates: List[str] = []
+        params: List[Any] = []
+
+        if status_filter == "enabled":
+            predicates.append(
+                "disabled = 0 AND "
+                "COALESCE(permanent_disabled, 0) = 0"
+            )
+        elif status_filter == "disabled":
+            predicates.append(
+                "disabled = 1 AND "
+                "COALESCE(permanent_disabled, 0) = 0"
+            )
+        elif status_filter == "permanent_disabled":
+            predicates.append("COALESCE(permanent_disabled, 0) = 1")
+
+        has_value_filters = False
+        if mode == "geminicli" and preview_filter in {"preview", "no_preview"}:
+            predicates.append(
+                "COALESCE(preview, 1) != 0"
+                if preview_filter == "preview"
+                else "COALESCE(preview, 1) = 0"
+            )
+            has_value_filters = True
+
+        if tier_filter not in {None, "all"}:
+            predicates.append("COALESCE(tier, ?) = ?")
+            params.extend([default_tier_for_mode(mode), tier_filter])
+            has_value_filters = True
+
+        if remark_filter is not None:
+            predicates.append("COALESCE(remark, '') = ?")
+            params.append(remark_filter)
+            has_value_filters = True
+
+        where_clause = (
+            "WHERE " + " AND ".join(f"({predicate})" for predicate in predicates)
+            if predicates
+            else ""
+        )
+        return where_clause, params, has_value_filters
+
+    @staticmethod
+    def _bounded_summary_from_row(
+        row: Tuple[Any, ...], mode: str, current_time: float
+    ) -> Tuple[Dict[str, Any], int]:
+        active_cooldowns, invalid_count = active_model_cooldowns(
+            row[6] or "{}", current_time
+        )
+        summary: Dict[str, Any] = {
+            "filename": row[0],
+            "disabled": bool(row[1]),
+            "permanent_disabled": bool(row[11]),
+            "error_codes": safe_json_list(row[2] or "[]"),
+            "last_success": row[3],
+            "user_email": row[4],
+            "rotation_order": row[5],
+            "model_cooldowns": active_cooldowns,
+            "tier": (
+                row[8]
+                if mode == "geminicli" and row[8] is not None
+                else (
+                    row[7]
+                    if mode != "geminicli" and row[7] is not None
+                    else default_tier_for_mode(mode)
+                )
+            ),
+            "success_count": row[9] or 0,
+            "failure_count": row[10] or 0,
+            "cycle_stats": json.loads(row[12] or "{}"),
+            "last_cycle_stats": json.loads(row[13] or "{}"),
+            "remark": row[14] or "",
+        }
+        if mode == "geminicli":
+            summary.update(
+                {
+                    "tier_raw_id": row[15],
+                    "tier_raw_name": row[16],
+                    "tier_detected_at": row[17],
+                    "health_status": row[18] or "healthy",
+                    "quarantine_reason": row[19],
+                    "probe_stage": row[20] or 0,
+                    "next_probe_at": row[21],
+                    "last_health_check_at": row[22],
+                    "health_check_started_at": row[23],
+                    "health_state_version": row[24] or 0,
+                    "preview": bool(row[7]) if row[7] is not None else True,
+                }
+            )
+        else:
+            summary["enable_credit"] = bool(row[8]) if row[8] is not None else False
+        return summary, invalid_count
+
+    async def _get_credentials_summary_bounded(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        status_filter: Optional[str],
+        mode: str,
+        error_code_filter: Optional[str],
+        preview_filter: Optional[str],
+        tier_filter: Optional[str],
+        remark_filter: Optional[str],
+        include_error_classifications: bool,
+    ) -> Dict[str, Any]:
+        table_name = self._get_table_name(mode)
+        current_time = time.time()
+        where_clause, params, has_value_filters = self._build_bounded_summary_where(
+            status_filter=status_filter,
+            mode=mode,
+            preview_filter=preview_filter,
+            tier_filter=tier_filter,
+            remark_filter=remark_filter,
+        )
+        invalid_cooldown_count = 0
+
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute("BEGIN")
+            try:
+                global_stats = {
+                    "total": 0,
+                    "normal": 0,
+                    "disabled": 0,
+                    "permanent_disabled": 0,
+                    "in_cooldown": 0,
+                    "no_cooldown": 0,
+                }
+                async with db.execute(
+                    f"SELECT disabled, permanent_disabled, COUNT(*) "
+                    f"FROM {table_name} GROUP BY disabled, permanent_disabled"
+                ) as stats_cursor:
+                    for disabled, permanent_disabled, count in await stats_cursor.fetchall():
+                        global_stats["total"] += count
+                        if permanent_disabled:
+                            global_stats["permanent_disabled"] += count
+                        elif disabled:
+                            global_stats["disabled"] += count
+                        else:
+                            global_stats["normal"] += count
+
+                async with db.execute(
+                    f"SELECT model_cooldowns FROM {table_name} "
+                    "WHERE COALESCE(disabled, 0) = 0 "
+                    "AND COALESCE(permanent_disabled, 0) = 0"
+                ) as cooldown_cursor:
+                    async for (model_cooldowns,) in cooldown_cursor:
+                        active, invalid = active_model_cooldowns(
+                            model_cooldowns, current_time
+                        )
+                        invalid_cooldown_count += invalid
+                        global_stats[
+                            "in_cooldown" if active else "no_cooldown"
+                        ] += 1
+
+                if has_value_filters or status_filter not in {None, "all"}:
+                    async with db.execute(
+                        f"SELECT COUNT(*) FROM {table_name} {where_clause}", params
+                    ) as count_cursor:
+                        count_row = await count_cursor.fetchone()
+                    total_count = int(count_row[0]) if count_row else 0
+                else:
+                    total_count = global_stats["total"]
+
+                if mode == "geminicli":
+                    page_query = f"""
+                        SELECT filename, disabled, error_codes, last_success,
+                               user_email, rotation_order, model_cooldowns, preview, tier,
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark,
+                               tier_raw_id, tier_raw_name, tier_detected_at,
+                               health_status, quarantine_reason, probe_stage, next_probe_at,
+                               last_health_check_at, health_check_started_at, health_state_version
+                        FROM {table_name}
+                        {where_clause}
+                        ORDER BY rotation_order, rowid
+                        LIMIT ? OFFSET ?
+                    """
+                else:
+                    page_query = f"""
+                        SELECT filename, disabled, error_codes, last_success,
+                               user_email, rotation_order, model_cooldowns, tier, enable_credit,
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                        FROM {table_name}
+                        {where_clause}
+                        ORDER BY rotation_order, rowid
+                        LIMIT ? OFFSET ?
+                    """
+
+                async with db.execute(
+                    page_query, [*params, limit, offset]
+                ) as page_cursor:
+                    page_rows = await page_cursor.fetchall()
+
+                summaries: List[Dict[str, Any]] = []
+                for row in page_rows:
+                    summary, invalid = self._bounded_summary_from_row(
+                        row, mode, current_time
+                    )
+                    invalid_cooldown_count += invalid
+                    summaries.append(summary)
+
+                async def load_error_messages(
+                    filenames: List[str],
+                ) -> Dict[str, Any]:
+                    messages: Dict[str, Any] = {}
+                    for start in range(0, len(filenames), 500):
+                        chunk = filenames[start:start + 500]
+                        placeholders = ",".join("?" for _ in chunk)
+                        async with db.execute(
+                            f"SELECT filename, error_messages FROM {table_name} "
+                            f"WHERE filename IN ({placeholders})",
+                            chunk,
+                        ) as error_cursor:
+                            for filename, error_messages in await error_cursor.fetchall():
+                                messages[filename] = safe_json_object(error_messages)
+                    return messages
+
+                summaries, _ = await paginate_and_classify_summaries(
+                    summaries,
+                    offset=0,
+                    limit=None,
+                    error_code_filter=error_code_filter,
+                    include_error_classifications=include_error_classifications,
+                    load_error_messages=load_error_messages,
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+
+        self._report_invalid_cooldowns(invalid_cooldown_count)
+        return {
+            "items": summaries,
+            "total": total_count,
+            "offset": offset,
+            "limit": limit,
+            "stats": global_stats,
+        }
+
     async def get_credentials_summary(
+        self,
+        offset: int = 0,
+        limit: Optional[int] = None,
+        status_filter: str = "all",
+        mode: str = "geminicli",
+        error_code_filter: Optional[str] = None,
+        cooldown_filter: Optional[str] = None,
+        preview_filter: Optional[str] = None,
+        tier_filter: Optional[str] = None,
+        remark_filter: Optional[str] = None,
+        include_error_classifications: bool = False,
+    ) -> Dict[str, Any]:
+        """Return credential summaries, using bounded SQLite reads when safe."""
+        self._ensure_initialized()
+        if self._supports_bounded_summary_path(
+            offset=offset,
+            limit=limit,
+            status_filter=status_filter,
+            mode=mode,
+            error_code_filter=error_code_filter,
+            cooldown_filter=cooldown_filter,
+            preview_filter=preview_filter,
+            tier_filter=tier_filter,
+            remark_filter=remark_filter,
+        ):
+            try:
+                return await self._get_credentials_summary_bounded(
+                    offset=offset,
+                    limit=limit,
+                    status_filter=status_filter,
+                    mode=mode,
+                    error_code_filter=error_code_filter,
+                    preview_filter=preview_filter,
+                    tier_filter=tier_filter,
+                    remark_filter=remark_filter,
+                    include_error_classifications=include_error_classifications,
+                )
+            except Exception as exc:
+                log.error(
+                    "SQLite bounded credential summary failed "
+                    f"({type(exc).__name__}); falling back to legacy path"
+                )
+
+        return await self._get_credentials_summary_legacy(
+            offset=offset,
+            limit=limit,
+            status_filter=status_filter,
+            mode=mode,
+            error_code_filter=error_code_filter,
+            cooldown_filter=cooldown_filter,
+            preview_filter=preview_filter,
+            tier_filter=tier_filter,
+            remark_filter=remark_filter,
+            include_error_classifications=include_error_classifications,
+        )
+
+    async def _get_credentials_summary_legacy(
         self,
         offset: int = 0,
         limit: Optional[int] = None,
@@ -1509,6 +1868,7 @@ class SQLiteManager:
         try:
             # 根据 mode 选择表名
             table_name = self._get_table_name(mode)
+            invalid_cooldown_count = 0
 
             async with aiosqlite.connect(self._db_path) as db:
                 # 先计算全局统计数据（不受筛选条件影响）
@@ -1560,7 +1920,7 @@ class SQLiteManager:
                                last_health_check_at, health_check_started_at, health_state_version
                         FROM {table_name}
                         {where_clause}
-                        ORDER BY rotation_order
+                        ORDER BY rotation_order, rowid
                     """
                 else:
                     all_query = f"""
@@ -1569,7 +1929,7 @@ class SQLiteManager:
                                success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name}
                         {where_clause}
-                        ORDER BY rotation_order
+                        ORDER BY rotation_order, rowid
                     """
 
                 async with db.execute(all_query, count_params) as cursor:
@@ -1587,11 +1947,11 @@ class SQLiteManager:
                             "AND COALESCE(permanent_disabled, 0) = 0"
                         ) as cooldown_stats_cursor:
                             for (model_cooldowns,) in await cooldown_stats_cursor.fetchall():
-                                cooldown_key = (
-                                    "in_cooldown"
-                                    if has_active_model_cooldown(model_cooldowns, current_time)
-                                    else "no_cooldown"
+                                active, invalid = active_model_cooldowns(
+                                    model_cooldowns, current_time
                                 )
+                                invalid_cooldown_count += invalid
+                                cooldown_key = "in_cooldown" if active else "no_cooldown"
                                 global_stats[cooldown_key] += 1
 
                     for row in all_rows:
@@ -1601,22 +1961,15 @@ class SQLiteManager:
                         is_normal = not bool(row[1]) and not (
                             bool(row[11]) if len(row) > 11 else False
                         )
+                        active_cooldowns, invalid = active_model_cooldowns(
+                            model_cooldowns_json, current_time
+                        )
+                        invalid_cooldown_count += invalid
                         if count_cooldowns_from_rows and is_normal:
                             cooldown_key = (
-                                "in_cooldown"
-                                if has_active_model_cooldown(model_cooldowns_json, current_time)
-                                else "no_cooldown"
+                                "in_cooldown" if active_cooldowns else "no_cooldown"
                             )
                             global_stats[cooldown_key] += 1
-                        model_cooldowns = json.loads(model_cooldowns_json)
-
-                        # 自动过滤掉已过期的模型CD
-                        active_cooldowns = {}
-                        if model_cooldowns:
-                            active_cooldowns = {
-                                k: v for k, v in model_cooldowns.items()
-                                if v > current_time
-                            }
 
                         error_codes = safe_json_list(error_codes_json)
                         if is_http_403_classification_filter(error_code_filter):
@@ -1723,6 +2076,7 @@ class SQLiteManager:
                         load_error_messages=load_error_messages,
                     )
 
+                    self._report_invalid_cooldowns(invalid_cooldown_count)
                     return {
                         "items": summaries,
                         "total": total_count,

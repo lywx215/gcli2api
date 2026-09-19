@@ -4,6 +4,7 @@ Antigravity API Client - Handles communication with Google's Antigravity API
 """
 
 import asyncio
+import copy
 import hashlib
 import json
 import os
@@ -232,12 +233,13 @@ async def wrap_cli_request(
     gemini_request: Dict[str, Any],
     model: str,
     project_id: str,
+    enable_credit: bool = False,
 ) -> Tuple[Dict[str, Any], str]:
     """
     将 Gemini 格式请求包装成 Antigravity CLI 格式。
     返回 (payload, request_id)。
     """
-    inner = dict(gemini_request)
+    inner = copy.deepcopy(gemini_request)
 
     # 移除 safetySettings（CLI 不发送）
     inner.pop("safetySettings", None)
@@ -269,21 +271,51 @@ async def wrap_cli_request(
         "model": model,
         "userAgent": "antigravity",
         "requestType": "agent",
-        "enabledCreditTypes": ["GOOGLE_ONE_AI"],
     }
+    if enable_credit:
+        payload["enabledCreditTypes"] = ["GOOGLE_ONE_AI"]
     return payload, request_id
 
 
 # ==================== 辅助函数 ====================
 
-def build_antigravity_headers(access_token: str) -> Dict[str, str]:
+def _should_forward_antigravity_header(header_name: str) -> bool:
+    normalized = header_name.strip().lower()
+    return normalized.startswith("x-b3-") or normalized in {
+        "accept-language",
+        "traceparent",
+        "tracestate",
+        "x-cloud-trace-context",
+        "x-goog-api-client",
+        "x-goog-request-params",
+        "x-goog-user-project",
+        "x-request-id",
+    }
+
+
+def build_antigravity_headers(
+    access_token: str,
+    extra_headers: Optional[Dict[str, str]] = None,
+    model_name: str = "",
+) -> Dict[str, str]:
     """构建 Antigravity CLI API 请求头。"""
-    return {
+    headers = {
         "User-Agent": ANTIGRAVITY_USER_AGENT,
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
+        "Accept": "*/*",
         "Accept-Encoding": "gzip",
+        "Connection": "close",
+        "requestId": f"req-{uuid.uuid4()}",
     }
+    for key, value in (extra_headers or {}).items():
+        if _should_forward_antigravity_header(key):
+            headers.setdefault(key, value)
+    if model_name:
+        headers["requestType"] = (
+            "image_gen" if "image" in model_name.lower() else "agent"
+        )
+    return headers
 
 
 def _is_retryable_status(status_code: int, disable_error_codes: List[int]) -> bool:
@@ -361,6 +393,7 @@ async def stream_request(
     current_file, credential_data = cred_result
     access_token = credential_data.get("access_token") or credential_data.get("token")
     project_id = credential_data.get("project_id", "")
+    enable_credit = bool(credential_data.get("enable_credit", False))
 
     if not access_token:
         log.error(f"[ANTIGRAVITY STREAM] No access token in credential: {current_file}")
@@ -371,15 +404,13 @@ async def stream_request(
     antigravity_url = await get_antigravity_api_url()
     target_url = f"{antigravity_url}/v1internal:streamGenerateContent?alt=sse"
 
-    auth_headers = build_antigravity_headers(access_token)
-
-    # 合并自定义headers
-    if headers:
-        auth_headers.update(headers)
+    auth_headers = build_antigravity_headers(access_token, headers, model_name)
 
     # 构建 CLI 格式请求体
     inner_request = body.get("request", body)
-    final_payload, _ = await wrap_cli_request(inner_request, model_name, project_id)
+    final_payload, _ = await wrap_cli_request(
+        inner_request, model_name, project_id, enable_credit
+    )
 
     # 3. 调用stream_post_async进行请求
     retry_config = await get_retry_config()
@@ -408,6 +439,10 @@ async def stream_request(
         # 只更新token和project_id,不重建整个headers和payload
         auth_headers["Authorization"] = f"Bearer {access_token}"
         final_payload["project"] = project_id
+        if credential_data.get("enable_credit", False):
+            final_payload["enabledCreditTypes"] = ["GOOGLE_ONE_AI"]
+        else:
+            final_payload.pop("enabledCreditTypes", None)
         return True
 
     def apply_cred_result(cred_result: Tuple[str, Dict[str, Any]]) -> bool:
@@ -419,6 +454,10 @@ async def stream_request(
             return False
         auth_headers["Authorization"] = f"Bearer {access_token}"
         final_payload["project"] = project_id
+        if credential_data.get("enable_credit", False):
+            final_payload["enabledCreditTypes"] = ["GOOGLE_ONE_AI"]
+        else:
+            final_payload.pop("enabledCreditTypes", None)
         return True
 
     for attempt in range(max_retries + 1):
@@ -652,6 +691,7 @@ async def non_stream_request(
     current_file, credential_data = cred_result
     access_token = credential_data.get("access_token") or credential_data.get("token")
     project_id = credential_data.get("project_id", "")
+    enable_credit = bool(credential_data.get("enable_credit", False))
 
     if not access_token:
         log.error(f"[ANTIGRAVITY] No access token in credential: {current_file}")
@@ -661,15 +701,13 @@ async def non_stream_request(
     antigravity_url = await get_antigravity_api_url()
     target_url = f"{antigravity_url}/v1internal:generateContent"
 
-    auth_headers = build_antigravity_headers(access_token)
-
-    # 合并自定义headers
-    if headers:
-        auth_headers.update(headers)
+    auth_headers = build_antigravity_headers(access_token, headers, model_name)
 
     # 构建 CLI 格式请求体
     inner_request = body.get("request", body)
-    final_payload, _ = await wrap_cli_request(inner_request, model_name, project_id)
+    final_payload, _ = await wrap_cli_request(
+        inner_request, model_name, project_id, enable_credit
+    )
 
     # 3. 调用post_async进行请求
     retry_config = await get_retry_config()
@@ -698,6 +736,10 @@ async def non_stream_request(
         # 只更新token和project_id,不重建整个headers和payload
         auth_headers["Authorization"] = f"Bearer {access_token}"
         final_payload["project"] = project_id
+        if credential_data.get("enable_credit", False):
+            final_payload["enabledCreditTypes"] = ["GOOGLE_ONE_AI"]
+        else:
+            final_payload.pop("enabledCreditTypes", None)
         return True
 
     def apply_cred_result(cred_result: Tuple[str, Dict[str, Any]]) -> bool:
@@ -709,6 +751,10 @@ async def non_stream_request(
             return False
         auth_headers["Authorization"] = f"Bearer {access_token}"
         final_payload["project"] = project_id
+        if credential_data.get("enable_credit", False):
+            final_payload["enabledCreditTypes"] = ["GOOGLE_ONE_AI"]
+        else:
+            final_payload.pop("enabledCreditTypes", None)
         return True
 
     for attempt in range(max_retries + 1):
@@ -912,7 +958,7 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
         return []
 
     # 构建请求头
-    headers = build_antigravity_headers(access_token)
+    headers = build_antigravity_headers(access_token, model_name="agent")
 
     try:
         # 使用 POST 请求获取模型列表
@@ -996,7 +1042,7 @@ async def fetch_quota_info(access_token: str) -> Dict[str, Any]:
         }
     """
 
-    headers = build_antigravity_headers(access_token)
+    headers = build_antigravity_headers(access_token, model_name="agent")
 
     try:
         antigravity_url = await get_antigravity_api_url()

@@ -20,6 +20,52 @@ def test_control_panels_do_not_contain_duplicate_ids():
         assert len(ids) == len(set(ids)), f"duplicate id in {filename}"
 
 
+def test_control_panels_preserve_authored_text_without_browser_translation():
+    front_dir = Path(__file__).parent / "front"
+
+    for filename in ("control_panel.html", "control_panel_mobile.html"):
+        html = (front_dir / filename).read_text(encoding="utf-8")
+        root = re.search(r"<html\b[^>]*>", html)
+        assert root is not None
+        assert 'lang="zh-CN"' in root.group(0)
+        assert 'class="notranslate"' in root.group(0)
+        assert 'translate="no"' in root.group(0)
+        assert '<meta name="google" content="notranslate">' in html
+        for authored_text in (
+            ">CD中</option>",
+            ">未CD</option>",
+            ">Code Assist Standard</option>",
+            ">Code Assist Enterprise</option>",
+            ">Free</option>",
+            ">Pro</option>",
+            ">Ultra</option>",
+            ">Unknown</option>",
+        ):
+            assert authored_text in html
+
+        for mistranslation in (
+            "尚未发行CD版",
+            ">光盘</option>",
+            "Code Assist 标准",
+            ">自由的</option>",
+            ">专业版</option>",
+            ">极端主义者</option>",
+        ):
+            assert mistranslation not in html
+
+    common_js = (front_dir / "common.js").read_text(encoding="utf-8")
+    assert "Tier: ${tierPresentation.label}" in common_js
+
+
+def test_oauth_result_pages_preserve_authored_text_without_browser_translation():
+    auth_source = (Path(__file__).parent / "src" / "auth.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert auth_source.count('class="notranslate" translate="no"') == 2
+    assert auth_source.count('<meta name="google" content="notranslate">') == 2
+
+
 def test_quota_fallback_cooldown_field_is_wired_for_both_panels():
     front_dir = Path(__file__).parent / "front"
 

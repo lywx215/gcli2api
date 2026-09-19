@@ -10,14 +10,7 @@ TOKEN_STATE_FIELDS = (
     "disabled",
     "permanent_disabled",
     "user_email",
-    "error_codes",
     "model_cooldowns",
-    "health_status",
-    "quarantine_reason",
-    "probe_stage",
-    "next_probe_at",
-    "health_check_started_at",
-    "health_state_version",
 )
 
 
