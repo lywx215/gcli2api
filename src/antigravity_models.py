@@ -18,6 +18,9 @@ class AntigravityModelMetadata:
     display_name: str
     family: str
     tier: str
+    visible: bool = True
+    availability: str = "public"
+    badge: Optional[str] = None
 
 
 PUBLIC_ANTIGRAVITY_MODELS: tuple[AntigravityModelMetadata, ...] = (
@@ -83,6 +86,40 @@ PUBLIC_ANTIGRAVITY_MODEL_IDS: tuple[str, ...] = tuple(
 _PUBLIC_MODEL_BY_ID = {model.id: model for model in PUBLIC_ANTIGRAVITY_MODELS}
 
 
+# These IDs are accepted by the upstream service and therefore remain in raw
+# quota responses and direct routing. They are known unavailable choices for
+# operators, however, so the quota panel must not render them as selectable
+# models. Keep this list separate from the public API catalog: visibility is a
+# panel concern and must never remove an upstream ID from compatibility paths.
+HIDDEN_ANTIGRAVITY_QUOTA_MODEL_IDS = frozenset(
+    {
+        "chat_20706",
+        "chat_23310",
+        "tab_flash_lite_preview",
+        "tab_jump_flash_lite_preview",
+        "gemini-2.5-pro",
+        "gemini-3-flash-agent",
+        "gemini-3.5-flash-extra-low",
+        "gemini-3.5-flash-lite",
+        "gemini-3.5-flash-low",
+    }
+)
+
+
+# ``gemini-3-flash`` is a usable direct-route model, but it is not one of the
+# CLI slugs advertised through /antigravity/v1/models. It should remain a
+# normal visible quota card, without the internal/compatibility badge.
+DISPLAY_ONLY_ANTIGRAVITY_QUOTA_MODELS = {
+    "gemini-3-flash": AntigravityModelMetadata(
+        "gemini-3-flash",
+        "gemini-3-flash",
+        "gemini-3-flash",
+        "default",
+        availability="available",
+    ),
+}
+
+
 # Bare names are compatibility conveniences only. They are accepted by the
 # request routers but are deliberately absent from the advertised model list.
 ANTIGRAVITY_MODEL_ALIASES = {
@@ -109,6 +146,7 @@ ANTIGRAVITY_NATIVE_MODEL_IDS = frozenset(
         "gemini-3.5-flash-medium",
         "gemini-3.5-flash-low",
         "gemini-3.5-flash-extra-low",
+        "gemini-3.5-flash-lite",
     }
 )
 
@@ -134,6 +172,9 @@ def describe_antigravity_model(model_id: str) -> dict[str, object]:
             "family": public_model.family,
             "tier": public_model.tier,
             "testModel": model_id,
+            "visible": public_model.visible,
+            "availability": public_model.availability,
+            "badge": public_model.badge,
         }
 
     family = model_id
@@ -144,6 +185,21 @@ def describe_antigravity_model(model_id: str) -> dict[str, object]:
             tier = suffix[1:]
             break
 
+    display_model = DISPLAY_ONLY_ANTIGRAVITY_QUOTA_MODELS.get(model_id)
+    if display_model is not None:
+        return {
+            "displayName": display_model.display_name,
+            "rawModelId": model_id,
+            "public": False,
+            "family": display_model.family,
+            "tier": display_model.tier,
+            "testModel": model_id,
+            "visible": display_model.visible,
+            "availability": display_model.availability,
+            "badge": display_model.badge,
+        }
+
+    unavailable = model_id in HIDDEN_ANTIGRAVITY_QUOTA_MODEL_IDS
     return {
         "displayName": model_id,
         "rawModelId": model_id,
@@ -151,4 +207,7 @@ def describe_antigravity_model(model_id: str) -> dict[str, object]:
         "family": family,
         "tier": tier,
         "testModel": model_id,
+        "visible": not unavailable,
+        "availability": "unavailable" if unavailable else "compatible",
+        "badge": "不可用" if unavailable else "内部/兼容",
     }

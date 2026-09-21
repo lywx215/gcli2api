@@ -2460,11 +2460,22 @@ async function _toggleQuotaDetails(pathId, mode) {
                         `;
 
                         const _nowMs = Date.now();
-                        const modelEntries = Object.entries(models);
+                        let modelEntries = Object.entries(models);
                         if (mode === 'antigravity') {
+                            // The quota API deliberately preserves every raw upstream
+                            // model for diagnostics and direct-route compatibility.
+                            // Only the panel presentation honors the catalog's safe
+                            // visibility metadata; older API payloads remain visible.
+                            modelEntries = modelEntries.filter(([_, quotaData]) => quotaData.visible !== false);
                             modelEntries.sort(([nameA, dataA], [nameB, dataB]) => {
-                                const publicOrder = Number(dataB.public === true) - Number(dataA.public === true);
-                                if (publicOrder !== 0) return publicOrder;
+                                const quotaGroup = (data) => {
+                                    if (data.public === true) return 'public';
+                                    if (data.availability === 'available') return 'available';
+                                    return 'compatible';
+                                };
+                                const groupOrder = { public: 0, available: 1, compatible: 2 };
+                                const order = groupOrder[quotaGroup(dataA)] - groupOrder[quotaGroup(dataB)];
+                                if (order !== 0) return order;
                                 return String(dataA.displayName || nameA).localeCompare(String(dataB.displayName || nameB));
                             });
                         }
@@ -2478,15 +2489,28 @@ async function _toggleQuotaDetails(pathId, mode) {
                             const rawModelId = quotaData.rawModelId || modelName;
                             const testModel = quotaData.testModel || displayName;
                             const isPublicModel = quotaData.public === true;
-                            const quotaGroup = isPublicModel ? 'public' : 'internal';
+                            const availability = quotaData.availability || (isPublicModel ? 'public' : 'compatible');
+                            const quotaGroup = isPublicModel
+                                ? 'public'
+                                : (availability === 'available' ? 'available' : 'compatible');
 
                             if (mode === 'antigravity' && quotaGroup !== activeQuotaGroup) {
-                                const groupTitle = isPublicModel ? '终端可选模型' : '内部/兼容模型';
-                                const groupHint = isPublicModel
+                                const groupTitle = quotaGroup === 'public'
+                                    ? '终端可选模型'
+                                    : (quotaGroup === 'available' ? '可用模型' : '内部/兼容模型');
+                                const groupHint = quotaGroup === 'public'
                                     ? '与当前 Antigravity CLI 公共模型目录一致'
-                                    : '保留上游原始 ID，可直接测试但不在公共模型 API 中广告';
+                                    : (quotaGroup === 'available'
+                                        ? '可通过现有 Antigravity 路由直接使用，但不在公共模型 API 中广告'
+                                        : '保留上游原始 ID，可直接测试但不在公共模型 API 中广告');
+                                const groupColors = {
+                                    public: ['#e8f5e9', '#1b5e20'],
+                                    available: ['#e3f2fd', '#0d47a1'],
+                                    compatible: ['#fff3e0', '#8a4b08']
+                                };
+                                const [groupBackground, groupColor] = groupColors[quotaGroup];
                                 quotaHTML += `
-                                    <div data-quota-model-group="${quotaGroup}" style="grid-column: 1 / -1; margin-top: ${activeQuotaGroup ? '8px' : '0'}; padding: 7px 9px; border-radius: 4px; background: ${isPublicModel ? '#e8f5e9' : '#fff3e0'}; color: ${isPublicModel ? '#1b5e20' : '#8a4b08'};">
+                                    <div data-quota-model-group="${quotaGroup}" style="grid-column: 1 / -1; margin-top: ${activeQuotaGroup ? '8px' : '0'}; padding: 7px 9px; border-radius: 4px; background: ${groupBackground}; color: ${groupColor};">
                                         <span style="font-size: 12px; font-weight: bold;">${groupTitle}</span>
                                         <span style="font-size: 10px; margin-left: 6px; opacity: 0.85;">${groupHint}</span>
                                     </div>
@@ -2523,11 +2547,13 @@ async function _toggleQuotaDetails(pathId, mode) {
                             else if (usedPercentage >= 70) percentageColor = '#ffc107'; // 黄色：使用较多
                             else if (usedPercentage >= 50) percentageColor = '#17a2b8'; // 蓝色：使用中等
 
+                            const modelBadge = typeof quotaData.badge === 'string' ? quotaData.badge : '';
+
                             quotaHTML += `
                                 <div style="background: white; border-left: 4px solid ${percentageColor}; border-radius: 4px; padding: 8px 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                                         <div style="font-weight: bold; color: #333; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: 8px;" title="${displayName} - 剩余${remainingPercentage}% - ${resetTime}${rawModelId !== displayName ? ` (原始: ${rawModelId})` : ''}">
-                                            ${displayName}${mode === 'antigravity' && !isPublicModel ? ' <span data-model-visibility="internal" style="font-size:9px;color:#b26a00;">内部/兼容</span>' : ''}
+                                            ${displayName}${mode === 'antigravity' && modelBadge ? ` <span data-model-availability="${availability}" style="font-size:9px;color:#b26a00;">${modelBadge}</span>` : ''}
                                         </div>
                                         <div style="font-size: 13px; font-weight: bold; color: ${percentageColor}; white-space: nowrap;">
                                             ${remainingPercentage}%

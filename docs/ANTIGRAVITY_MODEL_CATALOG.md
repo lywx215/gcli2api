@@ -6,7 +6,10 @@ The public Antigravity model-list endpoints advertise the intersection of the
 current credential's live `fetchAvailableModels` response and the model slugs
 documented for Antigravity CLI 1.2.7. Quota details continue to expose every
 raw upstream model so operators can inspect and test compatibility and service
-models without advertising those IDs to ordinary API clients.
+models without advertising those IDs to ordinary API clients. Each raw quota
+entry also has presentation-only `visible`, `availability`, and optional
+`badge` metadata. This metadata never changes the raw response, model routing,
+or public model-list contract.
 
 References:
 
@@ -20,6 +23,15 @@ Compatibility notes:
 - Existing OpenAI and Gemini model-list response schemas are unchanged.
 - Raw, legacy, `tiered`, `chat_*`, `tab_*`, and `*-agent` IDs remain directly
   routable but are not advertised by the public list endpoints.
+- The quota panel filters only entries with `visible: false`; raw quota API
+  responses still include them. `chat_20706`, `chat_23310`,
+  `tab_flash_lite_preview`, `tab_jump_flash_lite_preview`, `gemini-2.5-pro`,
+  `gemini-3-flash-agent`, `gemini-3.5-flash-extra-low`,
+  `gemini-3.5-flash-lite`, and `gemini-3.5-flash-low` are currently hidden as
+  unavailable.
+- `gemini-3-flash` remains a visible, directly routable quota model without an
+  internal/compatibility badge. It is intentionally not added to the public
+  `/antigravity/v1/models` or `/antigravity/v1beta/models` catalog.
 - Bare Gemini family names and Claude/GPT compatibility names are normalized
   to current upstream IDs at the Antigravity route boundary.
 - The public `gemini-3.1-pro-high` slug uses the current
