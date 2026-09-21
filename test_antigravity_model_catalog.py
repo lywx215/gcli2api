@@ -294,3 +294,5 @@ def test_quota_panel_groups_public_and_internal_models():
     assert "终端可选模型" in source
     assert "内部/兼容模型" in source
     assert 'data-model-visibility="internal"' in source
+    assert "&& data.success === true" in source
+    assert "实际返回:" in source

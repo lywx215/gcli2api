@@ -6,7 +6,9 @@ import asyncio
 import io
 import json
 import os
+import re
 import time
+import unicodedata
 import uuid
 import zipfile
 from typing import Any, List, Optional
@@ -64,9 +66,63 @@ from .utils import validate_mode
 router = APIRouter(prefix="/creds", tags=["credentials"])
 
 
+ANTIGRAVITY_MODEL_TEST_EXPECTED_REPLY = "测试成功"
+ANTIGRAVITY_MODEL_TEST_PROMPT = (
+    "这是模型可用性测试。请只回复以下四个汉字，不要添加解释或其他内容：测试成功"
+)
+
+
 # =============================================================================
 # 工具函数 (Helper Functions)
 # =============================================================================
+
+
+def _extract_antigravity_model_test_reply(response: Any) -> str:
+    """Extract final, non-thinking text from an Antigravity response."""
+    try:
+        payload = response.json()
+    except Exception:
+        try:
+            payload = json.loads(getattr(response, "text", "") or "{}")
+        except Exception:
+            return ""
+
+    if not isinstance(payload, dict):
+        return ""
+    response_payload = payload.get("response", payload)
+    if not isinstance(response_payload, dict):
+        return ""
+    candidates = response_payload.get("candidates", [])
+    if not isinstance(candidates, list) or not candidates:
+        return ""
+    candidate = candidates[0]
+    if not isinstance(candidate, dict):
+        return ""
+    content = candidate.get("content", {})
+    parts = content.get("parts", []) if isinstance(content, dict) else []
+    return "".join(
+        str(part.get("text", ""))
+        for part in parts
+        if isinstance(part, dict)
+        and not part.get("thought", False)
+        and part.get("text") is not None
+    ).strip()
+
+
+def _is_expected_antigravity_model_test_reply(reply: str) -> bool:
+    """Accept only the requested success marker, plus harmless punctuation."""
+    normalized = unicodedata.normalize("NFKC", reply or "")
+    normalized = re.sub(r"\s+", "", normalized)
+    normalized = normalized.strip("\"'“”‘’「」『』。.!！")
+    return normalized == ANTIGRAVITY_MODEL_TEST_EXPECTED_REPLY
+
+
+def _safe_model_test_reply_preview(reply: str, limit: int = 300) -> str:
+    """Return a short single-line model reply without exposing response metadata."""
+    preview = re.sub(r"\s+", " ", reply or "").strip()
+    if not preview:
+        return "（空回复）"
+    return preview if len(preview) <= limit else preview[:limit] + "…"
 
 
 async def extract_json_files_from_zip(zip_file: UploadFile) -> List[dict]:
@@ -2265,6 +2321,23 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         test_model = model if model else "gemini-2.5-flash"
         # 如果指定了具体模型，则跳过后续的 preview 模型测试
         skip_preview_test = model is not None
+        strict_antigravity_model_test = mode == "antigravity" and model is not None
+        test_prompt = (
+            ANTIGRAVITY_MODEL_TEST_PROMPT
+            if strict_antigravity_model_test
+            else "hi"
+        )
+        test_max_output_tokens = 256 if strict_antigravity_model_test else 1
+        upstream_test_model = test_model
+        if mode == "antigravity":
+            from src.converter.gemini_fix import map_antigravity_gemini_model
+            from src.utils import normalize_antigravity_model_alias
+
+            upstream_test_model = normalize_antigravity_model_alias(test_model)
+            if upstream_test_model.startswith("gemini-"):
+                upstream_test_model = map_antigravity_gemini_model(
+                    upstream_test_model, None, None
+                )
 
         if mode == "antigravity":
             api_base_url = await get_antigravity_api_url()
@@ -2282,11 +2355,15 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         response = await post_async(
             url=f"{api_base_url}/v1internal:generateContent",
             json={
-                "model": test_model,
+                "model": upstream_test_model,
                 "project": project_id,
                 "request": {
-                    "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-                    "generationConfig": {"maxOutputTokens": 1}
+                    "contents": [
+                        {"role": "user", "parts": [{"text": test_prompt}]}
+                    ],
+                    "generationConfig": {
+                        "maxOutputTokens": test_max_output_tokens
+                    }
                 }
             },
             headers=headers,
@@ -2345,10 +2422,44 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                 "filename": filename,
             })
 
+        if strict_antigravity_model_test and status_code == 429:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "success": False,
+                    "verified_reply": False,
+                    "status_code": status_code,
+                    "message": "模型当前限流，未完成返回内容验证",
+                    "expected_reply": ANTIGRAVITY_MODEL_TEST_EXPECTED_REPLY,
+                    "filename": filename,
+                },
+            )
+
         if status_code == 200 or status_code == 429:
             log.info(f"凭证测试成功: {filename} (mode={mode}, model={test_model}, status={status_code})")
             # 测试成功时清除错误状态
             if status_code == 200:
+                model_reply = None
+                if strict_antigravity_model_test:
+                    model_reply = _extract_antigravity_model_test_reply(response)
+                    if not _is_expected_antigravity_model_test_reply(model_reply):
+                        reply_preview = _safe_model_test_reply_preview(model_reply)
+                        log.warning(
+                            "Antigravity 模型语义测试失败: "
+                            f"{filename} (model={test_model}, reply={reply_preview})"
+                        )
+                        return JSONResponse(
+                            status_code=424,
+                            content={
+                                "success": False,
+                                "verified_reply": False,
+                                "status_code": status_code,
+                                "message": "模型未返回预期的测试成功标记",
+                                "expected_reply": ANTIGRAVITY_MODEL_TEST_EXPECTED_REPLY,
+                                "model_reply": reply_preview,
+                                "filename": filename,
+                            },
+                        )
                 if hasattr(storage_adapter._backend, "record_success"):
                     await storage_adapter._backend.record_success(
                         filename,
@@ -2408,14 +2519,23 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                     )
 
             # 返回成功响应
+            success_content = {
+                "success": True,
+                "status_code": status_code,
+                "message": "测试成功",
+                "filename": filename,
+            }
+            if strict_antigravity_model_test:
+                success_content.update(
+                    {
+                        "verified_reply": True,
+                        "expected_reply": ANTIGRAVITY_MODEL_TEST_EXPECTED_REPLY,
+                        "model_reply": model_reply,
+                    }
+                )
             return JSONResponse(
                 status_code=status_code,
-                content={
-                    "success": True,
-                    "status_code": status_code,
-                    "message": "测试成功",
-                    "filename": filename
-                }
+                content=success_content,
             )
         else:
             log.warning(f"凭证测试失败: {filename} (mode={mode}, status={status_code})")

@@ -4499,7 +4499,7 @@ async function testModelQuota(btn, filename, modelName, mode, displayName) {
         );
         const data = await response.json();
 
-        if (response.ok || response.status === 429) {
+        if ((response.ok || response.status === 429) && data.success === true) {
             btn.textContent = '✓';
             btn.style.borderColor = '#28a745';
             btn.style.color = '#28a745';
@@ -4511,7 +4511,14 @@ async function testModelQuota(btn, filename, modelName, mode, displayName) {
             btn.textContent = '✗';
             btn.style.borderColor = '#dc3545';
             btn.style.color = '#dc3545';
-            const errorDetail = data.error || data.detail || data.message || '';
+            const errorDetailParts = [data.error || data.detail || data.message || ''];
+            if (data.expected_reply) {
+                errorDetailParts.push(`预期返回: ${data.expected_reply}`);
+            }
+            if (data.model_reply) {
+                errorDetailParts.push(`实际返回: ${data.model_reply}`);
+            }
+            const errorDetail = errorDetailParts.filter(Boolean).join('\n');
             showStatus(`${displayModelName}: 测试失败 (HTTP ${response.status})`, 'error');
             if (errorDetail) {
                 showMessageModal(
