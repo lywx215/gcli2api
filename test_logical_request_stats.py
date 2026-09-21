@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 import unittest
 from unittest.mock import patch
@@ -9,7 +10,11 @@ from fastapi import Response
 
 from src import httpx_client
 from src.api import geminicli as geminicli_api
-from src.logical_request_stats import response_has_valid_body, stream_item_has_body
+from src.logical_request_stats import (
+    response_has_valid_body,
+    stream_item_has_body,
+    stream_item_is_error,
+)
 from src.panel import creds as credential_routes
 from src.router import stream_passthrough
 from src.storage._stats_common import normalize_logical_request_model_family
@@ -215,6 +220,17 @@ class LogicalRequestStreamTests(unittest.TestCase):
     def test_nonstream_requires_a_real_generated_body(self):
         self.assertFalse(response_has_valid_body(Response(content=b"{}", status_code=200)))
         self.assertFalse(response_has_valid_body(Response(content=b'{"error": {}}', status_code=200)))
+        retired = (
+            "Gemini 3.5 Flash is no longer available. "
+            "Please switch to Gemini 3.7 Flash in the latest version of Antigravity."
+        )
+        retired_frame = json.dumps(
+            {"response": {"candidates": [{"content": {"parts": [{"text": retired}]}}]}}
+        ).encode()
+        self.assertFalse(response_has_valid_body(Response(content=retired_frame, status_code=200)))
+        retired_stream = b"data: " + retired_frame + b"\n\n"
+        self.assertFalse(stream_item_has_body(retired_stream))
+        self.assertTrue(stream_item_is_error(retired_stream))
         self.assertTrue(
             response_has_valid_body(
                 Response(

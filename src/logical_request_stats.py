@@ -43,7 +43,12 @@ def response_has_valid_body(response: Any) -> bool:
         payload = json.loads(body)
     except (TypeError, ValueError):
         return False
-    return isinstance(payload, dict) and not payload.get("error") and _payload_has_body(payload)
+    return (
+        isinstance(payload, dict)
+        and not payload.get("error")
+        and not _payload_has_unavailable_notice(payload)
+        and _payload_has_body(payload)
+    )
 
 
 def stream_item_has_body(item: Any) -> bool:
@@ -64,7 +69,11 @@ def stream_item_has_body(item: Any) -> bool:
         payload = json.loads(payload_text)
     except (TypeError, ValueError):
         return False
-    if not isinstance(payload, dict) or payload.get("error"):
+    if (
+        not isinstance(payload, dict)
+        or payload.get("error")
+        or _payload_has_unavailable_notice(payload)
+    ):
         return False
     return _payload_has_body(payload)
 
@@ -83,7 +92,18 @@ def stream_item_is_error(item: Any) -> bool:
         payload = json.loads(data_lines[-1])
     except (TypeError, ValueError):
         return False
-    return isinstance(payload, dict) and bool(payload.get("error"))
+    return isinstance(payload, dict) and (
+        bool(payload.get("error")) or _payload_has_unavailable_notice(payload)
+    )
+
+
+def _payload_has_unavailable_notice(payload: dict[str, Any]) -> bool:
+    """Recognize the explicit HTTP-200 retirement notice returned upstream."""
+    normalized = json.dumps(payload, ensure_ascii=False).casefold()
+    return (
+        "is no longer available" in normalized
+        and "please switch to" in normalized
+    )
 
 
 def _payload_has_body(payload: dict[str, Any]) -> bool:

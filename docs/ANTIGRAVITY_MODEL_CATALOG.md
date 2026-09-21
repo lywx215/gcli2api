@@ -27,8 +27,9 @@ Compatibility notes:
   responses still include them. `chat_20706`, `chat_23310`,
   `tab_flash_lite_preview`, `tab_jump_flash_lite_preview`, `gemini-2.5-pro`,
   `gemini-3-flash-agent`, `gemini-3.5-flash-extra-low`,
-  `gemini-3.5-flash-lite`, and `gemini-3.5-flash-low` are currently hidden as
-  unavailable.
+  and `gemini-3.5-flash-low` are currently hidden as unavailable.
+- `gemini-3.5-flash-lite` remains visible because the corrected native route
+  returned the exact strict probe marker during live validation.
 - `gemini-3-flash` remains a visible, directly routable quota model without an
   internal/compatibility badge. It is intentionally not added to the public
   `/antigravity/v1/models` or `/antigravity/v1beta/models` catalog.
