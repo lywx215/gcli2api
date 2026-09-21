@@ -103,6 +103,34 @@ function clearStoredAuthToken() {
     }
 }
 
+async function copyTextWithManualFallback(text, manualPrompt) {
+    if (window.isSecureContext && navigator.clipboard?.writeText) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return 'clipboard';
+        } catch (_) {
+            // Continue to browser and manual fallbacks.
+        }
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+        if (document.execCommand?.('copy')) return 'legacy';
+    } catch (_) {
+        // The prompt below keeps the data available for manual copying.
+    } finally {
+        document.body.removeChild(textarea);
+    }
+    window.prompt(manualPrompt || '请手动复制以下内容：', text);
+    return 'manual';
+}
+
 function getEmbedPolicy() {
     const element = document.querySelector('meta[name="gcli-embed-policy"]');
     if (!element) return { mode: 'disabled', origins: [] };
@@ -209,6 +237,8 @@ function createCredsManager(type) {
                 batchRefreshCooldown: `./creds/batch-refresh-cooldown`,
                 download: `./creds/download`,
                 downloadAll: `./creds/download-all`,
+                downloadSelected: `./creds/download-selected`,
+                copyEmails: `./creds/copy-emails`,
                 detail: `./creds/detail`,
                 fetchEmail: `./creds/fetch-email`,
                 refreshAllEmails: `./creds/refresh-all-emails`,
@@ -439,7 +469,7 @@ function createCredsManager(type) {
             const selectedCount = this.selectedFiles.size;
             document.getElementById(this.getElementId('SelectedCount')).textContent = `已选择 ${selectedCount} 项`;
 
-            const batchBtnNames = ['Enable', 'Disable', 'PermanentDisable', 'Delete', 'Verify', 'Test', 'Preview', 'RefreshCooldown', 'CopyEmails'];
+            const batchBtnNames = ['Enable', 'Disable', 'PermanentDisable', 'Delete', 'Verify', 'Test', 'Preview', 'RefreshCooldown', 'Download', 'CopyEmails'];
             if (this.type === 'antigravity') {
                 batchBtnNames.push('EnableCredit');
                 batchBtnNames.push('DisableCredit');
@@ -478,21 +508,67 @@ function createCredsManager(type) {
                 return;
             }
 
-            const emails = selectedFiles
-                .map(filename => this.emailByFilename.get(filename))
-                .filter(email => typeof email === 'string' && email.length > 0);
-            if (emails.length === 0) {
-                showStatus('选中的账号尚未获取邮箱，请先刷新邮箱', 'error');
-                return;
-            }
-
             try {
-                await navigator.clipboard.writeText(emails.join('\n'));
-                const missingCount = selectedFiles.length - emails.length;
-                const suffix = missingCount > 0 ? `，跳过 ${missingCount} 个未获取邮箱的账号` : '';
-                showStatus(`已复制 ${emails.length} 个选中账号的邮箱${suffix}`, missingCount > 0 ? 'warning' : 'success');
+                const response = await fetch(`${this.getEndpoint('copyEmails')}?${this.getModeParam()}`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ filenames: selectedFiles })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || '读取邮箱失败');
+                const emails = Array.isArray(data.emails) ? data.emails : [];
+                if (emails.length === 0) {
+                    showStatus(`选中的账号没有可复制邮箱（缺失 ${data.missing_count || selectedFiles.length} 项）`, 'warning');
+                    return;
+                }
+                const copyMode = await copyTextWithManualFallback(
+                    emails.join('\n'),
+                    '剪贴板不可用，请手动复制以下邮箱：'
+                );
+                const missingCount = Number(data.missing_count || 0);
+                const suffix = missingCount > 0 ? `，跳过 ${missingCount} 个无邮箱或不存在的账号` : '';
+                const prefix = copyMode === 'manual' ? '已显示手工复制窗口：' : '已复制 ';
+                showStatus(`${prefix}${emails.length} 个去重邮箱${suffix}`, missingCount > 0 ? 'warning' : 'success');
             } catch (error) {
                 showStatus(`复制邮箱失败: ${error.message}`, 'error');
+            }
+        },
+
+        async downloadSelected() {
+            const selectedFiles = Array.from(this.selectedFiles);
+            if (selectedFiles.length === 0) {
+                showStatus('请先选择要下载的凭证', 'error');
+                return;
+            }
+            try {
+                const response = await fetch(`${this.getEndpoint('downloadSelected')}?${this.getModeParam()}`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ filenames: selectedFiles })
+                });
+                if (!response.ok) {
+                    let message = '下载失败';
+                    try {
+                        const data = await response.json();
+                        message = data.detail || message;
+                    } catch (_) {}
+                    throw new Error(message);
+                }
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const anchor = document.createElement('a');
+                anchor.href = url;
+                anchor.download = this.type === 'antigravity'
+                    ? 'selected_antigravity_credentials.zip'
+                    : 'selected_credentials.zip';
+                anchor.click();
+                window.URL.revokeObjectURL(url);
+                const successCount = Number(response.headers.get('X-Selected-Count') || selectedFiles.length);
+                const missingCount = Number(response.headers.get('X-Missing-Count') || 0);
+                const suffix = missingCount > 0 ? `，缺失 ${missingCount} 项` : '';
+                showStatus(`已下载 ${successCount} 个选中凭证${suffix}`, missingCount > 0 ? 'warning' : 'success');
+            } catch (error) {
+                showStatus(`选中凭证下载失败: ${error.message}`, 'error');
             }
         },
 
@@ -1782,6 +1858,7 @@ function toggleSelectAll() {
     AppState.creds.updateBatchControls();
 }
 function batchAction(action) { AppState.creds.batchAction(action); }
+function downloadSelectedCredentials() { return AppState.creds.downloadSelected(); }
 function copySelectedEmails() { return AppState.creds.copySelectedEmails(); }
 function downloadCred(filename) {
     fetch(`./creds/download/${filename}`, { headers: { 'Authorization': `Bearer ${AppState.authToken}` } })
@@ -1843,6 +1920,7 @@ function toggleSelectAllAntigravity() {
     AppState.antigravityCreds.updateBatchControls();
 }
 function batchAntigravityAction(action) { AppState.antigravityCreds.batchAction(action); }
+function downloadSelectedAntigravityCredentials() { return AppState.antigravityCreds.downloadSelected(); }
 function copySelectedAntigravityEmails() { return AppState.antigravityCreds.copySelectedEmails(); }
 function downloadAntigravityCred(filename) {
     fetch(`./creds/download/${filename}?mode=antigravity`, { headers: getAuthHeaders() })

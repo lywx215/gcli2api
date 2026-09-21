@@ -21,6 +21,7 @@ from src.models import (
     CredFileActionRequest,
     CredFileBatchActionRequest,
     CredFileBatchTestRequest,
+    CredFilenameListRequest,
     RefreshTokenAddRequest,
     RefreshTokenBatchAddRequest,
 )
@@ -563,6 +564,127 @@ async def download_all_creds_common(mode: str = "geminicli") -> Response:
         content=zip_buffer.getvalue(),
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={zip_filename}"},
+    )
+
+
+def _normalize_selected_credential_filenames(filenames: List[str]) -> List[str]:
+    """Validate safe JSON basenames and de-duplicate while preserving order."""
+    normalized: List[str] = []
+    seen = set()
+    for raw_name in filenames:
+        name = str(raw_name or "").strip()
+        if (
+            not name
+            or len(name) > 255
+            or not name.endswith(".json")
+            or any(char in name for char in ("/", "\\", "\0", "\r", "\n"))
+            or name in {".", ".."}
+            or os.path.basename(name) != name
+        ):
+            raise HTTPException(status_code=400, detail="包含不安全的凭证文件名")
+        if name not in seen:
+            seen.add(name)
+            normalized.append(name)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="凭证文件名列表不能为空")
+    return normalized
+
+
+async def download_selected_creds_common(
+    filenames: List[str], mode: str = "geminicli"
+) -> Response:
+    """Package selected credentials without exposing item details in metadata."""
+    mode = validate_mode(mode)
+    selected = _normalize_selected_credential_filenames(filenames)
+    storage_adapter = await get_storage_adapter()
+    zip_buffer = io.BytesIO()
+    success_count = 0
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for filename in selected:
+            try:
+                credential_data = await storage_adapter.get_credential(filename, mode=mode)
+                if credential_data is None:
+                    continue
+                zip_file.writestr(
+                    filename,
+                    json.dumps(credential_data, ensure_ascii=False, indent=2),
+                )
+                success_count += 1
+            except Exception:
+                continue
+
+    missing_count = len(selected) - success_count
+    if success_count == 0:
+        raise HTTPException(status_code=404, detail="未找到可下载的凭证文件")
+
+    zip_buffer.seek(0)
+    zip_filename = (
+        "selected_antigravity_credentials.zip"
+        if mode == "antigravity"
+        else "selected_credentials.zip"
+    )
+    log.info(
+        f"选中凭证打包完成: mode={mode}, success={success_count}, missing={missing_count}"
+    )
+    return Response(
+        content=zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename={zip_filename}",
+            "X-Selected-Count": str(success_count),
+            "X-Missing-Count": str(missing_count),
+        },
+    )
+
+
+async def copy_selected_emails_common(
+    filenames: List[str], mode: str = "geminicli"
+) -> JSONResponse:
+    """Return already-persisted emails only; this path never performs network lookup."""
+    mode = validate_mode(mode)
+    selected = _normalize_selected_credential_filenames(filenames)
+    storage_adapter = await get_storage_adapter()
+    existing = {
+        os.path.basename(name)
+        for name in await storage_adapter.list_credentials(mode=mode)
+    }
+    emails: List[str] = []
+    email_keys = set()
+    missing = []
+    matched_count = 0
+
+    for filename in selected:
+        if filename not in existing:
+            if len(missing) < 50:
+                missing.append({"filename": filename, "reason": "not_found"})
+            continue
+        try:
+            state = await storage_adapter.get_credential_state(filename, mode=mode)
+        except Exception:
+            if len(missing) < 50:
+                missing.append({"filename": filename, "reason": "state_unavailable"})
+            continue
+        email = str((state or {}).get("user_email") or "").strip()
+        if not email:
+            if len(missing) < 50:
+                missing.append({"filename": filename, "reason": "email_unavailable"})
+            continue
+        matched_count += 1
+        email_key = email.lower()
+        if email_key not in email_keys:
+            email_keys.add(email_key)
+            emails.append(email)
+
+    missing_count = len(selected) - matched_count
+    return JSONResponse(
+        content={
+            "emails": emails,
+            "matched_count": matched_count,
+            "missing_count": missing_count,
+            "requested_count": len(selected),
+            "missing": missing,
+        }
     )
 
 
@@ -1392,6 +1514,38 @@ async def download_all_creds(
     except Exception as e:
         log.error(f"打包下载失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/download-selected")
+async def download_selected_creds(
+    request: CredFilenameListRequest,
+    token: str = Depends(verify_panel_token),
+    mode: str = "geminicli",
+):
+    """Download a validated selection as a ZIP archive."""
+    try:
+        return await download_selected_creds_common(request.filenames, mode=mode)
+    except HTTPException:
+        raise
+    except Exception:
+        log.exception("打包下载选中凭证失败")
+        raise HTTPException(status_code=500, detail="打包下载失败")
+
+
+@router.post("/copy-emails")
+async def copy_selected_emails(
+    request: CredFilenameListRequest,
+    token: str = Depends(verify_panel_token),
+    mode: str = "geminicli",
+):
+    """Return persisted email addresses for a validated selection."""
+    try:
+        return await copy_selected_emails_common(request.filenames, mode=mode)
+    except HTTPException:
+        raise
+    except Exception:
+        log.exception("读取选中凭证邮箱失败")
+        raise HTTPException(status_code=500, detail="读取邮箱失败")
 
 
 @router.post("/verify-project/{filename}")
