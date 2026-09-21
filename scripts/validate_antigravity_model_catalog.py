@@ -3,23 +3,28 @@
 The source SQLite database is opened read-only. One enabled Pro credential is
 copied to an automatically deleted temporary SQLite database, and the
 candidate service is started against that temporary database only. The script
-never prints credential identifiers, account metadata, tokens, or responses.
+never prints credential identifiers, account metadata, or tokens; model output
+is limited to a short reply preview needed for semantic availability checks.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
+import re
 import secrets
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -29,6 +34,8 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 VALIDATION_FILENAME = "live-validation.json"
+EXPECTED_REPLY = "测试成功"
+TEST_PROMPT = "这是模型可用性测试。请只回复以下四个汉字，不要添加解释或其他内容：测试成功"
 
 FAMILY_PREFERENCES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
@@ -62,12 +69,12 @@ FAMILY_PREFERENCES: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
-def _read_enabled_pro_credential(source_db: Path) -> dict[str, Any]:
+def _read_enabled_pro_credential(source_db: Path) -> tuple[str, dict[str, Any]]:
     source_uri = source_db.resolve().as_uri() + "?mode=ro"
     with sqlite3.connect(source_uri, uri=True) as database:
         row = database.execute(
             """
-            SELECT credential_data
+            SELECT filename, credential_data
             FROM antigravity_credentials
             WHERE COALESCE(disabled, 0) = 0
               AND COALESCE(permanent_disabled, 0) = 0
@@ -79,12 +86,34 @@ def _read_enabled_pro_credential(source_db: Path) -> dict[str, Any]:
         ).fetchone()
     if row is None:
         raise RuntimeError("No enabled Antigravity Pro credential is available")
-    credential = json.loads(row[0])
+    filename = str(row[0])
+    credential = json.loads(row[1])
     if not isinstance(credential, dict):
         raise RuntimeError("Selected credential payload is invalid")
     if not any(credential.get(key) for key in ("refresh_token", "access_token", "token")):
         raise RuntimeError("Selected credential has no usable token")
-    return credential
+    return filename, credential
+
+
+def _read_live_passwords(source_db: Path) -> tuple[str, str]:
+    """Read API/panel passwords without logging or returning unrelated config."""
+    source_uri = source_db.resolve().as_uri() + "?mode=ro"
+    with sqlite3.connect(source_uri, uri=True) as database:
+        rows = database.execute(
+            "SELECT key, value FROM config WHERE key IN (?, ?, ?)",
+            ("api_password", "panel_password", "password"),
+        ).fetchall()
+    values: dict[str, Any] = {}
+    for key, raw_value in rows:
+        try:
+            values[str(key)] = json.loads(raw_value)
+        except (TypeError, ValueError):
+            values[str(key)] = raw_value
+    fallback = str(values.get("password") or "pwd")
+    return (
+        str(values.get("api_password") or fallback),
+        str(values.get("panel_password") or fallback),
+    )
 
 
 async def _create_temporary_sqlite(directory: Path, credential: dict[str, Any]) -> None:
@@ -183,18 +212,105 @@ def _safe_error_metadata(response: httpx.Response) -> dict[str, Any]:
     }
 
 
-def _validate_live_service(
-    base_url: str, validation_password: str, requested_families: set[str]
+def _is_expected_reply(reply: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", reply or "")
+    normalized = re.sub(r"\s+", "", normalized)
+    normalized = normalized.strip("\"'“”‘’「」『』。.!！")
+    return normalized == EXPECTED_REPLY
+
+
+def _safe_reply_preview(reply: str, limit: int = 240) -> str:
+    preview = re.sub(r"\s+", " ", reply or "").strip()
+    if not preview:
+        return "（空回复）"
+    return preview if len(preview) <= limit else preview[:limit] + "…"
+
+
+def _test_model(
+    base_url: str,
+    headers: dict[str, str],
+    family: str,
+    model_id: str,
 ) -> dict[str, Any]:
-    headers = {"Authorization": f"Bearer {validation_password}"}
-    results: list[dict[str, Any]] = []
+    started_at = time.monotonic()
+    with httpx.Client(base_url=base_url, timeout=180.0, trust_env=False) as client:
+        response = client.post(
+            "/antigravity/v1/chat/completions",
+            headers=headers,
+            json={
+                "model": model_id,
+                "messages": [{"role": "user", "content": TEST_PROMPT}],
+                "max_tokens": 256,
+                "stream": False,
+            },
+        )
+    elapsed_ms = round((time.monotonic() - started_at) * 1000)
+    result: dict[str, Any] = {
+        "family": family,
+        "model": model_id,
+        "status": response.status_code,
+        "elapsed_ms": elapsed_ms,
+        "ok": False,
+    }
+    if response.status_code < 200 or response.status_code >= 300:
+        result.update(_safe_error_metadata(response))
+        return result
+
+    try:
+        payload = response.json()
+    except ValueError:
+        result["reply"] = "（非 JSON 响应）"
+        return result
+    choices = payload.get("choices", []) if isinstance(payload, dict) else []
+    content = ""
+    reasoning_content = ""
+    if choices and isinstance(choices[0], dict):
+        message = choices[0].get("message", {})
+        if isinstance(message, dict):
+            content = message.get("content") or ""
+            reasoning_content = message.get("reasoning_content") or ""
+    reply = str(content).strip()
+    result.update(
+        {
+            "content_chars": len(reply),
+            "reasoning_chars": len(str(reasoning_content).strip()),
+            "reply": _safe_reply_preview(reply),
+            "ok": _is_expected_reply(reply),
+        }
+    )
+    return result
+
+
+def _validate_live_service(
+    base_url: str,
+    api_password: str,
+    panel_password: str,
+    quota_filename: str,
+    requested_families: set[str],
+    all_models: bool,
+    all_public_models: bool,
+    workers: int,
+) -> dict[str, Any]:
+    api_headers = {"Authorization": f"Bearer {api_password}"}
+    panel_headers = {"Authorization": f"Bearer {panel_password}"}
+    stats_before: dict[str, Any] = {}
     with httpx.Client(base_url=base_url, timeout=120.0, trust_env=False) as client:
         _wait_until_ready(client)
 
-        quota_response = client.get(
-            f"/creds/quota/{VALIDATION_FILENAME}",
+        stats_response = client.get(
+            "/creds/stats-today",
             params={"mode": "antigravity"},
-            headers=headers,
+            headers=panel_headers,
+        )
+        if stats_response.status_code == 200:
+            candidate_stats = stats_response.json()
+            if isinstance(candidate_stats, dict):
+                stats_before = candidate_stats
+
+        quota_response = client.get(
+            f"/creds/quota/{quote(quota_filename, safe='')}",
+            params={"mode": "antigravity"},
+            headers=panel_headers,
         )
         quota_response.raise_for_status()
         quota_payload = quota_response.json()
@@ -204,7 +320,9 @@ def _validate_live_service(
         if not any(info.get("public") is False for info in quota_models.values()):
             raise RuntimeError("Live quota response did not preserve internal models")
 
-        models_response = client.get("/antigravity/v1/models", headers=headers)
+        models_response = client.get(
+            "/antigravity/v1/models", headers=api_headers
+        )
         models_response.raise_for_status()
         model_payload = models_response.json()
         public_model_ids = {
@@ -212,55 +330,67 @@ def _validate_live_service(
             for item in model_payload.get("data", [])
             if isinstance(item, dict) and isinstance(item.get("id"), str)
         }
-        selected_models = _choose_family_models(public_model_ids, requested_families)
-
-        for family, model_id in selected_models:
-            started_at = time.monotonic()
-            response = client.post(
-                "/antigravity/v1/chat/completions",
-                headers=headers,
-                json={
-                    "model": model_id,
-                    "messages": [{"role": "user", "content": "仅回复 OK"}],
-                    "max_tokens": 8,
-                    "stream": False,
-                },
-            )
-            elapsed_ms = round((time.monotonic() - started_at) * 1000)
-            if response.status_code < 200 or response.status_code >= 300:
-                results.append(
-                    {
-                        "family": family,
-                        "model": model_id,
-                        "status": response.status_code,
-                        "elapsed_ms": elapsed_ms,
-                        "ok": False,
-                        **_safe_error_metadata(response),
-                    }
+        if all_models or all_public_models:
+            selected_models = [
+                (
+                    str(info.get("family") or model_id),
+                    str(info.get("testModel") or model_id),
                 )
-                continue
-            payload = response.json()
-            choices = payload.get("choices", []) if isinstance(payload, dict) else []
-            content = ""
-            reasoning_content = ""
-            if choices and isinstance(choices[0], dict):
-                message = choices[0].get("message", {})
-                if isinstance(message, dict):
-                    content = message.get("content") or ""
-                    reasoning_content = message.get("reasoning_content") or ""
-            results.append(
-                {
+                for model_id, info in quota_models.items()
+                if isinstance(info, dict)
+                and (all_models or info.get("public") is True)
+            ]
+            selected_models.sort(
+                key=lambda item: (
+                    not bool(quota_models.get(item[1], {}).get("public")),
+                    item[1],
+                )
+            )
+        else:
+            selected_models = _choose_family_models(
+                public_model_ids, requested_families
+            )
+
+    indexed_results: dict[int, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(
+                _test_model, base_url, api_headers, family, model_id
+            ): index
+            for index, (family, model_id) in enumerate(selected_models)
+        }
+        for future in as_completed(futures):
+            index = futures[future]
+            family, model_id = selected_models[index]
+            try:
+                indexed_results[index] = future.result()
+            except Exception as exc:
+                indexed_results[index] = {
                     "family": family,
                     "model": model_id,
-                    "status": response.status_code,
-                    "elapsed_ms": elapsed_ms,
-                    "content_chars": len(str(content).strip()),
-                    "reasoning_chars": len(str(reasoning_content).strip()),
-                    "ok": bool(
-                        str(content).strip() or str(reasoning_content).strip()
-                    ),
+                    "status": None,
+                    "error_type": type(exc).__name__,
+                    "ok": False,
                 }
-            )
+    results = [indexed_results[index] for index in range(len(selected_models))]
+
+    stats_after: dict[str, Any] = {}
+    with httpx.Client(base_url=base_url, timeout=30.0, trust_env=False) as client:
+        stats_response = client.get(
+            "/creds/stats-today",
+            params={"mode": "antigravity"},
+            headers=panel_headers,
+        )
+        if stats_response.status_code == 200:
+            candidate_stats = stats_response.json()
+            if isinstance(candidate_stats, dict):
+                stats_after = candidate_stats
+    stats_before_total = int(stats_before.get("total_count") or 0)
+    stats_after_total = int(stats_after.get("total_count") or 0)
+    stats_before_success = int(stats_before.get("success_count") or 0)
+    stats_after_success = int(stats_after.get("success_count") or 0)
+    stats_before_failure = int(stats_before.get("failure_count") or 0)
+    stats_after_failure = int(stats_after.get("failure_count") or 0)
 
     return {
         "advertised_model_count": len(public_model_ids),
@@ -269,6 +399,14 @@ def _validate_live_service(
             for model_id in public_model_ids
         ),
         "raw_quota_model_count": len(quota_models),
+        "tested_model_count": len(selected_models),
+        "worker_count": workers,
+        "expected_reply": EXPECTED_REPLY,
+        "stats_total_before": stats_before_total,
+        "stats_total_after": stats_after_total,
+        "stats_total_delta": stats_after_total - stats_before_total,
+        "stats_success_delta": stats_after_success - stats_before_success,
+        "stats_failure_delta": stats_after_failure - stats_before_failure,
         "results": results,
     }
 
@@ -278,15 +416,57 @@ def main() -> int:
     parser.add_argument("--source-db", type=Path, required=True)
     parser.add_argument("--port", type=int, default=7862)
     parser.add_argument(
+        "--live-url",
+        help=(
+            "Probe an already running gcli2api instance and write normal usage "
+            "statistics there instead of starting an isolated candidate"
+        ),
+    )
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument(
         "--family",
         action="append",
         choices=[family for family, _ in FAMILY_PREFERENCES],
         default=[],
         help="Validate only the selected family; may be repeated",
     )
+    selection.add_argument(
+        "--all-models",
+        action="store_true",
+        help="Test every raw model returned by live quota discovery",
+    )
+    selection.add_argument(
+        "--all-public-models",
+        action="store_true",
+        help="Test every public base model returned by live quota discovery",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=6,
+        help="Number of concurrent model probes (1-12, default: 6)",
+    )
     args = parser.parse_args()
+    if not 1 <= args.workers <= 12:
+        parser.error("--workers must be between 1 and 12")
 
-    credential = _read_enabled_pro_credential(args.source_db)
+    source_filename, credential = _read_enabled_pro_credential(args.source_db)
+    if args.live_url:
+        api_password, panel_password = _read_live_passwords(args.source_db)
+        credential.clear()
+        report = _validate_live_service(
+            args.live_url.rstrip("/"),
+            api_password,
+            panel_password,
+            source_filename,
+            set(args.family),
+            args.all_models,
+            args.all_public_models,
+            args.workers,
+        )
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if all(item["ok"] for item in report["results"]) else 1
+
     validation_password = secrets.token_urlsafe(24)
     with tempfile.TemporaryDirectory(prefix="gcli2api-antigravity-live-") as temp_name:
         temporary_directory = Path(temp_name)
@@ -309,7 +489,12 @@ def main() -> int:
             report = _validate_live_service(
                 f"http://127.0.0.1:{args.port}",
                 validation_password,
+                validation_password,
+                VALIDATION_FILENAME,
                 set(args.family),
+                args.all_models,
+                args.all_public_models,
+                args.workers,
             )
         finally:
             process.terminate()

@@ -40,3 +40,24 @@ The validator opens the source SQLite database read-only, copies one enabled
 Pro credential to a temporary SQLite database, uses a random local API
 password, suppresses service logs, reports only model/status/timing metadata,
 and deletes the temporary database after stopping the candidate service.
+
+To probe every live raw model concurrently with strict semantic validation:
+
+```powershell
+python scripts/validate_antigravity_model_catalog.py `
+  --source-db C:\path\to\credentials.db `
+  --all-models --workers 6
+```
+
+Each probe asks the model to reply only `测试成功`. HTTP 2xx, non-empty
+reasoning, or a retirement/migration notice does not pass unless the final
+answer matches that marker. The panel's per-model test uses the same rule and
+returns HTTP 424 with a short reply preview when an upstream HTTP 200 contains
+an unavailable-model notice.
+
+`--live-url http://127.0.0.1:7861` sends the probes through the running
+gcli2api service and therefore updates its normal SQLite usage statistics.
+The dashboard counts upstream attempts rather than only final client
+responses, so retries can make the statistics delta larger than the number of
+logical probes. Isolated validation remains the safe default because failed
+internal models cannot change production credential health state.
