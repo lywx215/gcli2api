@@ -7,6 +7,7 @@ import json
 from typing import Any, Dict, Optional
 
 from log import log
+from src.antigravity_models import ANTIGRAVITY_NATIVE_MODEL_IDS
 from src.converter.thoughtSignature_fix import SKIP_THOUGHT_SIGNATURE_VALIDATOR
 
 # ==================== Gemini API 配置 ====================
@@ -558,19 +559,6 @@ def prepare_image_generation_request(
 
 # ==================== 模型特性辅助函数 ====================
 
-ANTIGRAVITY_NATIVE_MODEL_IDS = {
-    # Antigravity exposes these as first-class model IDs. Their trailing
-    # -high/-low suffixes are part of the upstream model name, not local
-    # thinking-level feature suffixes.
-    "gemini-3.1-pro-high",
-    "gemini-3.1-pro-low",
-    "gemini-3.5-flash-high",
-    "gemini-3.5-flash-low",
-    "gemini-3.5-flash-extra-low",
-    "gpt-oss-120b-medium",
-}
-
-
 def get_base_model_name(model_name: str, mode: str = "geminicli") -> str:
     """移除模型名称中的本地功能后缀,返回基础模型名。
 
@@ -694,6 +682,17 @@ def map_antigravity_gemini_model(model_name: str, thinking_level: Optional[str],
     """
     model_lower = model_name.lower()
 
+    # The public 3.1 Pro High slug is translated by the Antigravity client to
+    # its current service route. The quota response still exposes both names.
+    if model_lower == "gemini-3.1-pro-high":
+        return "gemini-pro-agent"
+
+    # Other native Antigravity effort tiers are complete upstream IDs.
+    # Checking the unmodified name first prevents -high/-medium/-low from
+    # being mistaken for local GeminiCLI feature suffixes.
+    if model_lower in ANTIGRAVITY_NATIVE_MODEL_IDS:
+        return model_lower
+
     # 1. 后端支持的精确模型 ID 列表
     exact_models = {
         "gemini-3-flash", "gemini-3-flash-agent",
@@ -705,7 +704,7 @@ def map_antigravity_gemini_model(model_name: str, thinking_level: Optional[str],
         "chat_20706", "chat_23310"
     }
 
-    base_model = get_base_model_name(model_lower)
+    base_model = get_base_model_name(model_lower, mode="antigravity")
 
     # 已经是一个精确的后端模型 ID 则直接返回
     if base_model in exact_models:

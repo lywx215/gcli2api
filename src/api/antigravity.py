@@ -26,6 +26,10 @@ from log import log
 from src.credential_manager import credential_manager
 from src.httpx_client import stream_post_async, post_async
 from src.models import Model, model_to_dict
+from src.antigravity_models import (
+    describe_antigravity_model,
+    select_public_model_ids,
+)
 from src.utils import ANTIGRAVITY_USER_AGENT
 
 # 导入共同的基础功能
@@ -1008,8 +1012,10 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
             current_timestamp = int(datetime.now(timezone.utc).timestamp())
 
             if 'models' in data and isinstance(data['models'], dict):
-                # 遍历模型字典
-                for model_id in data['models'].keys():
+                # 只广告官方终端可选择且当前凭证实际可用的模型。原始服务
+                # 模型仍由额度接口展示，也仍可通过请求路由直接使用。
+                public_model_ids = select_public_model_ids(data['models'].keys())
+                for model_id in public_model_ids:
                     model = Model(
                         id=model_id,
                         object='model',
@@ -1017,25 +1023,6 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
                         owned_by='google'
                     )
                     model_list.append(model_to_dict(model))
-            # 添加额外的 claude-sonnet-4-6-thinking 模型
-            if "claude-sonnet-4-6" in data.get('models', {}):
-                model = Model(
-                    id='claude-sonnet-4-6-thinking',
-                    object='model',
-                    created=current_timestamp,
-                    owned_by='google'
-                )
-                model_list.append(model_to_dict(model))
-            # 添加额外的 claude-opus-4-6 模型
-            if "claude-opus-4-6-thinking" in data.get('models', {}):
-                claude_opus_model = Model(
-                    id='claude-opus-4-6',
-                    object='model',
-                    created=current_timestamp,
-                    owned_by='google'
-                )
-                model_list.append(model_to_dict(claude_opus_model))
-
             log.info(f"[ANTIGRAVITY] Fetched {len(model_list)} available models")
             return model_list
         else:
@@ -1111,7 +1098,8 @@ async def fetch_quota_info(access_token: str) -> Dict[str, Any]:
                         quota_info[model_id] = {
                             "remaining": remaining,
                             "resetTime": reset_time_beijing,
-                            "resetTimeRaw": reset_time_raw
+                            "resetTimeRaw": reset_time_raw,
+                            **describe_antigravity_model(model_id),
                         }
 
             return {
