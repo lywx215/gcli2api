@@ -3039,9 +3039,16 @@ async def get_recent_daily_stats(
         storage_adapter = await get_storage_adapter()
         backend = getattr(storage_adapter, "_backend", None)
         if backend is None or not hasattr(backend, "get_recent_daily_stats"):
-            return JSONResponse(content={"days": days, "items": []})
+            return JSONResponse(content={
+                "days": days, "items": [], "metric": "logical_requests",
+                "since": None,
+                "description": "Completed logical client requests; unavailable on this storage backend.",
+            })
         items = await backend.get_recent_daily_stats(days=days, mode=mode)
-        return JSONResponse(content={"days": days, "items": items})
+        metadata = {}
+        if hasattr(backend, "get_logical_request_stats_metadata"):
+            metadata = await backend.get_logical_request_stats_metadata()
+        return JSONResponse(content={"days": days, "items": items, **metadata})
     except HTTPException:
         raise
     except Exception as e:

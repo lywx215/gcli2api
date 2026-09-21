@@ -15,6 +15,11 @@ def _today_beijing_str() -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
 
 
+def utc_iso8601(timestamp: float) -> str:
+    """Render a Unix timestamp as a stable UTC ISO-8601 value."""
+    return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def active_model_cooldowns(
     value: Any, current_time: Optional[float] = None
 ) -> Tuple[dict[Any, float], int]:
@@ -159,3 +164,62 @@ def normalize_model_family(model_name: Optional[str]) -> str:
             return family
     # 带 antigravity 名字、或未知型号
     return "other"
+
+
+def normalize_logical_request_model_family(model_name: Optional[str]) -> Optional[str]:
+    """Return a safe logical-request model family, or ``None`` for blank input.
+
+    Logical-request metrics are deliberately more precise than the legacy
+    attempt counters.  Unknown non-empty IDs remain visible after conservative
+    sanitising; collapsing them into ``other`` or ``unknown`` hides useful
+    capacity signals and can merge unrelated models.
+    """
+    if model_name is None:
+        return None
+    name = str(model_name).strip().lower()
+    if not name:
+        return None
+    if "/" in name:
+        name = name.rsplit("/", 1)[-1].strip()
+    if not name:
+        return None
+
+    # Only persist printable, bounded identifiers.  This is also safe as a
+    # document key when a non-SQL backend is used.
+    cleaned = "".join(ch for ch in name if ch.isalnum() or ch in "._-")[:160]
+    if not cleaned:
+        return None
+
+    # Keep each recent Gemini generation distinct.  More-specific rules must
+    # precede broad prefixes.
+    if cleaned.startswith("gemini-pro-agent"):
+        return "3.1-pro"
+    if cleaned.startswith("gemini-3.1-flash-lite-preview"):
+        return "3.1-flash-lite-preview"
+    if cleaned.startswith("gemini-3.1-flash-lite"):
+        return "3.1-flash-lite"
+    if cleaned.startswith("gemini-3.1-flash-image"):
+        return "3.1-flash-image"
+    if cleaned.startswith("gemini-3.1-pro"):
+        return "3.1-pro"
+    if cleaned.startswith("gemini-3-flash"):
+        return "3-flash"
+    for version in ("3.8", "3.7", "3.6", "3.5"):
+        prefix = f"gemini-{version}-"
+        if cleaned.startswith(prefix):
+            if "pro" in cleaned:
+                return f"{version}-pro"
+            if "flash" in cleaned:
+                return f"{version}-flash"
+            return version
+    if cleaned.startswith("claude-sonnet-4-6"):
+        return "claude-sonnet-4-6"
+    if cleaned.startswith("claude-opus-4-6"):
+        return "claude-opus-4-6"
+    if cleaned.startswith("gpt-oss-120b"):
+        return "gpt-oss-120b"
+
+    for prefix, (_short, family) in MODEL_FAMILY_RULES:
+        if cleaned.startswith(prefix):
+            return family
+    return cleaned

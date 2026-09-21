@@ -23,10 +23,13 @@ from src.error_classification import (
     safe_json_object,
 )
 from src.storage._stats_common import (
+    _today_beijing_str,
     clear_antigravity_cooldown_family,
     cooldowns_affect_antigravity_family,
     get_antigravity_cooldown_until,
     has_active_model_cooldown,
+    normalize_logical_request_model_family,
+    utc_iso8601,
 )
 from src.subscription_tiers import (
     default_tier_for_mode,
@@ -71,6 +74,7 @@ class MySQLManager:
         # 内存配置缓存 - 初始化时加载一次
         self._config_cache: Dict[str, Any] = {}
         self._config_loaded = False
+        self._logical_stats_enabled_at: Optional[float] = None
 
         # Redis 缓存（仅当 REDIS_URL 环境变量存在时启用）
         self._redis = None
@@ -128,6 +132,7 @@ class MySQLManager:
 
                 # 创建表和索引
                 await self._create_tables()
+                self._logical_stats_enabled_at = await self._load_logical_stats_enabled_at()
 
                 # 加载配置到内存
                 await self._load_config_cache()
@@ -250,6 +255,44 @@ class MySQLManager:
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """)
 
+                # New logical-request counters are scoped by node.  Existing
+                # credential and daily_* attempt history is deliberately left
+                # untouched.
+                await cur.execute("""
+                    CREATE TABLE IF NOT EXISTS request_daily_stats (
+                        server_name VARCHAR(64) NOT NULL, date VARCHAR(10) NOT NULL,
+                        mode VARCHAR(32) NOT NULL, success_count BIGINT NOT NULL DEFAULT 0,
+                        failure_count BIGINT NOT NULL DEFAULT 0, updated_at DOUBLE,
+                        PRIMARY KEY (server_name, date, mode)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+                await cur.execute("""
+                    CREATE TABLE IF NOT EXISTS request_daily_model_stats (
+                        server_name VARCHAR(64) NOT NULL, date VARCHAR(10) NOT NULL,
+                        mode VARCHAR(32) NOT NULL, model_family VARCHAR(160) NOT NULL,
+                        success_count BIGINT NOT NULL DEFAULT 0, failure_count BIGINT NOT NULL DEFAULT 0,
+                        updated_at DOUBLE, PRIMARY KEY (server_name, date, mode, model_family)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+                await cur.execute("""
+                    CREATE TABLE IF NOT EXISTS request_minute_model_stats (
+                        server_name VARCHAR(64) NOT NULL, minute_ts BIGINT NOT NULL,
+                        mode VARCHAR(32) NOT NULL, model_family VARCHAR(160) NOT NULL,
+                        count BIGINT NOT NULL DEFAULT 0,
+                        PRIMARY KEY (server_name, minute_ts, mode, model_family)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+                await cur.execute("""
+                    CREATE TABLE IF NOT EXISTS request_stats_metadata (
+                        server_name VARCHAR(64) NOT NULL, `key` VARCHAR(128) NOT NULL,
+                        value VARCHAR(255) NOT NULL, PRIMARY KEY (server_name, `key`)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+                await cur.execute(
+                    "INSERT IGNORE INTO request_stats_metadata (server_name, `key`, value) VALUES (%s, %s, %s)",
+                    (self._server_name, "logical_requests_enabled_at", str(time.time())),
+                )
+
             await conn.commit()
 
             # 自动添加缺失的 tier 列（兼容旧表结构）
@@ -257,6 +300,19 @@ class MySQLManager:
             await self._ensure_smart_429_columns()
 
             log.debug("MySQL tables and indexes created")
+
+    async def _load_logical_stats_enabled_at(self) -> float:
+        async with self._pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT value FROM request_stats_metadata WHERE server_name = %s AND `key` = %s",
+                    (self._server_name, "logical_requests_enabled_at"),
+                )
+                row = await cur.fetchone()
+        try:
+            return float(row[0]) if row else time.time()
+        except (TypeError, ValueError):
+            return time.time()
 
     async def _ensure_tier_column(self):
         """确保 tier 列存在（兼容旧表结构）"""
@@ -1811,6 +1867,119 @@ class MySQLManager:
         except Exception as e:
             log.error(f"Error setting model cooldown for {filename}: {e}")
             return False
+
+    async def record_logical_request(
+        self, model_name: Optional[str], mode: str, success: bool
+    ) -> None:
+        """Record a final logical request without modifying credential attempts."""
+        self._ensure_initialized()
+        family = normalize_logical_request_model_family(model_name)
+        if family is None:
+            log.warning("Ignoring logical request statistic with blank model name")
+            return
+        date = _today_beijing_str()
+        minute_ts = int(time.time() // 60) * 60
+        success_count, failure_count = (1, 0) if success else (0, 1)
+        now = time.time()
+        try:
+            async with self._pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("""
+                        INSERT INTO request_daily_stats (server_name, date, mode, success_count, failure_count, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE success_count = success_count + VALUES(success_count),
+                            failure_count = failure_count + VALUES(failure_count), updated_at = VALUES(updated_at)
+                    """, (self._server_name, date, mode, success_count, failure_count, now))
+                    await cur.execute("""
+                        INSERT INTO request_daily_model_stats (server_name, date, mode, model_family, success_count, failure_count, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE success_count = success_count + VALUES(success_count),
+                            failure_count = failure_count + VALUES(failure_count), updated_at = VALUES(updated_at)
+                    """, (self._server_name, date, mode, family, success_count, failure_count, now))
+                    await cur.execute("""
+                        INSERT INTO request_minute_model_stats (server_name, minute_ts, mode, model_family, count)
+                        VALUES (%s, %s, %s, %s, 1)
+                        ON DUPLICATE KEY UPDATE count = count + 1
+                    """, (self._server_name, minute_ts, mode, family))
+                await conn.commit()
+        except Exception as exc:
+            log.error(f"record_logical_request failed: {exc}")
+
+    async def get_logical_request_stats_metadata(self) -> Dict[str, str]:
+        self._ensure_initialized()
+        enabled_at = self._logical_stats_enabled_at or time.time()
+        return {
+            "metric": "logical_requests", "since": utc_iso8601(enabled_at),
+            "description": "Completed logical client requests. Legacy daily_* statistics remain upstream-attempt history.",
+        }
+
+    async def get_today_stats(self, mode: Optional[str] = None) -> Dict[str, Any]:
+        self._ensure_initialized()
+        today = _today_beijing_str()
+        try:
+            async with self._pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    if mode:
+                        await cur.execute("SELECT success_count, failure_count FROM request_daily_stats WHERE server_name = %s AND date = %s AND mode = %s", (self._server_name, today, mode))
+                        row = await cur.fetchone()
+                        success_count, failure_count = (int(row[0]), int(row[1])) if row else (0, 0)
+                        result: Dict[str, Any] = {"date": today, "mode": mode, "success_count": success_count, "failure_count": failure_count, "total_count": success_count + failure_count}
+                    else:
+                        await cur.execute("SELECT mode, success_count, failure_count FROM request_daily_stats WHERE server_name = %s AND date = %s", (self._server_name, today))
+                        rows = await cur.fetchall()
+                        by_mode = {row[0]: {"success_count": int(row[1]), "failure_count": int(row[2]), "total_count": int(row[1]) + int(row[2])} for row in rows}
+                        success_count = sum(item["success_count"] for item in by_mode.values())
+                        failure_count = sum(item["failure_count"] for item in by_mode.values())
+                        result = {"date": today, "by_mode": by_mode, "success_count": success_count, "failure_count": failure_count, "total_count": success_count + failure_count}
+            result.update(await self.get_logical_request_stats_metadata())
+            return result
+        except Exception as exc:
+            log.error(f"get_today_stats failed: {exc}")
+            return {"date": today, "success_count": 0, "failure_count": 0, "total_count": 0, "error": str(exc)}
+
+    async def get_recent_daily_stats(self, days: int = 7, mode: Optional[str] = None) -> List[Dict[str, Any]]:
+        self._ensure_initialized()
+        days = max(1, min(int(days or 7), 90))
+        async with self._pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                if mode:
+                    await cur.execute("SELECT date, success_count, failure_count FROM request_daily_stats WHERE server_name = %s AND mode = %s ORDER BY date DESC LIMIT %s", (self._server_name, mode, days))
+                else:
+                    await cur.execute("SELECT date, SUM(success_count), SUM(failure_count) FROM request_daily_stats WHERE server_name = %s GROUP BY date ORDER BY date DESC LIMIT %s", (self._server_name, days))
+                rows = await cur.fetchall()
+        return [{"date": row[0], "success_count": int(row[1] or 0), "failure_count": int(row[2] or 0), "total_count": int(row[1] or 0) + int(row[2] or 0)} for row in rows]
+
+    async def get_today_stats_by_model(self, mode: Optional[str] = None) -> Dict[str, Any]:
+        self._ensure_initialized()
+        today, from_ts = _today_beijing_str(), int(time.time()) - 60
+        async with self._pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                if mode:
+                    await cur.execute("SELECT model_family, success_count, failure_count FROM request_daily_model_stats WHERE server_name = %s AND date = %s AND mode = %s", (self._server_name, today, mode))
+                    daily_rows = await cur.fetchall()
+                    await cur.execute("SELECT model_family, SUM(count) FROM request_minute_model_stats WHERE server_name = %s AND minute_ts >= %s AND mode = %s GROUP BY model_family", (self._server_name, from_ts, mode))
+                else:
+                    await cur.execute("SELECT model_family, SUM(success_count), SUM(failure_count) FROM request_daily_model_stats WHERE server_name = %s AND date = %s GROUP BY model_family", (self._server_name, today))
+                    daily_rows = await cur.fetchall()
+                    await cur.execute("SELECT model_family, SUM(count) FROM request_minute_model_stats WHERE server_name = %s AND minute_ts >= %s GROUP BY model_family", (self._server_name, from_ts))
+                minute_rows = await cur.fetchall()
+        rpm = {row[0]: int(row[1] or 0) for row in minute_rows}
+        by_family = {row[0]: {"success": int(row[1] or 0), "failure": int(row[2] or 0), "total": int(row[1] or 0) + int(row[2] or 0), "rpm": rpm.pop(row[0], 0)} for row in daily_rows}
+        for family, count in rpm.items():
+            by_family[family] = {"success": 0, "failure": 0, "total": 0, "rpm": count}
+        result: Dict[str, Any] = {"date": today, "mode": mode, "by_family": by_family, "totals": {"success": sum(item["success"] for item in by_family.values()), "failure": sum(item["failure"] for item in by_family.values()), "total": sum(item["total"] for item in by_family.values()), "rpm": sum(item["rpm"] for item in by_family.values())}}
+        result.update(await self.get_logical_request_stats_metadata())
+        return result
+
+    async def cleanup_minute_stats(self, keep_minutes: int = 1440) -> int:
+        self._ensure_initialized()
+        cutoff = int(time.time()) - max(60, int(keep_minutes) * 60)
+        async with self._pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("DELETE FROM request_minute_model_stats WHERE server_name = %s AND minute_ts < %s", (self._server_name, cutoff))
+                deleted = cur.rowcount
+            await conn.commit()
+        return max(0, deleted)
 
     async def record_success(
         self,

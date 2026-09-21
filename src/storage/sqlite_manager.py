@@ -28,6 +28,8 @@ from src.storage._stats_common import (
     get_antigravity_cooldown_until,
     has_active_model_cooldown,
     normalize_model_family,
+    normalize_logical_request_model_family,
+    utc_iso8601,
 )
 from src.subscription_tiers import (
     default_tier_for_mode,
@@ -143,6 +145,14 @@ class SQLiteManager:
         self._stats_minute: Dict[Tuple[int, str, str], int] = {}
         self._stats_flush_task: Optional[asyncio.Task] = None
 
+        # Logical requests are intentionally separate from the legacy
+        # per-upstream-attempt counters above.  A logical request may include
+        # several credential/upstream attempts.
+        self._logical_stats_daily: Dict[Tuple[str, str], Dict[str, int]] = {}
+        self._logical_stats_daily_model: Dict[Tuple[str, str, str], Dict[str, int]] = {}
+        self._logical_stats_minute: Dict[Tuple[int, str, str], int] = {}
+        self._logical_stats_enabled_at: Optional[float] = None
+
     async def initialize(self) -> None:
         """初始化 SQLite 数据库"""
         if self._initialized:
@@ -171,6 +181,21 @@ class SQLiteManager:
 
                     # 创建表
                     await self._create_tables(db)
+
+                    now = time.time()
+                    await db.execute(
+                        "INSERT OR IGNORE INTO request_stats_metadata (key, value) VALUES (?, ?)",
+                        ("logical_requests_enabled_at", str(now)),
+                    )
+                    async with db.execute(
+                        "SELECT value FROM request_stats_metadata WHERE key = ?",
+                        ("logical_requests_enabled_at",),
+                    ) as cursor:
+                        row = await cursor.fetchone()
+                    try:
+                        self._logical_stats_enabled_at = float(row[0]) if row else now
+                    except (TypeError, ValueError):
+                        self._logical_stats_enabled_at = now
 
                     # 修复可能包含路径的凭证文件名
                     await self._repair_credential_filenames(db)
@@ -380,6 +405,45 @@ class SQLiteManager:
                 model_family TEXT NOT NULL,
                 count INTEGER DEFAULT 0,
                 PRIMARY KEY (minute_ts, mode, model_family)
+            )
+        """)
+
+        # Logical-request statistics are a new data set.  Do not migrate or
+        # reuse daily_*: those tables remain the upstream-attempt history.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS request_daily_stats (
+                date TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                success_count INTEGER DEFAULT 0,
+                failure_count INTEGER DEFAULT 0,
+                updated_at REAL,
+                PRIMARY KEY (date, mode)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS request_daily_model_stats (
+                date TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                model_family TEXT NOT NULL,
+                success_count INTEGER DEFAULT 0,
+                failure_count INTEGER DEFAULT 0,
+                updated_at REAL,
+                PRIMARY KEY (date, mode, model_family)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS request_minute_model_stats (
+                minute_ts INTEGER NOT NULL,
+                mode TEXT NOT NULL,
+                model_family TEXT NOT NULL,
+                count INTEGER DEFAULT 0,
+                PRIMARY KEY (minute_ts, mode, model_family)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS request_stats_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             )
         """)
 
@@ -2610,6 +2674,50 @@ class SQLiteManager:
         mk = (minute_ts, mode, family)
         self._stats_minute[mk] = self._stats_minute.get(mk, 0) + 1
 
+    async def record_logical_request(
+        self, model_name: Optional[str], mode: str, success: bool
+    ) -> None:
+        """Persist one completed client-visible request, not an upstream attempt.
+
+        Blank model IDs are rejected so metrics never invent ``other`` or
+        ``unknown`` buckets.  The caller owns deciding when retry/failover has
+        reached its final logical outcome.
+        """
+        self._ensure_initialized()
+        family = normalize_logical_request_model_family(model_name)
+        if family is None:
+            log.warning("Ignoring logical request statistic with blank model name")
+            return
+        date = _today_beijing_str()
+        minute_ts = int(time.time() // 60) * 60
+        counter = "success" if success else "failure"
+        daily = self._logical_stats_daily.setdefault(
+            (date, mode), {"success": 0, "failure": 0}
+        )
+        daily[counter] += 1
+        by_model = self._logical_stats_daily_model.setdefault(
+            (date, mode, family), {"success": 0, "failure": 0}
+        )
+        by_model[counter] += 1
+        key = (minute_ts, mode, family)
+        self._logical_stats_minute[key] = self._logical_stats_minute.get(key, 0) + 1
+
+    def _logical_stats_metadata(self) -> Dict[str, str]:
+        enabled_at = self._logical_stats_enabled_at or time.time()
+        return {
+            "metric": "logical_requests",
+            "since": utc_iso8601(enabled_at),
+            "description": (
+                "Completed logical client requests. Legacy daily_* statistics "
+                "remain upstream-attempt history."
+            ),
+        }
+
+    async def get_logical_request_stats_metadata(self) -> Dict[str, str]:
+        """Return provenance fields shared by the legacy-compatible stats APIs."""
+        self._ensure_initialized()
+        return self._logical_stats_metadata()
+
     async def _flush_stats_loop(self) -> None:
         """后台定期刷写统计缓冲到 SQLite。"""
         try:
@@ -2628,11 +2736,18 @@ class SQLiteManager:
         snap_daily = self._stats_daily
         snap_daily_model = self._stats_daily_model
         snap_minute = self._stats_minute
+        snap_logical_daily = self._logical_stats_daily
+        snap_logical_daily_model = self._logical_stats_daily_model
+        snap_logical_minute = self._logical_stats_minute
         self._stats_daily = {}
         self._stats_daily_model = {}
         self._stats_minute = {}
+        self._logical_stats_daily = {}
+        self._logical_stats_daily_model = {}
+        self._logical_stats_minute = {}
 
-        if not snap_daily and not snap_daily_model and not snap_minute:
+        if not (snap_daily or snap_daily_model or snap_minute or snap_logical_daily
+                or snap_logical_daily_model or snap_logical_minute):
             return
 
         now = time.time()
@@ -2669,9 +2784,37 @@ class SQLiteManager:
                             count = count + excluded.count
                     """, (minute_ts, mode, family, count))
 
+                for (date, mode), counters in snap_logical_daily.items():
+                    await db.execute("""
+                        INSERT INTO request_daily_stats (date, mode, success_count, failure_count, updated_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(date, mode) DO UPDATE SET
+                            success_count = success_count + excluded.success_count,
+                            failure_count = failure_count + excluded.failure_count,
+                            updated_at = excluded.updated_at
+                    """, (date, mode, counters["success"], counters["failure"], now))
+                for (date, mode, family), counters in snap_logical_daily_model.items():
+                    await db.execute("""
+                        INSERT INTO request_daily_model_stats (date, mode, model_family, success_count, failure_count, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(date, mode, model_family) DO UPDATE SET
+                            success_count = success_count + excluded.success_count,
+                            failure_count = failure_count + excluded.failure_count,
+                            updated_at = excluded.updated_at
+                    """, (date, mode, family, counters["success"], counters["failure"], now))
+                for (minute_ts, mode, family), count in snap_logical_minute.items():
+                    await db.execute("""
+                        INSERT INTO request_minute_model_stats (minute_ts, mode, model_family, count)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(minute_ts, mode, model_family) DO UPDATE SET
+                            count = count + excluded.count
+                    """, (minute_ts, mode, family, count))
+
                 await db.commit()
 
-            total = len(snap_daily) + len(snap_daily_model) + len(snap_minute)
+            total = (len(snap_daily) + len(snap_daily_model) + len(snap_minute)
+                     + len(snap_logical_daily) + len(snap_logical_daily_model)
+                     + len(snap_logical_minute))
             log.debug(f"Stats flushed: {total} entries written to SQLite")
 
         except Exception as e:
@@ -2692,6 +2835,22 @@ class SQLiteManager:
                     self._stats_daily_model[k] = v
             for k, v in snap_minute.items():
                 self._stats_minute[k] = self._stats_minute.get(k, 0) + v
+            for k, v in snap_logical_daily.items():
+                buf = self._logical_stats_daily.get(k)
+                if buf:
+                    buf["success"] += v["success"]
+                    buf["failure"] += v["failure"]
+                else:
+                    self._logical_stats_daily[k] = v
+            for k, v in snap_logical_daily_model.items():
+                buf = self._logical_stats_daily_model.get(k)
+                if buf:
+                    buf["success"] += v["success"]
+                    buf["failure"] += v["failure"]
+                else:
+                    self._logical_stats_daily_model[k] = v
+            for k, v in snap_logical_minute.items():
+                self._logical_stats_minute[k] = self._logical_stats_minute.get(k, 0) + v
             raise
 
     # ============ 统计查询 ============
@@ -2705,14 +2864,14 @@ class SQLiteManager:
                 if mode:
                     async with db.execute(
                         "SELECT COALESCE(success_count,0), COALESCE(failure_count,0) "
-                        "FROM daily_stats WHERE date = ? AND mode = ?",
+                        "FROM request_daily_stats WHERE date = ? AND mode = ?",
                         (today, mode),
                     ) as cursor:
                         row = await cursor.fetchone()
                     s = int(row[0]) if row else 0
                     f = int(row[1]) if row else 0
                     # 合并未刷写缓冲
-                    buf = self._stats_daily.get((today, mode))
+                    buf = self._logical_stats_daily.get((today, mode))
                     if buf:
                         s += buf["success"]
                         f += buf["failure"]
@@ -2722,11 +2881,12 @@ class SQLiteManager:
                         "success_count": s,
                         "failure_count": f,
                         "total_count": s + f,
+                        **self._logical_stats_metadata(),
                     }
                 else:
                     async with db.execute(
                         "SELECT mode, COALESCE(success_count,0), COALESCE(failure_count,0) "
-                        "FROM daily_stats WHERE date = ?",
+                        "FROM request_daily_stats WHERE date = ?",
                         (today,),
                     ) as cursor:
                         rows = await cursor.fetchall()
@@ -2735,7 +2895,7 @@ class SQLiteManager:
                         m = r[0]
                         by_mode[m] = {"success_count": int(r[1]), "failure_count": int(r[2])}
                     # 合并未刷写缓冲
-                    for (d, m), buf in self._stats_daily.items():
+                    for (d, m), buf in self._logical_stats_daily.items():
                         if d != today:
                             continue
                         entry = by_mode.get(m)
@@ -2754,6 +2914,7 @@ class SQLiteManager:
                         "success_count": total_s,
                         "failure_count": total_f,
                         "total_count": total_s + total_f,
+                        **self._logical_stats_metadata(),
                     }
         except Exception as e:
             log.error(f"get_today_stats failed: {e}")
@@ -2774,25 +2935,36 @@ class SQLiteManager:
                 if mode:
                     async with db.execute(
                         "SELECT date, COALESCE(success_count,0), COALESCE(failure_count,0) "
-                        "FROM daily_stats WHERE mode = ? ORDER BY date DESC LIMIT ?",
+                        "FROM request_daily_stats WHERE mode = ? ORDER BY date DESC LIMIT ?",
                         (mode, days),
                     ) as cursor:
                         rows = await cursor.fetchall()
                 else:
                     async with db.execute(
                         "SELECT date, SUM(success_count), SUM(failure_count) "
-                        "FROM daily_stats GROUP BY date ORDER BY date DESC LIMIT ?",
+                        "FROM request_daily_stats GROUP BY date ORDER BY date DESC LIMIT ?",
                         (days,),
                     ) as cursor:
                         rows = await cursor.fetchall()
+            # Include unflushed logical data without changing the historic
+            # list-item schema used by the panel.
+            merged = {
+                row[0]: [int(row[1] or 0), int(row[2] or 0)] for row in rows
+            }
+            for (date, buffered_mode), counters in self._logical_stats_daily.items():
+                if mode and buffered_mode != mode:
+                    continue
+                entry = merged.setdefault(date, [0, 0])
+                entry[0] += counters["success"]
+                entry[1] += counters["failure"]
             return [
                 {
-                    "date": r[0],
-                    "success_count": int(r[1] or 0),
-                    "failure_count": int(r[2] or 0),
-                    "total_count": int((r[1] or 0) + (r[2] or 0)),
+                    "date": date,
+                    "success_count": counts[0],
+                    "failure_count": counts[1],
+                    "total_count": counts[0] + counts[1],
                 }
-                for r in rows
+                for date, counts in sorted(merged.items(), reverse=True)[:days]
             ]
         except Exception as e:
             log.error(f"get_recent_daily_stats failed: {e}")
@@ -2812,13 +2984,13 @@ class SQLiteManager:
                 if mode:
                     async with db.execute(
                         "SELECT model_family, COALESCE(success_count,0), COALESCE(failure_count,0) "
-                        "FROM daily_model_stats WHERE date = ? AND mode = ?",
+                        "FROM request_daily_model_stats WHERE date = ? AND mode = ?",
                         (today, mode),
                     ) as cursor:
                         daily_rows = await cursor.fetchall()
                     async with db.execute(
                         "SELECT model_family, COALESCE(SUM(count),0) "
-                        "FROM minute_model_stats WHERE minute_ts >= ? AND mode = ? "
+                        "FROM request_minute_model_stats WHERE minute_ts >= ? AND mode = ? "
                         "GROUP BY model_family",
                         (from_ts, mode),
                     ) as cursor:
@@ -2826,13 +2998,13 @@ class SQLiteManager:
                 else:
                     async with db.execute(
                         "SELECT model_family, SUM(success_count), SUM(failure_count) "
-                        "FROM daily_model_stats WHERE date = ? GROUP BY model_family",
+                        "FROM request_daily_model_stats WHERE date = ? GROUP BY model_family",
                         (today,),
                     ) as cursor:
                         daily_rows = await cursor.fetchall()
                     async with db.execute(
                         "SELECT model_family, COALESCE(SUM(count),0) "
-                        "FROM minute_model_stats WHERE minute_ts >= ? "
+                        "FROM request_minute_model_stats WHERE minute_ts >= ? "
                         "GROUP BY model_family",
                         (from_ts,),
                     ) as cursor:
@@ -2847,7 +3019,7 @@ class SQLiteManager:
             rpm_map: Dict[str, int] = {r[0]: int(r[1] or 0) for r in minute_rows}
 
             # 合并未刷写的 daily_model 缓冲
-            for (d, m, fam), buf in self._stats_daily_model.items():
+            for (d, m, fam), buf in self._logical_stats_daily_model.items():
                 if d != today:
                     continue
                 if mode and m != mode:
@@ -2860,7 +3032,7 @@ class SQLiteManager:
                     by_family[fam] = {"success": buf["success"], "failure": buf["failure"]}
 
             # 合并未刷写的 minute 缓冲到 RPM
-            for (mts, m, fam), cnt in self._stats_minute.items():
+            for (mts, m, fam), cnt in self._logical_stats_minute.items():
                 if mts < from_ts:
                     continue
                 if mode and m != mode:
@@ -2893,6 +3065,7 @@ class SQLiteManager:
                     "total": tot_s + tot_f,
                     "rpm": tot_rpm,
                 },
+                **self._logical_stats_metadata(),
             }
         except Exception as e:
             log.error(f"get_today_stats_by_model failed: {e}")
@@ -2910,16 +3083,24 @@ class SQLiteManager:
         try:
             cutoff = int(time.time()) - max(60, int(keep_minutes) * 60)
             async with aiosqlite.connect(self._db_path) as db:
-                cursor = await db.execute(
+                legacy_cursor = await db.execute(
                     "DELETE FROM minute_model_stats WHERE minute_ts < ?", (cutoff,)
                 )
-                deleted = cursor.rowcount
+                cursor = await db.execute(
+                    "DELETE FROM request_minute_model_stats WHERE minute_ts < ?", (cutoff,)
+                )
+                deleted = max(0, legacy_cursor.rowcount) + max(0, cursor.rowcount)
                 await db.commit()
 
             # 同时清理内存中过期的 minute 条目
             expired_keys = [k for k in self._stats_minute if k[0] < cutoff]
             for k in expired_keys:
                 del self._stats_minute[k]
+            logical_expired_keys = [
+                k for k in self._logical_stats_minute if k[0] < cutoff
+            ]
+            for k in logical_expired_keys:
+                del self._logical_stats_minute[k]
 
             return deleted
         except Exception as e:
