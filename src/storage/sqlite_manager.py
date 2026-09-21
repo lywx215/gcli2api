@@ -23,6 +23,9 @@ from src.error_classification import (
 from src.storage._stats_common import (
     _today_beijing_str,
     active_model_cooldowns,
+    clear_antigravity_cooldown_family,
+    cooldowns_affect_antigravity_family,
+    get_antigravity_cooldown_until,
     has_active_model_cooldown,
     normalize_model_family,
 )
@@ -624,7 +627,9 @@ class SQLiteManager:
                             if filename in excluded:
                                 continue
                             model_cooldowns = json.loads(model_cooldowns_json or '{}')
-                            model_cooldown = model_cooldowns.get(model_name)
+                            model_cooldown = get_antigravity_cooldown_until(
+                                model_cooldowns, model_name
+                            )
                             if model_cooldown is None or current_time >= model_cooldown:
                                 credential_data = json.loads(credential_json)
                                 credential_data["enable_credit"] = bool(enable_credit)
@@ -2043,11 +2048,21 @@ class SQLiteManager:
                                 all_summaries.append(summary)
                         elif cooldown_filter == "pro_no_cooldown":
                             # 只保留 Pro 系列未冷却的凭证（不管 Flash 是否冷却）
-                            if not any("pro" in k.lower() for k in active_cooldowns):
+                            pro_cooled = (
+                                cooldowns_affect_antigravity_family(active_cooldowns, "pro")
+                                if mode == "antigravity"
+                                else any("pro" in k.lower() for k in active_cooldowns)
+                            )
+                            if not pro_cooled:
                                 all_summaries.append(summary)
                         elif cooldown_filter == "flash_no_cooldown":
                             # 只保留 Flash 系列未冷却的凭证（不管 Pro 是否冷却）
-                            if not any("flash" in k.lower() for k in active_cooldowns):
+                            flash_cooled = (
+                                cooldowns_affect_antigravity_family(active_cooldowns, "flash")
+                                if mode == "antigravity"
+                                else any("flash" in k.lower() for k in active_cooldowns)
+                            )
+                            if not flash_cooled:
                                 all_summaries.append(summary)
                         else:
                             # 不筛选冷却状态
@@ -2310,7 +2325,12 @@ class SQLiteManager:
                 model_cooldowns = json.loads(row[0] or '{}')
                 close_cycle = False
                 if cooldown_until is None:
-                    model_cooldowns.pop(model_name, None)
+                    if mode == "antigravity":
+                        model_cooldowns = clear_antigravity_cooldown_family(
+                            model_cooldowns, model_name
+                        )
+                    else:
+                        model_cooldowns.pop(model_name, None)
                 else:
                     previous_until = model_cooldowns.get(model_name)
                     model_cooldowns[model_name] = cooldown_until

@@ -9,6 +9,11 @@ import time
 from typing import Any, Dict, List, Optional
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from src.storage._stats_common import (
+    clear_antigravity_cooldown_family,
+    cooldowns_affect_antigravity_family,
+    get_antigravity_cooldown_until,
+)
 from src.error_classification import (
     has_error_code,
     is_http_403_classification_filter,
@@ -576,7 +581,7 @@ class MongoDBManager:
             if mode == "geminicli"
             else None
         )
-        if self._redis_enabled:
+        if self._redis_enabled and not (mode == "antigravity" and model_name):
             model_lower = model_name.lower() if model_name else ""
             preview_only = mode == "geminicli" and "preview" in model_lower
             result = await self._get_next_available_from_redis(
@@ -601,8 +606,8 @@ class MongoDBManager:
 
             if health_enabled:
                 match_query["health_status"] = {"$in": ["healthy", None]}
-                if excluded:
-                    match_query["filename"] = {"$nin": list(excluded)}
+            if excluded:
+                match_query["filename"] = {"$nin": list(excluded)}
 
             if required_tiers:
                 match_query["tier"] = {"$in": list(required_tiers)}
@@ -612,13 +617,39 @@ class MongoDBManager:
                 match_query["preview"] = True
 
             # 冷却检查：直接用 MongoDB 查询表达，无需 $addFields
-            if model_name:
+            if model_name and mode != "antigravity":
                 escaped_model_name = self._escape_model_name(model_name)
                 field = f"model_cooldowns.{escaped_model_name}"
                 match_query["$or"] = [
                     {field: {"$exists": False}},
                     {field: {"$lte": current_time}},
                 ]
+
+            if mode == "antigravity" and model_name:
+                projection = {
+                    "filename": 1,
+                    "model_cooldowns": 1,
+                    "_id": 0,
+                }
+                docs = await collection.find(match_query, projection).to_list(length=None)
+                random.shuffle(docs)
+                for doc in docs:
+                    deadline = get_antigravity_cooldown_until(
+                        doc.get("model_cooldowns") or {}, model_name
+                    )
+                    if deadline is None or current_time >= deadline:
+                        selected = await collection.find_one(
+                            {"filename": doc["filename"], "disabled": False},
+                            {"credential_data": 1, "enable_credit": 1, "_id": 0},
+                        )
+                        if not selected:
+                            continue
+                        credential_data = selected.get("credential_data") or {}
+                        credential_data["enable_credit"] = bool(
+                            selected.get("enable_credit", False)
+                        )
+                        return doc["filename"], credential_data
+                return None
 
             # 统计符合条件的凭证总数（走索引，极快）
             count = await collection.count_documents(match_query)
@@ -1391,11 +1422,21 @@ class MongoDBManager:
                         all_summaries.append(summary)
                 elif cooldown_filter == "pro_no_cooldown":
                     # 只保留 Pro 系列未冷却的凭证（不管 Flash 是否冷却）
-                    if not any("pro" in k.lower() for k in active_cooldowns):
+                    pro_cooled = (
+                        cooldowns_affect_antigravity_family(active_cooldowns, "pro")
+                        if mode == "antigravity"
+                        else any("pro" in k.lower() for k in active_cooldowns)
+                    )
+                    if not pro_cooled:
                         all_summaries.append(summary)
                 elif cooldown_filter == "flash_no_cooldown":
                     # 只保留 Flash 系列未冷却的凭证（不管 Pro 是否冷却）
-                    if not any("flash" in k.lower() for k in active_cooldowns):
+                    flash_cooled = (
+                        cooldowns_affect_antigravity_family(active_cooldowns, "flash")
+                        if mode == "antigravity"
+                        else any("flash" in k.lower() for k in active_cooldowns)
+                    )
+                    if not flash_cooled:
                         all_summaries.append(summary)
                 else:
                     # 不筛选冷却状态
@@ -1655,14 +1696,31 @@ class MongoDBManager:
 
             # 转义模型名中的点号
             escaped_model_name = self._escape_model_name(model_name)
+            removed_cooldown_keys = {escaped_model_name}
 
             # 使用原子操作直接更新，避免竞态条件
             if cooldown_until is None:
-                # 删除指定模型的冷却
+                if mode == "antigravity":
+                    existing = await collection.find_one(
+                        {"filename": filename},
+                        {"model_cooldowns": 1, "_id": 0},
+                    )
+                    if existing is None:
+                        log.warning(f"Credential {filename} not found")
+                        return False
+                    cooldowns = existing.get("model_cooldowns") or {}
+                    remaining = clear_antigravity_cooldown_family(
+                        cooldowns, model_name
+                    )
+                    removed_cooldown_keys = set(cooldowns) - set(remaining)
+                unset_fields = {
+                    f"model_cooldowns.{key}": ""
+                    for key in removed_cooldown_keys or {escaped_model_name}
+                }
                 result = await collection.update_one(
                     {"filename": filename},
                     {
-                        "$unset": {f"model_cooldowns.{escaped_model_name}": ""},
+                        "$unset": unset_fields,
                         "$set": {"updated_at": time.time()}
                     }
                 )
@@ -1686,7 +1744,11 @@ class MongoDBManager:
             if self._redis_enabled:
                 cd_key = self._rk_cd(mode, filename, escaped_model_name)
                 if cooldown_until is None:
-                    await self._redis.delete(cd_key)
+                    redis_keys = [
+                        self._rk_cd(mode, filename, key)
+                        for key in removed_cooldown_keys or {escaped_model_name}
+                    ]
+                    await self._redis.delete(*redis_keys)
                 else:
                     ttl = int(cooldown_until - time.time())
                     if ttl > 0:

@@ -23,6 +23,9 @@ from src.error_classification import (
 from src.storage._stats_common import (
     MODEL_FAMILY_RULES,
     _today_beijing_str,
+    clear_antigravity_cooldown_family,
+    cooldowns_affect_antigravity_family,
+    get_antigravity_cooldown_until,
     has_active_model_cooldown,
     normalize_model_family,
 )
@@ -451,7 +454,7 @@ class PSQLManager:
                         if row["filename"] in excluded:
                             continue
                         model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
-                        cd = model_cooldowns.get(model_name)
+                        cd = get_antigravity_cooldown_until(model_cooldowns, model_name)
                         if cd is None or current_time >= cd:
                             credential_data = json.loads(row["credential_data"])
                             credential_data["enable_credit"] = bool(row["enable_credit"])
@@ -1025,11 +1028,21 @@ class PSQLManager:
                             all_summaries.append(summary)
                     elif cooldown_filter == "pro_no_cooldown":
                         # 只保留 Pro 系列未冷却的凭证（不管 Flash 是否冷却）
-                        if not any("pro" in k.lower() for k in active_cooldowns):
+                        pro_cooled = (
+                            cooldowns_affect_antigravity_family(active_cooldowns, "pro")
+                            if mode == "antigravity"
+                            else any("pro" in k.lower() for k in active_cooldowns)
+                        )
+                        if not pro_cooled:
                             all_summaries.append(summary)
                     elif cooldown_filter == "flash_no_cooldown":
                         # 只保留 Flash 系列未冷却的凭证（不管 Pro 是否冷却）
-                        if not any("flash" in k.lower() for k in active_cooldowns):
+                        flash_cooled = (
+                            cooldowns_affect_antigravity_family(active_cooldowns, "flash")
+                            if mode == "antigravity"
+                            else any("flash" in k.lower() for k in active_cooldowns)
+                        )
+                        if not flash_cooled:
                             all_summaries.append(summary)
                     else:
                         all_summaries.append(summary)
@@ -1238,7 +1251,12 @@ class PSQLManager:
                 model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
                 close_cycle = False
                 if cooldown_until is None:
-                    model_cooldowns.pop(model_name, None)
+                    if mode == "antigravity":
+                        model_cooldowns = clear_antigravity_cooldown_family(
+                            model_cooldowns, model_name
+                        )
+                    else:
+                        model_cooldowns.pop(model_name, None)
                 else:
                     previous_until = model_cooldowns.get(model_name)
                     model_cooldowns[model_name] = cooldown_until

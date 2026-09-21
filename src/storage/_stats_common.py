@@ -7,7 +7,7 @@
 import json
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 
 def _today_beijing_str() -> str:
@@ -50,6 +50,63 @@ def has_active_model_cooldown(value: Any, current_time: Optional[float] = None) 
     """Return whether a persisted cooldown mapping contains an active deadline."""
     active, _ = active_model_cooldowns(value, current_time)
     return bool(active)
+
+
+def normalize_antigravity_cooldown_key(model_name: str) -> str:
+    """Return the effective Antigravity cooldown family for a model/key."""
+    model = str(model_name or "").strip().lower()
+    if model == "gemini-shared" or model.startswith(
+        ("gemini-3.1-pro", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash")
+    ):
+        return "gemini-shared"
+    if model == "claude-gpt-shared" or model.startswith(("claude-", "gpt-oss-")):
+        return "claude-gpt-shared"
+    return model
+
+
+def get_antigravity_cooldown_until(
+    cooldowns: Mapping[str, Any], model_name: str
+) -> Optional[float]:
+    """Return the latest deadline affecting a model, including legacy family keys."""
+    family = normalize_antigravity_cooldown_key(model_name)
+    deadlines = []
+    for key, value in (cooldowns or {}).items():
+        if normalize_antigravity_cooldown_key(key) != family:
+            continue
+        if isinstance(value, bool):
+            continue
+        try:
+            deadlines.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return max(deadlines) if deadlines else None
+
+
+def clear_antigravity_cooldown_family(
+    cooldowns: Mapping[str, Any], model_name: str
+) -> dict[str, Any]:
+    """Return a copy with every concrete/legacy key in the model family removed."""
+    family = normalize_antigravity_cooldown_key(model_name)
+    return {
+        key: value
+        for key, value in (cooldowns or {}).items()
+        if normalize_antigravity_cooldown_key(key) != family
+    }
+
+
+def cooldowns_affect_antigravity_family(
+    cooldowns: Mapping[str, Any], family: str
+) -> bool:
+    """Whether active cooldown keys affect the panel's Pro/Flash family filter."""
+    family = str(family or "").strip().lower()
+    for key in (cooldowns or {}):
+        normalized = normalize_antigravity_cooldown_key(key)
+        key_lower = str(key).lower()
+        if family == "pro" and ("pro" in key_lower or normalized == "gemini-shared"):
+            return True
+        if family == "flash" and ("flash" in key_lower or normalized == "gemini-shared"):
+            return True
+    return False
 
 
 # 模型家族归一化：各种变种（-search / -thinking / -lite / preview / pro / flash 等）

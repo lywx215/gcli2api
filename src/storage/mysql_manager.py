@@ -22,7 +22,12 @@ from src.error_classification import (
     safe_json_list,
     safe_json_object,
 )
-from src.storage._stats_common import has_active_model_cooldown
+from src.storage._stats_common import (
+    clear_antigravity_cooldown_family,
+    cooldowns_affect_antigravity_family,
+    get_antigravity_cooldown_until,
+    has_active_model_cooldown,
+)
 from src.subscription_tiers import (
     default_tier_for_mode,
     required_tiers_for_geminicli_model,
@@ -782,7 +787,7 @@ class MySQLManager:
         excluded = set(excluded_credentials or ()) if smart_enabled else set()
 
         # Redis 快速路径
-        if self._redis_enabled:
+        if self._redis_enabled and not (mode == "antigravity" and model_name):
             result = await self._get_next_available_from_redis(mode, model_name, excluded)
             if result is not None:
                 return result
@@ -875,7 +880,9 @@ class MySQLManager:
                                 continue
                             model_cooldowns = json.loads(model_cooldowns_json or '{}')
 
-                            model_cooldown = model_cooldowns.get(model_name)
+                            model_cooldown = get_antigravity_cooldown_until(
+                                model_cooldowns, model_name
+                            )
                             if model_cooldown is None or current_time >= model_cooldown:
                                 return filename, json.loads(credential_json)
 
@@ -1528,6 +1535,22 @@ class MySQLManager:
                         elif cooldown_filter == "no_cooldown":
                             if not active_cooldowns:
                                 all_summaries.append(summary)
+                        elif cooldown_filter == "pro_no_cooldown":
+                            pro_cooled = (
+                                cooldowns_affect_antigravity_family(active_cooldowns, "pro")
+                                if mode == "antigravity"
+                                else any("pro" in k.lower() for k in active_cooldowns)
+                            )
+                            if not pro_cooled:
+                                all_summaries.append(summary)
+                        elif cooldown_filter == "flash_no_cooldown":
+                            flash_cooled = (
+                                cooldowns_affect_antigravity_family(active_cooldowns, "flash")
+                                if mode == "antigravity"
+                                else any("flash" in k.lower() for k in active_cooldowns)
+                            )
+                            if not flash_cooled:
+                                all_summaries.append(summary)
                         else:
                             all_summaries.append(summary)
 
@@ -1749,9 +1772,18 @@ class MySQLManager:
                         return False
 
                     model_cooldowns = json.loads(row[0] or '{}')
+                    removed_cooldown_keys: set[str] = set()
 
                     if cooldown_until is None:
-                        model_cooldowns.pop(model_name, None)
+                        if mode == "antigravity":
+                            remaining = clear_antigravity_cooldown_family(
+                                model_cooldowns, model_name
+                            )
+                            removed_cooldown_keys = set(model_cooldowns) - set(remaining)
+                            model_cooldowns = remaining
+                        else:
+                            removed_cooldown_keys = {model_name}
+                            model_cooldowns.pop(model_name, None)
                     else:
                         model_cooldowns[model_name] = cooldown_until
 
@@ -1769,7 +1801,10 @@ class MySQLManager:
                 if cooldown_until is not None:
                     await self._redis_set_cooldown(mode, filename, model_name, cooldown_until)
                 else:
-                    await self._redis_clear_cooldown(mode, filename, model_name)
+                    for cooldown_key in removed_cooldown_keys or {model_name}:
+                        await self._redis_clear_cooldown(
+                            mode, filename, cooldown_key
+                        )
 
                 return True
 
