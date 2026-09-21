@@ -88,6 +88,7 @@ def test_unavailable_quota_models_keep_raw_metadata_but_are_hidden():
         "tab_jump_flash_lite_preview",
         "gemini-2.5-pro",
         "gemini-3-flash-agent",
+        "gemini-3.1-flash-image",
         "gemini-3.5-flash-extra-low",
         "gemini-3.5-flash-low",
     }

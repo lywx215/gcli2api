@@ -26,7 +26,8 @@ Compatibility notes:
 - The quota panel filters only entries with `visible: false`; raw quota API
   responses still include them. `chat_20706`, `chat_23310`,
   `tab_flash_lite_preview`, `tab_jump_flash_lite_preview`, `gemini-2.5-pro`,
-  `gemini-3-flash-agent`, `gemini-3.5-flash-extra-low`,
+  `gemini-3-flash-agent`, `gemini-3.1-flash-image`,
+  `gemini-3.5-flash-extra-low`,
   and `gemini-3.5-flash-low` are currently hidden as unavailable.
 - `gemini-3.5-flash-lite` remains visible because the corrected native route
   returned the exact strict probe marker during live validation.
