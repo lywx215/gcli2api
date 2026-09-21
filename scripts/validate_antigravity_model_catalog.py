@@ -289,6 +289,7 @@ def _validate_live_service(
     requested_families: set[str],
     all_models: bool,
     all_public_models: bool,
+    all_internal_models: bool,
     workers: int,
 ) -> dict[str, Any]:
     api_headers = {"Authorization": f"Bearer {api_password}"}
@@ -330,7 +331,7 @@ def _validate_live_service(
             for item in model_payload.get("data", [])
             if isinstance(item, dict) and isinstance(item.get("id"), str)
         }
-        if all_models or all_public_models:
+        if all_models or all_public_models or all_internal_models:
             selected_models = [
                 (
                     str(info.get("family") or model_id),
@@ -338,7 +339,11 @@ def _validate_live_service(
                 )
                 for model_id, info in quota_models.items()
                 if isinstance(info, dict)
-                and (all_models or info.get("public") is True)
+                and (
+                    all_models
+                    or (all_public_models and info.get("public") is True)
+                    or (all_internal_models and info.get("public") is False)
+                )
             ]
             selected_models.sort(
                 key=lambda item: (
@@ -440,6 +445,11 @@ def main() -> int:
         action="store_true",
         help="Test every public base model returned by live quota discovery",
     )
+    selection.add_argument(
+        "--all-internal-models",
+        action="store_true",
+        help="Test every internal/compatibility model from live quota discovery",
+    )
     parser.add_argument(
         "--workers",
         type=int,
@@ -462,6 +472,7 @@ def main() -> int:
             set(args.family),
             args.all_models,
             args.all_public_models,
+            args.all_internal_models,
             args.workers,
         )
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -494,6 +505,7 @@ def main() -> int:
                 set(args.family),
                 args.all_models,
                 args.all_public_models,
+                args.all_internal_models,
                 args.workers,
             )
         finally:
