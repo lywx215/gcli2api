@@ -7,6 +7,7 @@ import io
 import json
 import os
 import time
+import uuid
 import zipfile
 from typing import Any, List, Optional
 
@@ -2654,16 +2655,8 @@ async def _add_credential_by_refresh_token(
     if pid:
         credential_data["project_id"] = pid
 
-    # 3. 生成文件名
-    if custom_filename:
-        base = os.path.basename(custom_filename.strip())
-        if not base.endswith(".json"):
-            base += ".json"
-        filename = base
-    else:
-        stem = pid or f"refresh-{int(time.time() * 1000)}"
-        stem = "".join(c for c in stem if c.isalnum() or c in "-_")
-        filename = f"{stem}.json"
+    # 3. 生成文件名。自动命名不使用 project_id，避免同项目的 token 互相覆盖。
+    filename = _build_unique_refresh_filename(custom_filename)
 
     # 4. 入库
     tier_raw_id = None
@@ -2672,6 +2665,12 @@ async def _add_credential_by_refresh_token(
     tier_detection_status = None
     if mode == "antigravity":
         await credential_manager.add_antigravity_credential(filename, credential_data)
+        if subscription_tier:
+            await credential_manager.update_credential_state(
+                filename,
+                {"tier": subscription_tier},
+                mode="antigravity",
+            )
     else:
         storage_adapter = await get_storage_adapter()
         existed = await storage_adapter.get_credential(filename, mode="geminicli") is not None
@@ -2706,6 +2705,16 @@ async def _add_credential_by_refresh_token(
         "tier_detected_at": tier_detected_at,
         "tier_detection_status": tier_detection_status,
     }
+
+
+def _build_unique_refresh_filename(custom_filename: Optional[str]) -> str:
+    """Build a unique RT-import filename without encoding credential material."""
+    if custom_filename:
+        base = os.path.basename(custom_filename.strip())
+        if not base.endswith(".json"):
+            base += ".json"
+        return base
+    return f"refresh-{time.time_ns()}-{uuid.uuid4().hex}.json"
 
 
 # =============================================================================
