@@ -2460,7 +2460,16 @@ async function _toggleQuotaDetails(pathId, mode) {
                         `;
 
                         const _nowMs = Date.now();
-                        for (const [modelName, quotaData] of Object.entries(models)) {
+                        const modelEntries = Object.entries(models);
+                        if (mode === 'antigravity') {
+                            modelEntries.sort(([nameA, dataA], [nameB, dataB]) => {
+                                const publicOrder = Number(dataB.public === true) - Number(dataA.public === true);
+                                if (publicOrder !== 0) return publicOrder;
+                                return String(dataA.displayName || nameA).localeCompare(String(dataB.displayName || nameB));
+                            });
+                        }
+                        let activeQuotaGroup = null;
+                        for (const [modelName, quotaData] of modelEntries) {
                             // 后端返回的是剩余比例 (0-1)，不是绝对数量
                             const remainingFraction = quotaData.remaining || 0;
                             const resetTime = quotaData.resetTime || 'N/A';
@@ -2468,6 +2477,22 @@ async function _toggleQuotaDetails(pathId, mode) {
                             const displayName = quotaData.displayName || modelName;
                             const rawModelId = quotaData.rawModelId || modelName;
                             const testModel = quotaData.testModel || displayName;
+                            const isPublicModel = quotaData.public === true;
+                            const quotaGroup = isPublicModel ? 'public' : 'internal';
+
+                            if (mode === 'antigravity' && quotaGroup !== activeQuotaGroup) {
+                                const groupTitle = isPublicModel ? '终端可选模型' : '内部/兼容模型';
+                                const groupHint = isPublicModel
+                                    ? '与当前 Antigravity CLI 公共模型目录一致'
+                                    : '保留上游原始 ID，可直接测试但不在公共模型 API 中广告';
+                                quotaHTML += `
+                                    <div data-quota-model-group="${quotaGroup}" style="grid-column: 1 / -1; margin-top: ${activeQuotaGroup ? '8px' : '0'}; padding: 7px 9px; border-radius: 4px; background: ${isPublicModel ? '#e8f5e9' : '#fff3e0'}; color: ${isPublicModel ? '#1b5e20' : '#8a4b08'};">
+                                        <span style="font-size: 12px; font-weight: bold;">${groupTitle}</span>
+                                        <span style="font-size: 10px; margin-left: 6px; opacity: 0.85;">${groupHint}</span>
+                                    </div>
+                                `;
+                                activeQuotaGroup = quotaGroup;
+                            }
 
                             // 倒计时（基于 resetTimeRaw 的 UTC 时间）
                             let countdownStr = '';
@@ -2502,7 +2527,7 @@ async function _toggleQuotaDetails(pathId, mode) {
                                 <div style="background: white; border-left: 4px solid ${percentageColor}; border-radius: 4px; padding: 8px 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                                         <div style="font-weight: bold; color: #333; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: 8px;" title="${displayName} - 剩余${remainingPercentage}% - ${resetTime}${rawModelId !== displayName ? ` (原始: ${rawModelId})` : ''}">
-                                            ${displayName}
+                                            ${displayName}${mode === 'antigravity' && !isPublicModel ? ' <span data-model-visibility="internal" style="font-size:9px;color:#b26a00;">内部/兼容</span>' : ''}
                                         </div>
                                         <div style="font-size: 13px; font-weight: bold; color: ${percentageColor}; white-space: nowrap;">
                                             ${remainingPercentage}%
