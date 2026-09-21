@@ -323,6 +323,21 @@ def _is_retryable_status(status_code: int, disable_error_codes: List[int]) -> bo
     return status_code in (429, 503) or status_code in disable_error_codes
 
 
+def _is_meaningful_stream_chunk(chunk: Any) -> bool:
+    """Return whether a streamed item has exposed response content downstream."""
+    if isinstance(chunk, bytes):
+        text = chunk.decode("utf-8", errors="ignore").strip()
+    elif isinstance(chunk, str):
+        text = chunk.strip()
+    else:
+        return True
+
+    if text in ("", "data:", "data: [DONE]", "[DONE]"):
+        return False
+    # SSE comment/heartbeat frames do not expose model output.
+    return not text.startswith(":")
+
+
 async def _switch_credential_for_retry(
     *,
     next_cred_task: Optional[asyncio.Task],
@@ -421,6 +436,7 @@ async def stream_request(
     last_error_response = None  # 记录最后一次的错误响应
     next_cred_task = None  # 预热的下一个凭证任务
     excluded_credentials: set[str] = set()
+    content_yielded = False  # 已向下游输出正文后，禁止异常时完整重试
 
     # 内部函数：快速更新凭证(只更新token和project_id,避免重建整个请求)
     async def refresh_credential_fast():
@@ -465,113 +481,121 @@ async def stream_request(
         need_retry = False  # 标记是否需要重试
 
         try:
-            async for chunk in stream_post_async(
+            upstream_stream = stream_post_async(
                 url=target_url,
                 body=final_payload,
                 native=native,
                 headers=auth_headers
-            ):
-                # 判断是否是Response对象
-                if isinstance(chunk, Response):
-                    status_code = chunk.status_code
-                    last_error_response = chunk  # 记录最后一次错误
+            )
+            try:
+                async for chunk in upstream_stream:
+                    # 判断是否是Response对象
+                    if isinstance(chunk, Response):
+                        status_code = chunk.status_code
+                        last_error_response = chunk  # 记录最后一次错误
 
-                    # 缓存错误解析结果,避免重复decode
-                    error_body = None
-                    try:
-                        error_body = chunk.body.decode('utf-8') if isinstance(chunk.body, bytes) else str(chunk.body)
-                    except Exception:
-                        error_body = ""
+                        # 缓存错误解析结果,避免重复decode
+                        error_body = None
+                        try:
+                            error_body = chunk.body.decode('utf-8') if isinstance(chunk.body, bytes) else str(chunk.body)
+                        except Exception:
+                            error_body = ""
 
-                    # 如果错误码是429、503或者在禁用码当中，做好记录后进行重试
-                    if _is_retryable_status(status_code, DISABLE_ERROR_CODES):
-                        log.warning(f"[ANTIGRAVITY STREAM] 流式请求失败 (status={status_code}), 凭证: {current_file}, 响应: {error_body[:500] if error_body else '无'}")
+                        # 如果错误码是429、503或者在禁用码当中，做好记录后进行重试
+                        if _is_retryable_status(status_code, DISABLE_ERROR_CODES):
+                            log.warning(f"[ANTIGRAVITY STREAM] 流式请求失败 (status={status_code}), 凭证: {current_file}, 响应: {error_body[:500] if error_body else '无'}")
 
-                        # 解析冷却时间
-                        cooldown_until = None
-                        if (status_code == 429 or status_code == 503) and error_body:
-                            try:
-                                cooldown_until = await parse_and_log_cooldown(error_body, mode="antigravity")
-                            except Exception:
-                                pass
-                        smart_cooldown = _smart_capacity_cooldown(
-                            status_code, error_body or "", model_name, current_file
-                        )
-                        if smart_cooldown is not None:
-                            cooldown_until = smart_cooldown
-
-                        smart_error_recorded = False
-                        if is_smart_429_protection_enabled():
-                            await record_api_call_error(
-                                credential_manager, current_file, status_code,
-                                cooldown_until, mode="antigravity", model_name=model_name,
-                                error_message=error_body,
+                            # 解析冷却时间
+                            cooldown_until = None
+                            if (status_code == 429 or status_code == 503) and error_body:
+                                try:
+                                    cooldown_until = await parse_and_log_cooldown(error_body, mode="antigravity")
+                                except Exception:
+                                    pass
+                            smart_cooldown = _smart_capacity_cooldown(
+                                status_code, error_body or "", model_name, current_file
                             )
-                            smart_error_recorded = True
+                            if smart_cooldown is not None:
+                                cooldown_until = smart_cooldown
 
-                        # 预热下一个凭证
-                        if is_smart_429_protection_enabled():
-                            excluded_credentials.add(current_file)
-                        if next_cred_task is None and attempt < max_retries:
-                            next_cred_task = asyncio.create_task(
-                                credential_manager.get_valid_credential(
-                                    mode="antigravity", model_name=model_name,
-                                    excluded_credentials=excluded_credentials,
+                            smart_error_recorded = False
+                            if is_smart_429_protection_enabled():
+                                await record_api_call_error(
+                                    credential_manager, current_file, status_code,
+                                    cooldown_until, mode="antigravity", model_name=model_name,
+                                    error_message=error_body,
                                 )
+                                smart_error_recorded = True
+
+                            # 预热下一个凭证
+                            if is_smart_429_protection_enabled():
+                                excluded_credentials.add(current_file)
+                            if next_cred_task is None and attempt < max_retries:
+                                next_cred_task = asyncio.create_task(
+                                    credential_manager.get_valid_credential(
+                                        mode="antigravity", model_name=model_name,
+                                        excluded_credentials=excluded_credentials,
+                                    )
+                                )
+
+                            # 记录错误并切换凭证
+                            if not smart_error_recorded:
+                                await record_api_call_error(
+                                    credential_manager, current_file, status_code,
+                                    cooldown_until, mode="antigravity", model_name=model_name,
+                                    error_message=error_body
+                                )
+
+                            # 检查是否应该重试
+                            should_retry = await handle_error_with_retry(
+                                credential_manager, status_code, current_file,
+                                retry_config["retry_enabled"], attempt, max_retries, retry_interval,
+                                mode="antigravity"
                             )
 
-                        # 记录错误并切换凭证
-                        if not smart_error_recorded:
+                            if should_retry and attempt < max_retries:
+                                need_retry = True
+                                break  # 跳出内层循环，准备重试
+                            else:
+                                # 不重试，直接返回原始错误
+                                log.error(f"[ANTIGRAVITY STREAM] 达到最大重试次数或不应重试，返回原始错误")
+                                yield chunk
+                                return
+                        else:
+                            # 错误码不在禁用码当中，直接返回，无需重试
+                            log.error(f"[ANTIGRAVITY STREAM] 流式请求失败，非重试错误码 (status={status_code}), 凭证: {current_file}, 响应: {error_body[:500] if error_body else '无'}")
                             await record_api_call_error(
                                 credential_manager, current_file, status_code,
-                                cooldown_until, mode="antigravity", model_name=model_name,
+                                None, mode="antigravity", model_name=model_name,
                                 error_message=error_body
                             )
-
-                        # 检查是否应该重试
-                        should_retry = await handle_error_with_retry(
-                            credential_manager, status_code, current_file,
-                            retry_config["retry_enabled"], attempt, max_retries, retry_interval,
-                            mode="antigravity"
-                        )
-
-                        if should_retry and attempt < max_retries:
-                            need_retry = True
-                            break  # 跳出内层循环，准备重试
-                        else:
-                            # 不重试，直接返回原始错误
-                            log.error(f"[ANTIGRAVITY STREAM] 达到最大重试次数或不应重试，返回原始错误")
                             yield chunk
                             return
                     else:
-                        # 错误码不在禁用码当中，直接返回，无需重试
-                        log.error(f"[ANTIGRAVITY STREAM] 流式请求失败，非重试错误码 (status={status_code}), 凭证: {current_file}, 响应: {error_body[:500] if error_body else '无'}")
-                        await record_api_call_error(
-                            credential_manager, current_file, status_code,
-                            None, mode="antigravity", model_name=model_name,
-                            error_message=error_body
-                        )
+                        # 不是Response，说明是真流，直接yield返回
+                        # 只在第一个chunk时记录成功
+                        if not success_recorded:
+                            await record_api_call_success(
+                                credential_manager, current_file, mode="antigravity", model_name=model_name
+                            )
+                            if is_smart_429_protection_enabled():
+                                smart_429_service.record_success("antigravity", model_name, current_file)
+                            success_recorded = True
+                            log.debug(f"[ANTIGRAVITY STREAM] 开始接收流式响应，模型: {model_name}")
+
+                        # 记录原始chunk内容（用于调试）
+                        if isinstance(chunk, bytes):
+                            log.debug(f"[ANTIGRAVITY STREAM RAW] chunk(bytes): {chunk}")
+                        else:
+                            log.debug(f"[ANTIGRAVITY STREAM RAW] chunk(str): {chunk}")
+
+                        if _is_meaningful_stream_chunk(chunk):
+                            content_yielded = True
                         yield chunk
-                        return
-                else:
-                    # 不是Response，说明是真流，直接yield返回
-                    # 只在第一个chunk时记录成功
-                    if not success_recorded:
-                        await record_api_call_success(
-                            credential_manager, current_file, mode="antigravity", model_name=model_name
-                        )
-                        if is_smart_429_protection_enabled():
-                            smart_429_service.record_success("antigravity", model_name, current_file)
-                        success_recorded = True
-                        log.debug(f"[ANTIGRAVITY STREAM] 开始接收流式响应，模型: {model_name}")
-
-                    # 记录原始chunk内容（用于调试）
-                    if isinstance(chunk, bytes):
-                        log.debug(f"[ANTIGRAVITY STREAM RAW] chunk(bytes): {chunk}")
-                    else:
-                        log.debug(f"[ANTIGRAVITY STREAM RAW] chunk(str): {chunk}")
-
-                    yield chunk
+            finally:
+                close_upstream = getattr(upstream_stream, "aclose", None)
+                if close_upstream is not None:
+                    await close_upstream()
 
             # 流式请求完成，检查结果
             if success_recorded:
@@ -622,6 +646,11 @@ async def stream_request(
 
         except Exception as e:
             log.error(f"[ANTIGRAVITY STREAM] 流式请求异常: {e}, 凭证: {current_file}")
+            if content_yielded:
+                log.error(
+                    "[ANTIGRAVITY STREAM] 已向下游输出正文，禁止异常后完整重试"
+                )
+                raise
             if attempt < max_retries:
                 log.info(f"[ANTIGRAVITY STREAM] 异常后重试 (attempt {attempt + 2}/{max_retries + 1})...")
                 await asyncio.sleep(retry_interval)
