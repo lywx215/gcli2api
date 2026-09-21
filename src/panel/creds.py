@@ -51,6 +51,7 @@ from src.subscription_tiers import (
     valid_tiers_for_mode,
 )
 from src.httpx_client import post_async
+from src.logical_request_stats import record_logical_request
 from config import (
     get_code_assist_endpoint,
     get_antigravity_api_url,
@@ -2280,6 +2281,16 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         - 429: 凭证被限流但有效
         - 其他: 凭证失败（返回实际错误码）
     """
+    strict_antigravity_model_test = False
+    strict_test_counted = False
+    test_model = model or ""
+
+    async def record_strict_test_result(success: bool) -> None:
+        nonlocal strict_test_counted
+        if strict_antigravity_model_test and not strict_test_counted:
+            await record_logical_request(test_model, mode, success)
+            strict_test_counted = True
+
     try:
         mode = validate_mode(mode)
 
@@ -2423,6 +2434,16 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
             })
 
         if strict_antigravity_model_test and status_code == 429:
+            error_text = response.text if hasattr(response, "text") else ""
+            if hasattr(storage_adapter._backend, "record_failure"):
+                await storage_adapter._backend.record_failure(
+                    filename,
+                    status_code,
+                    error_message=error_text,
+                    mode=mode,
+                    model_name=test_model,
+                )
+            await record_strict_test_result(False)
             return JSONResponse(
                 status_code=429,
                 content={
@@ -2448,6 +2469,15 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                             "Antigravity 模型语义测试失败: "
                             f"{filename} (model={test_model}, reply={reply_preview})"
                         )
+                        if hasattr(storage_adapter._backend, "record_failure"):
+                            await storage_adapter._backend.record_failure(
+                                filename,
+                                status_code,
+                                error_message="Model test did not return the expected success marker",
+                                mode=mode,
+                                model_name=test_model,
+                            )
+                        await record_strict_test_result(False)
                         return JSONResponse(
                             status_code=424,
                             content={
@@ -2471,6 +2501,9 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                         "error_codes": [],
                         "error_messages": {}
                     }, mode=mode)
+
+                if strict_antigravity_model_test:
+                    await record_strict_test_result(True)
 
                 # 如果是 geminicli 模式且第一次测试成功，继续测试 gemini-3-flash-preview（仅在未指定具体模型时）
                 if mode == "geminicli" and not skip_preview_test:
@@ -2516,6 +2549,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                         status_code,
                         error_message=error_text,
                         mode=mode,
+                        model_name=test_model,
                     )
 
             # 返回成功响应
@@ -2552,6 +2586,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                         status_code,
                         error_message=error_text,
                         mode=mode,
+                        model_name=test_model,
                     )
                 else:
                     # 使用覆盖模式保存错误（与 credential_manager 保持一致）
@@ -2583,6 +2618,9 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
             except Exception as e:
                 log.error(f"保存测试错误信息失败: {e}")
 
+        if strict_antigravity_model_test:
+            await record_strict_test_result(False)
+
         # 返回错误响应，包含完整的错误信息
         error_text = response.text if hasattr(response, 'text') else ""
 
@@ -2601,6 +2639,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         raise
     except Exception as e:
         log.error(f"测试凭证失败 {filename}: {e}")
+        await record_strict_test_result(False)
         raise HTTPException(status_code=500, detail=f"测试失败: {str(e)}")
 
 

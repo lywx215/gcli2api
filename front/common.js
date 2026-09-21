@@ -4181,28 +4181,43 @@ async function addCredentialByRefreshToken() {
 
 // 模型家族 -> 展示名、顺序、颜色
 const MODEL_FAMILY_DISPLAY = [
-    { key: '2.5-pro',                  label: 'gemini-2.5-pro',                color: '#ff7043' },
-    { key: '2.5-flash',                label: 'gemini-2.5-flash',              color: '#42a5f5' },
-    { key: '2.5-flash-lite',           label: 'gemini-2.5-flash-lite',         color: '#26a69a' },
-    { key: '3-pro-preview',            label: 'gemini-3-pro-preview',          color: '#ab47bc' },
-    { key: '3-flash-preview',          label: 'gemini-3-flash-preview',        color: '#5c6bc0' },
-    { key: '3.1-pro-preview',          label: 'gemini-3.1-pro-preview',        color: '#7e57c2' },
-    { key: '3.1-flash',                label: 'gemini-3.1-flash',              color: '#29b6f6' },
-    { key: '3.1-flash-lite-preview',   label: 'gemini-3.1-flash-lite-preview', color: '#26c6da' },
+    { key: '3.8-flash',                label: 'Gemini 3.8 Flash',             color: '#1a237e' },
+    { key: '3.7-flash',                label: 'Gemini 3.7 Flash',             color: '#283593' },
+    { key: '3.6-flash',                label: 'Gemini 3.6 Flash',             color: '#303f9f' },
+    { key: '3.5-flash',                label: 'Gemini 3.5 Flash',             color: '#3949ab' },
+    { key: '3.5-flash-high',           label: 'Gemini 3.5 Flash High',        color: '#283593' },
+    { key: '3.1-pro',                  label: 'Gemini 3.1 Pro',               color: '#7e57c2' },
+    { key: '3.1-pro-preview',          label: 'Gemini 3.1 Pro Preview',       color: '#9575cd' },
+    { key: '3.1-flash',                label: 'Gemini 3.1 Flash',             color: '#29b6f6' },
+    { key: '3.1-flash-lite',           label: 'Gemini 3.1 Flash Lite',        color: '#00acc1' },
+    { key: '3.1-flash-lite-preview',   label: 'Gemini 3.1 Flash Lite Preview', color: '#26c6da' },
+    { key: '3.1-flash-image',          label: 'Gemini 3.1 Flash Image',       color: '#00897b' },
+    { key: '3-pro',                    label: 'Gemini 3 Pro',                 color: '#8e24aa' },
+    { key: '3-pro-preview',            label: 'Gemini 3 Pro Preview',         color: '#ab47bc' },
+    { key: '3-flash',                  label: 'Gemini 3 Flash',               color: '#3f51b5' },
+    { key: '3-flash-preview',          label: 'Gemini 3 Flash Preview',       color: '#5c6bc0' },
+    { key: '2.5-pro',                  label: 'Gemini 2.5 Pro',               color: '#ff7043' },
+    { key: '2.5-flash',                label: 'Gemini 2.5 Flash',             color: '#42a5f5' },
+    { key: '2.5-flash-lite',           label: 'Gemini 2.5 Flash Lite',        color: '#26a69a' },
     { key: '2.0-flash',                label: 'gemini-2.0-flash',              color: '#78909c' },
-    { key: '2.0-pro',                  label: 'gemini-2.0-pro',                color: '#8d6e63' },
-    { key: 'other',                    label: '其他 / 未知',                   color: '#bdbdbd' },
+    { key: '2.0-pro',                  label: 'Gemini 2.0 Pro',               color: '#8d6e63' },
+    { key: 'pro-agent',                label: 'Gemini Pro Agent (legacy)',    color: '#ef6c00' },
+    { key: 'claude-opus-4-6',          label: 'Claude Opus 4.6',               color: '#c62828' },
+    { key: 'claude-sonnet-4-6',        label: 'Claude Sonnet 4.6',             color: '#d84315' },
+    { key: 'gpt-oss-120b',             label: 'GPT-OSS 120B',                 color: '#546e7a' },
 ];
 
 function _renderModelStatsRows(byFamily, tbodyEl, isHotBg) {
     if (!tbodyEl) return;
     const families = byFamily || {};
-    // 按预设顺序输出 + 末尾追加未识别的 family
+    // Known families keep a stable product order.  Future safe family IDs
+    // remain visible after them; only the legacy catch-all buckets are hidden.
     const known = new Set(MODEL_FAMILY_DISPLAY.map(f => f.key));
     const orderedKeys = MODEL_FAMILY_DISPLAY.map(f => f.key)
         .filter(k => families[k]);
-    const extraKeys = Object.keys(families).filter(k => !known.has(k));
-
+    const extraKeys = Object.keys(families)
+        .filter(k => !known.has(k) && k !== 'other' && k !== 'unknown')
+        .sort();
     const rows = [...orderedKeys, ...extraKeys];
     if (rows.length === 0) {
         tbodyEl.innerHTML = '<tr><td colspan="6" style="padding:12px;text-align:center;opacity:0.7;">今日暂无调用</td></tr>';

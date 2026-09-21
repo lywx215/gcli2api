@@ -677,7 +677,7 @@ async def stream_request(
         yield build_error_response("请求失败，所有重试均已耗尽", 429)
 
 
-async def non_stream_request(
+async def _non_stream_request(
     body: Dict[str, Any],
     headers: Optional[Dict[str, str]] = None,
 ) -> Response:
@@ -963,6 +963,23 @@ async def non_stream_request(
         return last_error_response
     else:
         return build_error_response("所有重试均失败", 500)
+
+
+async def non_stream_request(
+    body: Dict[str, Any],
+    headers: Optional[Dict[str, str]] = None,
+    *,
+    record_logical: bool = True,
+) -> Response:
+    """Execute one client logical request after all internal retry attempts."""
+    response = await _non_stream_request(body=body, headers=headers)
+    if record_logical:
+        from src.logical_request_stats import record_logical_request, response_has_valid_body
+
+        await record_logical_request(
+            str(body.get("model") or ""), "antigravity", response_has_valid_body(response)
+        )
+    return response
 
 
 # ==================== 模型和配额查询 ====================

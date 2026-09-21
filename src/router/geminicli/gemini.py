@@ -199,7 +199,7 @@ async def stream_generate_content(
             "request": normalized_req
         }
 
-        response = await non_stream_request(body=api_request)
+        response = await non_stream_request(body=api_request, record_logical=False)
 
         # 检查响应状态码
         if hasattr(response, "status_code") and response.status_code != 200:
@@ -417,12 +417,12 @@ async def stream_generate_content(
 
     # ========== 根据模式选择生成器 ==========
     if use_fake_streaming:
-        return await build_streaming_response_or_error(fake_stream_generator())
+        return await build_streaming_response_or_error(fake_stream_generator(), model_name=real_model, mode="geminicli")
     elif use_anti_truncation:
         log.info("启用流式抗截断功能")
-        return await build_streaming_response_or_error(anti_truncation_generator())
+        return await build_streaming_response_or_error(anti_truncation_generator(), model_name=real_model, mode="geminicli")
     else:
-        return await build_streaming_response_or_error(normal_stream_generator())
+        return await build_streaming_response_or_error(normal_stream_generator(), model_name=real_model, mode="geminicli")
 
 @router.post("/v1beta/models/{model:path}:countTokens")
 @router.post("/v1/models/{model:path}:countTokens")

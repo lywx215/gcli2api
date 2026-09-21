@@ -543,7 +543,7 @@ async def stream_request(
     yield err
 
 
-async def non_stream_request(
+async def _non_stream_request(
     body: Dict[str, Any],
     headers: Optional[Dict[str, str]] = None,
 ) -> Response:
@@ -846,6 +846,23 @@ async def non_stream_request(
     err = build_error_response("Server is busy, please retry later", 503)
     _debug_log_final_response("NON-STREAM", err)
     return err
+
+
+async def non_stream_request(
+    body: Dict[str, Any],
+    headers: Optional[Dict[str, str]] = None,
+    *,
+    record_logical: bool = True,
+) -> Response:
+    """Execute one client logical request after all internal retry attempts."""
+    response = await _non_stream_request(body=body, headers=headers)
+    if record_logical:
+        from src.logical_request_stats import record_logical_request, response_has_valid_body
+
+        await record_logical_request(
+            str(body.get("model") or ""), "geminicli", response_has_valid_body(response)
+        )
+    return response
 
 
 # ==================== 测试代码 ====================
