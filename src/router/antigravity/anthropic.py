@@ -26,6 +26,7 @@ from log import log
 # 本地模块 - 工具和认证
 from src.utils import (
     get_base_model_from_feature_model,
+    normalize_antigravity_model_alias,
     is_anti_truncation_model,
     is_fake_streaming_model,
     authenticate_bearer,
@@ -88,7 +89,9 @@ async def messages(
     # 处理模型名称和功能检测
     use_fake_streaming = is_fake_streaming_model(claude_request.model)
     use_anti_truncation = is_anti_truncation_model(claude_request.model)
-    real_model = get_base_model_from_feature_model(claude_request.model)
+    real_model = normalize_antigravity_model_alias(
+        get_base_model_from_feature_model(claude_request.model)
+    )
 
     # 获取流式标志
     is_streaming = claude_request.stream
@@ -156,7 +159,7 @@ async def messages(
     async def fake_stream_generator():
         from src.api.antigravity import non_stream_request
 
-        response = await non_stream_request(body=api_request)
+        response = await non_stream_request(body=api_request, record_logical=False)
 
         # 检查响应状态码
         if hasattr(response, "status_code") and response.status_code != 200:
@@ -333,12 +336,12 @@ async def messages(
 
     # ========== 根据模式选择生成器 ==========
     if use_fake_streaming:
-        return await build_streaming_response_or_error(fake_stream_generator())
+        return await build_streaming_response_or_error(fake_stream_generator(), model_name=real_model, mode="antigravity")
     elif use_anti_truncation:
         log.info("启用流式抗截断功能")
-        return await build_streaming_response_or_error(anti_truncation_generator())
+        return await build_streaming_response_or_error(anti_truncation_generator(), model_name=real_model, mode="antigravity")
     else:
-        return await build_streaming_response_or_error(normal_stream_generator())
+        return await build_streaming_response_or_error(normal_stream_generator(), model_name=real_model, mode="antigravity")
 
 
 @router.post("/antigravity/v1/messages/count_tokens")

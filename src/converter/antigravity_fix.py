@@ -782,17 +782,36 @@ async def normalize_antigravity_request(
         # 对于 Gemini 模型：统一转换为 functionDeclarations 并确保只使用 parameters 字段（移除 parametersJsonSchema 以防报错）
         result["tools"] = _ensure_empty_tool_schema_for_claude(result.get("tools"), model, "antigravity")
 
-    if "gemini-2.5-flash-lite" in model.lower():
+    if "gpt-oss" in model.lower():
+        # The OpenAI-compatible GPT-OSS service route rejects Gemini safety
+        # settings. Keep its request envelope minimal, matching the current
+        # Antigravity terminal behavior.
+        result.pop("safetySettings", None)
+    elif "gemini-2.5-flash-lite" in model.lower():
         result["safetySettings"] = LITE_SAFETY_SETTINGS
     else:
         result["safetySettings"] = DEFAULT_SAFETY_SETTINGS
 
     # 2. 参数范围限制
     if generation_config:
-        # 强制设置 maxOutputTokens 为 64000
-        generation_config["maxOutputTokens"] = 64000
-        # 强制设置 topK 为 64
-        generation_config["topK"] = 64
+        if "gpt-oss" in model.lower():
+            # Preserve a client-supplied short output limit and omit Gemini's
+            # topK extension, which the GPT-OSS route does not accept.
+            requested_max_output = generation_config.get("maxOutputTokens")
+            if not isinstance(requested_max_output, (int, float)) or isinstance(
+                requested_max_output, bool
+            ):
+                requested_max_output = 8192
+            generation_config["maxOutputTokens"] = min(
+                max(int(requested_max_output), 1), 8192
+            )
+            generation_config.pop("topK", None)
+            generation_config.pop("thinkingConfig", None)
+        else:
+            # 强制设置 maxOutputTokens 为 64000
+            generation_config["maxOutputTokens"] = 64000
+            # 强制设置 topK 为 64
+            generation_config["topK"] = 64
 
     if "contents" in result:
         result["contents"] = _ensure_tool_call_ids(result["contents"], model)

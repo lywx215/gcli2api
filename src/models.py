@@ -383,6 +383,10 @@ class CredFileBatchTestRequest(BaseModel):
     filenames: List[str]
 
 
+class CredFilenameListRequest(BaseModel):
+    filenames: List[str] = Field(..., min_length=1, max_length=100)
+
+
 class RefreshTokenAddRequest(BaseModel):
     refresh_token: str
     client_id: Optional[str] = None  # 可选，留空使用内置默认值

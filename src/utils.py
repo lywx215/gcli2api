@@ -4,6 +4,7 @@ from config import get_api_password, get_panel_password
 from fastapi import Depends, HTTPException, Header, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from log import log
+from src.antigravity_models import ANTIGRAVITY_MODEL_ALIASES
 
 # HTTP Bearer security scheme
 security = HTTPBearer()
@@ -108,17 +109,6 @@ def is_fake_streaming_model(model_name: str) -> bool:
 def is_anti_truncation_model(model_name: str) -> bool:
     """Check if model name indicates anti-truncation should be used."""
     return model_name.startswith(("抗截断/", "流式抗截断/"))
-
-
-ANTIGRAVITY_MODEL_ALIASES = {
-    # Some clients/proxies strip the final Antigravity model tier because
-    # -high/-low also look like local thinking-level suffixes.  Keep these
-    # compatibility aliases at the Antigravity route boundary so requests
-    # still hit real upstream model IDs.
-    "gemini-3.1-pro": "gemini-3.1-pro-high",
-    "gemini-3.5-flash": "gemini-3.5-flash-low",
-    "gpt-oss-120b": "gpt-oss-120b-medium",
-}
 
 
 def normalize_antigravity_model_alias(model_name: str) -> str:

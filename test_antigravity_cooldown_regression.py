@@ -53,6 +53,20 @@ class _FakeCredentialsFactory:
 class _FakeResponse:
     status_code = 200
 
+    def __init__(self, reply="测试成功"):
+        self._payload = {
+            "response": {
+                "candidates": [
+                    {"content": {"parts": [{"text": reply}]}}
+                ]
+            }
+        }
+        self.text = json.dumps(self._payload, ensure_ascii=False)
+        self.content = self.text.encode("utf-8")
+
+    def json(self):
+        return self._payload
+
 
 async def test_antigravity_specific_model_uses_current_header_signature(monkeypatch):
     storage = _FakeStorageAdapter()
@@ -91,6 +105,79 @@ async def test_antigravity_specific_model_uses_current_header_signature(monkeypa
     assert storage._backend.success_calls == [
         ("credential.json", "gemini-3.6-flash-high", "antigravity")
     ]
+    assert captured_request["json"]["request"]["contents"][0]["parts"][0][
+        "text"
+    ].endswith("测试成功")
+    assert captured_request["json"]["request"]["generationConfig"] == {
+        "maxOutputTokens": 256
+    }
+
+
+async def test_antigravity_specific_model_rejects_deprecation_text(monkeypatch):
+    storage = _FakeStorageAdapter()
+
+    async def fake_get_storage_adapter():
+        return storage
+
+    async def fake_get_antigravity_api_url():
+        return "https://antigravity.test"
+
+    async def fake_post_async(**kwargs):
+        return _FakeResponse(
+            "Gemini 3.5 Flash is no longer available. "
+            "Please switch to Gemini 3.7 Flash in the latest version of Antigravity."
+        )
+
+    monkeypatch.setattr(creds_panel, "get_storage_adapter", fake_get_storage_adapter)
+    monkeypatch.setattr(
+        creds_panel, "get_antigravity_api_url", fake_get_antigravity_api_url
+    )
+    monkeypatch.setattr(creds_panel, "Credentials", _FakeCredentialsFactory)
+    monkeypatch.setattr(httpx_client, "post_async", fake_post_async)
+
+    response = await creds_panel.test_credential_common(
+        "credential.json",
+        mode="antigravity",
+        model="gemini-3.5-flash-low",
+    )
+    payload = json.loads(response.body)
+
+    assert response.status_code == 424
+    assert payload["success"] is False
+    assert payload["verified_reply"] is False
+    assert "no longer available" in payload["model_reply"]
+    assert storage._backend.success_calls == []
+
+
+async def test_antigravity_model_test_uses_current_service_route(monkeypatch):
+    storage = _FakeStorageAdapter()
+    captured_request = {}
+
+    async def fake_get_storage_adapter():
+        return storage
+
+    async def fake_get_antigravity_api_url():
+        return "https://antigravity.test"
+
+    async def fake_post_async(**kwargs):
+        captured_request.update(kwargs)
+        return _FakeResponse()
+
+    monkeypatch.setattr(creds_panel, "get_storage_adapter", fake_get_storage_adapter)
+    monkeypatch.setattr(
+        creds_panel, "get_antigravity_api_url", fake_get_antigravity_api_url
+    )
+    monkeypatch.setattr(creds_panel, "Credentials", _FakeCredentialsFactory)
+    monkeypatch.setattr(httpx_client, "post_async", fake_post_async)
+
+    response = await creds_panel.test_credential_common(
+        "credential.json",
+        mode="antigravity",
+        model="gemini-3.1-pro-high",
+    )
+
+    assert response.status_code == 200
+    assert captured_request["json"]["model"] == "gemini-pro-agent"
 
 
 async def test_antigravity_generic_429_does_not_create_persistent_cooldown():

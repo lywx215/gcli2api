@@ -23,8 +23,13 @@ from src.error_classification import (
 from src.storage._stats_common import (
     MODEL_FAMILY_RULES,
     _today_beijing_str,
+    clear_antigravity_cooldown_family,
+    cooldowns_affect_antigravity_family,
+    get_antigravity_cooldown_until,
     has_active_model_cooldown,
     normalize_model_family,
+    normalize_logical_request_model_family,
+    utc_iso8601,
 )
 from src.subscription_tiers import (
     default_tier_for_mode,
@@ -74,6 +79,7 @@ class PSQLManager:
         # 内存配置缓存
         self._config_cache: Dict[str, Any] = {}
         self._config_loaded = False
+        self._logical_stats_enabled_at: Optional[float] = None
 
     async def initialize(self) -> None:
         """初始化 PostgreSQL 数据库"""
@@ -94,6 +100,10 @@ class PSQLManager:
                 async with self._pool.acquire() as conn:
                     await self._create_tables(conn)
                     await self._ensure_schema_compatibility(conn)
+                    self._logical_stats_enabled_at = float(await conn.fetchval(
+                        "SELECT value FROM request_stats_metadata WHERE key = $1",
+                        "logical_requests_enabled_at",
+                    ))
 
                 await self._load_config_cache()
 
@@ -226,6 +236,35 @@ class PSQLManager:
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_minute_model_stats_ts ON minute_model_stats(minute_ts)
         """)
+
+        # Separate logical-request metrics from the retained upstream-attempt
+        # daily_* tables.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS request_daily_stats (
+                date TEXT NOT NULL, mode TEXT NOT NULL,
+                success_count BIGINT NOT NULL DEFAULT 0, failure_count BIGINT NOT NULL DEFAULT 0,
+                updated_at DOUBLE PRECISION, PRIMARY KEY (date, mode)
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS request_daily_model_stats (
+                date TEXT NOT NULL, mode TEXT NOT NULL, model_family TEXT NOT NULL,
+                success_count BIGINT NOT NULL DEFAULT 0, failure_count BIGINT NOT NULL DEFAULT 0,
+                updated_at DOUBLE PRECISION, PRIMARY KEY (date, mode, model_family)
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS request_minute_model_stats (
+                minute_ts BIGINT NOT NULL, mode TEXT NOT NULL, model_family TEXT NOT NULL,
+                count BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (minute_ts, mode, model_family)
+            )
+        """)
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_request_minute_model_stats_ts ON request_minute_model_stats(minute_ts)")
+        await conn.execute("CREATE TABLE IF NOT EXISTS request_stats_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        await conn.execute(
+            "INSERT INTO request_stats_metadata (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING",
+            "logical_requests_enabled_at", str(time.time()),
+        )
 
         # 索引
         await conn.execute("""
@@ -451,7 +490,7 @@ class PSQLManager:
                         if row["filename"] in excluded:
                             continue
                         model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
-                        cd = model_cooldowns.get(model_name)
+                        cd = get_antigravity_cooldown_until(model_cooldowns, model_name)
                         if cd is None or current_time >= cd:
                             credential_data = json.loads(row["credential_data"])
                             credential_data["enable_credit"] = bool(row["enable_credit"])
@@ -1025,11 +1064,21 @@ class PSQLManager:
                             all_summaries.append(summary)
                     elif cooldown_filter == "pro_no_cooldown":
                         # 只保留 Pro 系列未冷却的凭证（不管 Flash 是否冷却）
-                        if not any("pro" in k.lower() for k in active_cooldowns):
+                        pro_cooled = (
+                            cooldowns_affect_antigravity_family(active_cooldowns, "pro")
+                            if mode == "antigravity"
+                            else any("pro" in k.lower() for k in active_cooldowns)
+                        )
+                        if not pro_cooled:
                             all_summaries.append(summary)
                     elif cooldown_filter == "flash_no_cooldown":
                         # 只保留 Flash 系列未冷却的凭证（不管 Pro 是否冷却）
-                        if not any("flash" in k.lower() for k in active_cooldowns):
+                        flash_cooled = (
+                            cooldowns_affect_antigravity_family(active_cooldowns, "flash")
+                            if mode == "antigravity"
+                            else any("flash" in k.lower() for k in active_cooldowns)
+                        )
+                        if not flash_cooled:
                             all_summaries.append(summary)
                     else:
                         all_summaries.append(summary)
@@ -1238,7 +1287,12 @@ class PSQLManager:
                 model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
                 close_cycle = False
                 if cooldown_until is None:
-                    model_cooldowns.pop(model_name, None)
+                    if mode == "antigravity":
+                        model_cooldowns = clear_antigravity_cooldown_family(
+                            model_cooldowns, model_name
+                        )
+                    else:
+                        model_cooldowns.pop(model_name, None)
                 else:
                     previous_until = model_cooldowns.get(model_name)
                     model_cooldowns[model_name] = cooldown_until
@@ -1547,6 +1601,56 @@ class PSQLManager:
 
         return json.dumps(new_stats), json.dumps(last_stats)
 
+    async def record_logical_request(
+        self, model_name: Optional[str], mode: str, success: bool
+    ) -> None:
+        """Record a final client-visible request without touching attempt history."""
+        self._ensure_initialized()
+        family = normalize_logical_request_model_family(model_name)
+        if family is None:
+            log.warning("Ignoring logical request statistic with blank model name")
+            return
+        date = _today_beijing_str()
+        minute_ts = int(time.time() // 60) * 60
+        success_count, failure_count = (1, 0) if success else (0, 1)
+        now = time.time()
+        try:
+            async with self._pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute("""
+                        INSERT INTO request_daily_stats (date, mode, success_count, failure_count, updated_at)
+                        VALUES ($1, $2, $3, $4, $5)
+                        ON CONFLICT (date, mode) DO UPDATE SET
+                            success_count = request_daily_stats.success_count + EXCLUDED.success_count,
+                            failure_count = request_daily_stats.failure_count + EXCLUDED.failure_count,
+                            updated_at = EXCLUDED.updated_at
+                    """, date, mode, success_count, failure_count, now)
+                    await conn.execute("""
+                        INSERT INTO request_daily_model_stats (date, mode, model_family, success_count, failure_count, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT (date, mode, model_family) DO UPDATE SET
+                            success_count = request_daily_model_stats.success_count + EXCLUDED.success_count,
+                            failure_count = request_daily_model_stats.failure_count + EXCLUDED.failure_count,
+                            updated_at = EXCLUDED.updated_at
+                    """, date, mode, family, success_count, failure_count, now)
+                    await conn.execute("""
+                        INSERT INTO request_minute_model_stats (minute_ts, mode, model_family, count)
+                        VALUES ($1, $2, $3, 1)
+                        ON CONFLICT (minute_ts, mode, model_family) DO UPDATE SET
+                            count = request_minute_model_stats.count + 1
+                    """, minute_ts, mode, family)
+        except Exception as exc:
+            log.error(f"record_logical_request failed: {exc}")
+
+    async def get_logical_request_stats_metadata(self) -> Dict[str, str]:
+        self._ensure_initialized()
+        enabled_at = self._logical_stats_enabled_at or time.time()
+        return {
+            "metric": "logical_requests",
+            "since": utc_iso8601(enabled_at),
+            "description": "Completed logical client requests. Legacy daily_* statistics remain upstream-attempt history.",
+        }
+
     async def get_today_stats(self, mode: Optional[str] = None) -> Dict[str, Any]:
         """获取今天（北京时间）的总调用统计。
 
@@ -1563,27 +1667,29 @@ class PSQLManager:
                         SELECT
                             COALESCE(success_count, 0) AS s,
                             COALESCE(failure_count, 0) AS f
-                        FROM daily_stats
+                        FROM request_daily_stats
                         WHERE date = $1 AND mode = $2
                         """,
                         today, mode,
                     )
                     s = int(row["s"]) if row else 0
                     f = int(row["f"]) if row else 0
-                    return {
+                    result = {
                         "date": today,
                         "mode": mode,
                         "success_count": s,
                         "failure_count": f,
                         "total_count": s + f,
                     }
+                    result.update(await self.get_logical_request_stats_metadata())
+                    return result
                 else:
                     rows = await conn.fetch(
                         """
                         SELECT mode,
                                COALESCE(success_count, 0) AS s,
                                COALESCE(failure_count, 0) AS f
-                        FROM daily_stats
+                        FROM request_daily_stats
                         WHERE date = $1
                         """,
                         today,
@@ -1599,13 +1705,15 @@ class PSQLManager:
                             "total_count": s + f,
                         }
                         total_s += s; total_f += f
-                    return {
+                    result = {
                         "date": today,
                         "by_mode": by_mode,
                         "success_count": total_s,
                         "failure_count": total_f,
                         "total_count": total_s + total_f,
                     }
+                    result.update(await self.get_logical_request_stats_metadata())
+                    return result
         except Exception as e:
             log.error(f"get_today_stats failed: {e}")
             return {
@@ -1628,7 +1736,7 @@ class PSQLManager:
                         SELECT date,
                                COALESCE(success_count, 0) AS s,
                                COALESCE(failure_count, 0) AS f
-                        FROM daily_stats
+                        FROM request_daily_stats
                         WHERE mode = $1
                         ORDER BY date DESC
                         LIMIT $2
@@ -1641,7 +1749,7 @@ class PSQLManager:
                         SELECT date,
                                SUM(success_count) AS s,
                                SUM(failure_count) AS f
-                        FROM daily_stats
+                        FROM request_daily_stats
                         GROUP BY date
                         ORDER BY date DESC
                         LIMIT $1
@@ -1764,7 +1872,7 @@ class PSQLManager:
                         SELECT model_family,
                                COALESCE(success_count, 0) AS s,
                                COALESCE(failure_count, 0) AS f
-                        FROM daily_model_stats
+                        FROM request_daily_model_stats
                         WHERE date = $1 AND mode = $2
                         """,
                         today, mode,
@@ -1772,7 +1880,7 @@ class PSQLManager:
                     minute_rows = await conn.fetch(
                         """
                         SELECT model_family, COALESCE(SUM(count), 0) AS rpm
-                        FROM minute_model_stats
+                        FROM request_minute_model_stats
                         WHERE minute_ts >= $1 AND mode = $2
                         GROUP BY model_family
                         """,
@@ -1784,7 +1892,7 @@ class PSQLManager:
                         SELECT model_family,
                                SUM(success_count) AS s,
                                SUM(failure_count) AS f
-                        FROM daily_model_stats
+                        FROM request_daily_model_stats
                         WHERE date = $1
                         GROUP BY model_family
                         """,
@@ -1793,7 +1901,7 @@ class PSQLManager:
                     minute_rows = await conn.fetch(
                         """
                         SELECT model_family, COALESCE(SUM(count), 0) AS rpm
-                        FROM minute_model_stats
+                        FROM request_minute_model_stats
                         WHERE minute_ts >= $1
                         GROUP BY model_family
                         """,
@@ -1822,7 +1930,7 @@ class PSQLManager:
                     by_family[fam] = {"success": 0, "failure": 0, "total": 0, "rpm": rpm}
 
             tot_rpm = sum(rpm_map.values())
-            return {
+            result = {
                 "date": today,
                 "mode": mode,
                 "by_family": by_family,
@@ -1833,6 +1941,8 @@ class PSQLManager:
                     "rpm": tot_rpm,
                 },
             }
+            result.update(await self.get_logical_request_stats_metadata())
+            return result
         except Exception as e:
             log.error(f"get_today_stats_by_model failed: {e}")
             return {
@@ -1849,13 +1959,17 @@ class PSQLManager:
         try:
             cutoff = int(time.time()) - max(60, int(keep_minutes) * 60)
             async with self._pool.acquire() as conn:
-                result = await conn.execute(
+                legacy_result = await conn.execute(
                     "DELETE FROM minute_model_stats WHERE minute_ts < $1",
+                    cutoff,
+                )
+                result = await conn.execute(
+                    "DELETE FROM request_minute_model_stats WHERE minute_ts < $1",
                     cutoff,
                 )
             # asyncpg 返回 'DELETE n'
             try:
-                return int(str(result).split()[-1])
+                return int(str(legacy_result).split()[-1]) + int(str(result).split()[-1])
             except Exception:
                 return 0
         except Exception as e:

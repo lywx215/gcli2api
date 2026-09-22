@@ -168,7 +168,7 @@ def test_credential_stats_include_compact_cooldown_counts():
                 }""" in common_js
 
 
-def test_credential_page_size_and_selected_email_copy_are_wired_for_both_panels():
+def test_credential_page_size_and_selected_tools_are_wired_for_both_panels():
     front_dir = Path(__file__).parent / "front"
     for filename in ("control_panel.html", "control_panel_mobile.html"):
         html = (front_dir / filename).read_text(encoding="utf-8")
@@ -185,12 +185,18 @@ def test_credential_page_size_and_selected_email_copy_are_wired_for_both_panels(
         assert 'onclick="copySelectedEmails()"' in html
         assert 'id="antigravityBatchCopyEmailsBtn"' in html
         assert 'onclick="copySelectedAntigravityEmails()"' in html
+        assert 'id="batchDownloadBtn"' in html
+        assert 'onclick="downloadSelectedCredentials()"' in html
+        assert 'id="antigravityBatchDownloadBtn"' in html
+        assert 'onclick="downloadSelectedAntigravityCredentials()"' in html
 
     common_js = (front_dir / "common.js").read_text(encoding="utf-8")
     assert "pageSize: 25" in common_js
-    assert "emailByFilename: new Map()" in common_js
-    assert "this.emailByFilename.get(filename)" in common_js
-    assert "navigator.clipboard.writeText(emails.join('\\n'))" in common_js
+    assert "downloadSelected: `./creds/download-selected`" in common_js
+    assert "copyEmails: `./creds/copy-emails`" in common_js
+    assert "copyTextWithManualFallback" in common_js
+    assert "window.isSecureContext && navigator.clipboard?.writeText" in common_js
+    assert "window.prompt(manualPrompt" in common_js
 
 
 def test_classified_403_filters_are_wired_for_both_panels():

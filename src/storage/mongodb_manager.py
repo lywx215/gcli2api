@@ -9,6 +9,14 @@ import time
 from typing import Any, Dict, List, Optional
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from src.storage._stats_common import (
+    _today_beijing_str,
+    clear_antigravity_cooldown_family,
+    cooldowns_affect_antigravity_family,
+    get_antigravity_cooldown_until,
+    normalize_logical_request_model_family,
+    utc_iso8601,
+)
 from src.error_classification import (
     has_error_code,
     is_http_403_classification_filter,
@@ -81,6 +89,7 @@ class MongoDBManager:
         # Redis 缓存（仅当 REDIS_URL 环境变量存在时启用）
         self._redis = None
         self._redis_enabled: bool = False
+        self._logical_stats_enabled_at: Optional[float] = None
 
     async def initialize(self) -> None:
         """初始化 MongoDB 连接"""
@@ -102,6 +111,14 @@ class MongoDBManager:
 
             # 创建索引
             await self._create_indexes()
+            now = time.time()
+            metadata = self._db["request_stats_metadata"]
+            await metadata.update_one(
+                {"_id": "logical_requests_enabled_at"},
+                {"$setOnInsert": {"value": now}}, upsert=True,
+            )
+            item = await metadata.find_one({"_id": "logical_requests_enabled_at"})
+            self._logical_stats_enabled_at = float((item or {}).get("value", now))
 
             # 加载配置到内存
             await self._load_config_cache()
@@ -576,7 +593,7 @@ class MongoDBManager:
             if mode == "geminicli"
             else None
         )
-        if self._redis_enabled:
+        if self._redis_enabled and not (mode == "antigravity" and model_name):
             model_lower = model_name.lower() if model_name else ""
             preview_only = mode == "geminicli" and "preview" in model_lower
             result = await self._get_next_available_from_redis(
@@ -601,8 +618,8 @@ class MongoDBManager:
 
             if health_enabled:
                 match_query["health_status"] = {"$in": ["healthy", None]}
-                if excluded:
-                    match_query["filename"] = {"$nin": list(excluded)}
+            if excluded:
+                match_query["filename"] = {"$nin": list(excluded)}
 
             if required_tiers:
                 match_query["tier"] = {"$in": list(required_tiers)}
@@ -612,13 +629,39 @@ class MongoDBManager:
                 match_query["preview"] = True
 
             # 冷却检查：直接用 MongoDB 查询表达，无需 $addFields
-            if model_name:
+            if model_name and mode != "antigravity":
                 escaped_model_name = self._escape_model_name(model_name)
                 field = f"model_cooldowns.{escaped_model_name}"
                 match_query["$or"] = [
                     {field: {"$exists": False}},
                     {field: {"$lte": current_time}},
                 ]
+
+            if mode == "antigravity" and model_name:
+                projection = {
+                    "filename": 1,
+                    "model_cooldowns": 1,
+                    "_id": 0,
+                }
+                docs = await collection.find(match_query, projection).to_list(length=None)
+                random.shuffle(docs)
+                for doc in docs:
+                    deadline = get_antigravity_cooldown_until(
+                        doc.get("model_cooldowns") or {}, model_name
+                    )
+                    if deadline is None or current_time >= deadline:
+                        selected = await collection.find_one(
+                            {"filename": doc["filename"], "disabled": False},
+                            {"credential_data": 1, "enable_credit": 1, "_id": 0},
+                        )
+                        if not selected:
+                            continue
+                        credential_data = selected.get("credential_data") or {}
+                        credential_data["enable_credit"] = bool(
+                            selected.get("enable_credit", False)
+                        )
+                        return doc["filename"], credential_data
+                return None
 
             # 统计符合条件的凭证总数（走索引，极快）
             count = await collection.count_documents(match_query)
@@ -1391,11 +1434,21 @@ class MongoDBManager:
                         all_summaries.append(summary)
                 elif cooldown_filter == "pro_no_cooldown":
                     # 只保留 Pro 系列未冷却的凭证（不管 Flash 是否冷却）
-                    if not any("pro" in k.lower() for k in active_cooldowns):
+                    pro_cooled = (
+                        cooldowns_affect_antigravity_family(active_cooldowns, "pro")
+                        if mode == "antigravity"
+                        else any("pro" in k.lower() for k in active_cooldowns)
+                    )
+                    if not pro_cooled:
                         all_summaries.append(summary)
                 elif cooldown_filter == "flash_no_cooldown":
                     # 只保留 Flash 系列未冷却的凭证（不管 Pro 是否冷却）
-                    if not any("flash" in k.lower() for k in active_cooldowns):
+                    flash_cooled = (
+                        cooldowns_affect_antigravity_family(active_cooldowns, "flash")
+                        if mode == "antigravity"
+                        else any("flash" in k.lower() for k in active_cooldowns)
+                    )
+                    if not flash_cooled:
                         all_summaries.append(summary)
                 else:
                     # 不筛选冷却状态
@@ -1655,14 +1708,31 @@ class MongoDBManager:
 
             # 转义模型名中的点号
             escaped_model_name = self._escape_model_name(model_name)
+            removed_cooldown_keys = {escaped_model_name}
 
             # 使用原子操作直接更新，避免竞态条件
             if cooldown_until is None:
-                # 删除指定模型的冷却
+                if mode == "antigravity":
+                    existing = await collection.find_one(
+                        {"filename": filename},
+                        {"model_cooldowns": 1, "_id": 0},
+                    )
+                    if existing is None:
+                        log.warning(f"Credential {filename} not found")
+                        return False
+                    cooldowns = existing.get("model_cooldowns") or {}
+                    remaining = clear_antigravity_cooldown_family(
+                        cooldowns, model_name
+                    )
+                    removed_cooldown_keys = set(cooldowns) - set(remaining)
+                unset_fields = {
+                    f"model_cooldowns.{key}": ""
+                    for key in removed_cooldown_keys or {escaped_model_name}
+                }
                 result = await collection.update_one(
                     {"filename": filename},
                     {
-                        "$unset": {f"model_cooldowns.{escaped_model_name}": ""},
+                        "$unset": unset_fields,
                         "$set": {"updated_at": time.time()}
                     }
                 )
@@ -1686,7 +1756,11 @@ class MongoDBManager:
             if self._redis_enabled:
                 cd_key = self._rk_cd(mode, filename, escaped_model_name)
                 if cooldown_until is None:
-                    await self._redis.delete(cd_key)
+                    redis_keys = [
+                        self._rk_cd(mode, filename, key)
+                        for key in removed_cooldown_keys or {escaped_model_name}
+                    ]
+                    await self._redis.delete(*redis_keys)
                 else:
                     ttl = int(cooldown_until - time.time())
                     if ttl > 0:
@@ -1840,30 +1914,124 @@ class MongoDBManager:
         except Exception as e:
             log.error(f"Error recording failure for {filename}: {e}")
 
-    async def get_today_stats(self, mode: Optional[str] = None) -> Dict[str, Any]:
-        from datetime import datetime, timedelta, timezone
-        today = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
+    async def record_logical_request(
+        self, model_name: Optional[str], mode: str, success: bool
+    ) -> None:
+        """Record a final logical request in dedicated Mongo collections."""
+        self._ensure_initialized()
+        family = normalize_logical_request_model_family(model_name)
+        if family is None:
+            log.warning("Ignoring logical request statistic with blank model name")
+            return
+        date = _today_beijing_str()
+        minute_ts = int(time.time() // 60) * 60
+        counter = "success_count" if success else "failure_count"
+        now = time.time()
+        try:
+            await self._db["request_daily_stats"].update_one(
+                {"date": date, "mode": mode},
+                {"$inc": {counter: 1}, "$set": {"updated_at": now}}, upsert=True,
+            )
+            await self._db["request_daily_model_stats"].update_one(
+                {"date": date, "mode": mode, "model_family": family},
+                {"$inc": {counter: 1}, "$set": {"updated_at": now}}, upsert=True,
+            )
+            await self._db["request_minute_model_stats"].update_one(
+                {"minute_ts": minute_ts, "mode": mode, "model_family": family},
+                {"$inc": {"count": 1}}, upsert=True,
+            )
+        except Exception as exc:
+            log.error(f"record_logical_request failed: {exc}")
+
+    async def get_logical_request_stats_metadata(self) -> Dict[str, str]:
+        self._ensure_initialized()
+        enabled_at = self._logical_stats_enabled_at or time.time()
         return {
-            "date": today,
-            "success_count": 0,
-            "failure_count": 0,
-            "total_count": 0,
-            "note": "MongoDB 后端未启用按日统计",
+            "metric": "logical_requests",
+            "since": utc_iso8601(enabled_at),
+            "description": "Completed logical client requests. Legacy daily_* statistics remain upstream-attempt history.",
         }
+
+    async def get_today_stats(self, mode: Optional[str] = None) -> Dict[str, Any]:
+        today = _today_beijing_str()
+        match = {"date": today}
+        if mode:
+            match["mode"] = mode
+        rows = await self._db["request_daily_stats"].find(match).to_list(length=None)
+        success_count = sum(int(row.get("success_count", 0)) for row in rows)
+        failure_count = sum(int(row.get("failure_count", 0)) for row in rows)
+        result: Dict[str, Any] = {
+            "date": today, "success_count": success_count,
+            "failure_count": failure_count, "total_count": success_count + failure_count,
+        }
+        if mode:
+            result["mode"] = mode
+        else:
+            result["by_mode"] = {
+                row["mode"]: {
+                    "success_count": int(row.get("success_count", 0)),
+                    "failure_count": int(row.get("failure_count", 0)),
+                    "total_count": int(row.get("success_count", 0)) + int(row.get("failure_count", 0)),
+                } for row in rows
+            }
+        result.update(await self.get_logical_request_stats_metadata())
+        return result
 
     async def get_recent_daily_stats(self, days: int = 7, mode: Optional[str] = None) -> List[Dict[str, Any]]:
-        return []
+        days = max(1, min(int(days or 7), 90))
+        match: Dict[str, Any] = {"mode": mode} if mode else {}
+        pipeline = [{"$match": match}]
+        if mode:
+            pipeline.extend([
+                {"$sort": {"date": -1}}, {"$limit": days},
+                {"$project": {"_id": 0, "date": 1, "success_count": 1, "failure_count": 1}},
+            ])
+        else:
+            pipeline.extend([
+                {"$group": {"_id": "$date", "success_count": {"$sum": "$success_count"}, "failure_count": {"$sum": "$failure_count"}}},
+                {"$sort": {"_id": -1}}, {"$limit": days},
+                {"$project": {"_id": 0, "date": "$_id", "success_count": 1, "failure_count": 1}},
+            ])
+        rows = await self._db["request_daily_stats"].aggregate(pipeline).to_list(length=days)
+        return [{
+            "date": row["date"], "success_count": int(row.get("success_count", 0)),
+            "failure_count": int(row.get("failure_count", 0)),
+            "total_count": int(row.get("success_count", 0)) + int(row.get("failure_count", 0)),
+        } for row in rows]
 
     async def get_today_stats_by_model(self, mode: Optional[str] = None) -> Dict[str, Any]:
-        from datetime import datetime, timedelta, timezone
-        today = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
-        return {
-            "date": today,
-            "mode": mode,
-            "by_family": {},
-            "totals": {"success": 0, "failure": 0, "total": 0, "rpm": 0},
-            "note": "MongoDB 后端未启用按模型统计",
+        today = _today_beijing_str()
+        match: Dict[str, Any] = {"date": today}
+        if mode:
+            match["mode"] = mode
+        daily = await self._db["request_daily_model_stats"].find(match).to_list(length=None)
+        from_ts = int(time.time()) - 60
+        minute_match: Dict[str, Any] = {"minute_ts": {"$gte": from_ts}}
+        if mode:
+            minute_match["mode"] = mode
+        minute_rows = await self._db["request_minute_model_stats"].aggregate([
+            {"$match": minute_match}, {"$group": {"_id": "$model_family", "rpm": {"$sum": "$count"}}},
+        ]).to_list(length=None)
+        rpm = {row["_id"]: int(row.get("rpm", 0)) for row in minute_rows}
+        by_family: Dict[str, Dict[str, int]] = {}
+        for row in daily:
+            family = row["model_family"]
+            success_count = int(row.get("success_count", 0))
+            failure_count = int(row.get("failure_count", 0))
+            by_family[family] = {"success": success_count, "failure": failure_count, "total": success_count + failure_count, "rpm": rpm.pop(family, 0)}
+        for family, count in rpm.items():
+            by_family[family] = {"success": 0, "failure": 0, "total": 0, "rpm": count}
+        totals = {
+            "success": sum(item["success"] for item in by_family.values()),
+            "failure": sum(item["failure"] for item in by_family.values()),
+            "total": sum(item["total"] for item in by_family.values()),
+            "rpm": sum(item["rpm"] for item in by_family.values()),
         }
+        result: Dict[str, Any] = {"date": today, "mode": mode, "by_family": by_family, "totals": totals}
+        result.update(await self.get_logical_request_stats_metadata())
+        return result
 
     async def cleanup_minute_stats(self, keep_minutes: int = 1440) -> int:
-        return 0
+        cutoff = int(time.time()) - max(60, int(keep_minutes) * 60)
+        result = await self._db["request_minute_model_stats"].delete_many({"minute_ts": {"$lt": cutoff}})
+        return int(result.deleted_count)

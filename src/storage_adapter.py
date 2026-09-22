@@ -84,6 +84,15 @@ class StorageBackend(Protocol):
         """删除配置项"""
         ...
 
+    # Logical request metrics are separate from per-credential upstream
+    # attempts.  Implementations reject a blank model name rather than
+    # creating an ambiguous bucket.
+    async def record_logical_request(
+        self, model_name: Optional[str], mode: str, success: bool
+    ) -> None:
+        """Persist one completed logical client request."""
+        ...
+
 
 class StorageAdapter:
     """存储适配器，根据配置选择存储后端"""

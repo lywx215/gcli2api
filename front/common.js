@@ -103,6 +103,34 @@ function clearStoredAuthToken() {
     }
 }
 
+async function copyTextWithManualFallback(text, manualPrompt) {
+    if (window.isSecureContext && navigator.clipboard?.writeText) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return 'clipboard';
+        } catch (_) {
+            // Continue to browser and manual fallbacks.
+        }
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+        if (document.execCommand?.('copy')) return 'legacy';
+    } catch (_) {
+        // The prompt below keeps the data available for manual copying.
+    } finally {
+        document.body.removeChild(textarea);
+    }
+    window.prompt(manualPrompt || '请手动复制以下内容：', text);
+    return 'manual';
+}
+
 function getEmbedPolicy() {
     const element = document.querySelector('meta[name="gcli-embed-policy"]');
     if (!element) return { mode: 'disabled', origins: [] };
@@ -209,6 +237,8 @@ function createCredsManager(type) {
                 batchRefreshCooldown: `./creds/batch-refresh-cooldown`,
                 download: `./creds/download`,
                 downloadAll: `./creds/download-all`,
+                downloadSelected: `./creds/download-selected`,
+                copyEmails: `./creds/copy-emails`,
                 detail: `./creds/detail`,
                 fetchEmail: `./creds/fetch-email`,
                 refreshAllEmails: `./creds/refresh-all-emails`,
@@ -439,7 +469,7 @@ function createCredsManager(type) {
             const selectedCount = this.selectedFiles.size;
             document.getElementById(this.getElementId('SelectedCount')).textContent = `已选择 ${selectedCount} 项`;
 
-            const batchBtnNames = ['Enable', 'Disable', 'PermanentDisable', 'Delete', 'Verify', 'Test', 'Preview', 'RefreshCooldown', 'CopyEmails'];
+            const batchBtnNames = ['Enable', 'Disable', 'PermanentDisable', 'Delete', 'Verify', 'Test', 'Preview', 'RefreshCooldown', 'Download', 'CopyEmails'];
             if (this.type === 'antigravity') {
                 batchBtnNames.push('EnableCredit');
                 batchBtnNames.push('DisableCredit');
@@ -478,21 +508,67 @@ function createCredsManager(type) {
                 return;
             }
 
-            const emails = selectedFiles
-                .map(filename => this.emailByFilename.get(filename))
-                .filter(email => typeof email === 'string' && email.length > 0);
-            if (emails.length === 0) {
-                showStatus('选中的账号尚未获取邮箱，请先刷新邮箱', 'error');
-                return;
-            }
-
             try {
-                await navigator.clipboard.writeText(emails.join('\n'));
-                const missingCount = selectedFiles.length - emails.length;
-                const suffix = missingCount > 0 ? `，跳过 ${missingCount} 个未获取邮箱的账号` : '';
-                showStatus(`已复制 ${emails.length} 个选中账号的邮箱${suffix}`, missingCount > 0 ? 'warning' : 'success');
+                const response = await fetch(`${this.getEndpoint('copyEmails')}?${this.getModeParam()}`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ filenames: selectedFiles })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || '读取邮箱失败');
+                const emails = Array.isArray(data.emails) ? data.emails : [];
+                if (emails.length === 0) {
+                    showStatus(`选中的账号没有可复制邮箱（缺失 ${data.missing_count || selectedFiles.length} 项）`, 'warning');
+                    return;
+                }
+                const copyMode = await copyTextWithManualFallback(
+                    emails.join('\n'),
+                    '剪贴板不可用，请手动复制以下邮箱：'
+                );
+                const missingCount = Number(data.missing_count || 0);
+                const suffix = missingCount > 0 ? `，跳过 ${missingCount} 个无邮箱或不存在的账号` : '';
+                const prefix = copyMode === 'manual' ? '已显示手工复制窗口：' : '已复制 ';
+                showStatus(`${prefix}${emails.length} 个去重邮箱${suffix}`, missingCount > 0 ? 'warning' : 'success');
             } catch (error) {
                 showStatus(`复制邮箱失败: ${error.message}`, 'error');
+            }
+        },
+
+        async downloadSelected() {
+            const selectedFiles = Array.from(this.selectedFiles);
+            if (selectedFiles.length === 0) {
+                showStatus('请先选择要下载的凭证', 'error');
+                return;
+            }
+            try {
+                const response = await fetch(`${this.getEndpoint('downloadSelected')}?${this.getModeParam()}`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ filenames: selectedFiles })
+                });
+                if (!response.ok) {
+                    let message = '下载失败';
+                    try {
+                        const data = await response.json();
+                        message = data.detail || message;
+                    } catch (_) {}
+                    throw new Error(message);
+                }
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const anchor = document.createElement('a');
+                anchor.href = url;
+                anchor.download = this.type === 'antigravity'
+                    ? 'selected_antigravity_credentials.zip'
+                    : 'selected_credentials.zip';
+                anchor.click();
+                window.URL.revokeObjectURL(url);
+                const successCount = Number(response.headers.get('X-Selected-Count') || selectedFiles.length);
+                const missingCount = Number(response.headers.get('X-Missing-Count') || 0);
+                const suffix = missingCount > 0 ? `，缺失 ${missingCount} 项` : '';
+                showStatus(`已下载 ${successCount} 个选中凭证${suffix}`, missingCount > 0 ? 'warning' : 'success');
+            } catch (error) {
+                showStatus(`选中凭证下载失败: ${error.message}`, 'error');
             }
         },
 
@@ -1782,6 +1858,7 @@ function toggleSelectAll() {
     AppState.creds.updateBatchControls();
 }
 function batchAction(action) { AppState.creds.batchAction(action); }
+function downloadSelectedCredentials() { return AppState.creds.downloadSelected(); }
 function copySelectedEmails() { return AppState.creds.copySelectedEmails(); }
 function downloadCred(filename) {
     fetch(`./creds/download/${filename}`, { headers: { 'Authorization': `Bearer ${AppState.authToken}` } })
@@ -1843,6 +1920,7 @@ function toggleSelectAllAntigravity() {
     AppState.antigravityCreds.updateBatchControls();
 }
 function batchAntigravityAction(action) { AppState.antigravityCreds.batchAction(action); }
+function downloadSelectedAntigravityCredentials() { return AppState.antigravityCreds.downloadSelected(); }
 function copySelectedAntigravityEmails() { return AppState.antigravityCreds.copySelectedEmails(); }
 function downloadAntigravityCred(filename) {
     fetch(`./creds/download/${filename}?mode=antigravity`, { headers: getAuthHeaders() })
@@ -2382,7 +2460,27 @@ async function _toggleQuotaDetails(pathId, mode) {
                         `;
 
                         const _nowMs = Date.now();
-                        for (const [modelName, quotaData] of Object.entries(models)) {
+                        let modelEntries = Object.entries(models);
+                        if (mode === 'antigravity') {
+                            // The quota API deliberately preserves every raw upstream
+                            // model for diagnostics and direct-route compatibility.
+                            // Only the panel presentation honors the catalog's safe
+                            // visibility metadata; older API payloads remain visible.
+                            modelEntries = modelEntries.filter(([_, quotaData]) => quotaData.visible !== false);
+                            modelEntries.sort(([nameA, dataA], [nameB, dataB]) => {
+                                const quotaGroup = (data) => {
+                                    if (data.public === true) return 'public';
+                                    if (data.availability === 'available') return 'available';
+                                    return 'compatible';
+                                };
+                                const groupOrder = { public: 0, available: 1, compatible: 2 };
+                                const order = groupOrder[quotaGroup(dataA)] - groupOrder[quotaGroup(dataB)];
+                                if (order !== 0) return order;
+                                return String(dataA.displayName || nameA).localeCompare(String(dataB.displayName || nameB));
+                            });
+                        }
+                        let activeQuotaGroup = null;
+                        for (const [modelName, quotaData] of modelEntries) {
                             // 后端返回的是剩余比例 (0-1)，不是绝对数量
                             const remainingFraction = quotaData.remaining || 0;
                             const resetTime = quotaData.resetTime || 'N/A';
@@ -2390,6 +2488,35 @@ async function _toggleQuotaDetails(pathId, mode) {
                             const displayName = quotaData.displayName || modelName;
                             const rawModelId = quotaData.rawModelId || modelName;
                             const testModel = quotaData.testModel || displayName;
+                            const isPublicModel = quotaData.public === true;
+                            const availability = quotaData.availability || (isPublicModel ? 'public' : 'compatible');
+                            const quotaGroup = isPublicModel
+                                ? 'public'
+                                : (availability === 'available' ? 'available' : 'compatible');
+
+                            if (mode === 'antigravity' && quotaGroup !== activeQuotaGroup) {
+                                const groupTitle = quotaGroup === 'public'
+                                    ? '终端可选模型'
+                                    : (quotaGroup === 'available' ? '可用模型' : '内部/兼容模型');
+                                const groupHint = quotaGroup === 'public'
+                                    ? '与当前 Antigravity CLI 公共模型目录一致'
+                                    : (quotaGroup === 'available'
+                                        ? '可通过现有 Antigravity 路由直接使用，但不在公共模型 API 中广告'
+                                        : '保留上游原始 ID，可直接测试但不在公共模型 API 中广告');
+                                const groupColors = {
+                                    public: ['#e8f5e9', '#1b5e20'],
+                                    available: ['#e3f2fd', '#0d47a1'],
+                                    compatible: ['#fff3e0', '#8a4b08']
+                                };
+                                const [groupBackground, groupColor] = groupColors[quotaGroup];
+                                quotaHTML += `
+                                    <div data-quota-model-group="${quotaGroup}" style="grid-column: 1 / -1; margin-top: ${activeQuotaGroup ? '8px' : '0'}; padding: 7px 9px; border-radius: 4px; background: ${groupBackground}; color: ${groupColor};">
+                                        <span style="font-size: 12px; font-weight: bold;">${groupTitle}</span>
+                                        <span style="font-size: 10px; margin-left: 6px; opacity: 0.85;">${groupHint}</span>
+                                    </div>
+                                `;
+                                activeQuotaGroup = quotaGroup;
+                            }
 
                             // 倒计时（基于 resetTimeRaw 的 UTC 时间）
                             let countdownStr = '';
@@ -2420,11 +2547,13 @@ async function _toggleQuotaDetails(pathId, mode) {
                             else if (usedPercentage >= 70) percentageColor = '#ffc107'; // 黄色：使用较多
                             else if (usedPercentage >= 50) percentageColor = '#17a2b8'; // 蓝色：使用中等
 
+                            const modelBadge = typeof quotaData.badge === 'string' ? quotaData.badge : '';
+
                             quotaHTML += `
                                 <div style="background: white; border-left: 4px solid ${percentageColor}; border-radius: 4px; padding: 8px 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                                         <div style="font-weight: bold; color: #333; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: 8px;" title="${displayName} - 剩余${remainingPercentage}% - ${resetTime}${rawModelId !== displayName ? ` (原始: ${rawModelId})` : ''}">
-                                            ${displayName}
+                                            ${displayName}${mode === 'antigravity' && modelBadge ? ` <span data-model-availability="${availability}" style="font-size:9px;color:#b26a00;">${modelBadge}</span>` : ''}
                                         </div>
                                         <div style="font-size: 13px; font-weight: bold; color: ${percentageColor}; white-space: nowrap;">
                                             ${remainingPercentage}%
@@ -4078,28 +4207,43 @@ async function addCredentialByRefreshToken() {
 
 // 模型家族 -> 展示名、顺序、颜色
 const MODEL_FAMILY_DISPLAY = [
-    { key: '2.5-pro',                  label: 'gemini-2.5-pro',                color: '#ff7043' },
-    { key: '2.5-flash',                label: 'gemini-2.5-flash',              color: '#42a5f5' },
-    { key: '2.5-flash-lite',           label: 'gemini-2.5-flash-lite',         color: '#26a69a' },
-    { key: '3-pro-preview',            label: 'gemini-3-pro-preview',          color: '#ab47bc' },
-    { key: '3-flash-preview',          label: 'gemini-3-flash-preview',        color: '#5c6bc0' },
-    { key: '3.1-pro-preview',          label: 'gemini-3.1-pro-preview',        color: '#7e57c2' },
-    { key: '3.1-flash',                label: 'gemini-3.1-flash',              color: '#29b6f6' },
-    { key: '3.1-flash-lite-preview',   label: 'gemini-3.1-flash-lite-preview', color: '#26c6da' },
+    { key: '3.8-flash',                label: 'Gemini 3.8 Flash',             color: '#1a237e' },
+    { key: '3.7-flash',                label: 'Gemini 3.7 Flash',             color: '#283593' },
+    { key: '3.6-flash',                label: 'Gemini 3.6 Flash',             color: '#303f9f' },
+    { key: '3.5-flash',                label: 'Gemini 3.5 Flash',             color: '#3949ab' },
+    { key: '3.5-flash-high',           label: 'Gemini 3.5 Flash High',        color: '#283593' },
+    { key: '3.1-pro',                  label: 'Gemini 3.1 Pro',               color: '#7e57c2' },
+    { key: '3.1-pro-preview',          label: 'Gemini 3.1 Pro Preview',       color: '#9575cd' },
+    { key: '3.1-flash',                label: 'Gemini 3.1 Flash',             color: '#29b6f6' },
+    { key: '3.1-flash-lite',           label: 'Gemini 3.1 Flash Lite',        color: '#00acc1' },
+    { key: '3.1-flash-lite-preview',   label: 'Gemini 3.1 Flash Lite Preview', color: '#26c6da' },
+    { key: '3.1-flash-image',          label: 'Gemini 3.1 Flash Image',       color: '#00897b' },
+    { key: '3-pro',                    label: 'Gemini 3 Pro',                 color: '#8e24aa' },
+    { key: '3-pro-preview',            label: 'Gemini 3 Pro Preview',         color: '#ab47bc' },
+    { key: '3-flash',                  label: 'Gemini 3 Flash',               color: '#3f51b5' },
+    { key: '3-flash-preview',          label: 'Gemini 3 Flash Preview',       color: '#5c6bc0' },
+    { key: '2.5-pro',                  label: 'Gemini 2.5 Pro',               color: '#ff7043' },
+    { key: '2.5-flash',                label: 'Gemini 2.5 Flash',             color: '#42a5f5' },
+    { key: '2.5-flash-lite',           label: 'Gemini 2.5 Flash Lite',        color: '#26a69a' },
     { key: '2.0-flash',                label: 'gemini-2.0-flash',              color: '#78909c' },
-    { key: '2.0-pro',                  label: 'gemini-2.0-pro',                color: '#8d6e63' },
-    { key: 'other',                    label: '其他 / 未知',                   color: '#bdbdbd' },
+    { key: '2.0-pro',                  label: 'Gemini 2.0 Pro',               color: '#8d6e63' },
+    { key: 'pro-agent',                label: 'Gemini Pro Agent (legacy)',    color: '#ef6c00' },
+    { key: 'claude-opus-4-6',          label: 'Claude Opus 4.6',               color: '#c62828' },
+    { key: 'claude-sonnet-4-6',        label: 'Claude Sonnet 4.6',             color: '#d84315' },
+    { key: 'gpt-oss-120b',             label: 'GPT-OSS 120B',                 color: '#546e7a' },
 ];
 
 function _renderModelStatsRows(byFamily, tbodyEl, isHotBg) {
     if (!tbodyEl) return;
     const families = byFamily || {};
-    // 按预设顺序输出 + 末尾追加未识别的 family
+    // Known families keep a stable product order.  Future safe family IDs
+    // remain visible after them; only the legacy catch-all buckets are hidden.
     const known = new Set(MODEL_FAMILY_DISPLAY.map(f => f.key));
     const orderedKeys = MODEL_FAMILY_DISPLAY.map(f => f.key)
         .filter(k => families[k]);
-    const extraKeys = Object.keys(families).filter(k => !known.has(k));
-
+    const extraKeys = Object.keys(families)
+        .filter(k => !known.has(k) && k !== 'other' && k !== 'unknown')
+        .sort();
     const rows = [...orderedKeys, ...extraKeys];
     if (rows.length === 0) {
         tbodyEl.innerHTML = '<tr><td colspan="6" style="padding:12px;text-align:center;opacity:0.7;">今日暂无调用</td></tr>';
@@ -4396,7 +4540,7 @@ async function testModelQuota(btn, filename, modelName, mode, displayName) {
         );
         const data = await response.json();
 
-        if (response.ok || response.status === 429) {
+        if ((response.ok || response.status === 429) && data.success === true) {
             btn.textContent = '✓';
             btn.style.borderColor = '#28a745';
             btn.style.color = '#28a745';
@@ -4408,7 +4552,14 @@ async function testModelQuota(btn, filename, modelName, mode, displayName) {
             btn.textContent = '✗';
             btn.style.borderColor = '#dc3545';
             btn.style.color = '#dc3545';
-            const errorDetail = data.error || data.detail || data.message || '';
+            const errorDetailParts = [data.error || data.detail || data.message || ''];
+            if (data.expected_reply) {
+                errorDetailParts.push(`预期返回: ${data.expected_reply}`);
+            }
+            if (data.model_reply) {
+                errorDetailParts.push(`实际返回: ${data.model_reply}`);
+            }
+            const errorDetail = errorDetailParts.filter(Boolean).join('\n');
             showStatus(`${displayModelName}: 测试失败 (HTTP ${response.status})`, 'error');
             if (errorDetail) {
                 showMessageModal(

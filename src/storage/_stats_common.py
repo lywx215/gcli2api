@@ -7,12 +7,17 @@
 import json
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 
 def _today_beijing_str() -> str:
     """返回当前北京时间 yyyy-mm-dd。"""
     return (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
+
+
+def utc_iso8601(timestamp: float) -> str:
+    """Render a Unix timestamp as a stable UTC ISO-8601 value."""
+    return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def active_model_cooldowns(
@@ -50,6 +55,63 @@ def has_active_model_cooldown(value: Any, current_time: Optional[float] = None) 
     """Return whether a persisted cooldown mapping contains an active deadline."""
     active, _ = active_model_cooldowns(value, current_time)
     return bool(active)
+
+
+def normalize_antigravity_cooldown_key(model_name: str) -> str:
+    """Return the effective Antigravity cooldown family for a model/key."""
+    model = str(model_name or "").strip().lower()
+    if model == "gemini-shared" or model.startswith(
+        ("gemini-3.1-pro", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash")
+    ):
+        return "gemini-shared"
+    if model == "claude-gpt-shared" or model.startswith(("claude-", "gpt-oss-")):
+        return "claude-gpt-shared"
+    return model
+
+
+def get_antigravity_cooldown_until(
+    cooldowns: Mapping[str, Any], model_name: str
+) -> Optional[float]:
+    """Return the latest deadline affecting a model, including legacy family keys."""
+    family = normalize_antigravity_cooldown_key(model_name)
+    deadlines = []
+    for key, value in (cooldowns or {}).items():
+        if normalize_antigravity_cooldown_key(key) != family:
+            continue
+        if isinstance(value, bool):
+            continue
+        try:
+            deadlines.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return max(deadlines) if deadlines else None
+
+
+def clear_antigravity_cooldown_family(
+    cooldowns: Mapping[str, Any], model_name: str
+) -> dict[str, Any]:
+    """Return a copy with every concrete/legacy key in the model family removed."""
+    family = normalize_antigravity_cooldown_key(model_name)
+    return {
+        key: value
+        for key, value in (cooldowns or {}).items()
+        if normalize_antigravity_cooldown_key(key) != family
+    }
+
+
+def cooldowns_affect_antigravity_family(
+    cooldowns: Mapping[str, Any], family: str
+) -> bool:
+    """Whether active cooldown keys affect the panel's Pro/Flash family filter."""
+    family = str(family or "").strip().lower()
+    for key in (cooldowns or {}):
+        normalized = normalize_antigravity_cooldown_key(key)
+        key_lower = str(key).lower()
+        if family == "pro" and ("pro" in key_lower or normalized == "gemini-shared"):
+            return True
+        if family == "flash" and ("flash" in key_lower or normalized == "gemini-shared"):
+            return True
+    return False
 
 
 # 模型家族归一化：各种变种（-search / -thinking / -lite / preview / pro / flash 等）
@@ -102,3 +164,62 @@ def normalize_model_family(model_name: Optional[str]) -> str:
             return family
     # 带 antigravity 名字、或未知型号
     return "other"
+
+
+def normalize_logical_request_model_family(model_name: Optional[str]) -> Optional[str]:
+    """Return a safe logical-request model family, or ``None`` for blank input.
+
+    Logical-request metrics are deliberately more precise than the legacy
+    attempt counters.  Unknown non-empty IDs remain visible after conservative
+    sanitising; collapsing them into ``other`` or ``unknown`` hides useful
+    capacity signals and can merge unrelated models.
+    """
+    if model_name is None:
+        return None
+    name = str(model_name).strip().lower()
+    if not name:
+        return None
+    if "/" in name:
+        name = name.rsplit("/", 1)[-1].strip()
+    if not name:
+        return None
+
+    # Only persist printable, bounded identifiers.  This is also safe as a
+    # document key when a non-SQL backend is used.
+    cleaned = "".join(ch for ch in name if ch.isalnum() or ch in "._-")[:160]
+    if not cleaned:
+        return None
+
+    # Keep each recent Gemini generation distinct.  More-specific rules must
+    # precede broad prefixes.
+    if cleaned.startswith("gemini-pro-agent"):
+        return "3.1-pro"
+    if cleaned.startswith("gemini-3.1-flash-lite-preview"):
+        return "3.1-flash-lite-preview"
+    if cleaned.startswith("gemini-3.1-flash-lite"):
+        return "3.1-flash-lite"
+    if cleaned.startswith("gemini-3.1-flash-image"):
+        return "3.1-flash-image"
+    if cleaned.startswith("gemini-3.1-pro"):
+        return "3.1-pro"
+    if cleaned.startswith("gemini-3-flash"):
+        return "3-flash"
+    for version in ("3.8", "3.7", "3.6", "3.5"):
+        prefix = f"gemini-{version}-"
+        if cleaned.startswith(prefix):
+            if "pro" in cleaned:
+                return f"{version}-pro"
+            if "flash" in cleaned:
+                return f"{version}-flash"
+            return version
+    if cleaned.startswith("claude-sonnet-4-6"):
+        return "claude-sonnet-4-6"
+    if cleaned.startswith("claude-opus-4-6"):
+        return "claude-opus-4-6"
+    if cleaned.startswith("gpt-oss-120b"):
+        return "gpt-oss-120b"
+
+    for prefix, (_short, family) in MODEL_FAMILY_RULES:
+        if cleaned.startswith(prefix):
+            return family
+    return cleaned

@@ -6,7 +6,10 @@ import asyncio
 import io
 import json
 import os
+import re
 import time
+import unicodedata
+import uuid
 import zipfile
 from typing import Any, List, Optional
 
@@ -20,6 +23,7 @@ from src.models import (
     CredFileActionRequest,
     CredFileBatchActionRequest,
     CredFileBatchTestRequest,
+    CredFilenameListRequest,
     RefreshTokenAddRequest,
     RefreshTokenBatchAddRequest,
 )
@@ -47,6 +51,7 @@ from src.subscription_tiers import (
     valid_tiers_for_mode,
 )
 from src.httpx_client import post_async
+from src.logical_request_stats import record_logical_request
 from config import (
     get_code_assist_endpoint,
     get_antigravity_api_url,
@@ -62,9 +67,63 @@ from .utils import validate_mode
 router = APIRouter(prefix="/creds", tags=["credentials"])
 
 
+ANTIGRAVITY_MODEL_TEST_EXPECTED_REPLY = "测试成功"
+ANTIGRAVITY_MODEL_TEST_PROMPT = (
+    "这是模型可用性测试。请只回复以下四个汉字，不要添加解释或其他内容：测试成功"
+)
+
+
 # =============================================================================
 # 工具函数 (Helper Functions)
 # =============================================================================
+
+
+def _extract_antigravity_model_test_reply(response: Any) -> str:
+    """Extract final, non-thinking text from an Antigravity response."""
+    try:
+        payload = response.json()
+    except Exception:
+        try:
+            payload = json.loads(getattr(response, "text", "") or "{}")
+        except Exception:
+            return ""
+
+    if not isinstance(payload, dict):
+        return ""
+    response_payload = payload.get("response", payload)
+    if not isinstance(response_payload, dict):
+        return ""
+    candidates = response_payload.get("candidates", [])
+    if not isinstance(candidates, list) or not candidates:
+        return ""
+    candidate = candidates[0]
+    if not isinstance(candidate, dict):
+        return ""
+    content = candidate.get("content", {})
+    parts = content.get("parts", []) if isinstance(content, dict) else []
+    return "".join(
+        str(part.get("text", ""))
+        for part in parts
+        if isinstance(part, dict)
+        and not part.get("thought", False)
+        and part.get("text") is not None
+    ).strip()
+
+
+def _is_expected_antigravity_model_test_reply(reply: str) -> bool:
+    """Accept only the requested success marker, plus harmless punctuation."""
+    normalized = unicodedata.normalize("NFKC", reply or "")
+    normalized = re.sub(r"\s+", "", normalized)
+    normalized = normalized.strip("\"'“”‘’「」『』。.!！")
+    return normalized == ANTIGRAVITY_MODEL_TEST_EXPECTED_REPLY
+
+
+def _safe_model_test_reply_preview(reply: str, limit: int = 300) -> str:
+    """Return a short single-line model reply without exposing response metadata."""
+    preview = re.sub(r"\s+", " ", reply or "").strip()
+    if not preview:
+        return "（空回复）"
+    return preview if len(preview) <= limit else preview[:limit] + "…"
 
 
 async def extract_json_files_from_zip(zip_file: UploadFile) -> List[dict]:
@@ -562,6 +621,127 @@ async def download_all_creds_common(mode: str = "geminicli") -> Response:
         content=zip_buffer.getvalue(),
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={zip_filename}"},
+    )
+
+
+def _normalize_selected_credential_filenames(filenames: List[str]) -> List[str]:
+    """Validate safe JSON basenames and de-duplicate while preserving order."""
+    normalized: List[str] = []
+    seen = set()
+    for raw_name in filenames:
+        name = str(raw_name or "").strip()
+        if (
+            not name
+            or len(name) > 255
+            or not name.endswith(".json")
+            or any(char in name for char in ("/", "\\", "\0", "\r", "\n"))
+            or name in {".", ".."}
+            or os.path.basename(name) != name
+        ):
+            raise HTTPException(status_code=400, detail="包含不安全的凭证文件名")
+        if name not in seen:
+            seen.add(name)
+            normalized.append(name)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="凭证文件名列表不能为空")
+    return normalized
+
+
+async def download_selected_creds_common(
+    filenames: List[str], mode: str = "geminicli"
+) -> Response:
+    """Package selected credentials without exposing item details in metadata."""
+    mode = validate_mode(mode)
+    selected = _normalize_selected_credential_filenames(filenames)
+    storage_adapter = await get_storage_adapter()
+    zip_buffer = io.BytesIO()
+    success_count = 0
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for filename in selected:
+            try:
+                credential_data = await storage_adapter.get_credential(filename, mode=mode)
+                if credential_data is None:
+                    continue
+                zip_file.writestr(
+                    filename,
+                    json.dumps(credential_data, ensure_ascii=False, indent=2),
+                )
+                success_count += 1
+            except Exception:
+                continue
+
+    missing_count = len(selected) - success_count
+    if success_count == 0:
+        raise HTTPException(status_code=404, detail="未找到可下载的凭证文件")
+
+    zip_buffer.seek(0)
+    zip_filename = (
+        "selected_antigravity_credentials.zip"
+        if mode == "antigravity"
+        else "selected_credentials.zip"
+    )
+    log.info(
+        f"选中凭证打包完成: mode={mode}, success={success_count}, missing={missing_count}"
+    )
+    return Response(
+        content=zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename={zip_filename}",
+            "X-Selected-Count": str(success_count),
+            "X-Missing-Count": str(missing_count),
+        },
+    )
+
+
+async def copy_selected_emails_common(
+    filenames: List[str], mode: str = "geminicli"
+) -> JSONResponse:
+    """Return already-persisted emails only; this path never performs network lookup."""
+    mode = validate_mode(mode)
+    selected = _normalize_selected_credential_filenames(filenames)
+    storage_adapter = await get_storage_adapter()
+    existing = {
+        os.path.basename(name)
+        for name in await storage_adapter.list_credentials(mode=mode)
+    }
+    emails: List[str] = []
+    email_keys = set()
+    missing = []
+    matched_count = 0
+
+    for filename in selected:
+        if filename not in existing:
+            if len(missing) < 50:
+                missing.append({"filename": filename, "reason": "not_found"})
+            continue
+        try:
+            state = await storage_adapter.get_credential_state(filename, mode=mode)
+        except Exception:
+            if len(missing) < 50:
+                missing.append({"filename": filename, "reason": "state_unavailable"})
+            continue
+        email = str((state or {}).get("user_email") or "").strip()
+        if not email:
+            if len(missing) < 50:
+                missing.append({"filename": filename, "reason": "email_unavailable"})
+            continue
+        matched_count += 1
+        email_key = email.lower()
+        if email_key not in email_keys:
+            email_keys.add(email_key)
+            emails.append(email)
+
+    missing_count = len(selected) - matched_count
+    return JSONResponse(
+        content={
+            "emails": emails,
+            "matched_count": matched_count,
+            "missing_count": missing_count,
+            "requested_count": len(selected),
+            "missing": missing,
+        }
     )
 
 
@@ -1393,6 +1573,38 @@ async def download_all_creds(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/download-selected")
+async def download_selected_creds(
+    request: CredFilenameListRequest,
+    token: str = Depends(verify_panel_token),
+    mode: str = "geminicli",
+):
+    """Download a validated selection as a ZIP archive."""
+    try:
+        return await download_selected_creds_common(request.filenames, mode=mode)
+    except HTTPException:
+        raise
+    except Exception:
+        log.exception("打包下载选中凭证失败")
+        raise HTTPException(status_code=500, detail="打包下载失败")
+
+
+@router.post("/copy-emails")
+async def copy_selected_emails(
+    request: CredFilenameListRequest,
+    token: str = Depends(verify_panel_token),
+    mode: str = "geminicli",
+):
+    """Return persisted email addresses for a validated selection."""
+    try:
+        return await copy_selected_emails_common(request.filenames, mode=mode)
+    except HTTPException:
+        raise
+    except Exception:
+        log.exception("读取选中凭证邮箱失败")
+        raise HTTPException(status_code=500, detail="读取邮箱失败")
+
+
 @router.post("/verify-project/{filename}")
 async def verify_credential_project(
     filename: str,
@@ -2069,6 +2281,16 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         - 429: 凭证被限流但有效
         - 其他: 凭证失败（返回实际错误码）
     """
+    strict_antigravity_model_test = False
+    strict_test_counted = False
+    test_model = model or ""
+
+    async def record_strict_test_result(success: bool) -> None:
+        nonlocal strict_test_counted
+        if strict_antigravity_model_test and not strict_test_counted:
+            await record_logical_request(test_model, mode, success)
+            strict_test_counted = True
+
     try:
         mode = validate_mode(mode)
 
@@ -2110,6 +2332,23 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         test_model = model if model else "gemini-2.5-flash"
         # 如果指定了具体模型，则跳过后续的 preview 模型测试
         skip_preview_test = model is not None
+        strict_antigravity_model_test = mode == "antigravity" and model is not None
+        test_prompt = (
+            ANTIGRAVITY_MODEL_TEST_PROMPT
+            if strict_antigravity_model_test
+            else "hi"
+        )
+        test_max_output_tokens = 256 if strict_antigravity_model_test else 1
+        upstream_test_model = test_model
+        if mode == "antigravity":
+            from src.converter.gemini_fix import map_antigravity_gemini_model
+            from src.utils import normalize_antigravity_model_alias
+
+            upstream_test_model = normalize_antigravity_model_alias(test_model)
+            if upstream_test_model.startswith("gemini-"):
+                upstream_test_model = map_antigravity_gemini_model(
+                    upstream_test_model, None, None
+                )
 
         if mode == "antigravity":
             api_base_url = await get_antigravity_api_url()
@@ -2127,11 +2366,15 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         response = await post_async(
             url=f"{api_base_url}/v1internal:generateContent",
             json={
-                "model": test_model,
+                "model": upstream_test_model,
                 "project": project_id,
                 "request": {
-                    "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-                    "generationConfig": {"maxOutputTokens": 1}
+                    "contents": [
+                        {"role": "user", "parts": [{"text": test_prompt}]}
+                    ],
+                    "generationConfig": {
+                        "maxOutputTokens": test_max_output_tokens
+                    }
                 }
             },
             headers=headers,
@@ -2190,10 +2433,63 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                 "filename": filename,
             })
 
+        if strict_antigravity_model_test and status_code == 429:
+            error_text = response.text if hasattr(response, "text") else ""
+            if hasattr(storage_adapter._backend, "record_failure"):
+                await storage_adapter._backend.record_failure(
+                    filename,
+                    status_code,
+                    error_message=error_text,
+                    mode=mode,
+                    model_name=test_model,
+                )
+            await record_strict_test_result(False)
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "success": False,
+                    "verified_reply": False,
+                    "status_code": status_code,
+                    "message": "模型当前限流，未完成返回内容验证",
+                    "expected_reply": ANTIGRAVITY_MODEL_TEST_EXPECTED_REPLY,
+                    "filename": filename,
+                },
+            )
+
         if status_code == 200 or status_code == 429:
             log.info(f"凭证测试成功: {filename} (mode={mode}, model={test_model}, status={status_code})")
             # 测试成功时清除错误状态
             if status_code == 200:
+                model_reply = None
+                if strict_antigravity_model_test:
+                    model_reply = _extract_antigravity_model_test_reply(response)
+                    if not _is_expected_antigravity_model_test_reply(model_reply):
+                        reply_preview = _safe_model_test_reply_preview(model_reply)
+                        log.warning(
+                            "Antigravity 模型语义测试失败: "
+                            f"{filename} (model={test_model}, reply={reply_preview})"
+                        )
+                        if hasattr(storage_adapter._backend, "record_failure"):
+                            await storage_adapter._backend.record_failure(
+                                filename,
+                                status_code,
+                                error_message="Model test did not return the expected success marker",
+                                mode=mode,
+                                model_name=test_model,
+                            )
+                        await record_strict_test_result(False)
+                        return JSONResponse(
+                            status_code=424,
+                            content={
+                                "success": False,
+                                "verified_reply": False,
+                                "status_code": status_code,
+                                "message": "模型未返回预期的测试成功标记",
+                                "expected_reply": ANTIGRAVITY_MODEL_TEST_EXPECTED_REPLY,
+                                "model_reply": reply_preview,
+                                "filename": filename,
+                            },
+                        )
                 if hasattr(storage_adapter._backend, "record_success"):
                     await storage_adapter._backend.record_success(
                         filename,
@@ -2205,6 +2501,9 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                         "error_codes": [],
                         "error_messages": {}
                     }, mode=mode)
+
+                if strict_antigravity_model_test:
+                    await record_strict_test_result(True)
 
                 # 如果是 geminicli 模式且第一次测试成功，继续测试 gemini-3-flash-preview（仅在未指定具体模型时）
                 if mode == "geminicli" and not skip_preview_test:
@@ -2250,17 +2549,27 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                         status_code,
                         error_message=error_text,
                         mode=mode,
+                        model_name=test_model,
                     )
 
             # 返回成功响应
+            success_content = {
+                "success": True,
+                "status_code": status_code,
+                "message": "测试成功",
+                "filename": filename,
+            }
+            if strict_antigravity_model_test:
+                success_content.update(
+                    {
+                        "verified_reply": True,
+                        "expected_reply": ANTIGRAVITY_MODEL_TEST_EXPECTED_REPLY,
+                        "model_reply": model_reply,
+                    }
+                )
             return JSONResponse(
                 status_code=status_code,
-                content={
-                    "success": True,
-                    "status_code": status_code,
-                    "message": "测试成功",
-                    "filename": filename
-                }
+                content=success_content,
             )
         else:
             log.warning(f"凭证测试失败: {filename} (mode={mode}, status={status_code})")
@@ -2277,6 +2586,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                         status_code,
                         error_message=error_text,
                         mode=mode,
+                        model_name=test_model,
                     )
                 else:
                     # 使用覆盖模式保存错误（与 credential_manager 保持一致）
@@ -2308,6 +2618,9 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
             except Exception as e:
                 log.error(f"保存测试错误信息失败: {e}")
 
+        if strict_antigravity_model_test:
+            await record_strict_test_result(False)
+
         # 返回错误响应，包含完整的错误信息
         error_text = response.text if hasattr(response, 'text') else ""
 
@@ -2326,6 +2639,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         raise
     except Exception as e:
         log.error(f"测试凭证失败 {filename}: {e}")
+        await record_strict_test_result(False)
         raise HTTPException(status_code=500, detail=f"测试失败: {str(e)}")
 
 
@@ -2654,16 +2968,8 @@ async def _add_credential_by_refresh_token(
     if pid:
         credential_data["project_id"] = pid
 
-    # 3. 生成文件名
-    if custom_filename:
-        base = os.path.basename(custom_filename.strip())
-        if not base.endswith(".json"):
-            base += ".json"
-        filename = base
-    else:
-        stem = pid or f"refresh-{int(time.time() * 1000)}"
-        stem = "".join(c for c in stem if c.isalnum() or c in "-_")
-        filename = f"{stem}.json"
+    # 3. 生成文件名。自动命名不使用 project_id，避免同项目的 token 互相覆盖。
+    filename = _build_unique_refresh_filename(custom_filename)
 
     # 4. 入库
     tier_raw_id = None
@@ -2672,6 +2978,12 @@ async def _add_credential_by_refresh_token(
     tier_detection_status = None
     if mode == "antigravity":
         await credential_manager.add_antigravity_credential(filename, credential_data)
+        if subscription_tier:
+            await credential_manager.update_credential_state(
+                filename,
+                {"tier": subscription_tier},
+                mode="antigravity",
+            )
     else:
         storage_adapter = await get_storage_adapter()
         existed = await storage_adapter.get_credential(filename, mode="geminicli") is not None
@@ -2706,6 +3018,16 @@ async def _add_credential_by_refresh_token(
         "tier_detected_at": tier_detected_at,
         "tier_detection_status": tier_detection_status,
     }
+
+
+def _build_unique_refresh_filename(custom_filename: Optional[str]) -> str:
+    """Build a unique RT-import filename without encoding credential material."""
+    if custom_filename:
+        base = os.path.basename(custom_filename.strip())
+        if not base.endswith(".json"):
+            base += ".json"
+        return base
+    return f"refresh-{time.time_ns()}-{uuid.uuid4().hex}.json"
 
 
 # =============================================================================
@@ -2756,9 +3078,16 @@ async def get_recent_daily_stats(
         storage_adapter = await get_storage_adapter()
         backend = getattr(storage_adapter, "_backend", None)
         if backend is None or not hasattr(backend, "get_recent_daily_stats"):
-            return JSONResponse(content={"days": days, "items": []})
+            return JSONResponse(content={
+                "days": days, "items": [], "metric": "logical_requests",
+                "since": None,
+                "description": "Completed logical client requests; unavailable on this storage backend.",
+            })
         items = await backend.get_recent_daily_stats(days=days, mode=mode)
-        return JSONResponse(content={"days": days, "items": items})
+        metadata = {}
+        if hasattr(backend, "get_logical_request_stats_metadata"):
+            metadata = await backend.get_logical_request_stats_metadata()
+        return JSONResponse(content={"days": days, "items": items, **metadata})
     except HTTPException:
         raise
     except Exception as e:
