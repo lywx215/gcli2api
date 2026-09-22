@@ -233,3 +233,39 @@ async def test_corrupt_deflate_is_an_item_error(manager):
     assert body['uploaded_count'] == 1 and body['failed_count'] == 1
     assert body['results'][0]['error_code'] == 'unreadable_zip_entry'
     assert manager._storage_adapter.store_credential.await_args.args[0] == 'good.json'
+
+async def test_oversized_chunked_upload_does_not_poison_next_http_request(monkeypatch, unused_tcp_port):
+    from hypercorn.asyncio import serve
+    from hypercorn.config import Config
+    configure(monkeypatch, request_bytes=1024*1024)
+    app = FastAPI()
+    app.add_middleware(limits.AntigravityUploadMiddleware)
+    @app.get('/ping')
+    async def ping():
+        return {'ok':True}
+    config = Config()
+    config.bind = [f'127.0.0.1:{unused_tcp_port}']
+    config.accesslog = None
+    config.errorlog = None
+    stop = asyncio.Event()
+    server = asyncio.create_task(serve(app, config, shutdown_trigger=stop.wait))
+    try:
+        for _ in range(100):
+            try:
+                _, writer = await asyncio.open_connection('127.0.0.1',unused_tcp_port)
+                writer.close()
+                await writer.wait_closed()
+                break
+            except OSError:
+                await asyncio.sleep(.01)
+        async with httpx.AsyncClient(base_url=f'http://127.0.0.1:{unused_tcp_port}', trust_env=False, timeout=2) as client:
+            async def chunks():
+                for _ in range(3):
+                    yield b'x'*(1024*1024)
+            response = await client.post('/creds/upload?mode=antigravity',content=chunks(),headers={'Content-Type':'multipart/form-data; boundary=test'})
+            assert response.status_code == 413
+            response = await client.get('/ping')
+            assert response.status_code == 200 and response.json() == {'ok':True}
+    finally:
+        stop.set()
+        await server

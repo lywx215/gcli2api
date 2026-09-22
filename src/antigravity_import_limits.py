@@ -96,7 +96,7 @@ class AntigravityUploadMiddleware:
         except ValueError:
             declared = 0
         if declared > limit:
-            return await JSONResponse(status_code=413, content={'detail':'Antigravity 导入超出资源限制'})(scope, receive, send)
+            return await _reject_oversize(scope, receive, send)
         async with import_slot():
             with SpooledTemporaryFile(max_size=1024 * 1024) as buffer:
                 size = 0
@@ -109,7 +109,9 @@ class AntigravityUploadMiddleware:
                     body = message.get('body', b'')
                     size += len(body)
                     if size > limit:
-                        return await JSONResponse(status_code=413, content={'detail':'Antigravity 导入超出资源限制'})(scope, receive, send)
+                        return await _reject_oversize(
+                            scope, receive, send, body_complete=not message.get("more_body", False)
+                        )
                     buffer.write(body)
                     if not message.get('more_body', False):
                         break
@@ -126,3 +128,32 @@ class AntigravityUploadMiddleware:
                         remaining = -1
                     return {'type':'http.request', 'body':data, 'more_body':more}
                 await self.app(scope, replay, send)
+
+
+async def _reject_oversize(scope, receive, send, *, body_complete=False):
+    # Never reuse a rejected HTTP/1 connection with an unread request body.
+    # Briefly drain in-flight bytes after sending 413 so closing the socket does
+    # not reset a finite upload before the client can read the error response.
+    headers = {"Connection": "close"} if scope.get("http_version", "1.1") in ("1.0", "1.1") else {}
+
+    async def finish_response(message):
+        if message["type"] != "http.response.body" or message.get("more_body", False):
+            return await send(message)
+        await send({**message, "more_body": True})
+        if not body_complete:
+            try:
+                async with asyncio.timeout(1):
+                    discarded = 0
+                    while discarded < 4 * 1024 * 1024:
+                        remainder = await receive()
+                        if remainder["type"] == "http.disconnect":
+                            break
+                        discarded += len(remainder.get("body", b""))
+                        if not remainder.get("more_body", False):
+                            break
+            except TimeoutError:
+                pass
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    await JSONResponse(status_code=413, headers=headers,
+                       content={"detail": "Antigravity 导入超出资源限制"})(scope, receive, finish_response)

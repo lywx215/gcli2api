@@ -95,8 +95,15 @@ test_antigravity_cycle_settlement.py、test_antigravity_import_limits.py。
 覆盖临时 SQLite 并发结算、三种协议的真流/假流/抗截断超时、长流、防重放、取消、
 真实本地 HTTP 慢响应头、上传限额、伪造 ZIP 信息、批量结果与敏感错误屏蔽。
 PostgreSQL 验证使用事务调用模拟，没有连接真实 PostgreSQL 或调用真实模型。
-最终执行 `python -m pytest -q --tb=short`：404 项通过，6 条现有依赖弃用警告；
+最终执行 `python -m pytest -q --tb=short`：405 项通过，6 条现有依赖弃用警告；
 包含管理协议、Legacy、模型转换及面板回归。`git diff --check` 通过。
 
 按上传、超时、冷却、导入限制拆分提交；回滚通过撤回对应代码，存在依赖时按逆序撤回，
 不覆盖运行数据、不进行历史统计重算。性能优化及终身统计仍后置。
+
+
+2026-09-22 本地 SQLite 联调追加：真实 HTTP 服务 25 项检查通过。发现超大分块上传
+提前返回 413 后可能污染 HTTP/1 长连接，已改为有界丢弃在途数据（最多 4 MiB / 1 秒）
+并关闭该连接，避免后续请求卡住；HTTP/2 不发送 Connection 头。
+补充真实 Hypercorn 网络回归：同一客户端超限上传后继续请求正常返回。
+测试使用独立临时 SQLite 和本地模拟上游；结束后清理模拟凭证/故障触发器，恢复默认配置。
