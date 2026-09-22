@@ -381,12 +381,12 @@ async def stream_generate_content(
 
     # ========== 根据模式选择生成器 ==========
     if use_fake_streaming:
-        return await build_streaming_response_or_error(fake_stream_generator(), model_name=real_model, mode="antigravity")
+        return await build_streaming_response_or_error(fake_stream_generator(), model_name=real_model, mode="antigravity", protocol="gemini", non_stream=True)
     elif use_anti_truncation:
         log.info("启用流式抗截断功能")
-        return await build_streaming_response_or_error(anti_truncation_generator(), model_name=real_model, mode="antigravity")
+        return await build_streaming_response_or_error(anti_truncation_generator(), model_name=real_model, mode="antigravity", protocol="gemini")
     else:
-        return await build_streaming_response_or_error(normal_stream_generator(), model_name=real_model, mode="antigravity")
+        return await build_streaming_response_or_error(normal_stream_generator(), model_name=real_model, mode="antigravity", protocol="gemini")
 
 @router.post("/antigravity/v1beta/models/{model:path}:countTokens")
 @router.post("/antigravity/v1/models/{model:path}:countTokens")

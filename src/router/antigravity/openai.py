@@ -380,12 +380,12 @@ async def chat_completions(
 
     # ========== 根据模式选择生成器 ==========
     if use_fake_streaming:
-        return await build_streaming_response_or_error(fake_stream_generator(), model_name=real_model, mode="antigravity")
+        return await build_streaming_response_or_error(fake_stream_generator(), model_name=real_model, mode="antigravity", protocol="openai", non_stream=True)
     elif use_anti_truncation:
         log.info("启用流式抗截断功能")
-        return await build_streaming_response_or_error(anti_truncation_generator(), model_name=real_model, mode="antigravity")
+        return await build_streaming_response_or_error(anti_truncation_generator(), model_name=real_model, mode="antigravity", protocol="openai")
     else:
-        return await build_streaming_response_or_error(normal_stream_generator(), model_name=real_model, mode="antigravity")
+        return await build_streaming_response_or_error(normal_stream_generator(), model_name=real_model, mode="antigravity", protocol="openai")
 
 
 # ==================== 测试代码 ====================

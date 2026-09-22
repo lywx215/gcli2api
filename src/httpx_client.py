@@ -4,6 +4,7 @@
 保持通用性，不与特定业务逻辑耦合
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Dict, Optional
 
@@ -75,11 +76,17 @@ async def post_async(
     json: Any = None,
     headers: Optional[Dict[str, str]] = None,
     timeout: float = 900.0,
+    response_header_timeout: Optional[float] = None,
     **kwargs,
 ) -> httpx.Response:
     """通用异步POST请求"""
     async with http_client.get_client(timeout=timeout, **kwargs) as client:
-        return await client.post(url, data=data, json=json, headers=headers)
+        if response_header_timeout is None:
+            return await client.post(url, data=data, json=json, headers=headers)
+        async with _bounded_response(client, url, json=json, data=data, headers=headers,
+                                     header_timeout=response_header_timeout) as response:
+            await response.aread()
+            return response
 
 
 # 调试用：设为 True 时所有流式请求都返回 429
@@ -90,6 +97,7 @@ async def stream_post_async(
     body: Dict[str, Any],
     native: bool = False,
     headers: Optional[Dict[str, str]] = None,
+    response_header_timeout: Optional[float] = None,
     **kwargs,
 ):
     """流式异步POST请求"""
@@ -104,7 +112,13 @@ async def stream_post_async(
         return
 
     async with http_client.get_streaming_client(**kwargs) as client:
-        async with client.stream("POST", url, json=body, headers=headers) as r:
+        response_context = (
+            client.stream("POST", url, json=body, headers=headers)
+            if response_header_timeout is None else
+            _bounded_response(client, url, json=body, headers=headers,
+                              header_timeout=response_header_timeout)
+        )
+        async with response_context as r:
             # 错误直接返回
             if r.status_code != 200:
                 from fastapi import Response
@@ -119,3 +133,38 @@ async def stream_post_async(
                 # 通过aiter_lines转化成bytes流返回（统一为bytes避免下游str/bytes混合）
                 async for line in r.aiter_lines():
                     yield line.encode('utf-8') if isinstance(line, str) else line
+
+
+@asynccontextmanager
+async def _bounded_response(client, url, *, header_timeout, **kwargs):
+    """Deadline begins after request body transmission, for HTTP/1.1 and HTTP/2.
+
+    httpx connect/write limits govern earlier phases. Waiting for the entire
+    header block is bounded even when an upstream trickles individual bytes.
+    """
+    sent = asyncio.Event()
+
+    async def trace(event, info):
+        if event.endswith("send_request_body.complete"):
+            sent.set()
+
+    request = client.build_request("POST", url, extensions={"trace": trace}, **kwargs)
+    opening = asyncio.create_task(client.send(request, stream=True))
+    transmitted = asyncio.create_task(sent.wait())
+    response = None
+    try:
+        await asyncio.wait((opening, transmitted), return_when=asyncio.FIRST_COMPLETED)
+        if opening.done():
+            response = opening.result()
+        else:
+            response = await asyncio.wait_for(opening, header_timeout)
+        yield response
+    finally:
+        for task in (opening, transmitted):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(opening, transmitted, return_exceptions=True)
+        if response is None and not opening.cancelled() and opening.exception() is None:
+            response = opening.result()
+        if response is not None:
+            await response.aclose()
