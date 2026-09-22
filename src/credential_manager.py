@@ -11,6 +11,7 @@ from log import log
 
 from src.google_oauth_api import Credentials
 from src.storage_adapter import get_storage_adapter
+from src.antigravity_import_limits import import_write_slot
 
 def _fire_and_forget_cb(task: asyncio.Task):
     """回调：消费 fire-and-forget 任务的异常，防止任务对象泄漏"""
@@ -147,9 +148,10 @@ class CredentialManager:
         """
         try:
             await self._ensure_initialized()
-            stored = await self._storage_adapter.store_credential(
-                credential_name, credential_data, mode="antigravity"
-            )
+            async with import_write_slot():
+                stored = await self._storage_adapter.store_credential(
+                    credential_name, credential_data, mode="antigravity"
+                )
         except Exception:
             raise CredentialStorageError() from None
         if not stored:

@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 
 from log import log
 from src.credential_manager import credential_manager, CredentialStorageError
+from src.antigravity_import_limits import import_slot, import_write_slot
 from src.error_classification import get_error_classifications
 from src.models import (
     CredFileActionRequest,
@@ -351,6 +352,9 @@ async def upload_credentials_common(
 ) -> JSONResponse:
     """批量上传凭证文件的通用函数"""
     mode = validate_mode(mode)
+    if mode == "antigravity":
+        from src.panel.antigravity_import import upload_antigravity_files
+        return await upload_antigravity_files(files, credential_manager)
 
     if not files:
         raise HTTPException(status_code=400, detail="请选择要上传的文件")
@@ -443,22 +447,17 @@ async def upload_credentials_common(
                 log.debug(f"成功上传 {mode} 凭证文件: {filename}")
                 return result
 
-            except CredentialStorageError as e:
-                return {"filename": file_data["filename"], "status": "error",
-                        "error_code": e.code, "message": str(e)}
             except json.JSONDecodeError as e:
                 return {
                     "filename": file_data["filename"],
                     "status": "error",
-                    "message": "JSON格式错误" if mode == "antigravity" else f"JSON格式错误: {str(e)}",
-                    "error_code": "invalid_json",
+                    "message": f"JSON格式错误: {str(e)}",
                 }
             except Exception as e:
                 return {
                     "filename": file_data["filename"],
                     "status": "error",
-                    "message": "凭证处理失败" if mode == "antigravity" else f"处理失败: {str(e)}",
-                    "error_code": "credential_import_failed",
+                    "message": f"处理失败: {str(e)}",
                 }
 
         log.info(f"开始并发处理 {len(batch_files)} 个 {mode} 文件...")
@@ -491,13 +490,6 @@ async def upload_credentials_common(
             f"{batch_uploaded_count}/{len(batch_files)} 个 {mode} 文件"
         )
 
-    if mode == "antigravity":
-        payload = {"uploaded_count": total_success, "total_count": len(all_results),
-                   "failed_count": len(all_results) - total_success, "results": all_results,
-                   "message": f"批量上传完成: 成功 {total_success}/{len(all_results)} 个 antigravity 文件"}
-        if not total_success:
-            payload["detail"] = "没有 antigravity 文件上传成功"
-        return JSONResponse(content=payload, status_code=200 if total_success else 400)
     if total_success > 0:
         return JSONResponse(
             content={
@@ -2784,7 +2776,14 @@ async def _exchange_refresh_token_to_credential(
 
 
 @router.post("/upload-by-refresh-token")
-async def upload_credentials_by_refresh_token(
+async def upload_credentials_by_refresh_token(req: RefreshTokenAddRequest, token: str = Depends(verify_panel_token)):
+    if req.mode == "antigravity":
+        async with import_slot():
+            return await _upload_credentials_by_refresh_token(req, token)
+    return await _upload_credentials_by_refresh_token(req, token)
+
+
+async def _upload_credentials_by_refresh_token(
     req: RefreshTokenAddRequest,
     token: str = Depends(verify_panel_token),
 ):
@@ -2836,7 +2835,14 @@ async def upload_credentials_by_refresh_token(
 
 
 @router.post("/upload-by-refresh-token-batch")
-async def upload_credentials_by_refresh_token_batch(
+async def upload_credentials_by_refresh_token_batch(req: RefreshTokenBatchAddRequest, token: str = Depends(verify_panel_token)):
+    if req.mode == "antigravity":
+        async with import_slot():
+            return await _upload_credentials_by_refresh_token_batch(req, token)
+    return await _upload_credentials_by_refresh_token_batch(req, token)
+
+
+async def _upload_credentials_by_refresh_token_batch(
     req: RefreshTokenBatchAddRequest,
     token: str = Depends(verify_panel_token),
 ):
@@ -2914,6 +2920,9 @@ async def upload_credentials_by_refresh_token_batch(
     except HTTPException:
         raise
     except Exception as e:
+        if req.mode == "antigravity":
+            return JSONResponse(status_code=500, content={"error_code": "credential_import_failed",
+                "detail": "批量凭证添加失败"})
         log.error(f"批量通过 refresh_token 添加凭证失败: {e}")
         raise HTTPException(status_code=500, detail=f"批量添加失败: {str(e)}")
 
@@ -3006,9 +3015,10 @@ async def _add_credential_by_refresh_token(
                     "error_code": exc.code, "error": str(exc)}
         if subscription_tier:
             try:
-                updated = await credential_manager.update_credential_state(
-                    filename, {"tier": subscription_tier}, mode="antigravity"
-                )
+                async with import_write_slot():
+                    updated = await credential_manager.update_credential_state(
+                        filename, {"tier": subscription_tier}, mode="antigravity"
+                    )
             except Exception:
                 updated = False
             if not updated:
