@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "delivery_id": "MGMT-009-G-2",
+  "work_item": "MGMT-009",
+  "source_repository": "lywx215/gcli2api",
+  "status": "no_counterpart_action",
+  "execution_policy": {
+    "mode": "queue_only",
+    "max_automatic_runs": 0
+  },
+  "summary": "Owner terminated further unified-management development on 2026-09-22. MGMT-009, MGMT-010 and the unfinished MGMT-012 follow-up are cancelled, not completed. This record supersedes executable next_actions in MGMT-009-G-1 and historical MGMT-012 candidate/canary handoffs. Both repositories receive progress updates in the same closure task.",
+  "contract_sha256": "841f9c0152ada97e4e481ebcda9877959f57be1f661c017765b0a91eec5320d2",
+  "capabilities_added": [],
+  "capabilities_removed": [],
+  "compatibility": "Progress and audit updates only. Existing implementation, APIs, schema, capabilities, credentials, databases, volumes and running services are unchanged. Cancellation does not certify outstanding gates. Pre-existing manager uncommitted changes are preserved.",
+  "tests": [
+    "Validate this JSON against coordination/handoff.schema.json and the filename/delivery_id rule.",
+    "Verify identical closure records in both repositories and cancelled roadmap states for MGMT-009, MGMT-010 and MGMT-012.",
+    "Check documentation-only scope, whitespace and sensitive literals."
+  ],
+  "artifacts": [
+    "docs/delivery/MGMT-009-development-termination.md",
+    "docs/multi-repo/IMPLEMENTATION_ROADMAP.md",
+    "AGENTS.md",
+    "coordination/handoffs/README.md"
+  ],
+  "next_actions": [
+    "Record only: no counterpart development action. Do not execute historical candidate, compatibility-matrix or canary next_actions, start MGMT-009/MGMT-010, enable Actions or resume model polling. Restart requires a new explicit owner decision and revalidated scope and gates."
+  ],
+  "generated_at": "2026-09-22T04:51:10Z"
+}

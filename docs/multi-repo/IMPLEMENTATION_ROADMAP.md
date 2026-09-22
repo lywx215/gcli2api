@@ -1,8 +1,22 @@
 # gcli2api统一管理系统完整实施路线图
 
-状态：**Draft for Review**
+状态：**后续开发已终止（2026-09-22）**
 
 路线图版本：`implementation-roadmap-1.4`（2026-09-09）
+
+## 后续开发终止（2026-09-22）
+
+仓库所有者已明确终止本统一管理项目的后续开发。MGMT-009、MGMT-010及MGMT-012
+尚未完成的开发、候选验证和灰度工作统一标记为 `cancelled`（已终止），不再作为待办。
+已合入的实现、历史验收证据和现有运行功能保留；终止不等于验收通过，不将未完成门禁
+标记为 `done`，也不构成回滚、停服、删除数据或继续部署的授权。
+
+该决定优先于下文历史流程以及旧分支、Issue和handoff中的 `ready`、`blocked`、
+`in_progress`、`planned` 与 `next_actions`。尤其不得继续执行旧的 `MGMT-009-G-1`
+或MGMT-012候选/灰度交接，也不得因依赖变化自动启动MGMT-009或MGMT-010。
+恢复开发必须由所有者另行明确启动并重新确认范围和门禁。
+
+完整终止记录见 [MGMT-009-development-termination.md](../delivery/MGMT-009-development-termination.md)。
 
 ## 1. 目的和权威性
 
@@ -52,6 +66,7 @@ Issue用于跟踪状态，PR用于交付实现，handoff用于跨仓库投递，
 | `review` | PR、测试和交付材料等待Review | 仅修复本工作项问题 |
 | `blocked` | 缺少必要输入或外部条件 | 否，不得猜测绕过 |
 | `done` | 验收、合并和handoff均完成 | 否 |
+| `cancelled` | 所有者终止后续工作；保留已完成证据，不代表门禁通过 | 否 |
 
 ### 3.2 每个工作项的固定流程
 
@@ -111,9 +126,9 @@ flowchart LR
 | MGMT-007 | 负载快照、趋势、热力图和人工调整建议 | manager | MGMT-006 | `planned` |
 | MGMT-008 | 腾讯云数据库、Zeabur配置、备份恢复和安全验收 | manager/运维 | MGMT-007 | `done`，[manager PR #26](https://github.com/lywx215/gcli2api-manager/pull/26) |
 | MGMT-011 | 算力预算、24小时恢复预测和手动额度刷新 | manager | MGMT-008 | `done`，[manager PR #30](https://github.com/lywx215/gcli2api-manager/pull/30) |
-| MGMT-012 | 节点控制台嵌入、`#manage`直达和安全回退 | 两仓 | MGMT-011 | `in_progress` |
-| MGMT-009 | 20台版本矩阵、RC、2/5/剩余节点灰度 | 两仓/运维 | MGMT-012 | `planned` |
-| MGMT-010 | 正式发布、运行手册、告警、恢复演练和维护策略 | 两仓/运维 | MGMT-009 | `planned` |
+| MGMT-012 | 节点控制台嵌入、`#manage`直达和安全回退 | 两仓 | MGMT-011 | `cancelled`（2026-09-22，所有者终止） |
+| MGMT-009 | 20台版本矩阵、RC、2/5/剩余节点灰度 | 两仓/运维 | MGMT-012 | `cancelled`（2026-09-22，所有者终止） |
+| MGMT-010 | 正式发布、运行手册、告警、恢复演练和维护策略 | 两仓/运维 | MGMT-009 | `cancelled`（2026-09-22，所有者终止） |
 
 ## 6. 完整工作项定义
 
@@ -313,10 +328,8 @@ new-api、自动迁移/复制凭证、根据版本字符串猜测能力，以及
 
 ### MGMT-012：节点控制台嵌入与GCLI凭证页直达
 
-状态：`in_progress`。双仓路线图与Management schema 1.3已完成所有者Review；本增量将
-`dev8`设为gcli2api管理功能基线，增加页面可配置的Management Token和双模式嵌入策略。
-仍需manager先完成新capability容忍、gcli2api候选实现和G6.6证据后，MGMT-012才能标记为
-`done`，MGMT-009才能重新标记为`ready`。
+状态：`cancelled`（2026-09-22）。已合入实现保留，剩余验证及G6.6工作终止；
+不再解锁MGMT-009。以下目标、顺序和验收仅为历史计划。
 
 目标：让唯一管理员从manager的节点控制台进入对应gcli2api节点的GCLI凭证文件管理
 标签页；已审核节点优先在隔离iframe中展示，不支持或不可达时安全回退到新标签。该功能
@@ -371,6 +384,8 @@ gcli2api范围：
 
 ### MGMT-009：20节点兼容矩阵与灰度上线
 
+状态：`cancelled`（2026-09-22，所有者终止）。以下为历史范围，不再推进。
+
 目标：用可回滚的方式验证所有现网版本并逐步开放管理能力。
 
 流程：
@@ -387,6 +402,8 @@ gcli2api范围：
 回滚均演练；未通过版本不会被标记为完整支持。
 
 ### MGMT-010：正式发布和持续运维
+
+状态：`cancelled`（2026-09-22，所有者终止）。以下为历史范围，不再推进。
 
 目标：形成可长期维护的正式版本，而不是停留在一次性开发结果。
 

@@ -1,5 +1,9 @@
 # 交接 Outbox
 
+2026-09-22：统一管理后续开发已终止。MGMT-009、MGMT-010及MGMT-012旧交接只作历史记录，
+其后续动作不再执行。详见[终止记录](../../docs/delivery/MGMT-009-development-termination.md)。
+本次新的`MGMT-009-G-2`为`no_counterpart_action`审计记录，不启动对端开发。
+
 Codex完成需要`gcli2api-manager`继续处理的`MGMT-*`任务时，必须基于
 `../HANDOFF_TEMPLATE.json`创建一个不可覆盖的新JSON文件，例如：
 
