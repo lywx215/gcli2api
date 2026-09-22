@@ -88,7 +88,6 @@ def test_unavailable_quota_models_keep_raw_metadata_but_are_hidden():
         "tab_jump_flash_lite_preview",
         "gemini-2.5-pro",
         "gemini-3-flash-agent",
-        "gemini-3.1-flash-image",
         "gemini-3.5-flash-extra-low",
         "gemini-3.5-flash-low",
     }
@@ -112,6 +111,18 @@ def test_gemini_3_flash_is_visible_without_public_advertising_or_badge():
     assert metadata["availability"] == "available"
     assert metadata["badge"] is None
     assert "gemini-3-flash" not in PUBLIC_ANTIGRAVITY_MODEL_IDS
+
+
+def test_gemini_31_flash_image_is_visible_as_normal_internal_model():
+    metadata = describe_antigravity_model("gemini-3.1-flash-image")
+
+    assert metadata["displayName"] == "gemini-3.1-flash-image"
+    assert metadata["rawModelId"] == "gemini-3.1-flash-image"
+    assert metadata["public"] is False
+    assert metadata["visible"] is True
+    assert metadata["availability"] == "compatible"
+    assert metadata["badge"] == "内部/兼容"
+    assert "gemini-3.1-flash-image" not in PUBLIC_ANTIGRAVITY_MODEL_IDS
 
 
 def test_current_native_effort_and_tiered_ids_are_never_stripped():

@@ -99,7 +99,6 @@ HIDDEN_ANTIGRAVITY_QUOTA_MODEL_IDS = frozenset(
         "tab_jump_flash_lite_preview",
         "gemini-2.5-pro",
         "gemini-3-flash-agent",
-        "gemini-3.1-flash-image",
         "gemini-3.5-flash-extra-low",
         "gemini-3.5-flash-low",
     }
