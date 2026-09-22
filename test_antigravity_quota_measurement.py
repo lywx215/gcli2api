@@ -12,10 +12,12 @@ from scripts.measure_antigravity_quota import (
     adjust_workload,
     aggregate_usage,
     build_native_payload,
+    build_summary,
     execute_valid_request,
     output_tokens,
     parse_usage_payload,
     percent_difference,
+    render_markdown,
 )
 
 
@@ -172,3 +174,57 @@ def test_formal_sample_can_retarget_output_without_changing_matched_input():
     )
 
     assert adjusted == {"filler_words": 9_656, "output_words": 475}
+
+
+def test_summary_and_markdown_include_required_quota_metrics():
+    def record(prompt, candidates, thoughts):
+        return {
+            "usage": {
+                "promptTokenCount": prompt,
+                "cachedContentTokenCount": 0,
+                "candidatesTokenCount": candidates,
+                "thoughtsTokenCount": thoughts,
+                "totalTokenCount": prompt + candidates + thoughts,
+            }
+        }
+
+    def snapshot(remaining, offset=None):
+        value = {"remaining": remaining}
+        if offset is not None:
+            value["offset_seconds"] = offset
+        return value
+
+    report = {
+        "started_at": "start",
+        "finished_at": "finish",
+        "external_traffic_detected": False,
+        "comparison_issue": None,
+        "attempt_events": [],
+        "flash": {
+            "calibration": [],
+            "formal": [record(10_000, 1_000, 1_000)],
+            "supplements": [],
+            "quota_baseline": [snapshot(0.9)],
+            "quota_after": [snapshot(0.89, 300), snapshot(0.88, 600)],
+        },
+        "pro": {
+            "calibration": [],
+            "formal": [record(10_000, 1_000, 1_000)],
+            "supplements": [],
+            "quota_baseline": [snapshot(0.8)],
+            "quota_after": [snapshot(0.78, 300), snapshot(0.76, 600)],
+        },
+    }
+
+    report["summary"] = build_summary(report)
+    summary = report["summary"]
+    assert summary["flash_quota"]["before_panel_percent"] == pytest.approx(90)
+    assert summary["flash_rates"][
+        "t5_percentage_points_per_million_input_tokens"
+    ] == pytest.approx(100)
+    assert summary["quota_consumption_ratio_pro_to_flash"]["t5"] == pytest.approx(2)
+
+    markdown = render_markdown(report)
+    assert "T+5 consumed pp" in markdown
+    assert "pp/1M input" in markdown
+    assert "Pro/Flash quota-consumption ratio at final sample: 2.000000x" in markdown

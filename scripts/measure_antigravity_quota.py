@@ -645,14 +645,60 @@ def _quota_consumption(
     delta_final = before - final["remaining"]
     return {
         "before_remaining": before,
+        "before_panel_percent": before * 100,
         "t5_remaining": t5["remaining"],
+        "t5_panel_percent": t5["remaining"] * 100,
         "final_remaining": final["remaining"],
+        "final_panel_percent": final["remaining"] * 100,
+        "final_offset_seconds": final["offset_seconds"],
         "t5_consumed_fraction": delta_t5,
         "t5_consumed_percentage_points": delta_t5 * 100,
         "final_consumed_fraction": delta_final,
         "final_consumed_percentage_points": delta_final * 100,
         "below_upstream_resolution": delta_t5 == 0,
     }
+
+
+def _quota_rates(
+    quota: dict[str, Any], totals: dict[str, int], request_count: int
+) -> dict[str, float | None]:
+    def normalized(consumed_points: float, token_count: int) -> float | None:
+        if token_count <= 0:
+            return None
+        return consumed_points * 1_000_000 / token_count
+
+    t5_points = quota["t5_consumed_percentage_points"]
+    final_points = quota["final_consumed_percentage_points"]
+    return {
+        "t5_average_per_request_percentage_points": (
+            t5_points / request_count if request_count else None
+        ),
+        "final_average_per_request_percentage_points": (
+            final_points / request_count if request_count else None
+        ),
+        "t5_percentage_points_per_million_input_tokens": normalized(
+            t5_points, totals["promptTokenCount"]
+        ),
+        "t5_percentage_points_per_million_output_tokens": normalized(
+            t5_points, totals["outputTokenCount"]
+        ),
+        "t5_percentage_points_per_million_total_tokens": normalized(
+            t5_points, totals["totalTokenCount"]
+        ),
+        "final_percentage_points_per_million_input_tokens": normalized(
+            final_points, totals["promptTokenCount"]
+        ),
+        "final_percentage_points_per_million_output_tokens": normalized(
+            final_points, totals["outputTokenCount"]
+        ),
+        "final_percentage_points_per_million_total_tokens": normalized(
+            final_points, totals["totalTokenCount"]
+        ),
+    }
+
+
+def _safe_ratio(numerator: float, denominator: float) -> float | None:
+    return numerator / denominator if denominator > 0 else None
 
 
 def build_summary(report: dict[str, Any]) -> dict[str, Any]:
@@ -666,6 +712,12 @@ def build_summary(report: dict[str, Any]) -> dict[str, Any]:
     output_difference = percent_difference(
         flash_totals["outputTokenCount"], pro_totals["outputTokenCount"]
     )
+    flash_quota = _quota_consumption(
+        report["flash"]["quota_baseline"], report["flash"]["quota_after"]
+    )
+    pro_quota = _quota_consumption(
+        report["pro"]["quota_baseline"], report["pro"]["quota_after"]
+    )
     return {
         "flash_totals": flash_totals,
         "pro_totals": pro_totals,
@@ -673,12 +725,20 @@ def build_summary(report: dict[str, Any]) -> dict[str, Any]:
         "output_difference_percent": output_difference,
         "input_parity_passed": input_difference <= PARITY_LIMIT_PERCENT,
         "output_parity_passed": output_difference <= PARITY_LIMIT_PERCENT,
-        "flash_quota": _quota_consumption(
-            report["flash"]["quota_baseline"], report["flash"]["quota_after"]
-        ),
-        "pro_quota": _quota_consumption(
-            report["pro"]["quota_baseline"], report["pro"]["quota_after"]
-        ),
+        "flash_quota": flash_quota,
+        "pro_quota": pro_quota,
+        "flash_rates": _quota_rates(flash_quota, flash_totals, len(flash_records)),
+        "pro_rates": _quota_rates(pro_quota, pro_totals, len(pro_records)),
+        "quota_consumption_ratio_pro_to_flash": {
+            "t5": _safe_ratio(
+                pro_quota["t5_consumed_percentage_points"],
+                flash_quota["t5_consumed_percentage_points"],
+            ),
+            "final": _safe_ratio(
+                pro_quota["final_consumed_percentage_points"],
+                flash_quota["final_consumed_percentage_points"],
+            ),
+        },
     }
 
 
@@ -708,20 +768,27 @@ def render_markdown(report: dict[str, Any]) -> str:
         [
             "",
             f"- Input difference: {summary['input_difference_percent']:.4f}%",
+            f"- Input parity (<= 2%): {summary['input_parity_passed']}",
             f"- Output difference: {summary['output_difference_percent']:.4f}%",
+            f"- Output parity (<= 2%): {summary['output_parity_passed']}",
+            f"- Comparison issue: {report.get('comparison_issue') or 'None'}",
             "",
             "## Quota snapshots",
             "",
-            "| Model | Before | T+5 min | Consumed percentage points |",
-            "|---|---:|---:|---:|",
+            "| Model | Before fraction | Before panel % | T+5 fraction | T+5 panel % | T+5 consumed pp | Final offset | Final fraction | Final consumed pp |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for key, label in (("flash", FLASH_MODEL), ("pro", PRO_MODEL)):
         quota = summary[f"{key}_quota"]
         lines.append(
             f"| `{label}` | {quota['before_remaining']:.8f} | "
-            f"{quota['t5_remaining']:.8f} | "
-            f"{quota['t5_consumed_percentage_points']:.8f} |"
+            f"{quota['before_panel_percent']:.6f}% | "
+            f"{quota['t5_remaining']:.8f} | {quota['t5_panel_percent']:.6f}% | "
+            f"{quota['t5_consumed_percentage_points']:.8f} | "
+            f"T+{quota['final_offset_seconds'] // 60} min | "
+            f"{quota['final_remaining']:.8f} | "
+            f"{quota['final_consumed_percentage_points']:.8f} |"
         )
         if quota["below_upstream_resolution"]:
             lines.append(
@@ -729,6 +796,42 @@ def render_markdown(report: dict[str, Any]) -> str:
             )
     lines.extend(
         [
+            "",
+            "## Normalized quota consumption",
+            "",
+            "T+5 values below are percentage points normalized by the observed token totals; they do not isolate the causal price of one token type.",
+            "",
+            "| Model | Avg pp/request | pp/1M input | pp/1M output | pp/1M total |",
+            "|---|---:|---:|---:|---:|",
+        ]
+    )
+    for key, label in (("flash", FLASH_MODEL), ("pro", PRO_MODEL)):
+        rates = summary[f"{key}_rates"]
+        lines.append(
+            f"| `{label}` | {rates['t5_average_per_request_percentage_points']:.8f} | "
+            f"{rates['t5_percentage_points_per_million_input_tokens']:.8f} | "
+            f"{rates['t5_percentage_points_per_million_output_tokens']:.8f} | "
+            f"{rates['t5_percentage_points_per_million_total_tokens']:.8f} |"
+        )
+    ratios = summary["quota_consumption_ratio_pro_to_flash"]
+    lines.extend(
+        [
+            "",
+            (
+                f"- Pro/Flash quota-consumption ratio at T+5: {ratios['t5']:.6f}x"
+                if ratios["t5"] is not None
+                else "- Pro/Flash quota-consumption ratio at T+5: unavailable"
+            ),
+            (
+                f"- Pro/Flash quota-consumption ratio at final sample: {ratios['final']:.6f}x"
+                if ratios["final"] is not None
+                else "- Pro/Flash quota-consumption ratio at final sample: unavailable"
+            ),
+            "",
+            "## Request accounting",
+            "",
+            f"- Flash calibration/formal/supplement: {len(report['flash']['calibration'])}/{len(report['flash']['formal'])}/{len(report['flash'].get('supplements', []))}",
+            f"- Pro calibration/formal/supplement: {len(report['pro']['calibration'])}/{len(report['pro']['formal'])}/{len(report['pro'].get('supplements', []))}",
             "",
             "## Retry events",
             "",
