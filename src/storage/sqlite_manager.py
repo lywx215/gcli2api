@@ -4,6 +4,7 @@ SQLite 存储管理器
 
 import asyncio
 import json
+from src.storage._stats_common import prepare_antigravity_cooldown
 import os
 import time
 from datetime import datetime, timezone
@@ -2376,6 +2377,8 @@ class SQLiteManager:
         try:
             table_name = self._get_table_name(mode)
             async with aiosqlite.connect(self._db_path) as db:
+                if mode == "antigravity":
+                    await db.execute("BEGIN IMMEDIATE")
                 async with db.execute(
                     f"SELECT model_cooldowns, cycle_stats FROM {table_name} WHERE filename = ?",
                     (filename,),
@@ -2388,13 +2391,12 @@ class SQLiteManager:
 
                 model_cooldowns = json.loads(row[0] or '{}')
                 close_cycle = False
-                if cooldown_until is None:
-                    if mode == "antigravity":
-                        model_cooldowns = clear_antigravity_cooldown_family(
-                            model_cooldowns, model_name
-                        )
-                    else:
-                        model_cooldowns.pop(model_name, None)
+                if mode == "antigravity":
+                    model_cooldowns, close_cycle = prepare_antigravity_cooldown(
+                        model_cooldowns, model_name, cooldown_until
+                    )
+                elif cooldown_until is None:
+                    model_cooldowns.pop(model_name, None)
                 else:
                     previous_until = model_cooldowns.get(model_name)
                     model_cooldowns[model_name] = cooldown_until
