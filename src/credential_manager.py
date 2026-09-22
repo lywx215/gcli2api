@@ -21,6 +21,15 @@ def _fire_and_forget_cb(task: asyncio.Task):
         log.warning(f"[FireAndForget] 任务异常: {exc}")
 
 
+class CredentialStorageError(RuntimeError):
+    """Safe error exposed by Antigravity import entry points."""
+
+    code = "credential_store_failed"
+
+    def __init__(self):
+        super().__init__("凭证存储失败，请稍后重试")
+
+
 class CredentialManager:
     """
     统一凭证管理器
@@ -136,8 +145,15 @@ class CredentialManager:
         新增或更新一个Antigravity凭证
         存储层会自动处理轮换顺序
         """
-        await self._ensure_initialized()
-        await self._storage_adapter.store_credential(credential_name, credential_data, mode="antigravity")
+        try:
+            await self._ensure_initialized()
+            stored = await self._storage_adapter.store_credential(
+                credential_name, credential_data, mode="antigravity"
+            )
+        except Exception:
+            raise CredentialStorageError() from None
+        if not stored:
+            raise CredentialStorageError()
         log.info(f"Antigravity credential added/updated: {credential_name}")
 
     async def remove_credential(self, credential_name: str, mode: str = "geminicli") -> bool:
