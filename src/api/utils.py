@@ -4,6 +4,7 @@ Base API Client - 共用的 API 客户端基础功能
 """
 
 import asyncio
+from copy import deepcopy
 import json
 import re
 import time
@@ -396,6 +397,7 @@ async def collect_streaming_response(stream_generator) -> Response:
     collected_thought_text = []  # 用于收集思维链内容
     collected_other_parts = []  # 用于收集其他类型的parts（图片、文件、工具调用等）
     collected_tool_parts_count = 0  # 记录工具调用相关part数量
+    collected_grounding_metadata = None  # 保存最后一个非空完整 grounding 快照
     has_data = False
     line_count = 0
 
@@ -450,6 +452,13 @@ async def collect_streaming_response(stream_generator) -> Response:
                     continue
 
                 candidate = candidates[0]
+
+                # groundingChunks 与 groundingSupports 通过数组下标互相引用，不能跨 chunk
+                # 分别拼接。保留最后一个非空完整快照，既兼容上游最终块汇总格式，也避免
+                # 后续空对象覆盖已经收集到的联网搜索证据。
+                grounding_metadata = candidate.get("groundingMetadata")
+                if isinstance(grounding_metadata, dict) and grounding_metadata:
+                    collected_grounding_metadata = deepcopy(grounding_metadata)
 
                 # 收集文本内容
                 content = candidate.get("content", {})
@@ -540,6 +549,11 @@ async def collect_streaming_response(stream_generator) -> Response:
         final_parts.append({"text": ""})
 
     merged_response["response"]["candidates"][0]["content"]["parts"] = final_parts
+
+    if collected_grounding_metadata is not None:
+        merged_response["response"]["candidates"][0]["groundingMetadata"] = (
+            collected_grounding_metadata
+        )
 
     log.info(
         f"[STREAM COLLECTOR] Collected {len(collected_text)} text chunks, "
