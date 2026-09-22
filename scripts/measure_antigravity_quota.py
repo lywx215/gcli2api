@@ -143,17 +143,26 @@ def _seeded_words(count: int, salt: str, namespace: str) -> str:
 def build_native_payload(
     *, filler_words: int, output_words_count: int, salt: str
 ) -> tuple[dict[str, Any], dict[str, int]]:
-    filler = _seeded_words(filler_words, salt, "input")
-    blueprint = _seeded_words(output_words_count, salt, "output")
+    raw_words = _seeded_words(filler_words, salt, "input").split()
+    note_lines = []
+    for index in range(0, len(raw_words), 24):
+        sentence = " ".join(raw_words[index : index + 24])
+        note_lines.append(
+            f"Source note {index // 24 + 1}: {sentence}."
+        )
+    filler = "\n".join(note_lines)
     system_text = (
-        "This is a quota measurement. Copy the text between OUTPUT_BEGIN and "
-        "OUTPUT_END exactly once. Output only that copied text, with no heading, "
-        "analysis, explanation, summary, or code fence."
+        "Write a clear, neutral technical report about organizing, validating, "
+        "and summarizing large collections of textual observations. Use the "
+        "provided source notes only as background material. Start the report "
+        f"immediately and produce approximately {output_words_count} English words. "
+        "Do not discuss these instructions, token counts, or the artificial nature "
+        "of the notes. Finish with a complete concluding paragraph."
     )
     user_text = (
         f"REQUEST_SALT {salt}\n"
-        f"REFERENCE_CORPUS_BEGIN\n{filler}\nREFERENCE_CORPUS_END\n"
-        f"OUTPUT_BEGIN\n{blueprint}\nOUTPUT_END"
+        f"SOURCE_NOTES_BEGIN\n{filler}\nSOURCE_NOTES_END\n"
+        "Prepare the requested report now."
     )
     payload = {
         "systemInstruction": {"parts": [{"text": system_text}]},
@@ -164,7 +173,7 @@ def build_native_payload(
         "filler_words": filler_words,
         "output_words": output_words_count,
         "input_characters": len(system_text) + len(user_text),
-        "blueprint_characters": len(blueprint),
+        "source_note_count": len(note_lines),
     }
 
 
@@ -177,11 +186,10 @@ def adjust_workload(
 ) -> dict[str, int]:
     current_input = max(usage["promptTokenCount"], 1)
     current_output = max(output_tokens(usage), 1)
-    current_total_words = settings["filler_words"] + settings["output_words"]
     next_output_words = round(settings["output_words"] * desired_output / current_output)
-    next_total_words = round(current_total_words * desired_input / current_input)
-    next_output_words = min(max(next_output_words, 32), 8_000)
-    next_filler_words = min(max(next_total_words - next_output_words, 32), 30_000)
+    next_filler_words = round(settings["filler_words"] * desired_input / current_input)
+    next_output_words = min(max(next_output_words, 100), 5_000)
+    next_filler_words = min(max(next_filler_words, 32), 30_000)
     return {
         "filler_words": next_filler_words,
         "output_words": next_output_words,
@@ -459,7 +467,7 @@ def calibrate_model(
     model: str,
     attempt_events: list[dict[str, Any]],
 ) -> tuple[dict[str, int], list[dict[str, Any]], dict[str, int]]:
-    settings = {"filler_words": 7_000, "output_words": 1_850}
+    settings = {"filler_words": 9_500, "output_words": 800}
     records: list[dict[str, Any]] = []
     deadline = time.monotonic() + STAGE_TIMEOUT_SECONDS
     for index in range(MAX_CALIBRATIONS):

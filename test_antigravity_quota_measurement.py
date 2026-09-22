@@ -48,6 +48,8 @@ def test_native_payload_contains_no_credentials_and_has_generation_controls():
     assert payload["generationConfig"]["temperature"] == 0
     assert metadata["filler_words"] == 20
     assert metadata["output_words"] == 10
+    assert "SOURCE_NOTES_BEGIN" in serialized
+    assert "approximately 10 English words" in serialized
 
 
 def test_usage_parsing_counts_visible_and_reasoning_output():
@@ -87,7 +89,7 @@ def test_adjustment_and_aggregation_use_actual_usage():
     ]
     adjusted = adjust_workload(settings, usage)
     assert adjusted["output_words"] == 3_600
-    assert adjusted["filler_words"] == 7_400
+    assert adjusted["filler_words"] == 8_750
 
     records = [{"usage": usage}, {"usage": usage}]
     totals = aggregate_usage(records)
@@ -146,8 +148,8 @@ def test_non_retryable_error_stops_stage():
             )
 
 
-def test_workload_adjustment_can_reconstruct_redacted_resume_settings():
-    flash_first = {"filler_words": 7_000, "output_words": 1_850}
+def test_workload_adjustment_scales_input_and_output_independently():
+    flash_first = {"filler_words": 9_500, "output_words": 800}
     after_first = adjust_workload(
         flash_first,
         {
@@ -156,20 +158,10 @@ def test_workload_adjustment_can_reconstruct_redacted_resume_settings():
             "thoughtsTokenCount": 2_085,
         },
     )
-    after_second = adjust_workload(
-        after_first,
-        {
-            "promptTokenCount": 9_988,
-            "candidatesTokenCount": 2_618,
-            "thoughtsTokenCount": 5_172,
-        },
-    )
-
-    assert after_first == {"filler_words": 8_945, "output_words": 941}
-    assert after_second == {"filler_words": 9_656, "output_words": 242}
+    assert after_first == {"filler_words": 10_612, "output_words": 407}
 
 
-def test_formal_warmup_can_retarget_flash_to_two_thousand_output_tokens():
+def test_formal_sample_can_retarget_output_without_changing_matched_input():
     adjusted = adjust_workload(
         {"filler_words": 9_656, "output_words": 242},
         {
@@ -179,4 +171,4 @@ def test_formal_warmup_can_retarget_flash_to_two_thousand_output_tokens():
         },
     )
 
-    assert adjusted == {"filler_words": 9_423, "output_words": 475}
+    assert adjusted == {"filler_words": 9_656, "output_words": 475}
