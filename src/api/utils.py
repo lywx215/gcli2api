@@ -384,12 +384,7 @@ async def collect_streaming_response(stream_generator) -> Response:
                 "finishReason": None,
                 "safetyRatings": [],
                 "citationMetadata": None
-            }],
-            "usageMetadata": {
-                "promptTokenCount": 0,
-                "candidatesTokenCount": 0,
-                "totalTokenCount": 0
-            }
+            }]
         }
     }
 
@@ -424,11 +419,11 @@ async def collect_streaming_response(stream_generator) -> Response:
                 continue
 
             # 解析流式数据行
-            if not line_str.startswith("data: "):
-                log.debug(f"[STREAM COLLECTOR] Skipping line without 'data: ' prefix: {line_str[:100]}")
+            if not line_str.startswith("data:"):
+                log.debug(f"[STREAM COLLECTOR] Skipping line without 'data:' prefix: {line_str[:100]}")
                 continue
 
-            raw = line_str[6:].strip()
+            raw = line_str[5:].strip()
             if raw == "[DONE]":
                 log.debug("[STREAM COLLECTOR] Received [DONE] marker")
                 break
@@ -444,6 +439,33 @@ async def collect_streaming_response(stream_generator) -> Response:
                 if not response_obj:
                     log.debug("[STREAM COLLECTOR] No 'response' key in chunk, trying direct access")
                     response_obj = chunk  # 尝试直接使用chunk
+
+                # Error frames can arrive after text without changing HTTP 200.
+                # Surface them instead of returning a partial answer as success.
+                error = chunk.get("error")
+                if error is None:
+                    error = response_obj.get("error")
+                if error is not None:
+                    status_code = error.get("code") if isinstance(error, dict) else None
+                    if type(status_code) is not int or not 400 <= status_code <= 599:
+                        status_code = 502
+                    log.warning(f"[STREAM COLLECTOR] Upstream error frame: status={status_code}")
+                    return Response(
+                        content=json.dumps({"error": error}, ensure_ascii=False).encode("utf-8"),
+                        status_code=status_code,
+                        media_type="application/json",
+                    )
+
+                # Response-level metadata does not require a candidate. In
+                # particular, the final usage or prompt block may arrive alone.
+                merged = merged_response["response"]
+                usage = response_obj.get("usageMetadata")
+                if isinstance(usage, dict) and usage:
+                    merged.setdefault("usageMetadata", {}).update(usage)
+                for field in ("promptFeedback", "modelVersion", "responseId", "createTime"):
+                    value = response_obj.get(field)
+                    if value:
+                        merged[field] = deepcopy(value)
 
                 candidates = response_obj.get("candidates", [])
                 log.debug(f"[STREAM COLLECTOR] Found {len(candidates)} candidates")
@@ -502,11 +524,6 @@ async def collect_streaming_response(stream_generator) -> Response:
                 if candidate.get("citationMetadata"):
                     merged_response["response"]["candidates"][0]["citationMetadata"] = candidate["citationMetadata"]
 
-                # 更新使用元数据
-                usage = response_obj.get("usageMetadata", {})
-                if usage:
-                    merged_response["response"]["usageMetadata"].update(usage)
-
             except json.JSONDecodeError as e:
                 log.debug(f"[STREAM COLLECTOR] Failed to parse JSON chunk: {e}")
                 continue
@@ -549,6 +566,18 @@ async def collect_streaming_response(stream_generator) -> Response:
         final_parts.append({"text": ""})
 
     merged_response["response"]["candidates"][0]["content"]["parts"] = final_parts
+
+    prompt_feedback = merged_response["response"].get("promptFeedback")
+    has_prompt_block = isinstance(prompt_feedback, dict) and bool(prompt_feedback.get("blockReason"))
+    if (
+        not merged_response["response"]["candidates"][0].get("finishReason")
+        and not has_prompt_block
+    ):
+        log.warning(
+            "[STREAM COLLECTOR] Stream ended without a finish reason or prompt block; "
+            f"text_chunks={len(collected_text)}, "
+            f"usage_present={bool(merged_response['response'].get('usageMetadata'))}"
+        )
 
     if collected_grounding_metadata is not None:
         merged_response["response"]["candidates"][0]["groundingMetadata"] = (
