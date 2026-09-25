@@ -750,24 +750,6 @@ async def normalize_antigravity_request(
     model = _normalize_antigravity_request(result, model, generation_config, return_thoughts)
     result["model"] = model
 
-    # 这些模型不支持预填充：循环移除末尾的 model 消息，保证以用户消息结尾
-    no_prefill_models = [
-        "opus",
-        "sonnet",
-        "gemini-3.6-flash",
-        "gemini-3.7-flash",
-        "gemini-3.8-flash",
-    ]
-    if any(keyword in model.lower() for keyword in no_prefill_models):
-        contents = result.get("contents", [])
-        removed_count = 0
-        while contents and isinstance(contents[-1], dict) and contents[-1].get("role") == "model":
-            contents.pop()
-            removed_count += 1
-        if removed_count > 0:
-            log.warning(f"[ANTIGRAVITY] {model} 不支持预填充，移除了 {removed_count} 条末尾 model 消息")
-            result["contents"] = contents
-
     # 移除 antigravity 模式不支持的字段
     generation_config.pop("presencePenalty", None)
     generation_config.pop("frequencyPenalty", None)
@@ -817,13 +799,42 @@ async def normalize_antigravity_request(
         result["contents"] = _ensure_tool_call_ids(result["contents"], model)
 
         cleaned_contents = []
-        for content in result["contents"]:
+        for content_index, content in enumerate(result["contents"]):
             if isinstance(content, dict) and "parts" in content:
                 # 过滤掉空的或无效的 parts
                 valid_parts = []
-                for part in content["parts"]:
+                for part_index, part in enumerate(content["parts"]):
                     if not isinstance(part, dict):
                         continue
+
+                    # 先规范化 text，再判断有效性，避免纯空白及空列表留下空 part。
+                    part = part.copy()
+                    if "text" in part:
+                        text_value = part["text"]
+                        if isinstance(text_value, list):
+                            log.warning(
+                                f"[ANTIGRAVITY_FIX] text 字段是列表，自动合并: "
+                                f"content_index={content_index}, part_index={part_index}, "
+                                f"type=list, length={len(text_value)}"
+                            )
+                            text_parts = []
+                            for t in text_value:
+                                if isinstance(t, dict) and "text" in t:
+                                    text_parts.append(str(t["text"]))
+                                elif isinstance(t, str):
+                                    text_parts.append(t)
+                                elif t is not None:
+                                    text_parts.append(str(t))
+                            part["text"] = " ".join(text_parts).rstrip()
+                        elif isinstance(text_value, str):
+                            part["text"] = text_value.rstrip()
+                        elif text_value not in (None, {}, []):
+                            log.warning(
+                                f"[ANTIGRAVITY_FIX] text 字段类型异常，转为字符串: "
+                                f"content_index={content_index}, part_index={part_index}, "
+                                f"type={type(text_value).__name__}"
+                            )
+                            part["text"] = str(text_value).rstrip()
 
                     # 检查 part 是否有有效的非空值
                     # 过滤掉空字典或所有值都为空的 part
@@ -835,35 +846,13 @@ async def normalize_antigravity_request(
 
                     if has_valid_value:
                         part = _normalize_part_thought_signature(part, model)
-
-                        # 修复 text 字段：确保是字符串而不是列表
-                        if "text" in part:
-                            text_value = part["text"]
-                            if isinstance(text_value, list):
-                                # 如果是列表，合并为字符串
-                                # 注意: list 中的元素可能是 dict（如 {"type":"text","text":"..."}），不能直接 str(dict)
-                                # 否则会产生 Python repr 字符串 "{'type': 'text', 'text': '...'}"，污染 model 历史
-                                log.warning(f"[ANTIGRAVITY_FIX] text 字段是列表，自动合并: {text_value}")
-                                text_parts = []
-                                for t in text_value:
-                                    if isinstance(t, dict) and "text" in t:
-                                        text_parts.append(str(t["text"]))
-                                    elif isinstance(t, str):
-                                        text_parts.append(t)
-                                    elif t is not None:
-                                        text_parts.append(str(t))
-                                part["text"] = " ".join(text_parts)
-                            elif isinstance(text_value, str):
-                                # 清理尾随空格
-                                part["text"] = text_value.rstrip()
-                            else:
-                                # 其他类型转为字符串
-                                log.warning(f"[ANTIGRAVITY_FIX] text 字段类型异常 ({type(text_value)}), 转为字符串: {text_value}")
-                                part["text"] = str(text_value)
-
                         valid_parts.append(part)
                     else:
-                        log.warning(f"[ANTIGRAVITY_FIX] 移除空的或无效的 part: {part}")
+                        log.warning(
+                            f"[ANTIGRAVITY_FIX] 移除空的或无效的 part: "
+                            f"content_index={content_index}, part_index={part_index}, "
+                            f"field_count={len(part)}"
+                        )
 
                 # 只添加有有效 parts 的 content
                 if valid_parts:
@@ -871,11 +860,32 @@ async def normalize_antigravity_request(
                     cleaned_content["parts"] = valid_parts
                     cleaned_contents.append(cleaned_content)
                 else:
-                    log.warning(f"[ANTIGRAVITY_FIX] 跳过没有有效 parts 的 content: {content.get('role')}")
+                    log.warning(
+                        f"[ANTIGRAVITY_FIX] 跳过没有有效 parts 的 content: "
+                        f"content_index={content_index}, part_count={len(content['parts'])}"
+                    )
             else:
                 cleaned_contents.append(content)
 
         result["contents"] = cleaned_contents
+
+    # 空消息清理可能重新暴露末尾 model；在清理后应用既有 no-prefill 策略。
+    no_prefill_models = [
+        "opus",
+        "sonnet",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+        "gemini-3.8-flash",
+    ]
+    if any(keyword in model.lower() for keyword in no_prefill_models):
+        contents = result.get("contents", [])
+        removed_count = 0
+        while contents and isinstance(contents[-1], dict) and contents[-1].get("role") == "model":
+            contents.pop()
+            removed_count += 1
+        if removed_count > 0:
+            log.warning(f"[ANTIGRAVITY] 不支持预填充，移除了 {removed_count} 条末尾 model 消息")
+            result["contents"] = contents
 
     if generation_config:
         result["generationConfig"] = generation_config
