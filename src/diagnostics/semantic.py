@@ -187,6 +187,10 @@ class Attempt:
         self.buffer = b''
         self.done = False
         self.done_frame = False
+        if self.summary is not None:
+            with self.server.lock:
+                if not self.server.sealed:
+                    self.server.open_attempts[self.id] = self
 
     def enabled(self):
         return self.summary is not None and self.server.debug()
@@ -238,9 +242,20 @@ class Attempt:
             self.line(line)
 
     def finish(self, failure=None):
-        if self.done:
+        if self.server is None:
+            self.done = True
+            self.buffer = b''
             return
-        self.done = True
+        with self.server.lock:
+            if self.done:
+                return
+            self.done = True
+            try:
+                self._finish_observation(failure)
+            finally:
+                self.server.open_attempts.pop(self.id, None)
+
+    def _finish_observation(self, failure):
         if not self.enabled():
             self.buffer = b''
             return
@@ -269,8 +284,8 @@ class Attempt:
         elif self.http_status is not None and self.http_status >= 400: stage = 'dispatch'
         elif not summary.parsed: stage = 'parse'
         elif summary.error: stage = 'unknown'
-        elif not eof and (self.done_frame or semantic_result in ('success', 'empty')): origin, stage = 'local', 'read'
-        elif not eof: origin, stage = 'unknown', 'read'
+        elif not eof and semantic_result == 'success': origin, stage = 'local', 'read'
+        elif not eof and semantic_result == 'incomplete' and not self.done_frame: origin, stage = 'unknown', 'read'
         self.server.emit('upstream.attempt_finished', dict(resultClass=result, failureOrigin=origin,
                          failureStage=stage, errorClass=error,
                          usage=usage(summary.raw), output=summary.output, terminalSeen=summary.terminal, eofSeen=eof,
@@ -400,6 +415,10 @@ def converted(upstream, delivered, protocol='gemini', mode='nonstream', streamin
     summary = observed or collected or Summary()
     if observed is None and collected is None:
         summary.observe(upstream)
+    if summary.error:
+        # Error-only bodies can reach a nonstream converter from a pseudo-stream
+        # route. That converter is not evidence of the actual delivery protocol.
+        return
     if not isinstance(delivered, dict):
         return
     raw = delivered.get('usageMetadata' if protocol == 'gemini' else 'usage')
@@ -514,6 +533,14 @@ def finish_conversions(server):
                     output=output, resultClass=delivered_result(result, output)))
 
 
+def finish_attempts(server, cancelled=False):
+    # Settle numeric observations only. Do not close, drain, or cancel a business
+    # iterator. A later HTTP close still settles its independent call span.
+    with server.lock:
+        for attempt in tuple(server.open_attempts.values()):
+            safe_finish(attempt, 'cancelled' if cancelled else None)
+
+
 def _best_effort(function):
     """Malformed observations must never alter a model response or cancellation."""
     from functools import wraps
@@ -542,6 +569,7 @@ converted = _best_effort(converted)
 conversion_input = _best_effort(conversion_input)
 conversion_output = _best_effort(conversion_output)
 finish_conversions = _best_effort(finish_conversions)
+finish_attempts = _best_effort(finish_attempts)
 collector_parsed = _best_effort(collector_parsed)
 collected_response = _best_effort(collected_response)
 observe_buffered_response = _best_effort(observe_buffered_response)

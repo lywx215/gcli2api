@@ -201,6 +201,7 @@ class Server(Span):
         # No existing ASGI request ID exists. Provider payload requestId remains untouched.
         self.request_id = str(uuid.uuid4())
         self.calls = 0
+        self.open_attempts = {}
 
     def call(self, attempt=None):
         with self.lock:

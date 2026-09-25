@@ -82,6 +82,7 @@ def upstream_app(scenario):
         if scenario == 'empty': parts = [{'text':'   '}]
         candidate = {'content':{'parts':parts,'role':'model'}}
         if scenario != 'incomplete': candidate['finishReason'] = 'STOP'
+        if scenario == 'blocked': candidate['finishReason'] = 'SAFETY'
         first = {'response':{'candidates':[candidate]}}
         raw = {'promptTokenCount':10,'candidatesTokenCount':0 if scenario=='zero' else 87,'thoughtsTokenCount':13 if scenario == 'thought13' else 2}
         if scenario in ('thought2', 'thought13'):
@@ -139,7 +140,7 @@ def main():
     parser.add_argument('--upstream', default='http://127.0.0.1:19090')
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--nonstream-upstream', action='store_true')
-    parser.add_argument('--scenario', choices=['success','zero','missing','error','retry','slow','tool','media','empty','incomplete','eof','thought2','thought13','anti_nested','http429','http503'], default='success')
+    parser.add_argument('--scenario', choices=['success','zero','missing','error','retry','slow','tool','media','empty','blocked','incomplete','eof','thought2','thought13','anti_nested','http429','http503'], default='success')
     asyncio.run(run(parser.parse_args()))
 
 

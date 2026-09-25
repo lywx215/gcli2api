@@ -1,5 +1,7 @@
 # DIAG-02 R1 处置：待协调检查及精确 HEAD 复审
 
+本文件保留 R1 历史处置；R2 指出的归因和结算缺口及最新修订见 [R2 处置](DIAG-02-R2-disposition.md)。
+
 审查对象：`4d17a2b0260d594ace2d0fdd9df86e6d62c9add7`。只读审查来源：
 `G:/code/gemini30/CLIProxyAPI/coordination/diagnostics/20260924/reviews/DIAG-02-R1/review.md`。
 报告摘要写 7 项，正文实际列 P2-1 至 P2-8；以下按全部 8 项处置。修订 HEAD 由最终交付消息提供。

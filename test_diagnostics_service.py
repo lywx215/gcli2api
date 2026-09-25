@@ -75,7 +75,7 @@ def payload(protocol, stream=False):
     return ('/antigravity/v1/chat/completions' if protocol=='openai' else '/antigravity/v1/messages'), dict(model='gemini-3.7-flash',messages=[dict(role='user',content='synthetic prompt')],stream=stream,max_tokens=128)
 
 
-@pytest.mark.parametrize('scenario', ['success','zero','missing','error','retry','incomplete','tool','media','empty','eof'])
+@pytest.mark.parametrize('scenario', ['success','zero','missing','error','retry','incomplete','tool','media','empty','blocked','eof'])
 def test_real_service_semantic_cases(tmp_path, scenario):
     with running(tmp_path,'fake','upstream',scenario=scenario) as (fake,_):
         with running(tmp_path,'gcli','gcli',fake) as (origin,root):
@@ -93,10 +93,11 @@ def test_real_service_semantic_cases(tmp_path, scenario):
     data=attempts[-1]['data']
     # The real collector stops at [DONE], without draining the HTTP reader to
     # EOF. Do not manufacture EOF merely because model termination is valid.
-    assert data['resultClass']==({'error':'error', 'empty':'empty', 'eof':'success'}.get(scenario, 'incomplete'))
+    assert data['resultClass']==({'error':'error', 'empty':'empty', 'blocked':'blocked', 'eof':'success'}.get(scenario, 'incomplete'))
     if scenario == 'eof': assert data['eofSeen']
     elif scenario == 'error': assert data['failureStage'] == 'unknown'  # HTTP 200 with an application error frame.
-    elif scenario != 'incomplete': assert (data['failureOrigin'], data['failureStage']) == ('local', 'read')
+    elif scenario in ('empty','blocked','incomplete'): assert (data['failureOrigin'], data['failureStage']) == ('upstream', 'unknown')
+    else: assert (data['failureOrigin'], data['failureStage']) == ('local', 'read')
     if scenario == 'tool': assert data['output']['validToolCalls'] == 1
     if scenario == 'media': assert data['output']['mediaParts'] == 1
     converted = [r for r in records if r['event'] == 'response.converted']
@@ -123,11 +124,15 @@ def test_two_workers_restart_and_all_protocols(tmp_path):
                 for origin in (first,second):
                     for protocol in ('gemini','openai','claude'):
                         for stream in (False,True):
-                            path,body=payload(protocol,stream)
-                            response=httpx.post(origin+path,json=body,headers={'authorization':'Bearer synthetic-local-password','traceparent':'00-'+'1'*32+'-'+'2'*16+'-01'},trust_env=False,timeout=10)
-                            assert response.status_code==200, response.text
-                            assert response.headers['x-diag-trace-id']=='1'*32
-                            expectations[response.headers['x-diag-request-id']] = (protocol, stream, origin == first)
+                            for anti in (False,True):
+                                path,body=payload(protocol,stream)
+                                if anti:
+                                    if protocol == 'gemini': path = path.replace('/models/', '/models/抗截断/')
+                                    else: body['model'] = '抗截断/' + body['model']
+                                response=httpx.post(origin+path,json=body,headers={'authorization':'Bearer synthetic-local-password','traceparent':'00-'+'1'*32+'-'+'2'*16+'-01'},trust_env=False,timeout=10)
+                                assert response.status_code==200, response.text
+                                assert response.headers['x-diag-trace-id']=='1'*32
+                                expectations[response.headers['x-diag-request-id']] = (protocol, stream, origin == first, anti)
         with running(tmp_path,'restart','gcli',fake,instance='same-replica') as (origin,root3):
             roots.append(root3)
             path,body=payload('gemini')
@@ -138,12 +143,22 @@ def test_two_workers_restart_and_all_protocols(tmp_path):
     assert len(set.union(*boots))==3
     assert {r['instanceId'] for rows in records for r in rows}=={'same-replica'}
     for rows in records[:2]:
-        assert len([r for r in rows if r['event']=='diag.server' and r['parentSpanId']=='2'*16])==6
+        assert len([r for r in rows if r['event']=='diag.server' and r['parentSpanId']=='2'*16])==12
         assert {'gemini','openai_chat','claude'} <= {r['data']['outputProtocol'] for r in rows if r['event']=='response.converted'}
         for server in (r for r in rows if r['event']=='diag.server' and r['parentSpanId']=='2'*16):
             conversions = [r['data'] for r in rows if r['event']=='response.converted' and r['serverSpanId']==server['spanId']]
             assert len(conversions) == 1
-            protocol, stream, collected = expectations[server['requestId']]
+            protocol, stream, collected, anti = expectations[server['requestId']]
+            attempts = [r for r in rows if r['event']=='upstream.attempt_finished' and r['serverSpanId']==server['spanId']]
+            calls = [r for r in rows if r['event']=='diag.call' and r['serverSpanId']==server['spanId']]
+            expected_count = 3 if anti and stream and protocol != 'claude' else 1
+            # Claude's existing converter stops at the first finishReason, even
+            # in anti-truncation mode; do not invent further business attempts.
+            assert len(attempts) == len(calls) == expected_count
+            assert len({r['attemptId'] for r in attempts}) == expected_count
+            assert {r['attemptId'] for r in attempts} == {r['attemptId'] for r in calls}
+            assert all(r['spanId']==server['spanId'] and r['logSeq'] < server['logSeq'] for r in attempts)
+            assert server['data']['coverage']['expectedLastLogSeq'] == server['logSeq']
             conversion = conversions[0]
             assert conversion['outputProtocol'] == {'openai':'openai_chat'}.get(protocol, protocol)
             assert conversion['clientStreaming'] == stream
@@ -155,8 +170,7 @@ def test_two_workers_restart_and_all_protocols(tmp_path):
                 assert conversion['deliveredUsage']['reasoning']['value'] == (None if stream else 2)
                 assert conversion['deliveredUsage']['reasoningIncludedInOutput'] is (None if stream else False)
             if not stream and not collected:
-                attempts = [r['data'] for r in rows if r['event']=='upstream.attempt_finished' and r['serverSpanId']==server['spanId']]
-                assert len(attempts) == 1 and attempts[0]['resultClass'] == 'success'
+                assert attempts[0]['data']['resultClass'] == 'success'
 
 
 def test_real_client_disconnect_and_duplicate_headers(tmp_path):

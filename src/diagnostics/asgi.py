@@ -56,8 +56,9 @@ class DiagnosticsMiddleware:
             end, delivery = 'error', 'failed'
             raise
         finally:
-            from .semantic import finish_conversions
+            from .semantic import finish_conversions, finish_attempts
             finish_conversions(server)
+            finish_attempts(server, delivery == 'cancelled')
             route = getattr(scope.get('route'), 'path', None)
             if not isinstance(route, str) or not re.fullmatch(r'/[A-Za-z0-9_:/{}.*-]{0,127}', route):
                 route = None
