@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Dict, Optional
 
 import httpx
+from src.diagnostics.http import DiagnosticAsyncClient
 
 from config import get_proxy_config
 from log import log
@@ -34,7 +35,7 @@ class HttpxClientManager:
         """获取配置好的异步HTTP客户端"""
         client_kwargs = await self.get_client_kwargs(timeout=timeout, **kwargs)
 
-        async with httpx.AsyncClient(**client_kwargs) as client:
+        async with DiagnosticAsyncClient(**client_kwargs) as client:
             yield client
 
     @asynccontextmanager
@@ -45,7 +46,7 @@ class HttpxClientManager:
         client_kwargs = await self.get_client_kwargs(timeout=timeout, **kwargs)
 
         # 创建独立的客户端实例用于流式处理
-        client = httpx.AsyncClient(**client_kwargs)
+        client = DiagnosticAsyncClient(**client_kwargs)
         try:
             yield client
         finally:

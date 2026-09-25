@@ -938,7 +938,7 @@ def gemini_to_anthropic_response(
     # 构建 Anthropic 响应
     message_id = f"msg_{uuid.uuid4().hex}"
 
-    return {
+    result = {
         "id": message_id,
         "type": "message",
         "role": "assistant",
@@ -948,6 +948,9 @@ def gemini_to_anthropic_response(
         "stop_sequence": None,
         "usage": usage,
     }
+    from src.diagnostics.semantic import converted
+    converted(gemini_response, result, protocol='claude')
+    return result
 
 
 async def gemini_stream_to_anthropic_stream(
@@ -988,6 +991,8 @@ async def gemini_stream_to_anthropic_stream(
 
     def _sse_event(event: str, data: Dict[str, Any]) -> bytes:
         """生成 SSE 事件"""
+        from src.diagnostics.semantic import conversion_output
+        conversion_output(data, 'claude')
         payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
         return f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
 
@@ -1048,6 +1053,8 @@ async def gemini_stream_to_anthropic_stream(
             else:
                 response = data
 
+            from src.diagnostics.semantic import conversion_input
+            conversion_input(response, 'claude')
             candidate = (response.get("candidates", []) or [{}])[0] or {}
             parts = (candidate.get("content", {}) or {}).get("parts", []) or []
 

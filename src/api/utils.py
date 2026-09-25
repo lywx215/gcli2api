@@ -373,6 +373,8 @@ async def collect_streaming_response(stream_generator) -> Response:
         ...     # line format: "data: {...}" or Response object
         >>> response = await collect_streaming_response(stream_generator)
     """
+    from src.diagnostics.semantic import collector_observer, collector_parsed, converted
+    diagnostic_collection = collector_observer()
     # 初始化响应结构
     merged_response = {
         "response": {
@@ -431,6 +433,7 @@ async def collect_streaming_response(stream_generator) -> Response:
             try:
                 log.debug(f"[STREAM COLLECTOR] Parsing JSON: {raw[:200]}")
                 chunk = json.loads(raw)
+                collector_parsed(diagnostic_collection, chunk)
                 has_data = True
                 log.debug(f"[STREAM COLLECTOR] Chunk keys: {chunk.keys() if isinstance(chunk, dict) else type(chunk)}")
 
@@ -525,9 +528,11 @@ async def collect_streaming_response(stream_generator) -> Response:
                     merged_response["response"]["candidates"][0]["citationMetadata"] = candidate["citationMetadata"]
 
             except json.JSONDecodeError as e:
+                collector_parsed(diagnostic_collection, invalid=True)
                 log.debug(f"[STREAM COLLECTOR] Failed to parse JSON chunk: {e}")
                 continue
             except Exception as e:
+                collector_parsed(diagnostic_collection, invalid=True)
                 log.debug(f"[STREAM COLLECTOR] Error processing chunk: {e}")
                 continue
 
@@ -596,6 +601,7 @@ async def collect_streaming_response(stream_generator) -> Response:
         merged_response = merged_response["response"]
 
     # 返回纯JSON格式
+    converted(merged_response, merged_response, mode='collected', observed=diagnostic_collection)
     return Response(
         content=json.dumps(merged_response, ensure_ascii=False).encode('utf-8'),
         status_code=200,

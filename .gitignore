@@ -5,6 +5,7 @@
 !tsconfig.json
 !docs/openapi/*.json
 !coordination/handoffs/*.json
+!contracts/diagnostics/v1/**/*.json
 *.toml
 !pyproject.toml
 creds/
@@ -92,6 +93,7 @@ Thumbs.db
 # Logs
 *.log
 log.txt
+*.diag.*.jsonl
 
 # Temporary files
 *.tmp

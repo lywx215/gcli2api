@@ -139,8 +139,17 @@ async def lifespan(app: FastAPI):
     log.info("GCLI2API 主服务已停止")
 
 
+from src.diagnostics.asgi import DiagnosticsMiddleware
+
+
+class DiagnosticFastAPI(FastAPI):
+    def build_middleware_stack(self):
+        # Wrap outside error handling while preserving the public FastAPI API.
+        return DiagnosticsMiddleware(super().build_middleware_stack())
+
+
 # 创建FastAPI应用
-app = FastAPI(
+app = DiagnosticFastAPI(
     title="GCLI2API",
     description="Gemini API proxy with OpenAI compatibility",
     version="2.0.0",

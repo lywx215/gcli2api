@@ -25,6 +25,7 @@ from log import log
 
 from src.credential_manager import credential_manager
 from src.httpx_client import stream_post_async, post_async
+from src.diagnostics.semantic import Attempt, observe_post, observe_stream
 from src.models import Model, model_to_dict
 from src.antigravity_models import (
     describe_antigravity_model,
@@ -491,6 +492,7 @@ async def stream_request(
                 native=native,
                 headers=auth_headers
             )
+            upstream_stream = observe_stream(upstream_stream, Attempt(attempt + 1, current_file), native)
             try:
                 async for chunk in upstream_stream:
                     # 判断是否是Response对象
@@ -701,7 +703,17 @@ async def _non_stream_request(
         # 收集流式响应
         # stream_request是一个异步生成器，可能yield Response（错误）或流数据
         # collect_streaming_response会自动处理这两种情况
-        return await collect_streaming_response(stream)
+        try:
+            return await collect_streaming_response(stream)
+        finally:
+            # Collector can stop on [DONE] or an error frame before HTTP EOF.
+            # Close the existing iterator; do not leave its call to asyncgen GC.
+            try:
+                await stream.aclose()
+            except Exception:
+                # Cleanup failure must not replace the collector's response.
+                # The shared HTTP observer has already recorded the close error.
+                pass
 
     # 否则使用传统非流式模式
     log.debug("[ANTIGRAVITY] 使用传统非流式模式")
@@ -794,12 +806,12 @@ async def _non_stream_request(
         need_retry = False  # 标记是否需要重试
         
         try:
-            response = await post_async(
+            response = await observe_post(post_async(
                 url=target_url,
                 json=final_payload,
                 headers=auth_headers,
                 timeout=300.0
-            )
+            ), Attempt(attempt + 1, current_file))
 
             status_code = response.status_code
 

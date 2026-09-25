@@ -120,6 +120,8 @@ async def generate_content(
             # 如果有 response 包装，解包装它
             if "response" in response_data:
                 unwrapped_data = response_data["response"]
+                from src.diagnostics.semantic import converted
+                converted(response_data, unwrapped_data)
                 return JSONResponse(content=unwrapped_data)
         # 错误响应或没有 response 字段，直接返回
         return response
@@ -286,6 +288,10 @@ async def stream_generate_content(
                         # 解析JSON
                         data = json.loads(json_str)
 
+                        from src.diagnostics.semantic import conversion_input, conversion_output
+                        conversion_input(data, 'gemini')
+                        conversion_output(data.get('response', data), 'gemini')
+
                         # 展开 response 包装
                         if "response" in data and "candidates" not in data:
                             log.debug(f"[ANTIGRAVITY-ANTI-TRUNCATION] 展开response包装")
@@ -365,11 +371,17 @@ async def stream_generate_content(
 
                         # 展开 response 包装
                         if "response" in data and "candidates" not in data:
+                            from src.diagnostics.semantic import conversion_input, conversion_output
+                            conversion_input(data, 'gemini')
+                            conversion_output(data['response'], 'gemini')
                             log.debug(f"[ANTIGRAVITY] 展开response包装")
                             unwrapped_data = data["response"]
                             # 重新构建SSE格式
                             yield f"data: {json.dumps(unwrapped_data, ensure_ascii=False)}\n\n".encode('utf-8')
                         else:
+                            from src.diagnostics.semantic import conversion_input, conversion_output
+                            conversion_input(data, 'gemini')
+                            conversion_output(data, 'gemini')
                             # 已经是展开的格式，直接返回
                             yield chunk
                     except json.JSONDecodeError:

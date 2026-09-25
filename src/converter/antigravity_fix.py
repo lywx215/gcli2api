@@ -728,6 +728,10 @@ async def normalize_antigravity_request(
     Returns:
         规范化后的请求
     """
+    from src.diagnostics.semantic import normalization_start, normalization_end
+    diagnostic_before = normalization_start(request)
+    diagnostic_changes = []
+
     # 导入配置函数
     from config import get_return_thoughts_to_frontend
 
@@ -745,7 +749,9 @@ async def normalize_antigravity_request(
 
     # 图片模型走独立的图片生成处理路径
     if "image" in model.lower():
-        return prepare_image_generation_request(result, model)
+        result = prepare_image_generation_request(result, model)
+        normalization_end(diagnostic_before, result, diagnostic_changes)
+        return result
 
     model = _normalize_antigravity_request(result, model, generation_config, return_thoughts)
     result["model"] = model
@@ -828,6 +834,8 @@ async def normalize_antigravity_request(
                             part["text"] = " ".join(text_parts).rstrip()
                         elif isinstance(text_value, str):
                             part["text"] = text_value.rstrip()
+                            if diagnostic_before is not None and part["text"] != text_value and len(diagnostic_changes) < 16:
+                                diagnostic_changes.append(dict(operation='trim_whitespace', index=content_index, reason='whitespace'))
                         elif text_value not in (None, {}, []):
                             log.warning(
                                 f"[ANTIGRAVITY_FIX] text 字段类型异常，转为字符串: "
@@ -860,6 +868,8 @@ async def normalize_antigravity_request(
                     cleaned_content["parts"] = valid_parts
                     cleaned_contents.append(cleaned_content)
                 else:
+                    if diagnostic_before is not None and len(diagnostic_changes) < 16:
+                        diagnostic_changes.append(dict(operation='remove_empty', index=content_index, reason='empty'))
                     log.warning(
                         f"[ANTIGRAVITY_FIX] 跳过没有有效 parts 的 content: "
                         f"content_index={content_index}, part_count={len(content['parts'])}"
@@ -881,6 +891,8 @@ async def normalize_antigravity_request(
         contents = result.get("contents", [])
         removed_count = 0
         while contents and isinstance(contents[-1], dict) and contents[-1].get("role") == "model":
+            if diagnostic_before is not None and len(diagnostic_changes) < 16:
+                diagnostic_changes.append(dict(operation='remove_trailing_model', index=len(contents) - 1, reason='no_prefill'))
             contents.pop()
             removed_count += 1
         if removed_count > 0:
@@ -890,4 +902,5 @@ async def normalize_antigravity_request(
     if generation_config:
         result["generationConfig"] = generation_config
 
+    normalization_end(diagnostic_before, result, diagnostic_changes)
     return result

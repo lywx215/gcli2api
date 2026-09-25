@@ -36,15 +36,25 @@ _cached_log_level: int = LOG_LEVELS["info"]
 _cached_log_file: str = "log.txt"
 # ENABLE_LOG=0/false/no/off 时彻底关闭日志
 _log_enabled: bool = True
+_diag_debug_epoch = 0
+_diag_access_epoch = 0
+_diag_dropped = 0
+_diag_files = {}
 
 
 def _refresh_config():
     """从环境变量刷新缓存配置（模块加载时及需要时调用）"""
     global _cached_log_level, _cached_log_file, _log_enabled
+    global _diag_debug_epoch, _diag_access_epoch
+    previous = (_log_enabled, _cached_log_level == 0)
     level = os.getenv("LOG_LEVEL", "info").lower()
     _cached_log_level = LOG_LEVELS.get(level, LOG_LEVELS["info"])
     _cached_log_file = os.getenv("LOG_FILE", "log.txt")
     _log_enabled = os.getenv("ENABLE_LOG", "1").strip().lower() not in ("0", "false", "no", "off")
+    if previous[0] != _log_enabled:
+        _diag_access_epoch += 1
+    if previous != (_log_enabled, _cached_log_level == 0):
+        _diag_debug_epoch += 1
 
 
 def _get_current_log_level() -> int:
@@ -135,9 +145,24 @@ def _log_writer_worker():
                 else:
                     break
 
-        if batch and not _file_writing_disabled:
+        # Diagnostics reuse this bounded writer, with separate per-worker files.
+        legacy_batch = []
+        for item in batch:
+            if isinstance(item, tuple):
+                path, line = item
+                try:
+                    handle = _diag_files.get(path)
+                    if handle is None:
+                        handle = open(path, 'a', encoding='utf-8', newline='\n')
+                        _diag_files[path] = handle
+                    handle.write(line + '\n')
+                except Exception:
+                    _diag_note_loss()
+            else:
+                legacy_batch.append(item)
+        if legacy_batch and not _file_writing_disabled:
             # 一次 write 调用搞定整批，最大化减少系统调用
-            chunk = "\n".join(batch) + "\n"
+            chunk = "\n".join(legacy_batch) + "\n"
             try:
                 if _log_file_handle is None:
                     _open_log_file("a")
@@ -154,6 +179,11 @@ def _log_writer_worker():
         # 定时 flush
         now = _now_ts()
         if now - last_flush_time >= _FLUSH_INTERVAL:
+            for handle in list(_diag_files.values()):
+                try:
+                    handle.flush()
+                except Exception:
+                    _diag_note_loss()
             if _log_file_handle is not None:
                 try:
                     _log_file_handle.flush()
@@ -172,6 +202,12 @@ def _log_writer_worker():
         except Exception:
             pass
     _close_log_file()
+    for handle in list(_diag_files.values()):
+        try:
+            handle.close()
+        except Exception:
+            _diag_note_loss()
+    _diag_files.clear()
 
 
 def _now_ts() -> float:
@@ -210,7 +246,7 @@ def _write_to_file(message: str):
     if _file_writing_disabled:
         return
     # deque.append 在 CPython 受 GIL 保护，无需额外锁
-    if len(_log_deque) >= _MAX_QUEUE_SIZE:
+    if len(_log_deque) >= _MAX_QUEUE_SIZE - 256:
         return  # 过载保护：丢弃而非阻塞
     _log_deque.append(message)
     # 非阻塞通知 writer（acquire 失败直接跳过，不影响主线程）
@@ -253,11 +289,13 @@ def _log(level: str, message: str):
 
 def set_log_level(level: str):
     """动态设置日志级别（同时更新缓存）"""
-    global _cached_log_level
+    global _cached_log_level, _diag_debug_epoch
     level = level.lower()
     if level not in LOG_LEVELS:
         print(f"Warning: Unknown log level '{level}'. Valid levels: {', '.join(LOG_LEVELS.keys())}")
         return False
+    if (_cached_log_level == 0) != (LOG_LEVELS[level] == 0):
+        _diag_debug_epoch += 1
     _cached_log_level = LOG_LEVELS[level]
     return True
 
@@ -299,6 +337,59 @@ class Logger:
 
     def get_queue_size(self) -> int:
         return len(_log_deque)
+
+
+def _diag_note_loss():
+    global _diag_dropped
+    _diag_dropped += 1
+
+
+def diagnostic_switches():
+    return (_log_enabled, _log_enabled and _cached_log_level == 0,
+            _diag_access_epoch, _diag_debug_epoch)
+
+
+def write_diagnostic(line, boot_id, basic):
+    """Accept one already-redacted JSON line; reserve queue capacity for terminals.
+
+    A True result proves enqueue only. Later I/O loss is sink-wide evidence.
+    Files are per boot, so neither Windows spawn nor POSIX fork shares a file.
+    """
+    _start_writer_thread()
+    with _deque_condition:
+        limit = _MAX_QUEUE_SIZE if basic else _MAX_QUEUE_SIZE - 256
+        if len(_log_deque) >= limit:
+            _diag_note_loss()
+            return False
+        path = f'{_cached_log_file}.diag.{os.getpid()}.{boot_id}.jsonl'
+        _log_deque.append((path, line))
+        _deque_condition.notify()
+    return True
+
+
+def _diagnostic_after_fork():
+    global _log_deque, _deque_condition, _writer_thread, _writer_running
+    global _diag_files, _diag_dropped, _log_file_handle
+    # Inherited locks/queues/threads must never be reused by a forked worker.
+    # Discard child copies of buffered files without flushing parent records.
+    for handle in [*_diag_files.values(), _log_file_handle]:
+        if handle is not None:
+            try:
+                os.close(handle.fileno())
+                handle.close()
+            except Exception:
+                pass
+    _log_deque = deque()
+    _deque_condition = threading.Condition(threading.Lock())
+    _writer_thread = None
+    _writer_running = False
+    _diag_files = {}
+    _diag_dropped = 0
+    _log_file_handle = None
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_diagnostic_after_fork)
 
 
 # 导出全局日志实例
