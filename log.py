@@ -40,6 +40,9 @@ _diag_debug_epoch = 0
 _diag_access_epoch = 0
 _diag_dropped = 0
 _diag_files = {}
+_diag_sizes = {}
+_diag_disabled = set()
+_DIAG_MAX_FILE_BYTES = 16 * 1024 * 1024
 
 
 def _refresh_config():
@@ -150,14 +153,7 @@ def _log_writer_worker():
         for item in batch:
             if isinstance(item, tuple):
                 path, line = item
-                try:
-                    handle = _diag_files.get(path)
-                    if handle is None:
-                        handle = open(path, 'a', encoding='utf-8', newline='\n')
-                        _diag_files[path] = handle
-                    handle.write(line + '\n')
-                except Exception:
-                    _diag_note_loss()
+                _write_diagnostic_line(path, line)
             else:
                 legacy_batch.append(item)
         if legacy_batch and not _file_writing_disabled:
@@ -179,10 +175,11 @@ def _log_writer_worker():
         # 定时 flush
         now = _now_ts()
         if now - last_flush_time >= _FLUSH_INTERVAL:
-            for handle in list(_diag_files.values()):
+            for path, handle in list(_diag_files.items()):
                 try:
                     handle.flush()
                 except Exception:
+                    _disable_diagnostic_path(path)
                     _diag_note_loss()
             if _log_file_handle is not None:
                 try:
@@ -344,6 +341,40 @@ def _diag_note_loss():
     _diag_dropped += 1
 
 
+def _disable_diagnostic_path(path):
+    # Circuit is per path, for this process lifetime. Never delete other boots.
+    _diag_disabled.add(path)
+    handle = _diag_files.pop(path, None)
+    if handle is not None:
+        try:
+            handle.close()
+        except Exception:
+            pass
+
+
+def _write_diagnostic_line(path, line):
+    if path in _diag_disabled:
+        _diag_note_loss()
+        return
+    try:
+        size = len(line.encode('utf8')) + 1
+        if path not in _diag_sizes:
+            _diag_sizes[path] = os.path.getsize(path) if os.path.exists(path) else 0
+        if _diag_sizes[path] + size > _DIAG_MAX_FILE_BYTES:
+            _disable_diagnostic_path(path)
+            _diag_note_loss()
+            return
+        handle = _diag_files.get(path)
+        if handle is None:
+            handle = open(path, 'a', encoding='utf-8', newline='\n')
+            _diag_files[path] = handle
+        handle.write(line + '\n')
+        _diag_sizes[path] += size
+    except Exception:
+        _disable_diagnostic_path(path)
+        _diag_note_loss()
+
+
 def diagnostic_switches():
     return (_log_enabled, _log_enabled and _cached_log_level == 0,
             _diag_access_epoch, _diag_debug_epoch)
@@ -357,11 +388,11 @@ def write_diagnostic(line, boot_id, basic):
     """
     _start_writer_thread()
     with _deque_condition:
+        path = f'{_cached_log_file}.diag.{os.getpid()}.{boot_id}.jsonl'
         limit = _MAX_QUEUE_SIZE if basic else _MAX_QUEUE_SIZE - 256
-        if len(_log_deque) >= limit:
+        if path in _diag_disabled or len(_log_deque) >= limit:
             _diag_note_loss()
             return False
-        path = f'{_cached_log_file}.diag.{os.getpid()}.{boot_id}.jsonl'
         _log_deque.append((path, line))
         _deque_condition.notify()
     return True
@@ -369,7 +400,7 @@ def write_diagnostic(line, boot_id, basic):
 
 def _diagnostic_after_fork():
     global _log_deque, _deque_condition, _writer_thread, _writer_running
-    global _diag_files, _diag_dropped, _log_file_handle
+    global _diag_files, _diag_sizes, _diag_disabled, _diag_dropped, _log_file_handle
     # Inherited locks/queues/threads must never be reused by a forked worker.
     # Discard child copies of buffered files without flushing parent records.
     for handle in [*_diag_files.values(), _log_file_handle]:
@@ -384,6 +415,8 @@ def _diagnostic_after_fork():
     _writer_thread = None
     _writer_running = False
     _diag_files = {}
+    _diag_sizes = {}
+    _diag_disabled = set()
     _diag_dropped = 0
     _log_file_handle = None
 

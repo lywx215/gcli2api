@@ -15,7 +15,10 @@ class DiagnosticsMiddleware:
             if scope['type'] == 'lifespan':
                 runtime()
             return await self.app(scope, receive, send)
-        server = Server(scope.get('headers', []))
+        try:
+            server = Server(scope.get('headers', []))
+        except Exception:
+            return await self.app(scope, receive, send)
         token = current_server.set(server)
         committed, status, finished, disconnected = False, None, False, False
         end, delivery = 'unknown', 'unknown'
@@ -25,6 +28,7 @@ class DiagnosticsMiddleware:
             message = await receive()
             if message['type'] == 'http.disconnect':
                 disconnected = True
+                server.disconnected = True
             return message
 
         async def observed_send(message):
@@ -46,7 +50,7 @@ class DiagnosticsMiddleware:
             elif disconnected:
                 end, delivery = 'client_cancel', 'cancelled'
         except asyncio.CancelledError:
-            end, delivery = 'client_cancel', 'cancelled'
+            end, delivery = ('client_cancel' if disconnected else 'unknown'), 'cancelled'
             raise
         except BaseException:
             end, delivery = 'error', 'failed'
@@ -57,6 +61,10 @@ class DiagnosticsMiddleware:
             route = getattr(scope.get('route'), 'path', None)
             if not isinstance(route, str) or not re.fullmatch(r'/[A-Za-z0-9_:/{}.*-]{0,127}', route):
                 route = None
-            server.emit('diag.server', dict(routeTemplate=route, headersCommitted=committed, wireStatus=status,
-                                          endReason=end, deliveryState=delivery, totalMs=server.elapsed(), callCount=server.calls), terminal=True)
-            current_server.reset(token)
+            try:
+                server.emit('diag.server', dict(routeTemplate=route, headersCommitted=committed, wireStatus=status,
+                                              endReason=end, deliveryState=delivery, totalMs=server.elapsed(), callCount=server.calls), terminal=True)
+            except Exception:
+                pass
+            finally:
+                current_server.reset(token)

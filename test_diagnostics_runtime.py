@@ -177,7 +177,7 @@ async def test_asgi_cancel_and_committed_error(records):
         await DiagnosticsMiddleware(app)({'type':'http','headers':[]}, None, send)
     record = records[-1]
     assert record['data']['wireStatus'] == 200
-    assert record['data']['endReason'] == 'client_cancel'
+    assert record['data']['endReason'] == 'unknown'
     assert rt.active_server() is None
 
 
@@ -279,19 +279,38 @@ def test_worker_pid_change_reinitializes_identity(records, monkeypatch):
 def test_actual_fork_child_identity_and_writer(tmp_path):
     code = '''
 import os,json
+from pathlib import Path
+import log
 from src.diagnostics.runtime import runtime
 parent=runtime().resource
+log._stop_writer_thread()
+path = f"{os.environ['LOG_FILE']}.diag.{os.getpid()}.{parent['bootId']}.jsonl"
+handle = open(path, 'a', encoding='utf8', buffering=65536)
+handle.write('{"sentinel":"parent-buffer"}\\n')
+log._diag_files[path] = handle
 pid=os.fork()
 if pid==0:
     child=runtime().resource
     assert child['bootId']!=parent['bootId']
     assert child['instanceId']==parent['instanceId']
+    log.write_diagnostic('{"sentinel":"child"}', child['bootId'], True)
+    log._stop_writer_thread()
     os._exit(0)
 _, status=os.waitpid(pid,0)
 assert os.waitstatus_to_exitcode(status)==0
+handle.close()
+log._diag_files.clear()
+files = list(Path(os.environ['LOG_FILE']).parent.glob('*.jsonl'))
+assert len(files)==2
+assert Path(path).read_text().count('parent-buffer')==1
+assert '"sentinel":"child"' not in Path(path).read_text()
+child_path = next(p for p in files if str(p)!=path)
+assert 'parent-buffer' not in child_path.read_text()
+assert child_path.read_text().count('"sentinel":"child"')==1
 '''
-    env = dict(os.environ, ENABLE_LOG='0', DIAG_INSTANCE_ID='synthetic-replica')
-    assert subprocess.run([sys.executable,'-c',code],env=env,capture_output=True).returncode==0
+    env = dict(os.environ, ENABLE_LOG='1', LOG_FILE=str(tmp_path/'fork.log'), DIAG_INSTANCE_ID='synthetic-replica')
+    result = subprocess.run([sys.executable,'-c',code],env=env,capture_output=True)
+    assert result.returncode==0, result.stderr.decode()
 
 
 async def test_real_proxy_final_destination_and_hook_order(records, monkeypatch):

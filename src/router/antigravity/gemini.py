@@ -14,6 +14,7 @@ if str(project_root) not in sys.path:
 # 标准库
 import asyncio
 import json
+from src.diagnostics.semantic import converted, conversion_input, conversion_output
 
 # 第三方库
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
@@ -120,9 +121,9 @@ async def generate_content(
             # 如果有 response 包装，解包装它
             if "response" in response_data:
                 unwrapped_data = response_data["response"]
-                from src.diagnostics.semantic import converted
                 converted(response_data, unwrapped_data)
                 return JSONResponse(content=unwrapped_data)
+            converted(response_data, response_data)
         # 错误响应或没有 response 字段，直接返回
         return response
     except Exception as e:
@@ -206,8 +207,10 @@ async def stream_generate_content(
 
             # 构建响应块
             chunks = build_gemini_fake_stream_chunks(content, reasoning_content, finish_reason, images)
+            conversion_input(response_data, 'gemini', mode='pseudo_stream')
             for idx, chunk in enumerate(chunks):
                 chunk_json = json.dumps(chunk)
+                conversion_output(chunk, 'gemini')
                 log.debug(f"[FAKE_STREAM] Yielding chunk #{idx+1}: {chunk_json[:200]}")
                 yield f"data: {chunk_json}\n\n".encode()
 
@@ -288,9 +291,8 @@ async def stream_generate_content(
                         # 解析JSON
                         data = json.loads(json_str)
 
-                        from src.diagnostics.semantic import conversion_input, conversion_output
                         conversion_input(data, 'gemini')
-                        conversion_output(data.get('response', data), 'gemini')
+                        conversion_output(data, 'gemini')
 
                         # 展开 response 包装
                         if "response" in data and "candidates" not in data:
@@ -371,7 +373,6 @@ async def stream_generate_content(
 
                         # 展开 response 包装
                         if "response" in data and "candidates" not in data:
-                            from src.diagnostics.semantic import conversion_input, conversion_output
                             conversion_input(data, 'gemini')
                             conversion_output(data['response'], 'gemini')
                             log.debug(f"[ANTIGRAVITY] 展开response包装")
@@ -379,7 +380,6 @@ async def stream_generate_content(
                             # 重新构建SSE格式
                             yield f"data: {json.dumps(unwrapped_data, ensure_ascii=False)}\n\n".encode('utf-8')
                         else:
-                            from src.diagnostics.semantic import conversion_input, conversion_output
                             conversion_input(data, 'gemini')
                             conversion_output(data, 'gemini')
                             # 已经是展开的格式，直接返回

@@ -38,7 +38,7 @@ class Runtime:
         config = {key: os.getenv(env) for key, env in [('environment', 'DIAG_ENVIRONMENT'), ('deploymentId', 'DIAG_DEPLOYMENT_ID'), ('nodeLabel', 'DIAG_NODE_LABEL'), ('instanceId', 'DIAG_INSTANCE_ID')]}
         self.resource = resource(config)
         self.resource['buildCommit'] = None
-        self.invalid_resource = any(v is not None and not label(v, 128 if k == 'instanceId' else 64) for k, v in config.items())
+        self.invalid_resource = any(v not in (None, '') and not label(v, 128 if k == 'instanceId' else 64) for k, v in config.items())
         self.process_seq = 0
         self.revision = 0
         self.snapshot = None
@@ -149,7 +149,7 @@ class Span:
         self.rt, self.server = rt, server or self
         self.span_id = new_id(8)
         self.call_no, self.attempt = call_no, attempt
-        self.started = time.monotonic()
+        self.started = time.perf_counter()
         self.switches = logging.diagnostic_switches()
         self.seq = self.dropped = self.truncated = 0
         self.sealed = False
@@ -191,7 +191,7 @@ class Span:
                 self.sealed = True
 
     def elapsed(self):
-        return round((time.monotonic() - self.started) * 1000, 3)
+        return round((time.perf_counter() - self.started) * 1000, 3)
 
 
 class Server(Span):

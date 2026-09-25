@@ -72,16 +72,20 @@ def upstream_app(scenario):
         nonlocal calls
         calls += 1
         await request.json()
-        if scenario == 'retry' and calls <= 2:
-            return JSONResponse({'error':{'code':503,'message':'synthetic retry'}}, status_code=503)
+        if (scenario == 'retry' and calls <= 2) or (scenario == 'anti_nested' and calls % 2 == 1) or scenario in ('http429', 'http503'):
+            status = 429 if scenario == 'http429' else 503
+            return JSONResponse({'error':{'code':status,'message':'synthetic retry'}}, status_code=status)
         parts = [{'text':'synthetic answer'}]
+        if scenario == 'anti_nested' and calls >= 4: parts = [{'text':'synthetic continuation\n[done]'}]
         if scenario == 'tool': parts = [{'functionCall':{'name':'synthetic_tool','args':{}}}]
         if scenario == 'media': parts = [{'inlineData':{'mimeType':'image/png','data':'AA=='}}]
         if scenario == 'empty': parts = [{'text':'   '}]
         candidate = {'content':{'parts':parts,'role':'model'}}
         if scenario != 'incomplete': candidate['finishReason'] = 'STOP'
         first = {'response':{'candidates':[candidate]}}
-        raw = {'promptTokenCount':10,'candidatesTokenCount':0 if scenario=='zero' else 87,'thoughtsTokenCount':2}
+        raw = {'promptTokenCount':10,'candidatesTokenCount':0 if scenario=='zero' else 87,'thoughtsTokenCount':13 if scenario == 'thought13' else 2}
+        if scenario in ('thought2', 'thought13'):
+            first['response']['usageMetadata'] = raw
         tail = {'response':{'usageMetadata':raw}}
         if operation == 'generateContent':
             if scenario != 'missing': first['response']['usageMetadata'] = raw
@@ -95,7 +99,7 @@ def upstream_app(scenario):
             elif scenario != 'missing':
                 yield 'data: ' + json.dumps(tail) + '\n\n'
                 yield 'data: ' + json.dumps(tail) + '\n\n'  # repeated cumulative metadata
-            yield 'data: [DONE]\n\n'
+            if scenario != 'eof': yield 'data: [DONE]\n\n'
         return StreamingResponse(stream(), media_type='text/event-stream')
     return app
 
@@ -135,7 +139,7 @@ def main():
     parser.add_argument('--upstream', default='http://127.0.0.1:19090')
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--nonstream-upstream', action='store_true')
-    parser.add_argument('--scenario', choices=['success','zero','missing','error','retry','slow','tool','media','empty','incomplete'], default='success')
+    parser.add_argument('--scenario', choices=['success','zero','missing','error','retry','slow','tool','media','empty','incomplete','eof','thought2','thought13','anti_nested','http429','http503'], default='success')
     asyncio.run(run(parser.parse_args()))
 
 

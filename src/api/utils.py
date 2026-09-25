@@ -373,7 +373,7 @@ async def collect_streaming_response(stream_generator) -> Response:
         ...     # line format: "data: {...}" or Response object
         >>> response = await collect_streaming_response(stream_generator)
     """
-    from src.diagnostics.semantic import collector_observer, collector_parsed, converted
+    from src.diagnostics.semantic import collector_observer, collector_parsed, collected_response
     diagnostic_collection = collector_observer()
     # 初始化响应结构
     merged_response = {
@@ -601,7 +601,7 @@ async def collect_streaming_response(stream_generator) -> Response:
         merged_response = merged_response["response"]
 
     # 返回纯JSON格式
-    converted(merged_response, merged_response, mode='collected', observed=diagnostic_collection)
+    collected_response(diagnostic_collection)
     return Response(
         content=json.dumps(merged_response, ensure_ascii=False).encode('utf-8'),
         status_code=200,

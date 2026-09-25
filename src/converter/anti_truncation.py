@@ -225,6 +225,7 @@ class AntiTruncationStreamProcessor:
             log.debug(f"Anti-truncation attempt {self.current_attempt}/{self.max_attempts}")
 
             # 发送请求
+            response = None
             try:
                 response = await self.original_request_func(current_payload)
 
@@ -377,6 +378,16 @@ class AntiTruncationStreamProcessor:
                     yield b"data: [DONE]\n\n"
                     return
                 # 否则继续下一次尝试
+            finally:
+                # A [DONE] return/break can leave the HTTP iterator suspended.
+                # Close it before starting another round or sealing the request.
+                if isinstance(response, StreamingResponse):
+                    close = getattr(response.body_iterator, 'aclose', None)
+                    if close is not None:
+                        try:
+                            await close()
+                        except Exception:
+                            pass
 
         # 如果所有尝试都失败了
         log.error("Anti-truncation: All attempts failed")

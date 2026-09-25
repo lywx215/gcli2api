@@ -14,6 +14,7 @@ if str(project_root) not in sys.path:
 # 标准库
 import asyncio
 import json
+from src.diagnostics.semantic import conversion_input, conversion_output
 
 # 第三方库
 from fastapi import APIRouter, Depends, HTTPException
@@ -197,8 +198,10 @@ async def chat_completions(
 
             # 构建响应块
             chunks = build_openai_fake_stream_chunks(content, reasoning_content, finish_reason, real_model, images)
+            conversion_input(gemini_response, 'openai_chat', mode='pseudo_stream')
             for idx, chunk in enumerate(chunks):
                 chunk_json = json.dumps(chunk)
+                conversion_output(chunk, 'openai_chat')
                 log.debug(f"[FAKE_STREAM] Yielding chunk #{idx+1}: {chunk_json[:200]}")
                 yield f"data: {chunk_json}\n\n".encode()
 

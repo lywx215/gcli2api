@@ -13,9 +13,17 @@ from src.logical_request_stats import (
 
 async def prepend_async_item(first_item: Any, iterator: AsyncIterator[Any]):
     """Yield a prefetched item before continuing the original iterator."""
-    yield first_item
-    async for item in iterator:
-        yield item
+    try:
+        yield first_item
+        async for item in iterator:
+            yield item
+    finally:
+        close = getattr(iterator, 'aclose', None)
+        if close is not None:
+            try:
+                await close()
+            except Exception:
+                pass  # Cleanup must not replace a delivered response/error.
 
 
 async def read_first_async_item(iterator: AsyncIterator[Any]) -> Any:

@@ -75,7 +75,7 @@ def payload(protocol, stream=False):
     return ('/antigravity/v1/chat/completions' if protocol=='openai' else '/antigravity/v1/messages'), dict(model='gemini-3.7-flash',messages=[dict(role='user',content='synthetic prompt')],stream=stream,max_tokens=128)
 
 
-@pytest.mark.parametrize('scenario', ['success','zero','missing','error','retry','incomplete','tool','media'])
+@pytest.mark.parametrize('scenario', ['success','zero','missing','error','retry','incomplete','tool','media','empty','eof'])
 def test_real_service_semantic_cases(tmp_path, scenario):
     with running(tmp_path,'fake','upstream',scenario=scenario) as (fake,_):
         with running(tmp_path,'gcli','gcli',fake) as (origin,root):
@@ -93,7 +93,17 @@ def test_real_service_semantic_cases(tmp_path, scenario):
     data=attempts[-1]['data']
     # The real collector stops at [DONE], without draining the HTTP reader to
     # EOF. Do not manufacture EOF merely because model termination is valid.
-    assert data['resultClass']==('error' if scenario=='error' else 'incomplete')
+    assert data['resultClass']==({'error':'error', 'empty':'empty', 'eof':'success'}.get(scenario, 'incomplete'))
+    if scenario == 'eof': assert data['eofSeen']
+    elif scenario == 'error': assert data['failureStage'] == 'unknown'  # HTTP 200 with an application error frame.
+    elif scenario != 'incomplete': assert (data['failureOrigin'], data['failureStage']) == ('local', 'read')
+    if scenario == 'tool': assert data['output']['validToolCalls'] == 1
+    if scenario == 'media': assert data['output']['mediaParts'] == 1
+    converted = [r for r in records if r['event'] == 'response.converted']
+    if scenario != 'error':
+        assert len(converted) == 1
+        assert converted[0]['data']['outputProtocol'] == 'gemini'
+        assert converted[0]['data']['deliveryMode'] == 'collected'
     metric=data['usage']['candidate']
     if scenario=='missing': assert metric==dict(value=None,present=False,source='unknown')
     elif scenario!='error': assert metric['value']==(0 if scenario=='zero' else 87)
@@ -105,6 +115,7 @@ def test_real_service_semantic_cases(tmp_path, scenario):
 
 def test_two_workers_restart_and_all_protocols(tmp_path):
     roots=[]
+    expectations = {}
     with running(tmp_path,'fake','upstream') as (fake,_):
         with running(tmp_path,'worker1','gcli',fake,instance='same-replica') as (first,root1):
             with running(tmp_path,'worker2','gcli',fake,instance='same-replica',nonstream=True) as (second,root2):
@@ -116,6 +127,7 @@ def test_two_workers_restart_and_all_protocols(tmp_path):
                             response=httpx.post(origin+path,json=body,headers={'authorization':'Bearer synthetic-local-password','traceparent':'00-'+'1'*32+'-'+'2'*16+'-01'},trust_env=False,timeout=10)
                             assert response.status_code==200, response.text
                             assert response.headers['x-diag-trace-id']=='1'*32
+                            expectations[response.headers['x-diag-request-id']] = (protocol, stream, origin == first)
         with running(tmp_path,'restart','gcli',fake,instance='same-replica') as (origin,root3):
             roots.append(root3)
             path,body=payload('gemini')
@@ -129,7 +141,22 @@ def test_two_workers_restart_and_all_protocols(tmp_path):
         assert len([r for r in rows if r['event']=='diag.server' and r['parentSpanId']=='2'*16])==6
         assert {'gemini','openai_chat','claude'} <= {r['data']['outputProtocol'] for r in rows if r['event']=='response.converted'}
         for server in (r for r in rows if r['event']=='diag.server' and r['parentSpanId']=='2'*16):
-            assert any(r['event']=='response.converted' and r['serverSpanId']==server['spanId'] for r in rows)
+            conversions = [r['data'] for r in rows if r['event']=='response.converted' and r['serverSpanId']==server['spanId']]
+            assert len(conversions) == 1
+            protocol, stream, collected = expectations[server['requestId']]
+            conversion = conversions[0]
+            assert conversion['outputProtocol'] == {'openai':'openai_chat'}.get(protocol, protocol)
+            assert conversion['clientStreaming'] == stream
+            assert conversion['deliveryMode'] == ('stream' if stream else ('collected' if collected else 'nonstream'))
+            if protocol == 'openai':
+                # Existing converter emits usage only on a finishReason frame;
+                # tail-only usage is not delivered on this streaming fixture.
+                assert conversion['deliveredUsage']['outputTotal']['value'] == (None if stream else 87)
+                assert conversion['deliveredUsage']['reasoning']['value'] == (None if stream else 2)
+                assert conversion['deliveredUsage']['reasoningIncludedInOutput'] is (None if stream else False)
+            if not stream and not collected:
+                attempts = [r['data'] for r in rows if r['event']=='upstream.attempt_finished' and r['serverSpanId']==server['spanId']]
+                assert len(attempts) == 1 and attempts[0]['resultClass'] == 'success'
 
 
 def test_real_client_disconnect_and_duplicate_headers(tmp_path):
@@ -155,3 +182,90 @@ def test_real_client_disconnect_and_duplicate_headers(tmp_path):
     assert servers[0]['contextSource']=='invalid_replaced'
     assert servers[0]['data']['endReason']=='client_cancel'
     assert calls[0]['data']['endReason'] in ('cancelled','closed_early')
+
+
+@pytest.mark.parametrize('nonstream', [False, True])
+def test_pseudo_stream_actual_delivered_protocol(tmp_path, nonstream):
+    expected = {}
+    with running(tmp_path,'fake','upstream') as (fake,_):
+        with running(tmp_path,'gcli','gcli',fake,nonstream=nonstream) as (origin,root):
+            for protocol in ('gemini','openai','claude'):
+                path,body = payload(protocol,True)
+                if protocol == 'gemini': path = path.replace('/models/', '/models/假流式/')
+                else: body['model'] = '假流式/' + body['model']
+                response = httpx.post(origin+path,json=body,headers={'authorization':'Bearer synthetic-local-password'},trust_env=False,timeout=10)
+                assert response.status_code == 200 and '[DONE]' in response.text
+                expected[response.headers['x-diag-request-id']] = {'openai':'openai_chat'}.get(protocol,protocol)
+    rows = read_records(root)
+    for request_id, protocol in expected.items():
+        conversions = [r['data'] for r in rows if r['requestId']==request_id and r['event']=='response.converted']
+        assert len(conversions) == 1
+        assert conversions[0]['outputProtocol'] == protocol
+        assert conversions[0]['deliveryMode'] == 'pseudo_stream'
+        assert conversions[0]['clientStreaming'] is True
+        assert conversions[0]['upstreamStreaming'] == (not nonstream)
+
+
+def test_antitruncation_rounds_nested_retries_keep_attempt_owners(tmp_path):
+    with running(tmp_path,'fake','upstream',scenario='anti_nested') as (fake,_):
+        with running(tmp_path,'gcli','gcli',fake) as (origin,root):
+            path,body = payload('gemini',True)
+            path = path.replace('/models/', '/models/抗截断/')
+            response = httpx.post(origin+path,json=body,headers={'authorization':'Bearer synthetic-local-password'},trust_env=False,timeout=10)
+            assert response.status_code == 200 and 'synthetic continuation' in response.text
+            request_id = response.headers['x-diag-request-id']
+    rows = [r for r in read_records(root) if r['requestId'] == request_id]
+    attempts = [r for r in rows if r['event']=='upstream.attempt_finished']
+    calls = [r for r in rows if r['event']=='diag.call']
+    assert len(attempts) == len(calls) == 4
+    assert [r['attemptNo'] for r in calls] == [1,2,1,2]
+    assert len({r['attemptId'] for r in attempts}) == 4
+    assert {r['retryScope'] for r in attempts} == {'antigravity'}
+    assert {r['attemptId'] for r in attempts} == {r['attemptId'] for r in calls}
+    assert len({r['serverSpanId'] for r in calls+attempts}) == 1
+    assert len([r for r in rows if r['event']=='response.converted']) == 1
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('reasoning', [2,13])
+def test_real_openai_reasoning_is_separate(tmp_path, stream, reasoning):
+    with running(tmp_path,'fake','upstream',scenario=f'thought{reasoning}') as (fake,_):
+        with running(tmp_path,'gcli','gcli',fake,nonstream=True) as (origin,root):
+            path,body = payload('openai',stream)
+            response = httpx.post(origin+path,json=body,headers={'authorization':'Bearer synthetic-local-password'},trust_env=False,timeout=10)
+            assert response.status_code == 200
+            request_id = response.headers['x-diag-request-id']
+    rows = [r['data'] for r in read_records(root) if r['requestId']==request_id and r['event']=='response.converted']
+    assert len(rows)==1
+    assert rows[0]['upstreamUsage']['candidate']['value']==87
+    assert rows[0]['upstreamUsage']['reasoning']['value']==reasoning
+    assert rows[0]['deliveredUsage']['outputTotal']['value']==87
+    assert rows[0]['deliveredUsage']['reasoning']['value']==reasoning
+    assert rows[0]['deliveredUsage']['reasoningIncludedInOutput'] is False
+
+
+@pytest.mark.parametrize('scenario', ['http429','http503'])
+@pytest.mark.parametrize('nonstream', [False,True])
+def test_http_status_failure_is_dispatch(tmp_path, scenario, nonstream):
+    with running(tmp_path,'fake','upstream',scenario=scenario) as (fake,_):
+        with running(tmp_path,'gcli','gcli',fake,nonstream=nonstream) as (origin,root):
+            path,body = payload('gemini')
+            response = httpx.post(origin+path,json=body,headers={'authorization':'Bearer synthetic-local-password'},trust_env=False,timeout=10)
+            assert response.status_code == int(scenario[4:])
+            request_id = response.headers['x-diag-request-id']
+    attempts = [r['data'] for r in read_records(root) if r['requestId']==request_id and r['event']=='upstream.attempt_finished']
+    assert len(attempts)==3
+    assert all(r['resultClass']=='error' and r['failureStage']=='dispatch' and r['failureOrigin']=='upstream' for r in attempts)
+
+
+def test_fully_exhausted_stream_success(tmp_path):
+    with running(tmp_path,'fake','upstream',scenario='eof') as (fake,_):
+        with running(tmp_path,'gcli','gcli',fake) as (origin,root):
+            path,body = payload('gemini',True)
+            response = httpx.post(origin+path,json=body,headers={'authorization':'Bearer synthetic-local-password'},trust_env=False,timeout=10)
+            assert response.status_code==200
+            request_id=response.headers['x-diag-request-id']
+    rows = [r for r in read_records(root) if r['requestId']==request_id]
+    attempts = [r['data'] for r in rows if r['event']=='upstream.attempt_finished']
+    assert len(attempts)==1 and attempts[0]['resultClass']=='success' and attempts[0]['eofSeen']
+    assert [r['data']['endReason'] for r in rows if r['event']=='diag.call']==['eof']

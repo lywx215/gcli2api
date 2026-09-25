@@ -1,6 +1,7 @@
 """Allowlisted, DEBUG-only observations; never used by business decisions."""
 import asyncio
 import json
+import sys
 import time
 
 from .propagation import new_id
@@ -19,6 +20,9 @@ def usage(raw=None, protocol='gemini', source='upstream'):
             'openai_chat': ('prompt_tokens', 'completion_tokens', 'reasoning_tokens', 'total_tokens'),
             'claude': ('input_tokens', 'output_tokens')}[protocol]
     clean = {k: integer(raw[k]) for k in keys if k in raw}
+    details = raw.get('completion_tokens_details')
+    if protocol == 'openai_chat' and isinstance(details, dict) and 'reasoning_tokens' in details:
+        clean['reasoning_tokens'] = integer(details['reasoning_tokens'])
     def metric(key):
         value = clean.get(key)
         return dict(value=value, present=value is not None, source=source if value is not None else 'unknown')
@@ -28,7 +32,7 @@ def usage(raw=None, protocol='gemini', source='upstream'):
     return dict(protocol=protocol, input=metric(keys[0]), candidate=metric('candidatesTokenCount'),
                 reasoning=metric('thoughtsTokenCount' if protocol == 'gemini' else 'reasoning_tokens'),
                 outputTotal=metric(output_key), basis=('converted' if source == 'converted' else 'provider_cumulative') if any(v is not None for v in clean.values()) else 'unknown',
-                reasoningIncludedInOutput=True if protocol == 'openai_chat' and clean.get('completion_tokens') is not None else None, raw=clean)
+                reasoningIncludedInOutput=False if source == 'converted' and protocol in ('openai_chat', 'claude') and clean.get(output_key) is not None else None, raw=clean)
 
 
 def structure(request):
@@ -172,10 +176,14 @@ class Attempt:
     def __init__(self, number, credential):
         self.server = active_server()
         self.id, self.number = new_id(), number
-        self.started = time.monotonic()
+        self.started = time.perf_counter()
         self.summary = Summary() if self.server and self.server.debug() else None
         self.credential = self.server.rt.credential(credential) if self.summary else None
         self.eof = False
+        self.http_eof = False
+        self.http_observed = False
+        self.http_status = None
+        self.http_calls = self.http_eofs = 0
         self.buffer = b''
         self.done = False
         self.done_frame = False
@@ -214,6 +222,7 @@ class Attempt:
         if hasattr(chunk, 'status_code'):
             self.summary.error = True
             self.summary.status = chunk.status_code
+            self.http_status = chunk.status_code
             return
         if not native:
             self.line(chunk)
@@ -239,8 +248,12 @@ class Attempt:
             self.line(self.buffer)
             self.buffer = b''
         summary = self.summary
+        # The business iterator may end before the HTTP stream. Only use its
+        # exhaustion as fallback when no HTTP observation exists (e.g. mocks).
+        eof = self.http_eof if self.http_observed else self.eof
         result = 'cancelled' if failure == 'cancelled' else ('error' if failure else summary.result())
-        if result == 'success' and not self.eof:
+        semantic_result = result
+        if result == 'success' and not eof:
             result = 'incomplete'
         error = failure or {'success': 'none', 'blocked': 'blocked', 'empty': 'empty', 'incomplete': 'incomplete'}.get(result, 'other')
         if result == 'error' and summary.status == 429:
@@ -249,10 +262,19 @@ class Attempt:
             error = 'invalid_request'
         timing = dict(firstUpstreamByteMs=None, firstEffectiveOutputMs=None, responseCommitMs=None,
                       firstDownstreamEffectiveOutputMs=None, timingSource='server_monotonic')
-        self.server.emit('upstream.attempt_finished', dict(resultClass=result, failureOrigin='none' if result == 'success' else ('client' if failure == 'cancelled' else 'upstream'),
-                         failureStage='none' if result == 'success' else ('read' if failure else 'parse'), errorClass=error,
-                         usage=usage(summary.raw), output=summary.output, terminalSeen=summary.terminal, eofSeen=self.eof,
-                         parserFinishOk=summary.parsed and summary.seen, totalMs=round((time.monotonic() - self.started) * 1000, 3),
+        origin, stage = 'upstream', 'unknown'
+        if result == 'success': origin, stage = 'none', 'none'
+        elif failure == 'cancelled': origin, stage = ('client' if getattr(self.server, 'disconnected', False) else 'unknown'), 'read'
+        elif failure: stage = 'read'
+        elif self.http_status is not None and self.http_status >= 400: stage = 'dispatch'
+        elif not summary.parsed: stage = 'parse'
+        elif summary.error: stage = 'unknown'
+        elif not eof and (self.done_frame or semantic_result in ('success', 'empty')): origin, stage = 'local', 'read'
+        elif not eof: origin, stage = 'unknown', 'read'
+        self.server.emit('upstream.attempt_finished', dict(resultClass=result, failureOrigin=origin,
+                         failureStage=stage, errorClass=error,
+                         usage=usage(summary.raw), output=summary.output, terminalSeen=summary.terminal, eofSeen=eof,
+                         parserFinishOk=summary.parsed and summary.seen, totalMs=round((time.perf_counter() - self.started) * 1000, 3),
                          credentialRef=self.credential, credentialRefScope='boot' if self.credential else 'unknown', timing=timing), attempt=self)
 
 
@@ -262,16 +284,7 @@ async def observe_post(awaitable, attempt):
     try:
         response = await awaitable
         attempt.eof = True
-        if attempt.enabled():
-            attempt.summary.status = response.status_code
-            attempt.summary.error = response.status_code >= 400
-            if len(response.content) <= 65536:
-                try:
-                    attempt.summary.observe(response.json())
-                except (ValueError, TypeError):
-                    attempt.summary.parsed = False
-            else:
-                attempt.summary.parsed = False
+        observe_buffered_response(attempt, response)
         return response
     except asyncio.CancelledError:
         failure = 'cancelled'
@@ -281,7 +294,7 @@ async def observe_post(awaitable, attempt):
         raise
     finally:
         current_attempt.reset(token)
-        attempt.finish(failure)
+        safe_finish(attempt, failure)
 
 
 async def observe_stream(iterator, attempt, native=False):
@@ -296,7 +309,7 @@ async def observe_stream(iterator, attempt, native=False):
                 break
             finally:
                 current_attempt.reset(token)
-            attempt.chunk(chunk, native)
+            safe_chunk(attempt, chunk, native)
             yield chunk
     except asyncio.CancelledError:
         failure = 'cancelled'
@@ -308,12 +321,36 @@ async def observe_stream(iterator, attempt, native=False):
         failure = 'transport_error'
         raise
     finally:
+        pending = sys.exc_info()[0]
         try:
             close = getattr(iterator, 'aclose', None)
             if close:
                 await close()
+        except asyncio.CancelledError:
+            if pending in (None, GeneratorExit):
+                failure = 'cancelled'
+                raise
+        except BaseException:
+            # Preserve an already propagating transport exception/cancellation.
+            if pending is None:
+                failure = 'transport_error'
+                raise
         finally:
-            attempt.finish(failure)
+            safe_finish(attempt, failure)
+
+
+def observe_buffered_response(attempt, response):
+    if attempt.enabled():
+        attempt.http_status = response.status_code
+        attempt.summary.status = response.status_code
+        attempt.summary.error = response.status_code >= 400
+        if len(response.content) <= 65536:
+            try:
+                attempt.summary.observe(response.json())
+            except (ValueError, TypeError, RecursionError):
+                attempt.summary.parsed = False
+        else:
+            attempt.summary.parsed = False
 
 
 def delivery_summary(delivered, protocol):
@@ -359,17 +396,18 @@ def converted(upstream, delivered, protocol='gemini', mode='nonstream', streamin
     server = debug_server()
     if not server or not getattr(server, 'antigravity', False):
         return
-    summary = observed or Summary()
-    if observed is None:
+    collected = getattr(server, 'collected_summary', None)
+    summary = observed or collected or Summary()
+    if observed is None and collected is None:
         summary.observe(upstream)
     if not isinstance(delivered, dict):
         return
     raw = delivered.get('usageMetadata' if protocol == 'gemini' else 'usage')
-    if mode == 'collected':
-        server.collected = True
+    if collected is not None and mode == 'nonstream':
+        mode = 'collected'
     output = delivery_summary(delivered, protocol)
     server.emit('response.converted', dict(inputProtocol='gemini', outputProtocol=protocol,
-                clientStreaming=streaming, upstreamStreaming=mode in ('collected', 'stream') or getattr(server, 'collected', False), deliveryMode=mode,
+                clientStreaming=streaming, upstreamStreaming=mode in ('collected', 'stream'), deliveryMode=mode,
                 upstreamUsage=usage(summary.raw), deliveredUsage=usage(raw, protocol, 'converted'),
                 output=output, resultClass=delivered_result(summary.result(), output)))
 
@@ -396,6 +434,12 @@ def collector_parsed(summary, obj=None, invalid=False):
             summary.observe(obj)
 
 
+def collected_response(summary):
+    server = debug_server()
+    if server and summary is not None:
+        server.collected_summary = summary
+
+
 def conversion_state(protocol):
     server = debug_server()
     if not server or not getattr(server, 'antigravity', False):
@@ -407,9 +451,10 @@ def conversion_state(protocol):
     return server.conversions[protocol]
 
 
-def conversion_input(obj, protocol):
+def conversion_input(obj, protocol, mode='stream'):
     state = conversion_state(protocol)
     if state is not None:
+        state['mode'] = mode
         state['upstream'].observe(obj)
 
 
@@ -417,7 +462,11 @@ def conversion_output(obj, protocol):
     state = conversion_state(protocol)
     if state is None:
         return
+    if not isinstance(obj, dict):
+        state['upstream'].parsed = False
+        return
     if protocol == 'gemini':
+        obj = obj.get('response', obj)
         raw = obj.get('usageMetadata')
         state['terminal'] |= any(c.get('finishReason') for c in obj.get('candidates', []) if isinstance(c, dict))
         output = delivery_summary(obj, protocol)
@@ -460,7 +509,7 @@ def finish_conversions(server):
             result = 'incomplete'
         output = state['output'] or {k:None for k in summary.output}
         server.emit('response.converted', dict(inputProtocol='gemini', outputProtocol=protocol,
-                    clientStreaming=True, upstreamStreaming=True, deliveryMode='stream',
+                    clientStreaming=True, upstreamStreaming=state.get('mode', 'stream') == 'stream' or hasattr(server, 'collected_summary'), deliveryMode=state.get('mode', 'stream'),
                     upstreamUsage=usage(summary.raw), deliveredUsage=usage(state['raw'], protocol, 'converted'),
                     output=output, resultClass=delivered_result(result, output)))
 
@@ -476,8 +525,13 @@ def _best_effort(function):
             # No payload/exception output. Surface a bounded known observation
             # loss in the owning span's eventual coverage.
             server = active_server()
+            if args and isinstance(args[0], Attempt) and args[0].summary is not None:
+                args[0].summary.parsed = False
             if server and server.debug():
-                server.dropped += 1
+                with server.lock:
+                    if not getattr(server, 'observation_failed', False):
+                        server.observation_failed = True
+                        server.dropped += 1
             return None
     return observed
 
@@ -489,3 +543,7 @@ conversion_input = _best_effort(conversion_input)
 conversion_output = _best_effort(conversion_output)
 finish_conversions = _best_effort(finish_conversions)
 collector_parsed = _best_effort(collector_parsed)
+collected_response = _best_effort(collected_response)
+observe_buffered_response = _best_effort(observe_buffered_response)
+safe_chunk = _best_effort(Attempt.chunk)
+safe_finish = _best_effort(Attempt.finish)

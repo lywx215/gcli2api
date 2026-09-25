@@ -4,6 +4,7 @@ OpenAI Transfer Module - Handles conversion between OpenAI and Gemini API format
 """
 
 import json
+from src.diagnostics.semantic import converted, conversion_input, conversion_output
 import time
 import uuid
 from collections import OrderedDict
@@ -1761,7 +1762,6 @@ def convert_gemini_to_openai_response(
     if usage:
         response_data["usage"] = usage
 
-    from src.diagnostics.semantic import converted
     converted(gemini_response, response_data, protocol='openai_chat')
     return response_data
 
@@ -1965,7 +1965,6 @@ def convert_gemini_to_openai_stream(
             response_data["usage"] = usage
 
     # 转换为 SSE 格式: "data: {json}\n\n"
-    from src.diagnostics.semantic import conversion_input, conversion_output
     conversion_input(gemini_response, 'openai_chat')
     conversion_output(response_data, 'openai_chat')
     return f"data: {json.dumps(response_data)}\n\n"
