@@ -63,7 +63,7 @@ def _build_no_available_credential_response(model_name: Optional[str]) -> Respon
     """Return a specific 503 when a Tier-restricted model has no eligible credential."""
     if required_tiers_for_geminicli_model(model_name):
         return build_error_response(
-            "无支持 gemini-3.5-flash 的可用 Code Assist Standard/Enterprise 凭证",
+            "无支持所请求模型的可用 Code Assist Standard/Enterprise 凭证",
             503,
         )
     return attach_local_unavailable(build_error_response("当前无可用凭证", 500))

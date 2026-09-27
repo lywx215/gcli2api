@@ -289,7 +289,8 @@ async def chat_completions(
             stream_request_wrapper,
             anti_truncation_payload,
             max_attempts,
-            enable_prefill_mode=True,
+            enable_prefill_mode=(api_request["model"] != "gemini-3.8-flash"),
+            defer_intermediate_finish=(api_request["model"] == "gemini-3.8-flash"),
         )
 
         # 转换为 OpenAI 格式

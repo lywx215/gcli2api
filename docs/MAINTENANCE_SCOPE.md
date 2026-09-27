@@ -18,6 +18,13 @@
 流式错误边界、正文后不重放和一次性统计接线。该例外不恢复其他 Gemini CLI 功能、
 模型适配、性能优化、发布验证或 MGMT 待办；原停止维护决定继续有效。
 
+### Gemini CLI 3.8 Flash 模型适配例外
+
+2026-09-27，所有者另行明确要求参照 3.5 Flash 补齐 `gemini-3.8-flash`。
+仅恢复该模型的列表、功能变体、请求兼容、凭证筛选与统计接线及相关回归；
+不恢复其他 Gemini CLI 待办，不扩大到 Vertex/Antigravity 新功能或已取消 MGMT 项目。
+具体能力和验证见 [Gemini CLI 3.8 Flash](GEMINICLI_38_FLASH.md)。
+
 ## Antigravity：改善进度
 
 前四项已完成修复，配置、兼容影响和验证证据见 [稳定性修复说明](ANTIGRAVITY_STABILITY.md)：

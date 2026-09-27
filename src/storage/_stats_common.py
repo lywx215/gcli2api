@@ -118,6 +118,7 @@ def cooldowns_affect_antigravity_family(
 # 模型家族归一化：各种变种（-search / -thinking / -lite / preview / pro / flash 等）
 # 会被映射到其基础系列。按"更特殊在前"的顺序匹配。
 MODEL_FAMILY_RULES = [
+    ("gemini-3.8-flash",              ("3.8-flash",      "3.8-flash")),
     # 3.5 系（Antigravity 后端别名：低/中/高 thinking budget 的 Gemini 3.5 Flash）
     ("gemini-3.5-flash",              ("3.5-flash",      "3.5-flash")),
     ("gemini-3-flash-agent",          ("3.5-flash",      "3.5-flash-high")),
