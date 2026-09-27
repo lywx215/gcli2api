@@ -1,5 +1,6 @@
 # Credential files - should never be committed
 *.json
+!.codex/review.json
 !package.json
 !package-lock.json
 !tsconfig.json

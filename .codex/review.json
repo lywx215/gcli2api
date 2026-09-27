@@ -2,11 +2,32 @@
   "plan": ".codex/review-plan.md",
   "requirements": ["AGENTS.md"],
   "deliverables": [
+    "*.py",
     "docs/MAINTENANCE_SCOPE.md",
     "src/**/*.py",
+    "scripts/**/*.py",
     "tests/**/*.py",
     "test_*.py",
+    "front/**/*.html",
+    "front/**/*.js",
+    "front/**/*.css",
     "review/**/*.md",
-    "*.md"
+    "*.md",
+    "docs/**/*.md",
+    "docs/openapi/*.json",
+    "coordination/handoffs/*.json",
+    "*.yaml",
+    "*.yml",
+    ".github/**/*.yaml",
+    ".github/**/*.yml",
+    "*.sh",
+    "*.ps1",
+    "*.bat",
+    "Dockerfile",
+    "pyproject.toml",
+    "requirements*.txt",
+    ".env.example",
+    "version.txt",
+    "panel-version.txt"
   ]
 }

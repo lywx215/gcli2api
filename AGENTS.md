@@ -25,6 +25,19 @@ Antigravity及其必要的共享基础设施继续作为改善范围；共享代
 4. `docs/multi-repo/GCLI2API_CODEX_GUIDE.md`
 5. `docs/multi-repo/AUTOMATED_HANDOFF.md`
 
+## Claude Review 入口
+
+- 本项目已通过 `.codex/review.json` 接入本机共享 Claude review Hook；使用方法见
+  `review/CLAUDE_REVIEW_WORKFLOW.md`。不得另建一套审核脚本或复用历史任务的审核提示词。
+- 默认不审核。只有用户明确发送 `请 Claude 审核：<本次任务说明>`、
+  `启用 Claude 审核：<本次任务说明>` 或 `/claude-review <本次任务说明>` 才启动。
+  配置存在、任务结束、普通“继续”或讨论审核流程均不构成审核授权。
+- 明确启动后，方案和代码审核合计最多自动执行3轮；达到上限后汇报剩余问题，
+  只有用户发送 `继续 Claude 审核` 才能继续下一组审核。审核失败须如实报告，其他工作可继续。
+- 审核以本次任务的文件为依据，不要求提交或推送Git；实际发布、凭证或数据修改仍按用户授权执行。
+- Codex 开发与验证任务使用 GPT-6 Astra（`gpt-6-astra`）；Claude 审核由实际 Claude 执行，
+  不用 Codex 模型冒充 Claude 审核结论。
+
 ## 必须遵守
 
 - 本仓库拥有凭证真实数据、SQLite状态和管理动作的最终语义。
