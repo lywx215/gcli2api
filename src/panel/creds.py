@@ -17,7 +17,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Respons
 from fastapi.responses import JSONResponse
 
 from log import log
-from src.credential_manager import credential_manager
+from src.credential_manager import credential_manager, CredentialStorageError
+from src.antigravity_import_limits import import_slot, import_write_slot
 from src.error_classification import get_error_classifications
 from src.models import (
     CredFileActionRequest,
@@ -351,6 +352,9 @@ async def upload_credentials_common(
 ) -> JSONResponse:
     """批量上传凭证文件的通用函数"""
     mode = validate_mode(mode)
+    if mode == "antigravity":
+        from src.panel.antigravity_import import upload_antigravity_files
+        return await upload_antigravity_files(files, credential_manager)
 
     if not files:
         raise HTTPException(status_code=400, detail="请选择要上传的文件")
@@ -2772,7 +2776,14 @@ async def _exchange_refresh_token_to_credential(
 
 
 @router.post("/upload-by-refresh-token")
-async def upload_credentials_by_refresh_token(
+async def upload_credentials_by_refresh_token(req: RefreshTokenAddRequest, token: str = Depends(verify_panel_token)):
+    if req.mode == "antigravity":
+        async with import_slot():
+            return await _upload_credentials_by_refresh_token(req, token)
+    return await _upload_credentials_by_refresh_token(req, token)
+
+
+async def _upload_credentials_by_refresh_token(
     req: RefreshTokenAddRequest,
     token: str = Depends(verify_panel_token),
 ):
@@ -2799,6 +2810,8 @@ async def upload_credentials_by_refresh_token(
         )
 
         if not result["success"]:
+            if mode == "antigravity":
+                return JSONResponse(status_code=400, content={**result, "detail": result["error"]})
             raise HTTPException(status_code=400, detail=result["error"])
 
         return JSONResponse(content={
@@ -2807,18 +2820,29 @@ async def upload_credentials_by_refresh_token(
             "project_id": result["project_id"],
             "subscription_tier": result["subscription_tier"],
             "mode": mode,
+            **({"warnings": result.get("warnings", [])} if mode == "antigravity" else {}),
             "message": f"凭证添加成功: {result['filename']}",
         })
 
     except HTTPException:
         raise
     except Exception as e:
+        if req.mode == "antigravity":
+            return JSONResponse(status_code=500, content={"success": False,
+                "error_code": "credential_import_failed", "detail": "凭证添加失败"})
         log.error(f"通过 refresh_token 添加凭证失败: {e}")
         raise HTTPException(status_code=500, detail=f"添加失败: {str(e)}")
 
 
 @router.post("/upload-by-refresh-token-batch")
-async def upload_credentials_by_refresh_token_batch(
+async def upload_credentials_by_refresh_token_batch(req: RefreshTokenBatchAddRequest, token: str = Depends(verify_panel_token)):
+    if req.mode == "antigravity":
+        async with import_slot():
+            return await _upload_credentials_by_refresh_token_batch(req, token)
+    return await _upload_credentials_by_refresh_token_batch(req, token)
+
+
+async def _upload_credentials_by_refresh_token_batch(
     req: RefreshTokenBatchAddRequest,
     token: str = Depends(verify_panel_token),
 ):
@@ -2863,20 +2887,22 @@ async def upload_credentials_by_refresh_token_batch(
                     )
                     return {
                         "index": idx,
-                        "refresh_token_preview": rt[:12] + "..." + rt[-6:] if len(rt) > 24 else rt,
+                        "refresh_token_preview": "[redacted]" if mode == "antigravity" else (rt[:12] + "..." + rt[-6:] if len(rt) > 24 else rt),
                         "success": result["success"],
                         "filename": result.get("filename"),
                         "project_id": result.get("project_id"),
                         "subscription_tier": result.get("subscription_tier"),
                         "error": result.get("error"),
+                        **({"error_code": result.get("error_code"), "warnings": result.get("warnings", [])} if mode == "antigravity" else {}),
                     }
                 except Exception as e:
-                    log.error(f"批量添加第 {idx+1} 个 refresh_token 失败: {e}")
+                    log.error(f"批量添加第 {idx+1} 个凭证失败" if mode == "antigravity" else f"批量添加第 {idx+1} 个 refresh_token 失败: {e}")
                     return {
                         "index": idx,
-                        "refresh_token_preview": rt[:12] + "..." + rt[-6:] if len(rt) > 24 else rt,
+                        "refresh_token_preview": "[redacted]" if mode == "antigravity" else (rt[:12] + "..." + rt[-6:] if len(rt) > 24 else rt),
                         "success": False,
-                        "error": str(e),
+                        "error": "凭证添加失败" if mode == "antigravity" else str(e),
+                        "error_code": "credential_import_failed",
                     }
 
         results = await asyncio.gather(*(run_one(i, t) for i, t in enumerate(tokens)))
@@ -2894,6 +2920,9 @@ async def upload_credentials_by_refresh_token_batch(
     except HTTPException:
         raise
     except Exception as e:
+        if req.mode == "antigravity":
+            return JSONResponse(status_code=500, content={"error_code": "credential_import_failed",
+                "detail": "批量凭证添加失败"})
         log.error(f"批量通过 refresh_token 添加凭证失败: {e}")
         raise HTTPException(status_code=500, detail=f"批量添加失败: {str(e)}")
 
@@ -2919,10 +2948,11 @@ async def _add_credential_by_refresh_token(
             client_secret=csec,
         )
     except Exception as e:
-        log.error(f"refresh_token 换 access_token 失败: {e}")
+        log.error("凭证授权失败" if mode == "antigravity" else f"refresh_token 换 access_token 失败: {e}")
         return {
             "success": False,
-            "error": f"refresh_token 无效或网络异常: {e}",
+            "error": "授权无效或网络异常" if mode == "antigravity" else f"refresh_token 无效或网络异常: {e}",
+            "error_code": "credential_exchange_failed",
         }
     credentials = Credentials.from_dict(credential_data)
 
@@ -2951,7 +2981,7 @@ async def _add_credential_by_refresh_token(
                     pid = detected[0]
                     subscription_tier = detected[1] if len(detected) > 1 else None
         except Exception as e:
-            log.warning(f"自动探测 project_id 失败: {e}")
+            log.warning("自动探测 project_id 失败" if mode == "antigravity" else f"自动探测 project_id 失败: {e}")
 
     if mode == "geminicli":
         subscription_info = await fetch_geminicli_subscription_info(
@@ -2976,14 +3006,24 @@ async def _add_credential_by_refresh_token(
     tier_raw_name = None
     tier_detected_at = None
     tier_detection_status = None
+    warnings = []
     if mode == "antigravity":
-        await credential_manager.add_antigravity_credential(filename, credential_data)
+        try:
+            await credential_manager.add_antigravity_credential(filename, credential_data)
+        except CredentialStorageError as exc:
+            return {"success": False, "filename": filename,
+                    "error_code": exc.code, "error": str(exc)}
         if subscription_tier:
-            await credential_manager.update_credential_state(
-                filename,
-                {"tier": subscription_tier},
-                mode="antigravity",
-            )
+            try:
+                async with import_write_slot():
+                    updated = await credential_manager.update_credential_state(
+                        filename, {"tier": subscription_tier}, mode="antigravity"
+                    )
+            except Exception:
+                updated = False
+            if not updated:
+                warnings.append({"code": "credential_metadata_update_failed",
+                                 "message": "凭证已存储，附加信息更新失败"})
     else:
         storage_adapter = await get_storage_adapter()
         existed = await storage_adapter.get_credential(filename, mode="geminicli") is not None
@@ -3017,6 +3057,7 @@ async def _add_credential_by_refresh_token(
         "tier_raw_name": tier_raw_name,
         "tier_detected_at": tier_detected_at,
         "tier_detection_status": tier_detection_status,
+        **({"warnings": warnings} if mode == "antigravity" else {}),
     }
 
 

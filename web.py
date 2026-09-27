@@ -33,6 +33,7 @@ from src.task_manager import shutdown_all_tasks
 from src.panel import router as panel_router
 from src.keeplive import keepalive_service
 from src.management import install_management_api
+from src.antigravity_import_limits import AntigravityUploadMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -155,6 +156,8 @@ app = DiagnosticFastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+app.add_middleware(AntigravityUploadMiddleware)
 
 # CORS中间件
 app.add_middleware(

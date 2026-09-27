@@ -5,6 +5,7 @@
 """
 
 import json
+import math
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Optional, Tuple
@@ -223,3 +224,50 @@ def normalize_logical_request_model_family(model_name: Optional[str]) -> Optiona
         if cleaned.startswith(prefix):
             return family
     return cleaned
+
+
+def prepare_antigravity_cooldown(cooldowns, model_name, deadline, *, now=None):
+    """Return updated cooldowns and whether this quota/stat bucket closes once.
+
+    Concrete keys are retained. Extending an active shared quota extends its
+    existing keys too, so a previously settled reporting bucket cannot appear
+    expired while another member keeps the same quota cycle active. A new cycle
+    drops only expired keys of that quota; no database schema/ledger is needed.
+    Legacy group keys conservatively suppress settlement until they expire.
+    """
+    now = time.time() if now is None else now
+    result = dict(cooldowns)
+    if deadline is None:
+        return clear_antigravity_cooldown_family(result, model_name), False
+    if isinstance(deadline, bool) or not isinstance(deadline, (float, int)) or not math.isfinite(deadline):
+        raise ValueError("Invalid cooldown deadline")
+    quota = normalize_antigravity_cooldown_key(model_name)
+    members = {key: value for key, value in result.items()
+               if normalize_antigravity_cooldown_key(key) == quota}
+    active = {key: value for key, value in members.items()
+              if isinstance(value, (float, int)) and not isinstance(value, bool)
+              and math.isfinite(value) and value > now}
+
+    def stat_bucket(name):
+        name = name.lower()
+        return "pro" if "pro" in name else "flash" if "flash" in name else "other"
+
+    # An expired update must never trigger a new settlement or shorten an active quota.
+    if deadline <= now:
+        if not active:
+            result[model_name] = deadline
+        return result, False
+    if not active:
+        for key in members:
+            result.pop(key)
+        close = True
+    else:
+        legacy = any(key.lower() in ("gemini-shared", "claude-gpt-shared") for key in active)
+        close = not legacy and not any(stat_bucket(key) == stat_bucket(model_name) for key in members)
+        deadline = max(deadline, *active.values())
+        for key in members:
+            result[key] = deadline
+    result[model_name] = deadline
+    if model_name.lower() in ("gemini-shared", "claude-gpt-shared"):
+        close = False
+    return result, close

@@ -22,6 +22,8 @@ from config import (
     is_smart_429_protection_enabled,
 )
 from log import log
+from src.antigravity_limits import current_budget
+import httpx
 
 from src.credential_manager import credential_manager
 from src.httpx_client import stream_post_async, post_async
@@ -398,7 +400,40 @@ async def _switch_credential_for_retry(
 
 # ==================== 新的流式和非流式请求函数 ====================
 
-async def stream_request(
+async def stream_request(body, native=False, headers=None, events=False):
+    from src.antigravity_limits import (
+        GenerationBudget, GenerationLimits, GenerationTimeout, current_budget, timeout_response,
+    )
+    import httpx
+    inherited = current_budget.get()
+    budget = inherited or GenerationBudget(GenerationLimits.load())
+    budget.streaming = True
+    stream = _stream_request(body, native=native, headers=headers, events=events)
+    budget.streams.append(stream)
+    exposed = False
+    try:
+        while True:
+            try:
+                item = await budget.run(stream.__anext__())
+            except StopAsyncIteration:
+                return
+            budget.observe(item)
+            if not isinstance(item, Response):
+                exposed = exposed or _is_meaningful_stream_chunk(item)
+            yield item
+    except (GenerationTimeout, httpx.TimeoutException, TimeoutError):
+        if exposed:
+            raise GenerationTimeout() from None
+        yield timeout_response()
+    finally:
+        await stream.aclose()
+        if stream in budget.streams:
+            budget.streams.remove(stream)
+        if inherited is None:
+            await budget.close()
+
+
+async def _stream_request(
     body: Dict[str, Any],
     native: bool = False,
     headers: Optional[Dict[str, str]] = None,
@@ -515,6 +550,8 @@ async def stream_request(
                     body=final_payload,
                     native=native,
                     headers=auth_headers,
+                    timeout=current_budget.get().limits.http_timeout(),
+                    response_header_timeout=current_budget.get().limits.headers,
                     events=events,
                 )
                 upstream_stream = observe_stream(upstream_stream, Attempt(attempt + 1, current_file), native)
@@ -853,7 +890,8 @@ async def _non_stream_request(
                     url=target_url,
                     json=final_payload,
                     headers=auth_headers,
-                    timeout=300.0
+                    timeout=current_budget.get().limits.http_timeout(),
+                    response_header_timeout=current_budget.get().limits.headers
                 ), Attempt(attempt + 1, current_file))
 
                 status_code = response.status_code
@@ -1030,7 +1068,16 @@ async def non_stream_request(
     protected: bool = False,
 ) -> Response:
     """Execute one client logical request after all internal retry attempts."""
-    response = await _non_stream_request(body=body, headers=headers, **({"protected": True} if protected else {}))
+    from src.antigravity_limits import GenerationBudget, GenerationLimits, timeout_response
+    inherited = current_budget.get()
+    budget = inherited or GenerationBudget(GenerationLimits.load(), non_stream=True)
+    try:
+        response = await budget.run(_non_stream_request(body=body, headers=headers, **({"protected": True} if protected else {})))
+    except (TimeoutError, httpx.TimeoutException):
+        response = timeout_response()
+    finally:
+        if inherited is None:
+            await budget.close()
     if record_logical:
         from src.logical_request_stats import record_logical_request, response_has_valid_body
 

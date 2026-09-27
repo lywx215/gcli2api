@@ -4,6 +4,7 @@ PostgreSQL 存储管理器
 
 import asyncio
 import json
+from src.storage._stats_common import prepare_antigravity_cooldown
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -1276,51 +1277,51 @@ class PSQLManager:
         try:
             table_name = self._get_table_name(mode)
             async with self._pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    f"SELECT model_cooldowns, cycle_stats FROM {table_name} WHERE filename = $1", filename
-                )
+                async with conn.transaction():
+                    row = await conn.fetchrow(
+                        f"SELECT model_cooldowns, cycle_stats FROM {table_name} WHERE filename = $1 FOR UPDATE", filename
+                    )
 
-                if not row:
-                    log.warning(f"Credential {filename} not found")
-                    return False
+                    if not row:
+                        log.warning(f"Credential {filename} not found")
+                        return False
 
-                model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
-                close_cycle = False
-                if cooldown_until is None:
+                    model_cooldowns = json.loads(row["model_cooldowns"] or "{}")
+                    close_cycle = False
                     if mode == "antigravity":
-                        model_cooldowns = clear_antigravity_cooldown_family(
-                            model_cooldowns, model_name
+                        model_cooldowns, close_cycle = prepare_antigravity_cooldown(
+                            model_cooldowns, model_name, cooldown_until
+                        )
+                    elif cooldown_until is None:
+                        model_cooldowns.pop(model_name, None)
+                    else:
+                        previous_until = model_cooldowns.get(model_name)
+                        model_cooldowns[model_name] = cooldown_until
+                        close_cycle = not previous_until or previous_until <= time.time()
+
+                    if close_cycle:
+                        new_cycle_stats, last_cycle_stats = self._close_cycle_stats(row["cycle_stats"], model_name)
+                        await conn.execute(
+                            f"""
+                            UPDATE {table_name}
+                            SET model_cooldowns = $1,
+                                cycle_stats = $2,
+                                last_cycle_stats = $3,
+                                updated_at = EXTRACT(EPOCH FROM NOW())
+                            WHERE filename = $4
+                            """,
+                            json.dumps(model_cooldowns), new_cycle_stats, last_cycle_stats, filename
                         )
                     else:
-                        model_cooldowns.pop(model_name, None)
-                else:
-                    previous_until = model_cooldowns.get(model_name)
-                    model_cooldowns[model_name] = cooldown_until
-                    close_cycle = not previous_until or previous_until <= time.time()
-
-                if close_cycle:
-                    new_cycle_stats, last_cycle_stats = self._close_cycle_stats(row["cycle_stats"], model_name)
-                    await conn.execute(
-                        f"""
-                        UPDATE {table_name}
-                        SET model_cooldowns = $1,
-                            cycle_stats = $2,
-                            last_cycle_stats = $3,
-                            updated_at = EXTRACT(EPOCH FROM NOW())
-                        WHERE filename = $4
-                        """,
-                        json.dumps(model_cooldowns), new_cycle_stats, last_cycle_stats, filename
-                    )
-                else:
-                    await conn.execute(
-                        f"""
-                        UPDATE {table_name}
-                        SET model_cooldowns = $1,
-                            updated_at = EXTRACT(EPOCH FROM NOW())
-                        WHERE filename = $2
-                        """,
-                        json.dumps(model_cooldowns), filename
-                    )
+                        await conn.execute(
+                            f"""
+                            UPDATE {table_name}
+                            SET model_cooldowns = $1,
+                                updated_at = EXTRACT(EPOCH FROM NOW())
+                            WHERE filename = $2
+                            """,
+                            json.dumps(model_cooldowns), filename
+                        )
 
             log.debug(f"Set model cooldown: {filename}, model_name={model_name}, cooldown_until={cooldown_until}")
             return True

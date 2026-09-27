@@ -11,6 +11,7 @@ from log import log
 
 from src.google_oauth_api import Credentials
 from src.storage_adapter import get_storage_adapter
+from src.antigravity_import_limits import import_write_slot
 
 def _fire_and_forget_cb(task: asyncio.Task):
     """回调：消费 fire-and-forget 任务的异常，防止任务对象泄漏"""
@@ -19,6 +20,15 @@ def _fire_and_forget_cb(task: asyncio.Task):
     exc = task.exception()
     if exc:
         log.warning(f"[FireAndForget] 任务异常: {exc}")
+
+
+class CredentialStorageError(RuntimeError):
+    """Safe error exposed by Antigravity import entry points."""
+
+    code = "credential_store_failed"
+
+    def __init__(self):
+        super().__init__("凭证存储失败，请稍后重试")
 
 
 class CredentialManager:
@@ -136,8 +146,16 @@ class CredentialManager:
         新增或更新一个Antigravity凭证
         存储层会自动处理轮换顺序
         """
-        await self._ensure_initialized()
-        await self._storage_adapter.store_credential(credential_name, credential_data, mode="antigravity")
+        try:
+            await self._ensure_initialized()
+            async with import_write_slot():
+                stored = await self._storage_adapter.store_credential(
+                    credential_name, credential_data, mode="antigravity"
+                )
+        except Exception:
+            raise CredentialStorageError() from None
+        if not stored:
+            raise CredentialStorageError()
         log.info(f"Antigravity credential added/updated: {credential_name}")
 
     async def remove_credential(self, credential_name: str, mode: str = "geminicli") -> bool:
