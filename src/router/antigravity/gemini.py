@@ -47,6 +47,17 @@ from src.router.stream_passthrough import (
     prepend_async_item,
     read_first_async_item,
 )
+from src.router.model_api_errors import (
+    ModelApiErrorException,
+    error_from_response,
+    error_from_model_payload,
+    error_from_retirement_payload,
+    make_protected_model_api_route_class,
+    activate_logical_request_recording,
+    parse_model_response,
+    protect_authentication,
+)
+from src.logical_request_stats import record_logical_request
 
 # 本地模块 - 数据模型
 from src.models import GeminiRequest, model_to_dict
@@ -55,9 +66,23 @@ from src.models import GeminiRequest, model_to_dict
 from src.task_manager import create_managed_task
 
 
+authenticate_gemini_flexible = protect_authentication(authenticate_gemini_flexible)
+
 # ==================== 路由器初始化 ====================
 
-router = APIRouter()
+async def _record_generation_request(request: Request, success: bool) -> None:
+    await record_logical_request(
+        request.state.model_api_model,
+        request.state.model_api_mode,
+        success,
+    )
+
+
+router = APIRouter(
+    route_class=make_protected_model_api_route_class(
+        "gemini", recorder=_record_generation_request
+    )
+)
 
 
 # ==================== API 路由 ====================
@@ -66,6 +91,7 @@ router = APIRouter()
 @router.post("/antigravity/v1/models/{model:path}:generateContent")
 async def generate_content(
     gemini_request: "GeminiRequest",
+    request: Request = None,
     model: str = Path(..., description="Model name"),
     api_key: str = Depends(authenticate_gemini_flexible),
 ):
@@ -90,6 +116,10 @@ async def generate_content(
     # 处理模型名称和功能检测
     use_anti_truncation = is_anti_truncation_model(model)
     real_model = normalize_antigravity_model_alias(get_base_model_from_feature_model(model))
+    if request is not None:
+        request.state.model_api_model = real_model
+        request.state.model_api_mode = "antigravity"
+        activate_logical_request_recording(request)
 
     # 对于抗截断模型的非流式请求，给出警告
     if use_anti_truncation:
@@ -110,30 +140,41 @@ async def generate_content(
 
     # 调用 API 层的非流式请求
     from src.api.antigravity import non_stream_request
-    response = await non_stream_request(body=api_request)
+    response = await non_stream_request(
+        body=api_request,
+        **({"record_logical": False, "protected": True} if request is not None else {}),
+    )
 
     # 解包装响应：Antigravity API 可能返回的格式有额外的 response 包装层
     # 需要提取并返回标准 Gemini 格式
     # 保持 Gemini 原生的 inlineData 格式,不进行 Markdown 转换
     try:
         if response.status_code == 200:
-            response_data = json.loads(response.body if hasattr(response, 'body') else response.content)
-            # 如果有 response 包装，解包装它
+            response_data = parse_model_response(response.body if hasattr(response, 'body') else response.content)
+            payload_error = error_from_model_payload(response_data)
+            payload_error = payload_error or error_from_retirement_payload(response_data)
+            if payload_error is not None:
+                raise ModelApiErrorException(payload_error)
+            # 已验证对象；无包装时也重新构造响应，不转发上游头部。
             if "response" in response_data:
                 unwrapped_data = response_data["response"]
                 converted(response_data, unwrapped_data)
                 return JSONResponse(content=unwrapped_data)
             converted(response_data, response_data)
+            return JSONResponse(content=response_data)
         # 错误响应或没有 response 字段，直接返回
         return response
+    except ModelApiErrorException:
+        raise
     except Exception as e:
         log.warning(f"Failed to unwrap response: {e}, returning original response")
-        return response
+        raise
 
 @router.post("/antigravity/v1beta/models/{model:path}:streamGenerateContent")
 @router.post("/antigravity/v1/models/{model:path}:streamGenerateContent")
 async def stream_generate_content(
     gemini_request: GeminiRequest,
+    request: Request = None,
     model: str = Path(..., description="Model name"),
     api_key: str = Depends(authenticate_gemini_flexible),
 ):
@@ -171,7 +212,10 @@ async def stream_generate_content(
             "request": normalized_req
         }
 
-        response = await non_stream_request(body=api_request, record_logical=False)
+        response = await non_stream_request(
+            body=api_request,
+            **({"record_logical": False, "protected": True} if request is not None else {}),
+        )
 
         # 检查响应状态码
         if hasattr(response, "status_code") and response.status_code != 200:
@@ -188,15 +232,14 @@ async def stream_generate_content(
             response_body = str(response)
 
         try:
-            response_data = json.loads(response_body)
+            response_data = parse_model_response(response_body)
             log.debug(f"Gemini fake stream response data: {response_data}")
 
             # 检查是否是错误响应（有些错误可能status_code是200但包含error字段）
-            if "error" in response_data:
-                log.error(f"Fake streaming got error in response body: {response_data['error']}")
-                yield f"data: {json.dumps(response_data)}\n\n".encode()
-                yield "data: [DONE]\n\n".encode()
-                return
+            payload_error = error_from_model_payload(response_data)
+            payload_error = payload_error or error_from_retirement_payload(response_data)
+            if payload_error is not None:
+                raise ModelApiErrorException(payload_error)
 
             # 使用统一的解析函数
             content, reasoning_content, finish_reason, images = parse_response_for_fake_stream(response_data)
@@ -214,10 +257,11 @@ async def stream_generate_content(
                 log.debug(f"[FAKE_STREAM] Yielding chunk #{idx+1}: {chunk_json[:200]}")
                 yield f"data: {chunk_json}\n\n".encode()
 
+        except ModelApiErrorException:
+            raise
         except Exception as e:
             log.error(f"Response parsing failed: {e}, directly yield original response")
-            # 直接yield原始响应,不进行包装
-            yield f"data: {response_body}\n\n".encode()
+            raise
 
         yield "data: [DONE]\n\n".encode()
 
@@ -243,7 +287,7 @@ async def stream_generate_content(
         # 首先对payload应用反截断指令
         anti_truncation_payload = apply_anti_truncation(api_request)
 
-        first_attempt_stream = stream_request(body=anti_truncation_payload, native=False)
+        first_attempt_stream = stream_request(body=anti_truncation_payload, native=False, events=True)
         try:
             first_chunk = await read_first_async_item(first_attempt_stream)
         except StopAsyncIteration:
@@ -262,7 +306,7 @@ async def stream_generate_content(
                 first_attempt_pending = False
                 stream_gen = prepend_async_item(first_chunk, first_attempt_stream)
             else:
-                stream_gen = stream_request(body=payload, native=False)
+                stream_gen = stream_request(body=payload, native=False, events=True)
             return StreamingResponse(stream_gen, media_type="text/event-stream")
 
         # 创建反截断处理器
@@ -329,7 +373,7 @@ async def stream_generate_content(
 
         # 所有流式请求都使用非 native 模式（SSE格式）并展开 response 包装
         log.debug(f"[ANTIGRAVITY] 使用非native模式，将展开response包装")
-        stream_gen = stream_request(body=api_request, native=False)
+        stream_gen = stream_request(body=api_request, native=False, events=True)
         try:
             first_chunk = await read_first_async_item(stream_gen)
         except StopAsyncIteration:
@@ -343,16 +387,9 @@ async def stream_generate_content(
         async for chunk in prepend_async_item(first_chunk, stream_gen):
             # 检查是否是Response对象（错误情况）
             if isinstance(chunk, Response):
-                # 将Response转换为SSE格式的错误消息
-                try:
-                    error_content = chunk.body if isinstance(chunk.body, bytes) else (chunk.body or b'').encode('utf-8')
-                    error_json = json.loads(error_content.decode('utf-8'))
-                except Exception:
-                    error_json = {"error": {"code": chunk.status_code, "message": "upstream error", "status": "ERROR"}}
-                log.error(f"[ANTIGRAVITY STREAM] 返回错误给客户端: status={chunk.status_code}, error={str(error_json)[:200]}")
-                yield f"data: {json.dumps(error_json)}\n\n".encode('utf-8')
-                yield b"data: [DONE]\n\n"
-                return
+                raise ModelApiErrorException(
+                    error_from_response(chunk)
+                )
 
             # 处理SSE格式的chunk
             if isinstance(chunk, (str, bytes)):
@@ -393,12 +430,12 @@ async def stream_generate_content(
 
     # ========== 根据模式选择生成器 ==========
     if use_fake_streaming:
-        return await build_streaming_response_or_error(fake_stream_generator(), model_name=real_model, mode="antigravity")
+        return await build_streaming_response_or_error(fake_stream_generator(), model_name=real_model, mode="antigravity", protected=True, protocol="gemini")
     elif use_anti_truncation:
         log.info("启用流式抗截断功能")
-        return await build_streaming_response_or_error(anti_truncation_generator(), model_name=real_model, mode="antigravity")
+        return await build_streaming_response_or_error(anti_truncation_generator(), model_name=real_model, mode="antigravity", protected=True, protocol="gemini")
     else:
-        return await build_streaming_response_or_error(normal_stream_generator(), model_name=real_model, mode="antigravity")
+        return await build_streaming_response_or_error(normal_stream_generator(), model_name=real_model, mode="antigravity", protected=True, protocol="gemini")
 
 @router.post("/antigravity/v1beta/models/{model:path}:countTokens")
 @router.post("/antigravity/v1/models/{model:path}:countTokens")

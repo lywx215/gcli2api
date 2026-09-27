@@ -1,0 +1,12 @@
+{
+  "plan": ".codex/review-plan.md",
+  "requirements": ["AGENTS.md"],
+  "deliverables": [
+    "docs/MAINTENANCE_SCOPE.md",
+    "src/**/*.py",
+    "tests/**/*.py",
+    "test_*.py",
+    "review/**/*.md",
+    "*.md"
+  ]
+}

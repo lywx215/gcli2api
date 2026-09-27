@@ -5,13 +5,196 @@
 """
 
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Dict, Optional
+import codecs
+import json
+from typing import Any, AsyncGenerator, AsyncIterable, Dict, Optional
 
 import httpx
 from src.diagnostics.http import DiagnosticAsyncClient
 
 from config import get_proxy_config
 from log import log
+from src.router.model_api_errors import (
+    ErrorKind,
+    ErrorOrigin,
+    ModelApiErrorException,
+    error_from_http_status,
+    error_from_model_payload,
+    make_model_api_error,
+)
+from src.router.model_retirement import RetirementAction, new_attempt
+
+
+async def normalize_sse_events(chunks: AsyncIterable[bytes | str]):
+    """Normalize complete SSE events without guessing line-vs-event mode."""
+
+    decoder = codecs.getincrementaldecoder("utf-8")("strict")
+    text_buffer = ""
+    fields: dict[str, list[str]] = {}
+    event_name = ""
+
+    def dispatch() -> bytes | None:
+        nonlocal fields, event_name
+        data_lines = fields.get("data", [])
+        fields = {}
+        current_event = event_name
+        event_name = ""
+        if not data_lines:
+            return None
+        payload = "\n".join(data_lines)
+        if payload == "[DONE]":
+            if current_event == "error":
+                raise ModelApiErrorException(make_model_api_error(
+                    origin=ErrorOrigin.UPSTREAM, kind=ErrorKind.BAD_FORMAT
+                ))
+            return b"data: [DONE]\n\n"
+        try:
+            parsed = json.loads(payload)
+        except (ValueError, TypeError, RecursionError) as exc:
+            raise ModelApiErrorException(
+                make_model_api_error(
+                    origin=ErrorOrigin.UPSTREAM,
+                    kind=ErrorKind.BAD_FORMAT,
+                    status=502,
+                )
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ModelApiErrorException(
+                make_model_api_error(
+                    origin=ErrorOrigin.UPSTREAM,
+                    kind=ErrorKind.BAD_FORMAT,
+                    status=502,
+                )
+            )
+        error = error_from_model_payload(parsed)
+        if current_event == "error" or error is not None:
+            error = error or make_model_api_error(
+                origin=ErrorOrigin.UPSTREAM, kind=ErrorKind.BAD_FORMAT
+            )
+            raise ModelApiErrorException(error)
+        normalized = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+        return b"data: " + normalized.encode("utf-8") + b"\n\n"
+
+    async for chunk in chunks:
+        if isinstance(chunk, bytes):
+            text_buffer += decoder.decode(chunk, final=False)
+        elif isinstance(chunk, str):
+            text_buffer += chunk
+        else:
+            raise ModelApiErrorException(
+                make_model_api_error(
+                    origin=ErrorOrigin.UPSTREAM,
+                    kind=ErrorKind.BAD_FORMAT,
+                    status=502,
+                )
+            )
+        while "\n" in text_buffer:
+            line, text_buffer = text_buffer.split("\n", 1)
+            if line.endswith("\r"):
+                line = line[:-1]
+            if line == "":
+                event = dispatch()
+                if event is not None:
+                    yield event
+                continue
+            if line.startswith(":"):
+                continue
+            field, separator, value = line.partition(":")
+            if not separator or field not in {"data", "event", "id", "retry"}:
+                continue
+            if value.startswith(" "):
+                value = value[1:]
+            if field == "data":
+                fields.setdefault("data", []).append(value)
+            elif field == "event":
+                event_name = value
+    text_buffer += decoder.decode(b"", final=True)
+    if text_buffer:
+        if text_buffer.endswith("\r"):
+            text_buffer = text_buffer[:-1]
+        if text_buffer and not text_buffer.startswith(":"):
+            field, separator, value = text_buffer.partition(":")
+            if separator and field == "data":
+                if value.startswith(" "):
+                    value = value[1:]
+                fields.setdefault("data", []).append(value)
+    event = dispatch()
+    if event is not None:
+        yield event
+
+
+def _normalized_event_payload(event: bytes) -> dict[str, Any] | None:
+    text = event.decode("utf-8") if isinstance(event, bytes) else str(event)
+    data = [line[5:].strip() for line in text.splitlines() if line.startswith("data:")]
+    if not data or data[-1] == "[DONE]":
+        return None
+    payload = json.loads("\n".join(data))
+    return payload if isinstance(payload, dict) else None
+
+
+def _encode_normalized_event(payload: Any) -> bytes:
+    return (
+        b"data: "
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        + b"\n\n"
+    )
+
+
+async def _retirement_checked_events(chunks: AsyncIterable[bytes]):
+    """Apply the per-attempt retirement recognizer to normalized SSE events."""
+
+    checker = new_attempt()
+    async for event in chunks:
+        payload = _normalized_event_payload(event)
+        if payload is None:
+            final = checker.finish()
+            if final.action is RetirementAction.RETIRED:
+                raise ModelApiErrorException(
+                    error_from_http_status(404, origin=ErrorOrigin.UPSTREAM)
+                )
+            if final.action is RetirementAction.BUFFER_OVERFLOW:
+                raise ModelApiErrorException(
+                    make_model_api_error(
+                        origin=ErrorOrigin.UPSTREAM,
+                        kind=ErrorKind.BAD_FORMAT,
+                        status=502,
+                    )
+                )
+            for released in final.events:
+                yield _encode_normalized_event(released)
+            yield event
+            continue
+
+        result = checker.feed(payload)
+        if result.action is RetirementAction.RETIRED:
+            raise ModelApiErrorException(
+                error_from_http_status(404, origin=ErrorOrigin.UPSTREAM)
+            )
+        if result.action is RetirementAction.BUFFER_OVERFLOW:
+            raise ModelApiErrorException(
+                make_model_api_error(
+                    origin=ErrorOrigin.UPSTREAM,
+                    kind=ErrorKind.BAD_FORMAT,
+                    status=502,
+                )
+            )
+        # A completed recognizer returns PASS with no buffered events. Later
+        # usage/metadata frames still belong to the stream and must be delivered.
+        if result.action is RetirementAction.PASS and not result.events:
+            yield event
+        for released in result.events:
+            yield _encode_normalized_event(released)
+
+    # EOF is also a terminal boundary, even when the upstream omits [DONE].
+    final = checker.finish()
+    if final.action is RetirementAction.RETIRED:
+        raise ModelApiErrorException(error_from_http_status(404))
+    if final.action is RetirementAction.BUFFER_OVERFLOW:
+        raise ModelApiErrorException(make_model_api_error(
+            origin=ErrorOrigin.UPSTREAM, kind=ErrorKind.BAD_FORMAT
+        ))
+    for released in final.events:
+        yield _encode_normalized_event(released)
 
 
 class HttpxClientManager:
@@ -91,6 +274,7 @@ async def stream_post_async(
     body: Dict[str, Any],
     native: bool = False,
     headers: Optional[Dict[str, str]] = None,
+    events: bool = False,
     **kwargs,
 ):
     """流式异步POST请求"""
@@ -113,7 +297,11 @@ async def stream_post_async(
                 return
 
             # 如果native=True，直接返回bytes流
-            if native:
+            if events:
+                normalized_events = normalize_sse_events(r.aiter_bytes())
+                async for event in _retirement_checked_events(normalized_events):
+                    yield event
+            elif native:
                 async for chunk in r.aiter_bytes():
                     yield chunk
             else:

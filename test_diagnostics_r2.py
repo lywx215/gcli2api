@@ -20,6 +20,29 @@ def model_frame(kind='success'):
     return {'candidates': [candidate]}
 
 
+@pytest.mark.parametrize('kind,stage', [('http', 'unknown'), ('bad_format', 'parse')])
+async def test_typed_event_error_keeps_semantic_failure_stage(records, kind, stage):
+    from src.router.model_api_errors import ErrorKind, ErrorOrigin, ModelApiErrorException, make_model_api_error
+
+    async def source():
+        raise ModelApiErrorException(make_model_api_error(
+            origin=ErrorOrigin.UPSTREAM, kind=ErrorKind(kind), status=503,
+        ))
+        if False:
+            yield b''
+
+    with request_context() as server:
+        attempt = semantic.Attempt(1, 'synthetic')
+        with pytest.raises(ModelApiErrorException):
+            async for _ in semantic.observe_stream(source(), attempt):
+                pass
+        terminal(server)
+    data = next(r['data'] for r in records if r['event'] == 'upstream.attempt_finished')
+    assert data['resultClass'] == 'error'
+    assert data['failureOrigin'] == 'upstream'
+    assert data['failureStage'] == stage
+
+
 @pytest.mark.parametrize('eof', [False, True])
 @pytest.mark.parametrize('done', [False, True])
 @pytest.mark.parametrize('kind', ['success','empty','blocked','incomplete','parse','http429','http503','frame_error'])
@@ -127,7 +150,8 @@ def test_pseudo_stream_error_does_not_emit_nonstream_conversion(tmp_path):
                 path,body = payload(protocol,True)
                 body['model'] = '假流式/' + body['model']
                 response = httpx.post(origin+path,json=body,headers={'authorization':'Bearer synthetic-local-password'},trust_env=False,timeout=10)
-                assert response.status_code == 200 and '[DONE]' in response.text
+                assert response.status_code == 503 and '[DONE]' not in response.text
+                assert response.json()['error']['message'] == 'The service is temporarily unavailable. Please try again later.'
                 expected.append(response.headers['x-diag-request-id'])
     rows = read_records(root)
     for request_id in expected:

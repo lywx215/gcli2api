@@ -6,6 +6,7 @@ Anthropic 到 Gemini 格式转换器
 from __future__ import annotations
 
 import json
+import asyncio
 from src.diagnostics.semantic import converted, conversion_input, conversion_output
 import os
 import uuid
@@ -14,6 +15,10 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 from fastapi import Response
 from log import log
 from src.converter.utils import merge_system_messages
+from src.router.model_api_errors import (
+    ModelApiErrorException,
+    error_from_response,
+)
 
 from src.converter.thoughtSignature_fix import (
     decode_tool_id_and_signature,
@@ -1018,11 +1023,9 @@ async def gemini_stream_to_anthropic_stream(
         async for chunk in gemini_stream:
             # 检查是否是 Response 对象（错误情况）
             if isinstance(chunk, Response):
-                log.warning(f"[GEMINI_TO_ANTHROPIC] 收到 Response 对象，状态码: {chunk.status_code}，直接转发错误")
-                # 直接转发错误响应内容，不做格式转换
-                error_content = chunk.body if isinstance(chunk.body, bytes) else chunk.body.encode('utf-8')
-                yield error_content
-                return
+                raise ModelApiErrorException(
+                    error_from_response(chunk)
+                )
 
             # 记录接收到的原始chunk
             log.debug(f"[GEMINI_TO_ANTHROPIC] Raw chunk: {chunk[:200] if chunk else b''}")
@@ -1296,27 +1299,12 @@ async def gemini_stream_to_anthropic_stream(
 
         yield _sse_event("message_stop", {"type": "message_stop"})
 
+    except (asyncio.CancelledError, GeneratorExit):
+        raise
     except Exception as e:
         log.error(f"[ANTHROPIC] 流式转换失败: {e}")
-        # 发送错误事件
-        if not message_start_sent:
-            yield _sse_event(
-                "message_start",
-                {
-                    "type": "message_start",
-                    "message": {
-                        "id": message_id,
-                        "type": "message",
-                        "role": "assistant",
-                        "model": model,
-                        "content": [],
-                        "stop_reason": None,
-                        "stop_sequence": None,
-                        "usage": _usage_payload(),
-                    },
-                },
-            )
-        yield _sse_event(
-            "error",
-            {"type": "error", "error": {"type": "api_error", "message": str(e)}},
-        )
+        raise
+    finally:
+        close = getattr(gemini_stream, "aclose", None)
+        if close is not None:
+            await close()

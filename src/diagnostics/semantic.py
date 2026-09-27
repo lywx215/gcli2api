@@ -313,6 +313,8 @@ async def observe_post(awaitable, attempt):
 
 
 async def observe_stream(iterator, attempt, native=False):
+    from src.router.model_api_errors import ErrorKind, ModelApiErrorException
+
     failure = None
     try:
         while True:
@@ -331,6 +333,22 @@ async def observe_stream(iterator, attempt, native=False):
         raise
     except GeneratorExit:
         # Early generator close is not proof the client cancelled.
+        raise
+    except ModelApiErrorException as exc:
+        # Event validation can stop a model error before it reaches chunk().
+        # Preserve its semantic classification; it is not a transport read failure.
+        try:
+            if attempt.enabled():
+                attempt.summary.error = True
+                attempt.summary.status = exc.error.status
+                if exc.error.kind == ErrorKind.BAD_FORMAT:
+                    attempt.summary.parsed = False
+                elif exc.error.kind == ErrorKind.HTTP:
+                    attempt.summary.seen = True
+        except Exception:
+            pass  # Diagnostic observation must not replace the business error.
+        if exc.error.kind == ErrorKind.TIMEOUT:
+            failure = 'transport_error'
         raise
     except BaseException:
         failure = 'transport_error'

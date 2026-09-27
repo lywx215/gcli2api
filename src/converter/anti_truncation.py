@@ -11,6 +11,10 @@ from typing import Any, AsyncGenerator, Dict, List, Tuple
 from fastapi.responses import StreamingResponse
 
 from log import log
+from src.router.model_api_errors import (
+    ModelApiErrorException,
+    error_from_response,
+)
 
 # 反截断配置
 DONE_MARKER = "[done]"
@@ -247,16 +251,9 @@ class AntiTruncationStreamProcessor:
                     from fastapi import Response as FastAPIResponse
                     if isinstance(line, FastAPIResponse):
                         log.error(f"Anti-truncation: Received Response object from stream (status={line.status_code}), treating as error")
-                        error_chunk = {
-                            "error": {
-                                "message": line.body.decode('utf-8', errors='ignore') if hasattr(line, 'body') and line.body else "Upstream error",
-                                "type": "api_error",
-                                "code": line.status_code,
-                            }
-                        }
-                        yield f"data: {json.dumps(error_chunk)}\n\n".encode()
-                        yield b"data: [DONE]\n\n"
-                        return
+                        raise ModelApiErrorException(
+                            error_from_response(line)
+                        )
 
                     # 处理 bytes 类型的流式数据
                     if isinstance(line, bytes):
@@ -363,21 +360,11 @@ class AntiTruncationStreamProcessor:
                     yield b"data: [DONE]\n\n"
                     return
 
+            except ModelApiErrorException:
+                raise
             except Exception as e:
                 log.error(f"Anti-truncation error in attempt {self.current_attempt}: {str(e)}")
-                if self.current_attempt >= self.max_attempts:
-                    # 发送错误chunk
-                    error_chunk = {
-                        "error": {
-                            "message": f"Anti-truncation failed: {str(e)}",
-                            "type": "api_error",
-                            "code": 500,
-                        }
-                    }
-                    yield f"data: {json.dumps(error_chunk)}\n\n".encode()
-                    yield b"data: [DONE]\n\n"
-                    return
-                # 否则继续下一次尝试
+                raise
             finally:
                 # A [DONE] return/break can leave the HTTP iterator suspended.
                 # Close it before starting another round or sealing the request.
@@ -472,6 +459,11 @@ class AntiTruncationStreamProcessor:
         # 使用循环代替递归
         while True:
             try:
+                status_code = getattr(response, "status_code", 200)
+                if status_code < 200 or status_code >= 300:
+                    raise ModelApiErrorException(
+                        error_from_response(response)
+                    )
                 # 特殊处理：如果返回的是StreamingResponse，需要读取其body_iterator
                 if isinstance(response, StreamingResponse):
                     log.error("Anti-truncation: Received StreamingResponse in non-streaming handler - this should not happen")
@@ -539,17 +531,11 @@ class AntiTruncationStreamProcessor:
 
                 # 继续循环处理下一个响应
 
+            except ModelApiErrorException:
+                raise
             except Exception as e:
                 log.error(f"Anti-truncation non-streaming error: {str(e)}")
-                return json.dumps(
-                    {
-                        "error": {
-                            "message": f"Anti-truncation failed: {str(e)}",
-                            "type": "api_error",
-                            "code": 500,
-                        }
-                    }
-                ).encode()
+                raise
 
     def _check_done_marker_in_text(self, text: str) -> bool:
         """检测文本中是否包含DONE_MARKER（只检测指定标记）"""

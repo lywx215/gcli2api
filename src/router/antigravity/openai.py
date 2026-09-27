@@ -17,7 +17,7 @@ import json
 from src.diagnostics.semantic import conversion_input, conversion_output
 
 # 第三方库
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 # 本地模块 - 配置和日志
@@ -47,6 +47,17 @@ from src.router.stream_passthrough import (
     prepend_async_item,
     read_first_async_item,
 )
+from src.router.model_api_errors import (
+    ModelApiErrorException,
+    error_from_response,
+    error_from_model_payload,
+    error_from_retirement_payload,
+    make_protected_model_api_route_class,
+    activate_logical_request_recording,
+    parse_model_response,
+    protect_authentication,
+)
+from src.logical_request_stats import record_logical_request
 
 # 本地模块 - 数据模型
 from src.models import OpenAIChatCompletionRequest, model_to_dict
@@ -55,9 +66,23 @@ from src.models import OpenAIChatCompletionRequest, model_to_dict
 from src.task_manager import create_managed_task
 
 
+authenticate_bearer = protect_authentication(authenticate_bearer)
+
 # ==================== 路由器初始化 ====================
 
-router = APIRouter()
+async def _record_generation_request(request: Request, success: bool) -> None:
+    await record_logical_request(
+        request.state.model_api_model,
+        request.state.model_api_mode,
+        success,
+    )
+
+
+router = APIRouter(
+    route_class=make_protected_model_api_route_class(
+        "openai", recorder=_record_generation_request
+    )
+)
 
 
 # ==================== API 路由 ====================
@@ -65,6 +90,7 @@ router = APIRouter()
 @router.post("/antigravity/v1/chat/completions")
 async def chat_completions(
     openai_request: OpenAIChatCompletionRequest,
+    request: Request = None,
     token: str = Depends(authenticate_bearer)
 ):
     """
@@ -91,6 +117,10 @@ async def chat_completions(
 
     # 获取流式标志
     is_streaming = openai_request.stream
+    if not is_streaming and request is not None:
+        request.state.model_api_model = real_model
+        request.state.model_api_mode = "antigravity"
+        activate_logical_request_recording(request)
 
     # 对于抗截断模型的非流式请求，给出警告
     if use_anti_truncation and not is_streaming:
@@ -120,10 +150,15 @@ async def chat_completions(
     if not is_streaming:
         # 调用 API 层的非流式请求
         from src.api.antigravity import non_stream_request
-        response = await non_stream_request(body=api_request)
+        response = await non_stream_request(
+            body=api_request,
+            **({"record_logical": False, "protected": True} if request is not None else {}),
+        )
 
         # 检查响应状态码
         status_code = getattr(response, "status_code", 200)
+        if status_code != 200:
+            return response
 
         # 提取响应体
         if hasattr(response, "body"):
@@ -134,10 +169,17 @@ async def chat_completions(
             response_body = str(response)
 
         try:
-            gemini_response = json.loads(response_body)
+            gemini_response = parse_model_response(response_body)
+        except ModelApiErrorException:
+            raise
         except Exception as e:
             log.error(f"Failed to parse Gemini response: {e}")
             raise HTTPException(status_code=500, detail="Response parsing failed")
+        if status_code == 200:
+            payload_error = error_from_model_payload(gemini_response)
+            payload_error = payload_error or error_from_retirement_payload(gemini_response)
+            if payload_error is not None:
+                raise ModelApiErrorException(payload_error)
 
         # 转换为 OpenAI 格式
         from src.converter.openai2gemini import convert_gemini_to_openai_response
@@ -155,7 +197,10 @@ async def chat_completions(
     async def fake_stream_generator():
         from src.api.antigravity import non_stream_request
 
-        response = await non_stream_request(body=api_request, record_logical=False)
+        response = await non_stream_request(
+            body=api_request,
+            **({"record_logical": False, "protected": True} if request is not None else {}),
+        )
 
         # 检查响应状态码
         if hasattr(response, "status_code") and response.status_code != 200:
@@ -172,22 +217,14 @@ async def chat_completions(
             response_body = str(response)
 
         try:
-            gemini_response = json.loads(response_body)
+            gemini_response = parse_model_response(response_body)
             log.debug(f"OpenAI fake stream Gemini response: {gemini_response}")
 
             # 检查是否是错误响应（有些错误可能status_code是200但包含error字段）
-            if "error" in gemini_response:
-                log.error(f"Fake streaming got error in response body: {gemini_response['error']}")
-                # 转换错误为 OpenAI 格式
-                from src.converter.openai2gemini import convert_gemini_to_openai_response
-                openai_error = convert_gemini_to_openai_response(
-                    gemini_response,
-                    real_model,
-                    200
-                )
-                yield f"data: {json.dumps(openai_error)}\n\n".encode()
-                yield "data: [DONE]\n\n".encode()
-                return
+            payload_error = error_from_model_payload(gemini_response)
+            payload_error = payload_error or error_from_retirement_payload(gemini_response)
+            if payload_error is not None:
+                raise ModelApiErrorException(payload_error)
 
             # 使用统一的解析函数
             content, reasoning_content, finish_reason, images = parse_response_for_fake_stream(gemini_response)
@@ -205,21 +242,11 @@ async def chat_completions(
                 log.debug(f"[FAKE_STREAM] Yielding chunk #{idx+1}: {chunk_json[:200]}")
                 yield f"data: {chunk_json}\n\n".encode()
 
+        except ModelApiErrorException:
+            raise
         except Exception as e:
             log.error(f"Response parsing failed: {e}, directly yield error")
-            # 构建错误响应
-            error_chunk = {
-                "id": "error",
-                "object": "chat.completion.chunk",
-                "created": int(asyncio.get_event_loop().time()),
-                "model": real_model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {"content": f"Error: {str(e)}"},
-                    "finish_reason": "error"
-                }]
-            }
-            yield f"data: {json.dumps(error_chunk)}\n\n".encode()
+            raise
 
         yield "data: [DONE]\n\n".encode()
 
@@ -235,7 +262,7 @@ async def chat_completions(
         # 首先对payload应用反截断指令
         anti_truncation_payload = apply_anti_truncation(api_request)
 
-        first_attempt_stream = stream_request(body=anti_truncation_payload, native=False)
+        first_attempt_stream = stream_request(body=anti_truncation_payload, native=False, events=True)
         try:
             first_chunk = await read_first_async_item(first_attempt_stream)
         except StopAsyncIteration:
@@ -254,7 +281,7 @@ async def chat_completions(
                 first_attempt_pending = False
                 stream_gen = prepend_async_item(first_chunk, first_attempt_stream)
             else:
-                stream_gen = stream_request(body=payload, native=False)
+                stream_gen = stream_request(body=payload, native=False, events=True)
 
             return StreamingResponse(stream_gen, media_type="text/event-stream")
 
@@ -303,7 +330,7 @@ async def chat_completions(
 
                 except Exception as e:
                     log.error(f"Failed to convert chunk: {e}")
-                    continue
+                    raise
 
         # 发送结束标记
         yield "data: [DONE]\n\n".encode('utf-8')
@@ -315,7 +342,7 @@ async def chat_completions(
         import uuid
 
         # 调用 API 层的流式请求（不使用 native 模式）
-        stream_gen = stream_request(body=api_request, native=False)
+        stream_gen = stream_request(body=api_request, native=False, events=True)
         try:
             first_chunk = await read_first_async_item(stream_gen)
         except StopAsyncIteration:
@@ -331,22 +358,9 @@ async def chat_completions(
         async for chunk in prepend_async_item(first_chunk, stream_gen):
             # 检查是否是Response对象（错误情况）
             if isinstance(chunk, Response):
-                # 将Response转换为SSE格式的错误消息
-                try:
-                    error_content = chunk.body if isinstance(chunk.body, bytes) else (chunk.body or b'').encode('utf-8')
-                    gemini_error = json.loads(error_content.decode('utf-8'))
-                    # 转换为 OpenAI 格式错误
-                    from src.converter.openai2gemini import convert_gemini_to_openai_response
-                    openai_error = convert_gemini_to_openai_response(
-                        gemini_error,
-                        real_model,
-                        chunk.status_code
-                    )
-                    yield f"data: {json.dumps(openai_error)}\n\n".encode('utf-8')
-                except Exception:
-                    yield f"data: {json.dumps({'error': 'Stream error'})}\n\n".encode('utf-8')
-                yield b"data: [DONE]\n\n"
-                return
+                raise ModelApiErrorException(
+                    error_from_response(chunk)
+                )
             else:
                 # 正常的bytes数据，转换为 OpenAI 格式
                 chunk_str = chunk.decode('utf-8') if isinstance(chunk, bytes) else chunk
@@ -376,19 +390,19 @@ async def chat_completions(
 
                     except Exception as e:
                         log.error(f"Failed to convert chunk: {e}")
-                        continue
+                        raise
 
         # 发送结束标记
         yield "data: [DONE]\n\n".encode('utf-8')
 
     # ========== 根据模式选择生成器 ==========
     if use_fake_streaming:
-        return await build_streaming_response_or_error(fake_stream_generator(), model_name=real_model, mode="antigravity")
+        return await build_streaming_response_or_error(fake_stream_generator(), model_name=real_model, mode="antigravity", protected=True, protocol="openai")
     elif use_anti_truncation:
         log.info("启用流式抗截断功能")
-        return await build_streaming_response_or_error(anti_truncation_generator(), model_name=real_model, mode="antigravity")
+        return await build_streaming_response_or_error(anti_truncation_generator(), model_name=real_model, mode="antigravity", protected=True, protocol="openai")
     else:
-        return await build_streaming_response_or_error(normal_stream_generator(), model_name=real_model, mode="antigravity")
+        return await build_streaming_response_or_error(normal_stream_generator(), model_name=real_model, mode="antigravity", protected=True, protocol="openai")
 
 
 # ==================== 测试代码 ====================

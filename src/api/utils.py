@@ -37,6 +37,17 @@ def _fire_and_forget_cb(task: asyncio.Task):
         log.warning(f"[FireAndForget] 任务异常: {exc}")
 
 
+async def close_credential_prefetch(task):
+    """Settle the request-owned prefetch on every terminal/cancel/close path."""
+    if task is None:
+        return
+    if not task.done():
+        task.cancel()
+    # Child cancellation/failure is consumed, but cancellation of this awaiting
+    # parent still propagates instead of being mistaken for child cancellation.
+    await asyncio.gather(task, return_exceptions=True)
+
+
 # ==================== 调试日志工具 ====================
 
 def debug_log(message: str, level: str = "debug") -> None:
@@ -358,7 +369,7 @@ async def parse_and_log_cooldown(
 
 # ==================== 流式响应收集 ====================
 
-async def collect_streaming_response(stream_generator) -> Response:
+async def collect_streaming_response(stream_generator, *, protected: bool = False) -> Response:
     """
     将Gemini流式响应收集为一条完整的非流式响应
 
@@ -374,6 +385,10 @@ async def collect_streaming_response(stream_generator) -> Response:
         >>> response = await collect_streaming_response(stream_generator)
     """
     from src.diagnostics.semantic import collector_observer, collector_parsed, collected_response
+    from src.router.model_api_errors import (
+        ErrorKind, ErrorOrigin, ModelApiErrorException, attach_exception_error,
+        attach_model_api_error, make_model_api_error, parse_model_response,
+    )
     diagnostic_collection = collector_observer()
     # 初始化响应结构
     merged_response = {
@@ -432,7 +447,7 @@ async def collect_streaming_response(stream_generator) -> Response:
 
             try:
                 log.debug(f"[STREAM COLLECTOR] Parsing JSON: {raw[:200]}")
-                chunk = json.loads(raw)
+                chunk = parse_model_response(raw) if protected else json.loads(raw)
                 collector_parsed(diagnostic_collection, chunk)
                 has_data = True
                 log.debug(f"[STREAM COLLECTOR] Chunk keys: {chunk.keys() if isinstance(chunk, dict) else type(chunk)}")
@@ -527,6 +542,8 @@ async def collect_streaming_response(stream_generator) -> Response:
                 if candidate.get("citationMetadata"):
                     merged_response["response"]["candidates"][0]["citationMetadata"] = candidate["citationMetadata"]
 
+            except ModelApiErrorException:
+                raise
             except json.JSONDecodeError as e:
                 collector_parsed(diagnostic_collection, invalid=True)
                 log.debug(f"[STREAM COLLECTOR] Failed to parse JSON chunk: {e}")
@@ -534,18 +551,28 @@ async def collect_streaming_response(stream_generator) -> Response:
             except Exception as e:
                 collector_parsed(diagnostic_collection, invalid=True)
                 log.debug(f"[STREAM COLLECTOR] Error processing chunk: {e}")
+                if protected:
+                    raise ModelApiErrorException(make_model_api_error(
+                        origin=ErrorOrigin.UPSTREAM, kind=ErrorKind.BAD_FORMAT
+                    )) from e
                 continue
 
     except Exception as e:
         log.error(f"[STREAM COLLECTOR] Error collecting stream after {line_count} lines: {e}")
-        return build_error_response(f"收集流式响应失败: {str(e)}", 500)
+        response = build_error_response(f"收集流式响应失败: {str(e)}", 500)
+        return attach_exception_error(response, e) if protected else response
 
     log.debug(f"[STREAM COLLECTOR] Finished iteration, has_data={has_data}, line_count={line_count}")
 
     # 如果没有收集到任何数据，返回错误
     if not has_data:
         log.error(f"[STREAM COLLECTOR] No data collected from stream after {line_count} lines")
-        return build_error_response("No data collected from stream", 500)
+        response = build_error_response("No data collected from stream", 500)
+        if protected:
+            return attach_model_api_error(response, make_model_api_error(
+                origin=ErrorOrigin.UPSTREAM, kind=ErrorKind.BAD_FORMAT
+            ))
+        return response
 
     # 组装最终的parts
     final_parts = []
