@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
+from src.geminicli_models import GEMINI_38_FLASH_MODEL, GEMINI_38_FLASH_SUFFIXES
 
 
 TIER_FREE = "free"
@@ -58,6 +59,12 @@ _GEMINI_35_FLASH_MODEL_IDS = frozenset(
     for suffix in _GEMINI_35_FLASH_MODEL_SUFFIXES
 )
 
+# Local routing policy: inherit the existing 3.5 Flash credential allow-list.
+# This is not a claim that every Standard/Enterprise account has upstream access.
+_GEMINI_38_FLASH_MODEL_IDS = frozenset(
+    f"{GEMINI_38_FLASH_MODEL}{suffix}" for suffix in GEMINI_38_FLASH_SUFFIXES
+)
+
 
 def required_tiers_for_geminicli_model(model_name: Optional[str]) -> Optional[tuple[str, ...]]:
     """Return the hard Tier allow-list for a restricted Gemini CLI model."""
@@ -65,12 +72,12 @@ def required_tiers_for_geminicli_model(model_name: Optional[str]) -> Optional[tu
         return None
 
     normalized = str(model_name).strip().lower()
-    for prefix in ("假流式/", "流式抗截断/"):
+    for prefix in ("假流式/", "抗截断/", "流式抗截断/"):
         if normalized.startswith(prefix):
             normalized = normalized[len(prefix):]
             break
 
-    if normalized in _GEMINI_35_FLASH_MODEL_IDS:
+    if normalized in _GEMINI_35_FLASH_MODEL_IDS or normalized in _GEMINI_38_FLASH_MODEL_IDS:
         return GEMINI_35_FLASH_TIERS
     return None
 

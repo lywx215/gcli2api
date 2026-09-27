@@ -5,6 +5,7 @@ from fastapi import Depends, HTTPException, Header, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from log import log
 from src.antigravity_models import ANTIGRAVITY_MODEL_ALIASES
+from src.geminicli_models import GEMINI_38_FLASH_MODEL, GEMINI_38_FLASH_THINKING_LEVELS
 
 # HTTP Bearer security scheme
 security = HTTPBearer()
@@ -65,6 +66,7 @@ BASE_MODELS = [
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash",
     "gemini-3.5-flash-preview",
+    GEMINI_38_FLASH_MODEL,
 ]
 
 
@@ -156,7 +158,9 @@ def get_available_models(router_type: str = "openai") -> List[str]:
             thinking_suffixes = ["-max", "-high", "-medium", "-low", "-minimal"]
         # Gemini 3 系列: 使用思考等级后缀
         elif "gemini-3" in base_model:
-            if base_model == "gemini-3.5-flash":
+            if base_model == GEMINI_38_FLASH_MODEL:
+                thinking_suffixes = [f"-{level}" for level in GEMINI_38_FLASH_THINKING_LEVELS]
+            elif base_model == "gemini-3.5-flash":
                 # Gemini CLI exposes Minimal/Low/Medium/High thinking levels for 3.5 Flash.
                 thinking_suffixes = ["-minimal", "-low", "-medium", "-high"]
             elif "flash" in base_model:

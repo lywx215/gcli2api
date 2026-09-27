@@ -194,11 +194,13 @@ class AntiTruncationStreamProcessor:
         payload: Dict[str, Any],
         max_attempts: int = 3,
         enable_prefill_mode: bool = False,
+        defer_intermediate_finish: bool = False,
     ):
         self.original_request_func = original_request_func
         self.base_payload = payload.copy()
         self.max_attempts = max_attempts
         self.enable_prefill_mode = enable_prefill_mode
+        self.defer_intermediate_finish = defer_intermediate_finish
         # 使用 StringIO 避免字符串拼接的内存问题
         self.collected_content = io.StringIO()
         self.current_attempt = 0
@@ -301,6 +303,29 @@ class AntiTruncationStreamProcessor:
                                 if has_marker:
                                     found_done_marker = True
                                     log.debug(f"Anti-truncation: Found [done] marker in chunk, content: {content[:200]}")
+
+                            # Opt-in: a per-attempt finish must not terminate the
+                            # public converter while another continuation is pending.
+                            # Preserve safety/tool boundaries and the final attempt.
+                            if (
+                                self.defer_intermediate_finish
+                                and not found_done_marker
+                                and self.current_attempt < self.max_attempts
+                            ):
+                                payload = data.get("response", data)
+                                changed = False
+                                for candidate in payload.get("candidates", []):
+                                    parts = candidate.get("content", {}).get("parts", [])
+                                    has_tool_call = any(
+                                        "functionCall" in part
+                                        for part in parts if isinstance(part, dict)
+                                    )
+                                    if candidate.get("finishReason") in ("STOP", "MAX_TOKENS") and not has_tool_call:
+                                        candidate.pop("finishReason")
+                                        changed = True
+                                if changed:
+                                    line_str = "data: " + json.dumps(data, ensure_ascii=False)
+                                    line = (line_str + "\n\n").encode("utf-8")
 
                             # 清理行中的[done]标记后再发送
                             cleaned_line = self._remove_done_marker_from_line(line, line_str, data)

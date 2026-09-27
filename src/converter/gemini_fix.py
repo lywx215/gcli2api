@@ -5,9 +5,11 @@ Gemini Format Utilities - 统一的 Gemini 格式处理和转换工具
 """
 import json
 from typing import Any, Dict, Optional
+from fastapi import HTTPException
 
 from log import log
 from src.antigravity_models import ANTIGRAVITY_NATIVE_MODEL_IDS
+from src.geminicli_models import GEMINI_38_FLASH_MODEL, GEMINI_38_FLASH_THINKING_LEVELS
 from src.converter.thoughtSignature_fix import SKIP_THOUGHT_SIGNATURE_VALIDATOR
 
 # ==================== Gemini API 配置 ====================
@@ -772,6 +774,13 @@ async def normalize_gemini_request(
     result = request.copy()
     model = result.get("model", "")
     generation_config = (result.get("generationConfig") or {}).copy()  # 创建副本避免修改原对象
+    is_cli_38_flash = mode == "geminicli" and get_base_model_name(model) == GEMINI_38_FLASH_MODEL
+    if is_cli_38_flash:
+        # Do not silently turn an unsupported minimal request into default medium.
+        if "-minimal" in model or "-nothinking" in model:
+            raise HTTPException(400, "Gemini 3.8 Flash supports low, medium and high thinking levels.")
+        if isinstance(generation_config.get("thinkingConfig"), dict):
+            generation_config["thinkingConfig"] = generation_config["thinkingConfig"].copy()
     tools = result.get("tools")
     system_instruction = result.get("systemInstruction") or result.get("system_instructions")
 
@@ -791,6 +800,15 @@ async def normalize_gemini_request(
         if thinking_budget is None and thinking_level is None:
             thinking_budget = generation_config.get("thinkingConfig", {}).get("thinkingBudget")
             thinking_level = generation_config.get("thinkingConfig", {}).get("thinkingLevel")
+
+        if is_cli_38_flash:
+            if thinking_level is not None:
+                if str(thinking_level).lower() not in GEMINI_38_FLASH_THINKING_LEVELS:
+                    raise HTTPException(400, "Gemini 3.8 Flash supports low, medium and high thinking levels.")
+                thinking_level = str(thinking_level).upper()
+                thinking_budget = None
+            elif thinking_budget is not None:
+                raise HTTPException(400, "Use thinkingLevel instead of thinkingBudget for Gemini 3.8 Flash.")
 
         # 假如 is_thinking_model 为真或者思考预算/等级不为空，设置 thinkingConfig
         if is_thinking_model(model) or thinking_budget is not None or thinking_level is not None:
@@ -827,7 +845,7 @@ async def normalize_gemini_request(
                 base_model = get_base_model_name(model)
                 if "pro" in base_model:
                     include_thoughts = return_thoughts
-                elif "3-flash" in base_model:
+                elif "3-flash" in base_model or is_cli_38_flash:
                     if thinking_level is None:
                         include_thoughts = False
                     else:
@@ -996,7 +1014,13 @@ async def normalize_gemini_request(
         # 强制设置 maxOutputTokens 为 64000
         generation_config["maxOutputTokens"] = 64000
         # 强制设置 topK 为 64
-        generation_config["topK"] = 64
+        if not is_cli_38_flash:
+            generation_config["topK"] = 64
+
+    if is_cli_38_flash:
+        # These sampling/count parameters are not supported by the new model.
+        for key in ("temperature", "topP", "topK", "candidateCount"):
+            generation_config.pop(key, None)
 
     if "contents" in result:
         cleaned_contents = []
@@ -1059,6 +1083,12 @@ async def normalize_gemini_request(
                 cleaned_contents.append(content)
 
         result["contents"] = cleaned_contents
+
+    if is_cli_38_flash:
+        # Apply after empty-content cleanup, which can expose a trailing prefill.
+        contents = result.get("contents", [])
+        while contents and isinstance(contents[-1], dict) and contents[-1].get("role") == "model":
+            contents.pop()
 
     if generation_config:
         result["generationConfig"] = generation_config

@@ -340,7 +340,8 @@ async def stream_generate_content(
             stream_request_wrapper,
             anti_truncation_payload,
             max_attempts,
-            enable_prefill_mode=True,
+            enable_prefill_mode=(api_request["model"] != "gemini-3.8-flash"),
+            defer_intermediate_finish=(api_request["model"] == "gemini-3.8-flash"),
         )
 
         # 迭代 process_stream() 生成器，并展开 response 包装
