@@ -38,7 +38,9 @@
 
 - 统一管理后续开发仍为已终止：MGMT-009、MGMT-010、MGMT-012剩余工作不再推进，
   详见[终止记录](delivery/MGMT-009-development-termination.md)。
-- 本轮运行时修复仅用于 Antigravity；Management schema、capability 和
-  `panel-version.txt` 均不变，manager 无需配套动作。
+- Antigravity 稳定性第 1–4 项（上传结果真实性、阶段/总预算、原子冷却结算、导入资源限制）
+  的运行时修复只作用于 Antigravity。Gemini CLI 只适用上方“本轮有限例外”列明的五类共同
+  模型 API 错误输出保护，不因本次融合扩大。两者都不改变 Management schema、capability
+  和 `panel-version.txt`，manager 无需配套动作（`no_counterpart_action`）。
 - 此前已完成的Antigravity防重放、逻辑请求统计、模型验证、选中凭证工具和SQLite
   默认列表有界分页继续保留，不重复立项。
