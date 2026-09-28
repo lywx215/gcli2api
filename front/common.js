@@ -2459,6 +2459,27 @@ async function _toggleQuotaDetails(pathId, mode) {
                             <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;">
                         `;
 
+                        if (mode === 'antigravity') {
+                            const groups = new Map([['claude-gpt-shared', 'Claude / GPT-OSS'], ['gemini-shared', 'Gemini 全部模型']]);
+                            for (const group of Object.keys(data.quota_group_states || {})) {
+                                if (!groups.has(group)) groups.set(group, group);
+                            }
+                            for (const [rawGroup, rawTitle] of groups) {
+                                const group = escapeHtmlAttribute(rawGroup);
+                                const title = escapeHtml(rawTitle);
+                                const state = (data.quota_group_states || {})[rawGroup] || {};
+                                // The server applies the same alias/group function used by admission.
+                                const until = Number((data.quota_groups || {})[rawGroup]?.cooldownUntil || 0);
+                                const timed = until * 1000 > Date.now() ? `计时冷却至 ${new Date(until * 1000).toLocaleString()}` : '无有效计时冷却';
+                                const label = state.state === 'blocked_unknown' ? '额度不可用，恢复时间未知'
+                                    : state.state === 'manual_override' ? '管理员已解除异常拦截' : '无异常额度拦截';
+                                quotaHTML += `<div style="grid-column:1/-1;padding:8px;border:1px solid #ccc;border-radius:4px;">
+                                    <strong>${title}</strong> · <span data-quota-label="${group}">${label}</span><br>${timed}
+                                    ${state.state === 'blocked_unknown' ? `<button type="button" data-release-quota="${group}">解除该组异常拦截（保留计时冷却）</button>` : ''}
+                                </div>`;
+                            }
+                        }
+
                         const _nowMs = Date.now();
                         let modelEntries = Object.entries(models);
                         if (mode === 'antigravity') {
@@ -2482,7 +2503,7 @@ async function _toggleQuotaDetails(pathId, mode) {
                         let activeQuotaGroup = null;
                         for (const [modelName, quotaData] of modelEntries) {
                             // 后端返回的是剩余比例 (0-1)，不是绝对数量
-                            const remainingFraction = quotaData.remaining || 0;
+                            const remainingFraction = Number.isFinite(quotaData.remaining) ? quotaData.remaining : null;
                             const resetTime = quotaData.resetTime || 'N/A';
                             const resetTimeRaw = quotaData.resetTimeRaw || '';
                             const displayName = quotaData.displayName || modelName;
@@ -2520,7 +2541,7 @@ async function _toggleQuotaDetails(pathId, mode) {
 
                             // 倒计时（基于 resetTimeRaw 的 UTC 时间）
                             let countdownStr = '';
-                            if (resetTimeRaw) {
+                            if (resetTimeRaw && !(mode === 'antigravity' && quotaData.rolling168h)) {
                                 try {
                                     const resetMs = new Date(resetTimeRaw).getTime();
                                     const remainSec = Math.max(0, Math.floor((resetMs - _nowMs) / 1000));
@@ -2538,11 +2559,11 @@ async function _toggleQuotaDetails(pathId, mode) {
                             }
 
                             // 计算已使用百分比（1 - 剩余比例）
-                            const usedPercentage = Math.round((1 - remainingFraction) * 100);
-                            const remainingPercentage = Math.round(remainingFraction * 100);
+                            const usedPercentage = remainingFraction === null ? 0 : Math.round((1 - remainingFraction) * 100);
+                            const remainingPercentage = remainingFraction === null ? '未知' : Math.round(remainingFraction * 100);
 
                             // 根据使用情况选择颜色
-                            let percentageColor = '#28a745'; // 绿色：使用少
+                            let percentageColor = remainingFraction === null ? '#777' : '#28a745'; // 未知额度单独显示
                             if (usedPercentage >= 90) percentageColor = '#dc3545'; // 红色：使用多
                             else if (usedPercentage >= 70) percentageColor = '#ffc107'; // 黄色：使用较多
                             else if (usedPercentage >= 50) percentageColor = '#17a2b8'; // 蓝色：使用中等
@@ -2552,11 +2573,11 @@ async function _toggleQuotaDetails(pathId, mode) {
                             quotaHTML += `
                                 <div style="background: white; border-left: 4px solid ${percentageColor}; border-radius: 4px; padding: 8px 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                        <div style="font-weight: bold; color: #333; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: 8px;" title="${displayName} - 剩余${remainingPercentage}% - ${resetTime}${rawModelId !== displayName ? ` (原始: ${rawModelId})` : ''}">
+                                        <div style="font-weight: bold; color: #333; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: 8px;" title="${displayName} - 剩余${remainingPercentage}${remainingFraction === null ? '' : '%'} - ${resetTime}${rawModelId !== displayName ? ` (原始: ${rawModelId})` : ''}">
                                             ${displayName}${mode === 'antigravity' && modelBadge ? ` <span data-model-availability="${availability}" style="font-size:9px;color:#b26a00;">${modelBadge}</span>` : ''}
                                         </div>
                                         <div style="font-size: 13px; font-weight: bold; color: ${percentageColor}; white-space: nowrap;">
-                                            ${remainingPercentage}%
+                                            ${remainingPercentage}${remainingFraction === null ? '' : '%'}
                                         </div>
                                     </div>
                                     <div style="width: 100%; height: 8px; background-color: #e9ecef; border-radius: 4px; overflow: hidden; margin-bottom: 4px;">
@@ -2565,7 +2586,7 @@ async function _toggleQuotaDetails(pathId, mode) {
                                     <div style="display: flex; justify-content: space-between; align-items: center;">
                                         <button onclick="testModelQuota(this, '${filename}', '${testModel}', '${mode}', '${displayName}')" style="font-size: 10px; padding: 1px 8px; border: 1px solid #9c27b0; background: white; color: #9c27b0; border-radius: 3px; cursor: pointer;" onmouseover="this.style.background='#9c27b0';this.style.color='white'" onmouseout="this.style.background='white';this.style.color='#9c27b0'">测试</button>
                                         <div style="font-size: 10px; color: #666;">
-                                            ${resetTime !== 'N/A' ? '🔄 ' + resetTime + (countdownStr ? ` <span style="color:${remainingPercentage <= 0 ? '#dc3545' : '#17a2b8'};font-weight:bold;">(⏱️ ${countdownStr})</span>` : '') : ''}
+                                            ${mode === 'antigravity' && quotaData.rolling168h ? '恢复时间未知（上游滚动 168h）' : resetTime !== 'N/A' ? '🔄 ' + resetTime + (countdownStr ? ` <span style="color:${remainingPercentage <= 0 ? '#dc3545' : '#17a2b8'};font-weight:bold;">(⏱️ ${countdownStr})</span>` : '') : ''}
                                         </div>
                                     </div>
                                 </div>
@@ -2574,6 +2595,24 @@ async function _toggleQuotaDetails(pathId, mode) {
 
                         quotaHTML += '</div>';
                         contentDiv.innerHTML = quotaHTML;
+                        contentDiv.querySelectorAll('[data-release-quota]').forEach(button => {
+                            button.addEventListener('click', async () => {
+                                button.disabled = true;
+                                try {
+                                    const group = button.dataset.releaseQuota;
+                                    const released = await fetch('./creds/action?mode=antigravity', {
+                                        method: 'POST', headers: {...getAuthHeaders(), 'Content-Type': 'application/json'},
+                                        body: JSON.stringify({filename, action: 'release_quota_group', group})
+                                    });
+                                    if (!released.ok) throw new Error('解除失败');
+                                    button.parentElement.querySelector('[data-quota-label]').textContent = '管理员已解除异常拦截；计时冷却仍有效';
+                                    button.remove();
+                                } catch (error) {
+                                    showStatus('解除异常额度拦截失败', 'error');
+                                    button.disabled = false;
+                                }
+                            });
+                        });
                     }
 
                     showStatus('✅ 成功加载额度信息', 'success');

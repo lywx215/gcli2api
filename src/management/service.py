@@ -238,6 +238,8 @@ class ManagementService:
         embed_capability: str | None = None,
     ) -> list[str]:
         capabilities: list[str] = []
+        if all(callable(getattr(backend, name, None)) for name in ("quota_admit", "quota_sync", "quota_release", "quota_snapshot")):
+            capabilities.append("antigravity.quota.protection")
         if embed_capability:
             capabilities.append(embed_capability)
         if hasattr(backend, "get_credentials_summary"):

@@ -178,6 +178,14 @@ class PanelActiveOperations:
         models = quota.get("models")
         if not isinstance(models, dict):
             models = {}
+        if mode == "antigravity":
+            from src.panel.creds import sync_model_cooldowns_from_quota
+            result = await sync_model_cooldowns_from_quota(
+                storage, filename, mode, models,
+                observation=quota.get("observation"), snapshot=quota.get("_quota_snapshot"),
+            )
+            return {"success": True, "model_cooldowns": result.get("model_cooldowns", {}),
+                    "quota_group_states": result.get("quota_group_states", {})}
         state = await storage.get_credential_state(filename, mode=mode)
         cooldowns = state.get("model_cooldowns", {}) if isinstance(state, dict) else {}
         if not isinstance(cooldowns, dict):

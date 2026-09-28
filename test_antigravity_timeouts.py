@@ -115,7 +115,7 @@ async def test_retry_and_credential_wait_share_budget(short_limits, monkeypatch)
         nonlocal calls
         calls += 1
         assert kwargs['timeout'].connect == 15
-        await asyncio.sleep(.05)
+        await asyncio.sleep(.01 if calls == 1 else 5)
         raise httpx.ConnectTimeout('synthetic')
         yield
     await _configure_stream(monkeypatch, upstream)

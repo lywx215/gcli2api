@@ -4,6 +4,15 @@
 
 契约版本：`management-schema 1.4`
 
+2026-09-27 Antigravity 增量兼容说明：支持权威额度组准入的后端增加 capability
+`antigravity.quota.protection`。既有 `sync_cooldown` 在 Antigravity 模式下应用独立共享组及
+动态 168 小时异常拦截，返回的现有 `cooldown_sync` 白名单结构不变；Gemini CLI 分支不变。
+该能力不表示新增中央管理动作，也不允许通过普通启用或 Credit 动作清除异常拦截。
+异常组单独解除使用现有认证的面板 `/creds/action?mode=antigravity` 增量 action
+`release_quota_group`，不扩展 `/management/v1` 的动作枚举。
+中央管理无需配套修改（`no_counterpart_action`），详见
+[`ANTIGRAVITY_QUOTA_PROTECTION.md`](../ANTIGRAVITY_QUOTA_PROTECTION.md)。
+
 基础路径：`/management/v1`
 
 本文使用“必须”“禁止”表示规范性要求。

@@ -16,6 +16,17 @@ class _FakeBackend:
         self.success_calls = []
         self.cooldown_calls = []
 
+    async def quota_snapshot(self, filename):
+        return {"quota_credential_generation": "synthetic", "quota_group_states": {}, "model_cooldowns": {}}
+
+    async def quota_admit(self, *args):
+        return {"generation": "synthetic", "group": "gemini-shared", "revision": 0, "purpose": "credential_test"}
+
+    async def quota_record_result(self, filename, admission, model, success, *args):
+        if success:
+            self.success_calls.append((filename, model, "antigravity"))
+        return True
+
     async def record_success(self, filename, *, model_name, mode):
         self.success_calls.append((filename, model_name, mode))
 
@@ -57,7 +68,7 @@ class _FakeResponse:
         self._payload = {
             "response": {
                 "candidates": [
-                    {"content": {"parts": [{"text": reply}]}}
+                    {"content": {"parts": [{"text": reply}]}, "finishReason": "STOP"}
                 ]
             }
         }
@@ -145,7 +156,7 @@ async def test_antigravity_specific_model_rejects_deprecation_text(monkeypatch):
     assert response.status_code == 424
     assert payload["success"] is False
     assert payload["verified_reply"] is False
-    assert "no longer available" in payload["model_reply"]
+    assert payload["message"] == "模型未通过响应验证"
     assert storage._backend.success_calls == []
 
 
@@ -241,22 +252,21 @@ def test_antigravity_parser_checks_all_error_info_and_retry_info(monkeypatch):
     assert parse_antigravity_quota_reset_timestamp(payload) == 1_002.5
 
 
-async def test_positive_live_quota_clears_existing_model_cooldown():
-    storage = _FakeStorageAdapter()
-    storage.state = {
-        "model_cooldowns": {
-            "gemini-3.6-flash-tiered": time.time() + 4 * 3600,
-        }
-    }
-
-    result = await creds_panel.sync_model_cooldowns_from_quota(
-        storage,
-        "credential.json",
-        "antigravity",
-        {"gemini-3.6-flash-tiered": {"remaining": 1.0}},
-    )
-
-    assert result == {"cleared": ["gemini-3.6-flash-tiered"], "added": []}
-    assert storage._backend.cooldown_calls == [
-        ("credential.json", "gemini-3.6-flash-tiered", None, "antigravity")
-    ]
+async def test_positive_partial_quota_does_not_clear_shared_cooldown(tmp_path, monkeypatch):
+    from src.storage.sqlite_manager import SQLiteManager
+    from types import SimpleNamespace
+    monkeypatch.setenv("CREDENTIALS_DIR", str(tmp_path))
+    backend = SQLiteManager()
+    await backend.initialize()
+    try:
+        await backend.store_credential("credential.json", {}, mode="antigravity")
+        await backend.set_model_cooldown("credential.json", "gemini-3.6-flash-tiered", time.time()+3600, mode="antigravity")
+        snapshot = await backend.quota_snapshot("credential.json")
+        result = await creds_panel.sync_model_cooldowns_from_quota(
+            SimpleNamespace(_backend=backend), "credential.json", "antigravity",
+            {"gemini-3.6-flash-tiered": {"remaining": 1.0}}, snapshot=snapshot,
+        )
+        assert result["cleared"] == []
+        assert result["model_cooldowns"] == snapshot["model_cooldowns"]
+    finally:
+        await backend.close()

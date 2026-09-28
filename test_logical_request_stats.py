@@ -302,6 +302,13 @@ class LogicalRequestStreamTests(unittest.TestCase):
                 return False
 
         class Backend:
+            async def quota_snapshot(self, *args):
+                return {"quota_credential_generation": "synthetic"}
+            async def quota_admit(self, *args):
+                return {"generation": "synthetic"}
+            async def quota_record_result(self, *args):
+                self.failures.append(args)
+                return True
             def __init__(self):
                 self.failures = []
 
@@ -330,7 +337,7 @@ class LogicalRequestStreamTests(unittest.TestCase):
                 json={
                     "response": {
                         "candidates": [
-                            {"content": {"parts": [{"text": "retired model"}]}}
+                            {"content": {"parts": [{"text": "retired model"}]}, "finishReason": "STOP"}
                         ]
                     }
                 },

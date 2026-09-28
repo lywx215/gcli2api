@@ -15,7 +15,7 @@ def test_antigravity_cooldown_families_and_legacy_keys():
     assert normalize_antigravity_cooldown_key("gemini-3.5-flash-high") == "gemini-shared"
     assert normalize_antigravity_cooldown_key("gemini-3.6-flash") == "gemini-shared"
     assert normalize_antigravity_cooldown_key("gemini-3.7-flash-low") == "gemini-shared"
-    assert normalize_antigravity_cooldown_key("gemini-3.8-flash") == "gemini-3.8-flash"
+    assert normalize_antigravity_cooldown_key("gemini-3.8-flash") == "gemini-shared"
     assert normalize_antigravity_cooldown_key("claude-sonnet-4-6") == "claude-gpt-shared"
     assert normalize_antigravity_cooldown_key("gpt-oss-120b") == "claude-gpt-shared"
 
@@ -26,10 +26,9 @@ def test_antigravity_cooldown_families_and_legacy_keys():
         "gemini-3.8-flash": 130.0,
         "ignored": "not-a-number",
     }
-    assert get_antigravity_cooldown_until(cooldowns, "gemini-3.7-flash") == 120.0
+    assert get_antigravity_cooldown_until(cooldowns, "gemini-3.7-flash") == 130.0
     assert get_antigravity_cooldown_until(cooldowns, "gemini-3.8-flash") == 130.0
     assert set(clear_antigravity_cooldown_family(cooldowns, "gemini-3.1-pro")) == {
-        "gemini-3.8-flash",
         "ignored",
     }
     assert cooldowns_affect_antigravity_family({"gemini-shared": 120}, "pro")
@@ -96,7 +95,7 @@ async def test_sqlite_selection_clear_and_panel_filters_share_family_semantics(
             "shared.json", "gemini-3.1-pro-preview", None, mode="antigravity"
         )
         state = await manager.get_credential_state("shared.json", mode="antigravity")
-        assert state["model_cooldowns"] == {"gemini-3.8-flash": future + 10}
+        assert state["model_cooldowns"] == {}
 
         assert await manager.set_model_cooldown(
             "ready.json", "gemini-3.7-flash", future, mode="antigravity"
@@ -110,12 +109,11 @@ async def test_sqlite_selection_clear_and_panel_filters_share_family_semantics(
         )
         assert {item["filename"] for item in pro_result["items"]} == {
             "shared.json",
-            "independent.json",
         }
 
         flash_result = await manager.get_credentials_summary(
             mode="antigravity", cooldown_filter="flash_no_cooldown"
         )
-        assert {item["filename"] for item in flash_result["items"]} == set()
+        assert {item["filename"] for item in flash_result["items"]} == {"shared.json"}
     finally:
         await manager.close()

@@ -239,13 +239,32 @@ class _FakeCooldownBackend:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["geminicli", "antigravity"])
-async def test_panel_quota_sync_uses_shared_fallback(monkeypatch, mode):
+async def test_panel_quota_sync_uses_shared_fallback(monkeypatch, tmp_path, mode):
     storage = _FakeCooldownStorage()
 
     async def fallback_minutes():
         return 30
 
     monkeypatch.setattr(creds_panel, "get_quota_fallback_cooldown_minutes", fallback_minutes)
+    if mode == "antigravity":
+        from src.storage.sqlite_manager import SQLiteManager
+        from types import SimpleNamespace
+        monkeypatch.setenv("CREDENTIALS_DIR", str(tmp_path))
+        backend = SQLiteManager()
+        await backend.initialize()
+        try:
+            await backend.store_credential("credential.json", {}, mode)
+            snapshot = await backend.quota_snapshot("credential.json")
+            before = time.time()
+            result = await creds_panel.sync_model_cooldowns_from_quota(
+                SimpleNamespace(_backend=backend), "credential.json", mode,
+                {"model-a": {"remaining": 0}}, snapshot=snapshot,
+            )
+            assert result["added"] == ["model-a"] and result["cleared"] == []
+            assert before + 1800 - 1 <= result["model_cooldowns"]["model-a"] <= time.time() + 1800 + 1
+        finally:
+            await backend.close()
+        return
     before = time.time()
     result = await creds_panel.sync_model_cooldowns_from_quota(
         storage,

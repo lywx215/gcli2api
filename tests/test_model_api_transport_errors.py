@@ -18,6 +18,7 @@ def configure(monkeypatch, backend):
     api = importlib.import_module(f'src.api.{backend}')
 
     class Credentials:
+        quota_admit = AsyncMock(return_value={"generation": "synthetic", "group": "unknown", "revision": 0, "purpose": "business"})
         get_valid_credential = AsyncMock(return_value=(
             'synthetic.json', {'access_token': 'synthetic-token', 'project_id': 'synthetic-project'}
         ))
@@ -91,7 +92,7 @@ async def test_done_only_never_commits_success_before_empty_retry(monkeypatch, b
     generator = api.stream_request({'model': 'synthetic', 'request': {}}, events=True)
     with pytest.raises(ModelApiErrorException) as caught:
         await generator.__anext__()
-    assert caught.value.error.status == 502 and calls == 2
+    assert caught.value.error.status == 502 and calls == (1 if backend == "antigravity" else 2)
     api.record_api_call_success.assert_not_awaited()
 
 
@@ -100,7 +101,7 @@ async def test_antigravity_empty_native_response_is_typed_502(monkeypatch):
     post = AsyncMock(return_value=httpx.Response(200, content=b''))
     monkeypatch.setattr(api, 'post_async', post)
     response = await api.non_stream_request({'model': 'synthetic', 'request': {}}, protected=True, record_logical=False)
-    assert post.await_count == 2 and response.status_code == 500
+    assert post.await_count == 1 and response.status_code == 502
     assert get_attached_model_api_error(response).status == 502
 
 
@@ -140,7 +141,7 @@ async def test_antigravity_collector_opts_into_normalized_events(monkeypatch):
 
     monkeypatch.setattr(api, 'stream_request', stream)
     response = await api.non_stream_request({'model': 'synthetic'}, protected=True, record_logical=False)
-    assert response.status_code == 200 and closed
+    assert response.status_code == 502 and closed
 
 
 @pytest.mark.parametrize('backend', ('geminicli', 'antigravity'))
@@ -295,7 +296,7 @@ async def test_anti_truncation_round_two_failure_keeps_type_and_stops(monkeypatc
         number = calls
         try:
             if number == 1:
-                yield b'data: {"candidates":[{"content":{"parts":[{"text":"partial answer"}]}}]}\n\n'
+                yield b'data: {"candidates":[{"content":{"parts":[{"text":"partial answer"}]},"finishReason":"MAX_TOKENS"}]}\n\n'
                 yield b'data: [DONE]\n\n'
             elif failure == 'timeout':
                 raise httpx.ReadTimeout('SENTINEL')

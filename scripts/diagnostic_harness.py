@@ -38,6 +38,9 @@ def isolated_environment(root, upstream, debug, collected):
 class SyntheticCredentials:
     def __init__(self):
         self.number = 0
+    async def quota_admit(self, *args):
+        return {"generation": "synthetic", "group": "gemini-shared", "revision": 0, "purpose": "business"}
+
     async def get_valid_credential(self, **kwargs):
         self.number += 1
         n = self.number % 2

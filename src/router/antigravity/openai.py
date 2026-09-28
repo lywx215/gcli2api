@@ -113,6 +113,8 @@ async def chat_completions(
     # 处理模型名称和功能检测
     use_fake_streaming = is_fake_streaming_model(openai_request.model)
     use_anti_truncation = is_anti_truncation_model(openai_request.model)
+    from src.diagnostics.antigravity import requested_model
+    requested_model(openai_request.model)
     real_model = normalize_antigravity_model_alias(get_base_model_from_feature_model(openai_request.model))
 
     # 获取流式标志

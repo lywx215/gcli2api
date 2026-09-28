@@ -86,7 +86,7 @@ def test_expiry_new_round_and_legacy_keys():
     for key in ('gemini-shared', HIGH):
         _, close = prepare_antigravity_cooldown({key:200}, LOW, 300, now=100)
         assert not close
-    # Unknown models remain independent; no broad all-Gemini grouping.
+    # New Gemini variants join the same quota (stat buckets remain distinct).
     _, close = prepare_antigravity_cooldown({HIGH:200}, 'gemini-3.8-flash', 300, now=100)
     assert close
     _, close = prepare_antigravity_cooldown({'claude-sonnet-4-6':200}, 'gpt-oss-120b', 300, now=100)
@@ -109,9 +109,9 @@ async def test_postgres_uses_transaction_and_row_lock():
             return dict(self.row)
         async def execute(self, query, *args):
             assert self.locked
-            self.row['model_cooldowns'] = args[0]
-            if len(args) == 4:
-                self.row['cycle_stats'], self.row['last_cycle_stats'] = args[1:3]
+            import re
+            names = re.findall(r"(\w+) = \$\d+", query.split(" WHERE ")[0])
+            self.row.update(zip(names, args))
     conn = Connection()
     class Pool:
         @asynccontextmanager

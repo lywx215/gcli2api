@@ -39,7 +39,11 @@ from src.subscription_tiers import (
 )
 
 
-class PSQLManager:
+from src.storage.antigravity_quota import AntigravityQuotaMixin
+
+
+class PSQLManager(AntigravityQuotaMixin):
+    QUOTA_ENGINE = 'postgres'
     """PostgreSQL 数据库管理器"""
 
     # 状态字段常量
@@ -177,6 +181,8 @@ class PSQLManager:
                 user_email TEXT,
 
                 model_cooldowns TEXT DEFAULT '{}',
+                quota_group_states TEXT DEFAULT '{}',
+                quota_credential_generation TEXT,
                 tier TEXT DEFAULT 'pro',
                 enable_credit INTEGER DEFAULT 0,
 
@@ -323,6 +329,8 @@ class PSQLManager:
                 ("last_success", "DOUBLE PRECISION"),
                 ("user_email", "TEXT"),
                 ("model_cooldowns", "TEXT DEFAULT '{}'"),
+                ("quota_group_states", "TEXT DEFAULT '{}'"),
+                ("quota_credential_generation", "TEXT"),
                 ("tier", "TEXT DEFAULT 'pro'"),
                 ("enable_credit", "INTEGER DEFAULT 0"),
                 ("rotation_order", "INTEGER DEFAULT 0"),
@@ -402,7 +410,7 @@ class PSQLManager:
 
     # ============ 凭证查询方法 ============
 
-    async def get_next_available_credential(
+    async def _get_next_available_credential_legacy(
         self,
         mode: str = "geminicli",
         model_name: Optional[str] = None,
@@ -1263,7 +1271,7 @@ class PSQLManager:
 
     # ============ 模型级冷却管理 ============
 
-    async def set_model_cooldown(
+    async def _set_model_cooldown_legacy(
         self,
         filename: str,
         model_name: str,
@@ -1394,7 +1402,7 @@ class PSQLManager:
                     WHERE filename = $1
                 """, filename, self._bump_cycle_stats(stats_row["cycle_stats"] if stats_row else None, model_name))
 
-                if model_name:
+                if model_name and mode != "antigravity":
                     row = await conn.fetchrow(
                         f"SELECT model_cooldowns FROM {table_name} WHERE filename = $1", filename
                     )

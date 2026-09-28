@@ -35,7 +35,11 @@ from src.subscription_tiers import (
 from log import log
 
 
-class MongoDBManager:
+from src.storage.antigravity_quota import AntigravityQuotaMixin
+
+
+class MongoDBManager(AntigravityQuotaMixin):
+    QUOTA_ENGINE = 'mongo'
     """MongoDB 数据库管理器"""
 
     # 状态字段常量
@@ -560,7 +564,7 @@ class MongoDBManager:
 
     # ============ SQL 方法 ============
 
-    async def get_next_available_credential(
+    async def _get_next_available_credential_legacy(
         self,
         mode: str = "geminicli",
         model_name: Optional[str] = None,
@@ -1678,7 +1682,7 @@ class MongoDBManager:
 
     # ============ 模型级冷却管理 ============
 
-    async def set_model_cooldown(
+    async def _set_model_cooldown_legacy(
         self,
         filename: str,
         model_name: str,
@@ -1865,7 +1869,7 @@ class MongoDBManager:
             )
 
             # 条件删除模型冷却：只有该键存在时才写入
-            if model_name:
+            if model_name and mode != "antigravity":
                 escaped = self._escape_model_name(model_name)
                 await collection.update_one(
                     {"filename": filename, f"model_cooldowns.{escaped}": {"$exists": True}},

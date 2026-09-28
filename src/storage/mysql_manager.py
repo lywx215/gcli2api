@@ -38,7 +38,11 @@ from src.subscription_tiers import (
 )
 
 
-class MySQLManager:
+from src.storage.antigravity_quota import AntigravityQuotaMixin
+
+
+class MySQLManager(AntigravityQuotaMixin):
+    QUOTA_ENGINE = 'mysql'
     """MySQL 数据库管理器"""
 
     # 状态字段常量
@@ -298,8 +302,19 @@ class MySQLManager:
             # 自动添加缺失的 tier 列（兼容旧表结构）
             await self._ensure_tier_column()
             await self._ensure_smart_429_columns()
+            await self._ensure_quota_columns()
 
             log.debug("MySQL tables and indexes created")
+
+    async def _ensure_quota_columns(self):
+        async with self._pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SHOW COLUMNS FROM gcli_antigravity_credentials")
+                columns = {row[0] for row in await cur.fetchall()}
+                for name, definition in (("quota_group_states", "LONGTEXT"), ("quota_credential_generation", "VARCHAR(32)")):
+                    if name not in columns:
+                        await cur.execute(f"ALTER TABLE gcli_antigravity_credentials ADD COLUMN {name} {definition}")
+            await conn.commit()
 
     async def _load_logical_stats_enabled_at(self) -> float:
         async with self._pool.acquire() as conn:
@@ -822,7 +837,7 @@ class MySQLManager:
 
     # ============ 凭证查询方法 ============
 
-    async def get_next_available_credential(
+    async def _get_next_available_credential_legacy(
         self,
         mode: str = "geminicli",
         model_name: Optional[str] = None,
@@ -1801,7 +1816,7 @@ class MySQLManager:
 
     # ============ 模型级冷却管理 ============
 
-    async def set_model_cooldown(
+    async def _set_model_cooldown_legacy(
         self,
         filename: str,
         model_name: str,
@@ -2013,7 +2028,7 @@ class MySQLManager:
                     """, (current_ts, current_ts, self._server_name, filename))
 
                     # 条件删除模型冷却
-                    if model_name:
+                    if model_name and mode != "antigravity":
                         await cur.execute(f"""
                             SELECT model_cooldowns FROM {table_name}
                             WHERE server_name = %s AND filename = %s
@@ -2033,7 +2048,7 @@ class MySQLManager:
                 await conn.commit()
 
                 # Redis: 清除模型冷却 TTL key
-                if model_name:
+                if model_name and mode != "antigravity":
                     await self._redis_clear_cooldown(mode, filename, model_name)
 
         except Exception as e:

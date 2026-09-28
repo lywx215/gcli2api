@@ -81,7 +81,7 @@ def test_real_service_semantic_cases(tmp_path, scenario):
         with running(tmp_path,'gcli','gcli',fake) as (origin,root):
             path,body = payload('gemini')
             response=httpx.post(origin+path,json=body,headers={'authorization':'Bearer synthetic-local-password','x-request-id':'caller-1'},trust_env=False,timeout=10)
-            assert response.status_code == (503 if scenario=='error' else 200), response.text
+            assert response.status_code == (503 if scenario=='error' else 502 if scenario in ('incomplete','empty') else 200), response.text
             request_id=response.headers['x-diag-request-id']
     records=[r for r in read_records(root) if r['requestId']==request_id]
     attempts=[r for r in records if r['event']=='upstream.attempt_finished']
@@ -101,7 +101,7 @@ def test_real_service_semantic_cases(tmp_path, scenario):
     if scenario == 'tool': assert data['output']['validToolCalls'] == 1
     if scenario == 'media': assert data['output']['mediaParts'] == 1
     converted = [r for r in records if r['event'] == 'response.converted']
-    if scenario != 'error':
+    if scenario not in ('error', 'incomplete', 'empty'):
         assert len(converted) == 1
         assert converted[0]['data']['outputProtocol'] == 'gemini'
         assert converted[0]['data']['deliveryMode'] == 'collected'
@@ -164,11 +164,11 @@ def test_two_workers_restart_and_all_protocols(tmp_path):
             assert conversion['clientStreaming'] == stream
             assert conversion['deliveryMode'] == ('stream' if stream else ('collected' if collected else 'nonstream'))
             if protocol == 'openai':
-                # Existing converter emits usage only on a finishReason frame;
-                # tail-only usage is not delivered on this streaming fixture.
-                assert conversion['deliveredUsage']['outputTotal']['value'] == (None if stream else 87)
-                assert conversion['deliveredUsage']['reasoning']['value'] == (None if stream else 2)
-                assert conversion['deliveredUsage']['reasoningIncludedInOutput'] is (None if stream else False)
+                # Validated terminal frames retain the final upstream usage,
+                # including a usage-only tail after the model's original STOP.
+                assert conversion['deliveredUsage']['outputTotal']['value'] == 87
+                assert conversion['deliveredUsage']['reasoning']['value'] == 2
+                assert conversion['deliveredUsage']['reasoningIncludedInOutput'] is False
             if not stream and not collected:
                 assert attempts[0]['data']['resultClass'] == 'success'
 

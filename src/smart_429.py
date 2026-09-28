@@ -64,6 +64,12 @@ def _error_info(error_response: Any) -> tuple[Dict[str, Any], frozenset[str]]:
 
 def classify_upstream_429(error_response: Any, mode: str = "geminicli") -> Classification:
     """Classify 429s with quota > concrete capacity > risk-check priority."""
+    if mode == "antigravity" and isinstance(error_response, dict):
+        # Malformed evidence stays unknown; it must not break a request or create
+        # a long quota cooldown. Keep Gemini CLI's existing interpretation.
+        raw = error_response.get("error", error_response)
+        if isinstance(raw, dict) and not isinstance(raw.get("details", []), list):
+            error_response = {"error": {**raw, "details": []}}
     error, reasons = _error_info(error_response)
     details = error.get("details", []) if isinstance(error, dict) else []
     has_reset = False
@@ -74,8 +80,16 @@ def classify_upstream_429(error_response: Any, mode: str = "geminicli") -> Class
         if isinstance(metadata, dict) and (
             metadata.get("quotaResetTimeStamp") or metadata.get("quotaResetDelay")
         ):
-            has_reset = True
-            break
+            if mode == "antigravity":
+                import math
+                from src.antigravity_quota import timestamp, duration
+                delay = duration(metadata.get("quotaResetDelay"))
+                has_reset = timestamp(metadata.get("quotaResetTimeStamp")) is not None or (
+                    delay is not None and math.isfinite(delay) and delay >= 0)
+            else:
+                has_reset = True
+            if has_reset:
+                break
     if "QUOTA_EXHAUSTED" in reasons or has_reset:
         kind = Upstream429Kind.QUOTA_EXHAUSTED
     elif reasons & CAPACITY_REASONS:

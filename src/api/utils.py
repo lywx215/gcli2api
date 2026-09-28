@@ -125,7 +125,8 @@ async def handle_auto_ban(
     credential_manager: CredentialManager,
     status_code: int,
     credential_name: str,
-    mode: str = "geminicli"
+    mode: str = "geminicli",
+    admission=None,
 ) -> None:
     """
     处理自动封禁：直接禁用凭证
@@ -137,6 +138,10 @@ async def handle_auto_ban(
         mode: 模式（geminicli 或 antigravity）
     """
     if credential_manager and credential_name:
+        if mode == "antigravity":
+            disabled = await credential_manager.quota_disable(credential_name, (admission or {}).get("generation"), (admission or {}).get("credentialVersion"))
+            log.warning(f"[ANTIGRAVITY AUTO_BAN] status={status_code}; identity/content guarded; applied={bool(disabled)}")
+            return
         log.warning(
             f"[{mode.upper()} AUTO_BAN] Status {status_code} triggers auto-ban for credential: {credential_name}"
         )
@@ -153,7 +158,8 @@ async def handle_error_with_retry(
     attempt: int,
     max_retries: int,
     retry_interval: float,
-    mode: str = "geminicli"
+    mode: str = "geminicli",
+    admission=None,
 ) -> bool:
     """
     统一处理错误和重试逻辑
@@ -180,12 +186,12 @@ async def handle_error_with_retry(
     # 优先检查自动封禁
     smart_enabled = is_smart_429_protection_enabled()
     should_auto_ban = await check_should_auto_ban(status_code)
-    if smart_enabled and status_code == 429:
+    if (smart_enabled and status_code == 429) or (mode == "antigravity" and status_code in (429, 503)):
         should_auto_ban = False
 
     if should_auto_ban:
         # 触发自动封禁
-        await handle_auto_ban(credential_manager, status_code, credential_name, mode)
+        await handle_auto_ban(credential_manager, status_code, credential_name, mode, **({"admission": admission} if mode == "antigravity" else {}))
 
         # 自动封禁后，仍然尝试重试（会在下次循环中自动获取新凭证）
         if retry_enabled and attempt < max_retries:
@@ -193,7 +199,7 @@ async def handle_error_with_retry(
                 f"[{mode.upper()} RETRY] Retrying with next credential after auto-ban "
                 f"(status {status_code}, attempt {attempt + 1}/{max_retries})"
             )
-            if not smart_enabled:
+            if not smart_enabled and mode != "antigravity":
                 await asyncio.sleep(retry_interval)
             return True
         return False
@@ -205,7 +211,7 @@ async def handle_error_with_retry(
             f"[{mode.upper()} RETRY] {status_code} error encountered, retrying "
             f"(attempt {attempt + 1}/{max_retries})"
         )
-        if not smart_enabled:
+        if not smart_enabled and mode != "antigravity":
             await asyncio.sleep(retry_interval)
         return True
 
@@ -251,7 +257,8 @@ async def record_api_call_success(
     credential_manager: CredentialManager,
     credential_name: str,
     mode: str = "geminicli",
-    model_name: Optional[str] = None
+    model_name: Optional[str] = None,
+    admission: Optional[dict] = None,
 ) -> None:
     """
     记录API调用成功
@@ -263,9 +270,12 @@ async def record_api_call_success(
         model_name: 模型名称（用于模型级CD）
     """
     if credential_manager and credential_name:
-        await credential_manager.record_api_call_result(
-            credential_name, True, mode=mode, model_name=model_name
+        recorded = await credential_manager.record_api_call_result(
+            credential_name, True, mode=mode, model_name=model_name,
+            **({"admission": admission} if admission is not None else {})
         )
+        if recorded is False:
+            return
         # 统计记录（fire-and-forget）
         from src.usage_stats import record_usage
         task = asyncio.create_task(record_usage(credential_name, model_name, True, mode))
@@ -279,7 +289,8 @@ async def record_api_call_error(
     cooldown_until: Optional[float] = None,
     mode: str = "geminicli",
     model_name: Optional[str] = None,
-    error_message: Optional[str] = None
+    error_message: Optional[str] = None,
+    admission: Optional[dict] = None,
 ) -> None:
     """
     记录API调用错误
@@ -294,15 +305,18 @@ async def record_api_call_error(
         error_message: 错误信息（可选）
     """
     if credential_manager and credential_name:
-        await credential_manager.record_api_call_result(
+        recorded = await credential_manager.record_api_call_result(
             credential_name,
             False,
             status_code,
             cooldown_until=cooldown_until,
             mode=mode,
             model_name=model_name,
-            error_message=error_message
+            error_message=error_message,
+            **({"admission": admission} if admission is not None else {})
         )
+        if recorded is False:
+            return
         # 统计记录（fire-and-forget）
         from src.usage_stats import record_usage
         task = asyncio.create_task(record_usage(credential_name, model_name, False, mode))
@@ -341,16 +355,13 @@ async def parse_and_log_cooldown(
             )
             if classification.kind != Upstream429Kind.QUOTA_EXHAUSTED:
                 log.info(
-                    "[ANTIGRAVITY] 429 未包含明确额度耗尽信息，跳过持久模型冷却"
+                    "[ANTIGRAVITY] 上游错误未包含明确额度耗尽信息，跳过持久模型冷却"
                 )
                 return None
 
             cooldown_until = parse_antigravity_quota_reset_timestamp(error_data)
             if cooldown_until is None:
-                cooldown_until = parse_quota_reset_timestamp(
-                    error_data,
-                    fallback_cooldown_seconds=fallback_seconds,
-                )
+                cooldown_until = time.time() + fallback_seconds
         else:
             cooldown_until = parse_quota_reset_timestamp(
                 error_data,
@@ -363,7 +374,7 @@ async def parse_and_log_cooldown(
             )
             return cooldown_until
     except Exception as parse_err:
-        log.debug(f"[{mode.upper()}] Failed to parse cooldown time: {parse_err}")
+        log.debug(f"[{mode.upper()}] Failed to parse cooldown time: {type(parse_err).__name__}")
     return None
 
 
@@ -390,6 +401,8 @@ async def collect_streaming_response(stream_generator, *, protected: bool = Fals
         attach_model_api_error, make_model_api_error, parse_model_response,
     )
     diagnostic_collection = collector_observer()
+    from src.antigravity_completion import Completion
+    completion = Completion()
     # 初始化响应结构
     merged_response = {
         "response": {
@@ -427,30 +440,31 @@ async def collect_streaming_response(stream_generator, *, protected: bool = Fals
             # 处理 bytes 类型
             if isinstance(line, bytes):
                 line_str = line.decode('utf-8', errors='ignore')
-                log.debug(f"[STREAM COLLECTOR] Processing bytes line {line_count}: {line_str[:200] if line_str else 'empty'}")
+                log.debug("[STREAM COLLECTOR] response fragment observed")
             elif isinstance(line, str):
                 line_str = line
-                log.debug(f"[STREAM COLLECTOR] Processing line {line_count}: {line_str[:200] if line_str else 'empty'}")
+                log.debug("[STREAM COLLECTOR] response fragment observed")
             else:
                 log.debug(f"[STREAM COLLECTOR] Skipping non-string/bytes line: {type(line)}")
                 continue
 
             # 解析流式数据行
             if not line_str.startswith("data:"):
-                log.debug(f"[STREAM COLLECTOR] Skipping line without 'data:' prefix: {line_str[:100]}")
+                log.debug("[STREAM COLLECTOR] response fragment observed")
                 continue
 
             raw = line_str[5:].strip()
             if raw == "[DONE]":
+                completion.finish()
                 log.debug("[STREAM COLLECTOR] Received [DONE] marker")
                 break
 
             try:
-                log.debug(f"[STREAM COLLECTOR] Parsing JSON: {raw[:200]}")
+                log.debug("[STREAM COLLECTOR] response fragment observed")
                 chunk = parse_model_response(raw) if protected else json.loads(raw)
                 collector_parsed(diagnostic_collection, chunk)
                 has_data = True
-                log.debug(f"[STREAM COLLECTOR] Chunk keys: {chunk.keys() if isinstance(chunk, dict) else type(chunk)}")
+                log.debug("[STREAM COLLECTOR] structured fragment observed")
 
                 # 提取响应对象
                 response_obj = chunk.get("response", {})
@@ -474,6 +488,8 @@ async def collect_streaming_response(stream_generator, *, protected: bool = Fals
                         media_type="application/json",
                     )
 
+                completion.observe(chunk)
+
                 # Response-level metadata does not require a candidate. In
                 # particular, the final usage or prompt block may arrive alone.
                 merged = merged_response["response"]
@@ -488,7 +504,7 @@ async def collect_streaming_response(stream_generator, *, protected: bool = Fals
                 candidates = response_obj.get("candidates", [])
                 log.debug(f"[STREAM COLLECTOR] Found {len(candidates)} candidates")
                 if not candidates:
-                    log.debug(f"[STREAM COLLECTOR] No candidates in chunk, chunk structure: {list(chunk.keys()) if isinstance(chunk, dict) else type(chunk)}")
+                    log.debug("[STREAM COLLECTOR] structured fragment observed")
                     continue
 
                 candidate = candidates[0]
@@ -514,7 +530,7 @@ async def collect_streaming_response(stream_generator, *, protected: bool = Fals
                     if "functionCall" in part or "functionResponse" in part or "function_call" in part:
                         collected_other_parts.append(part)
                         collected_tool_parts_count += 1
-                        log.debug(f"[STREAM COLLECTOR] Collected tool part: {list(part.keys())}")
+                        log.debug("[STREAM COLLECTOR] structured fragment observed")
                         continue
 
                     # 处理文本内容
@@ -523,14 +539,14 @@ async def collect_streaming_response(stream_generator, *, protected: bool = Fals
                         # 区分普通文本和思维链
                         if part.get("thought", False):
                             collected_thought_text.append(text)
-                            log.debug(f"[STREAM COLLECTOR] Collected thought text: {text[:100]}")
+                            log.debug("[STREAM COLLECTOR] text fragment observed")
                         else:
                             collected_text.append(text)
-                            log.debug(f"[STREAM COLLECTOR] Collected regular text: {text[:100]}")
+                            log.debug("[STREAM COLLECTOR] text fragment observed")
                     # 处理非文本内容（图片、文件等）
                     elif "inlineData" in part or "fileData" in part or "executableCode" in part or "codeExecutionResult" in part:
                         collected_other_parts.append(part)
-                        log.debug(f"[STREAM COLLECTOR] Collected non-text part: {list(part.keys())}")
+                        log.debug("[STREAM COLLECTOR] structured fragment observed")
 
                 # 收集其他信息（使用最后一个块的值）
                 if candidate.get("finishReason"):
@@ -546,21 +562,24 @@ async def collect_streaming_response(stream_generator, *, protected: bool = Fals
                 raise
             except json.JSONDecodeError as e:
                 collector_parsed(diagnostic_collection, invalid=True)
-                log.debug(f"[STREAM COLLECTOR] Failed to parse JSON chunk: {e}")
-                continue
+                from src.antigravity_completion import bad_format
+                raise bad_format() from None
             except Exception as e:
                 collector_parsed(diagnostic_collection, invalid=True)
-                log.debug(f"[STREAM COLLECTOR] Error processing chunk: {e}")
-                if protected:
-                    raise ModelApiErrorException(make_model_api_error(
-                        origin=ErrorOrigin.UPSTREAM, kind=ErrorKind.BAD_FORMAT
-                    )) from e
-                continue
+                log.debug(f"[STREAM COLLECTOR] Error processing chunk: {type(e).__name__}")
+                raise ModelApiErrorException(make_model_api_error(
+                    origin=ErrorOrigin.UPSTREAM, kind=ErrorKind.BAD_FORMAT
+                )) from e
 
     except Exception as e:
-        log.error(f"[STREAM COLLECTOR] Error collecting stream after {line_count} lines: {e}")
-        response = build_error_response(f"收集流式响应失败: {str(e)}", 500)
-        return attach_exception_error(response, e) if protected else response
+        log.error(f"[STREAM COLLECTOR] Error collecting stream after {line_count} lines: {type(e).__name__}")
+        response = build_error_response("Invalid upstream response", e.error.status if isinstance(e, ModelApiErrorException) else 502)
+        return attach_exception_error(response, e)
+
+    try:
+        completion.finish()
+    except ModelApiErrorException as exc:
+        return attach_model_api_error(build_error_response("Invalid upstream response", 502), exc.error)
 
     log.debug(f"[STREAM COLLECTOR] Finished iteration, has_data={has_data}, line_count={line_count}")
 
@@ -820,16 +839,18 @@ def parse_antigravity_quota_reset_timestamp(error_response: dict) -> Optional[fl
       }
     }
     """
+    from src.antigravity_quota import duration, timestamp
     try:
         error_obj = error_response.get("error", {})
-        details = error_obj.get("details", [])
+        raw_details = error_obj.get("details", [])
+        details = [d for d in raw_details if isinstance(d, dict)] if isinstance(raw_details, list) else []
 
         # 优先级1: quotaResetTimeStamp（绝对时间戳）
         for detail in details:
             if detail.get("@type") != "type.googleapis.com/google.rpc.ErrorInfo":
                 continue
-            reset_timestamp = _parse_reset_timestamp(
-                detail.get("metadata", {}).get("quotaResetTimeStamp")
+            reset_timestamp = timestamp(
+                (detail.get("metadata") if isinstance(detail.get("metadata"), dict) else {}).get("quotaResetTimeStamp")
             )
             if reset_timestamp is not None:
                 return reset_timestamp
@@ -838,8 +859,8 @@ def parse_antigravity_quota_reset_timestamp(error_response: dict) -> Optional[fl
         for detail in details:
             if detail.get("@type") != "type.googleapis.com/google.rpc.ErrorInfo":
                 continue
-            cooldown_seconds = _parse_duration_seconds(
-                detail.get("metadata", {}).get("quotaResetDelay")
+            cooldown_seconds = duration(
+                (detail.get("metadata") if isinstance(detail.get("metadata"), dict) else {}).get("quotaResetDelay")
             )
             if cooldown_seconds is not None:
                 return time.time() + cooldown_seconds
@@ -848,7 +869,7 @@ def parse_antigravity_quota_reset_timestamp(error_response: dict) -> Optional[fl
         for detail in details:
             if detail.get("@type") != "type.googleapis.com/google.rpc.RetryInfo":
                 continue
-            cooldown_seconds = _parse_duration_seconds(detail.get("retryDelay"))
+            cooldown_seconds = duration(detail.get("retryDelay"))
             if cooldown_seconds is not None:
                 return time.time() + cooldown_seconds
 

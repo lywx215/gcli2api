@@ -22,6 +22,8 @@ from config import (
     is_smart_429_protection_enabled,
 )
 from log import log
+from src.antigravity_completion import Completion, validate_json, bad_format, separate_terminal, finalize_terminal_usage
+from src.diagnostics.antigravity import emit_error, emit_admission, emit_retry, dispatch_scope
 from src.antigravity_limits import current_budget
 import httpx
 
@@ -60,10 +62,25 @@ from src.api.utils import (
 from src.smart_429 import Upstream429Kind, classify_upstream_429, smart_429_service
 
 
+async def _observed_stream(iterator, attempt, model, native):
+    with dispatch_scope(attempt, model):
+        observed = observe_stream(iterator, attempt, native)
+        try:
+            async for item in observed:
+                yield item
+        finally:
+            await observed.aclose()
+
+
+async def _observed_post(awaitable, attempt, model):
+    with dispatch_scope(attempt, model):
+        return await observe_post(awaitable, attempt)
+
+
 def _smart_capacity_cooldown(
     status_code: int, error_text: str, model_name: str, filename: str
 ) -> Optional[float]:
-    if status_code != 429 or not is_smart_429_protection_enabled():
+    if status_code not in (429, 503) or not is_smart_429_protection_enabled():
         return None
     try:
         payload = json.loads(error_text)
@@ -146,7 +163,7 @@ async def _get_redis():
         _redis_client = client
         log.info("[SESSION] Redis session store enabled")
     except Exception as e:
-        log.warning(f"[SESSION] Redis unavailable, falling back to in-memory: {e}")
+        log.warning(f"[SESSION] Redis unavailable, falling back to in-memory: {type(e).__name__}")
     return _redis_client
 
 
@@ -227,7 +244,7 @@ async def _get_session_state(request_payload: Dict[str, Any], model: str = "") -
             await redis.set(redis_key, json.dumps(state.__dict__), ex=SESSION_TTL_SECONDS)
             return state
         except Exception as e:
-            log.warning(f"[SESSION] Redis error, falling back to memory: {e}")
+            log.warning(f"[SESSION] Redis error, falling back to memory: {type(e).__name__}")
 
     # 内存回退
     _prune_session_states(now)
@@ -387,7 +404,7 @@ async def _switch_credential_for_retry(
                     await asyncio.sleep(retry_interval)
                 return True, next_cred_task
         except Exception as e:
-            log.warning(f"{log_prefix} 预热凭证任务失败: {e}")
+            log.warning(f"{log_prefix} 预热凭证任务失败: {type(e).__name__}")
             next_cred_task = None
 
     if not smart_enabled:
@@ -468,12 +485,14 @@ async def _stream_request(
         return
 
     current_file, credential_data = cred_result
+    credential_generation = credential_data.get("_quota_generation")
+    credential_content_version = credential_data.get("_quota_credential_version")
     access_token = credential_data.get("access_token") or credential_data.get("token")
     project_id = credential_data.get("project_id", "")
     enable_credit = bool(credential_data.get("enable_credit", False))
 
     if not access_token:
-        log.error(f"[ANTIGRAVITY STREAM] No access token in credential: {current_file}")
+        log.error(f"[ANTIGRAVITY STREAM] No access token in credential: [credential]")
         yield build_error_response("凭证中没有访问令牌", 500)
         return
 
@@ -502,7 +521,7 @@ async def _stream_request(
 
     # 内部函数：快速更新凭证(只更新token和project_id,避免重建整个请求)
     async def refresh_credential_fast():
-        nonlocal current_file, access_token, auth_headers, project_id, final_payload
+        nonlocal current_file, access_token, auth_headers, project_id, final_payload, credential_generation, credential_content_version
         cred_result = await credential_manager.get_valid_credential(
             mode="antigravity", model_name=model_name,
             excluded_credentials=excluded_credentials,
@@ -510,6 +529,8 @@ async def _stream_request(
         if not cred_result:
             return None
         current_file, credential_data = cred_result
+        credential_generation = credential_data.get("_quota_generation")
+        credential_content_version = credential_data.get("_quota_credential_version")
         access_token = credential_data.get("access_token") or credential_data.get("token")
         project_id = credential_data.get("project_id", "")
         if not access_token:
@@ -524,8 +545,10 @@ async def _stream_request(
         return True
 
     def apply_cred_result(cred_result: Tuple[str, Dict[str, Any]]) -> bool:
-        nonlocal current_file, access_token, project_id, auth_headers, final_payload
+        nonlocal current_file, access_token, project_id, auth_headers, final_payload, credential_generation, credential_content_version
         current_file, credential_data = cred_result
+        credential_generation = credential_data.get("_quota_generation")
+        credential_content_version = credential_data.get("_quota_credential_version")
         access_token = credential_data.get("access_token") or credential_data.get("token")
         project_id = credential_data.get("project_id", "")
         if not access_token or not project_id:
@@ -543,8 +566,25 @@ async def _stream_request(
             success_recorded = False  # 标记是否已记录成功
             need_retry = False  # 标记是否需要重试
             received_data_event = False
+            completion = Completion()
+            pending_terminal = []
+            pending_size = 0
+            admission = None
+            diagnostic_attempt = Attempt(attempt + 1, current_file)
 
             try:
+                while True:
+                    admission = await credential_manager.quota_admit(current_file, model_name, credential_generation, credential_content_version)
+                    emit_admission(diagnostic_attempt, model_name, admission)
+                    if admission is not None:
+                        break
+                    excluded_credentials.add(current_file)
+                    if not await refresh_credential_fast() or current_file in excluded_credentials:
+                        break
+                    diagnostic_attempt = Attempt(attempt + 1, current_file)
+                if admission is None:
+                    yield attach_local_unavailable(build_error_response("当前无可用凭证", 500))
+                    return
                 upstream_stream = stream_post_async(
                     url=target_url,
                     body=final_payload,
@@ -552,9 +592,9 @@ async def _stream_request(
                     headers=auth_headers,
                     timeout=current_budget.get().limits.http_timeout(),
                     response_header_timeout=current_budget.get().limits.headers,
-                    events=events,
+                    events=True,
                 )
-                upstream_stream = observe_stream(upstream_stream, Attempt(attempt + 1, current_file), native)
+                upstream_stream = _observed_stream(upstream_stream, diagnostic_attempt, model_name, native)
                 try:
                     async for chunk in upstream_stream:
                         # 判断是否是Response对象
@@ -569,9 +609,11 @@ async def _stream_request(
                             except Exception:
                                 error_body = ""
 
+                            emit_error(diagnostic_attempt, model_name, status_code, error_body, chunk.headers, admission)
+
                             # 如果错误码是429、503或者在禁用码当中，做好记录后进行重试
                             if _is_retryable_status(status_code, DISABLE_ERROR_CODES):
-                                log.warning(f"[ANTIGRAVITY STREAM] 流式请求失败 (status={status_code}), 凭证: {current_file}, 响应: {error_body[:500] if error_body else '无'}")
+                                log.warning("[ANTIGRAVITY] upstream response observed; see structured diagnostics")
 
                                 # 解析冷却时间
                                 cooldown_until = None
@@ -584,13 +626,13 @@ async def _stream_request(
                                     status_code, error_body or "", model_name, current_file
                                 )
                                 if smart_cooldown is not None:
-                                    cooldown_until = smart_cooldown
+                                    cooldown_until = None  # capacity backoff is not a shared quota deadline
 
                                 smart_error_recorded = False
                                 if is_smart_429_protection_enabled():
                                     await record_api_call_error(
                                         credential_manager, current_file, status_code,
-                                        cooldown_until, mode="antigravity", model_name=model_name,
+                                        cooldown_until, mode="antigravity", model_name=model_name, admission=admission,
                                         error_message=error_body,
                                     )
                                     smart_error_recorded = True
@@ -610,7 +652,7 @@ async def _stream_request(
                                 if not smart_error_recorded:
                                     await record_api_call_error(
                                         credential_manager, current_file, status_code,
-                                        cooldown_until, mode="antigravity", model_name=model_name,
+                                        cooldown_until, mode="antigravity", model_name=model_name, admission=admission,
                                         error_message=error_body
                                     )
 
@@ -618,9 +660,12 @@ async def _stream_request(
                                 should_retry = await handle_error_with_retry(
                                     credential_manager, status_code, current_file,
                                     retry_config["retry_enabled"], attempt, max_retries, retry_interval,
-                                    mode="antigravity"
+                                    mode="antigravity", admission=admission,
                                 )
 
+                                should_retry = should_retry and not (content_yielded or completion.candidates or completion.blocked)
+                                if not should_retry:
+                                    emit_retry(diagnostic_attempt, model_name, False, 0)
                                 if should_retry and attempt < max_retries:
                                     need_retry = True
                                     break  # 跳出内层循环，准备重试
@@ -631,85 +676,61 @@ async def _stream_request(
                                     return
                             else:
                                 # 错误码不在禁用码当中，直接返回，无需重试
-                                log.error(f"[ANTIGRAVITY STREAM] 流式请求失败，非重试错误码 (status={status_code}), 凭证: {current_file}, 响应: {error_body[:500] if error_body else '无'}")
+                                log.error("[ANTIGRAVITY] upstream response observed; see structured diagnostics")
                                 await record_api_call_error(
                                     credential_manager, current_file, status_code,
-                                    None, mode="antigravity", model_name=model_name,
+                                    None, mode="antigravity", model_name=model_name, admission=admission,
                                     error_message=error_body
                                 )
                                 yield chunk
                                 return
                         else:
-                            # 不是Response，说明是真流，直接yield返回
+                            protocol_done = completion.event(chunk)
                             received_data_event = received_data_event or _has_sse_data_event(chunk)
-                            if events and not received_data_event:
-                                continue
-                            # 只在第一个chunk时记录成功
-                            if not success_recorded:
-                                await record_api_call_success(
-                                    credential_manager, current_file, mode="antigravity", model_name=model_name
-                                )
-                                if is_smart_429_protection_enabled():
-                                    smart_429_service.record_success("antigravity", model_name, current_file)
-                                success_recorded = True
-                                log.debug(f"[ANTIGRAVITY STREAM] 开始接收流式响应，模型: {model_name}")
-
-                            # 记录原始chunk内容（用于调试）
-                            if isinstance(chunk, bytes):
-                                log.debug(f"[ANTIGRAVITY STREAM RAW] chunk(bytes): {chunk}")
-                            else:
-                                log.debug(f"[ANTIGRAVITY STREAM RAW] chunk(str): {chunk}")
-
-                            if _is_meaningful_stream_chunk(chunk):
-                                content_yielded = True
-                            yield chunk
+                            early, terminal = separate_terminal(chunk) if completion.terminal_seen else (chunk, None)
+                            if terminal is not None:
+                                pending_terminal.append(terminal)
+                                pending_size += len(terminal)
+                                if pending_size > 8 * 1024 * 1024:
+                                    raise bad_format()
+                            if early is not None:
+                                if _is_meaningful_stream_chunk(early):
+                                    content_yielded = True
+                                yield early
+                            if protocol_done:
+                                break
                 finally:
                     close_upstream = getattr(upstream_stream, "aclose", None)
                     if close_upstream is not None:
                         await close_upstream()
 
-                # 事件模式下纯 DONE/注释/空流按既有预算重试，最终固定为502。
-                if events and not received_data_event:
-                    if attempt < max_retries:
-                        need_retry = True
-                    else:
-                        raise ModelApiErrorException(
-                            make_model_api_error(
-                                origin=ErrorOrigin.UPSTREAM,
-                                kind=ErrorKind.BAD_FORMAT,
-                                status=502,
-                            )
-                        )
-                elif success_recorded:
-                    log.debug(f"[ANTIGRAVITY STREAM] 流式响应完成，模型: {model_name}")
-                    return
-                elif not need_retry:
-                    # 没有收到任何数据（空回复），需要重试
-                    log.warning(f"[ANTIGRAVITY STREAM] 收到空回复，无任何内容，凭证: {current_file}")
-                    await record_api_call_error(
-                        credential_manager, current_file, 200,
-                        None, mode="antigravity", model_name=model_name,
-                        error_message="Empty response from API"
+                if not need_retry:
+                    completion.finish()
+                    await record_api_call_success(
+                        credential_manager, current_file, mode="antigravity", model_name=model_name, admission=admission
                     )
-
-                    if attempt < max_retries:
-                        need_retry = True
-                    else:
-                        log.error(f"[ANTIGRAVITY STREAM] 空回复达到最大重试次数")
-                        yield build_error_response("服务返回空回复", 500)
-                        return
+                    success_recorded = True
+                    if is_smart_429_protection_enabled():
+                        smart_429_service.record_success("antigravity", model_name, current_file)
+                    for final_chunk in finalize_terminal_usage(pending_terminal, completion.usage):
+                        yield final_chunk
+                    return
 
                 # 统一处理重试
                 if need_retry:
                     log.info(f"[ANTIGRAVITY STREAM] 重试请求 (attempt {attempt + 2}/{max_retries + 1})...")
 
+                    retry_wait = smart_retry_delay(attempt, retry_interval) if retry_config.get("smart_429") else retry_interval
+                    emit_retry(diagnostic_attempt, model_name, True, retry_wait)
+                    previous_file = current_file
                     switched, next_cred_task = await _switch_credential_for_retry(
                         next_cred_task=next_cred_task,
-                        retry_interval=(smart_retry_delay(attempt, retry_interval) if retry_config.get("smart_429") else retry_interval),
+                        retry_interval=retry_wait,
                         refresh_credential_fast=refresh_credential_fast,
                         apply_cred_result=apply_cred_result,
                         log_prefix="[ANTIGRAVITY STREAM]",
                     )
+                    emit_retry(diagnostic_attempt, model_name, switched, 0, current_file != previous_file)
                     if not switched:
                         log.error("[ANTIGRAVITY STREAM] 重试时无可用凭证或令牌")
                         yield attach_local_unavailable(Response(
@@ -718,16 +739,19 @@ async def _stream_request(
                             media_type="application/json"
                         ))
                         return
-                    else:
-                        if not is_smart_429_protection_enabled():
-                            await asyncio.sleep(retry_interval)
                     continue  # 重试
 
-            except ModelApiErrorException:
+            except ModelApiErrorException as exc:
+                if exc.error.origin == ErrorOrigin.UPSTREAM:
+                    await record_api_call_error(credential_manager, current_file, 502, mode="antigravity",
+                                                model_name=model_name, error_message="", admission=admission)
                 raise
             except Exception as e:
-                log.error(f"[ANTIGRAVITY STREAM] 流式请求异常: {e}, 凭证: {current_file}")
-                if content_yielded:
+                if admission is not None:
+                    await record_api_call_error(credential_manager, current_file, 502, mode="antigravity",
+                                                model_name=model_name, error_message="", admission=admission)
+                log.error(f"[ANTIGRAVITY STREAM] 流式请求异常: {type(e).__name__}, 凭证: [credential]")
+                if content_yielded or completion.candidates or completion.blocked:
                     log.error(
                         "[ANTIGRAVITY STREAM] 已向下游输出正文，禁止异常后完整重试"
                     )
@@ -738,7 +762,7 @@ async def _stream_request(
                     continue
                 else:
                     # 所有重试都失败，返回最后一次的错误（如果有）
-                    log.error(f"[ANTIGRAVITY STREAM] 所有重试均失败，最后异常: {e}")
+                    log.error(f"[ANTIGRAVITY STREAM] 所有重试均失败，最后异常: {type(e).__name__}")
                     if last_error_response:
                         yield last_error_response
                     else:
@@ -813,12 +837,14 @@ async def _non_stream_request(
         return attach_local_unavailable(build_error_response("当前无可用凭证", 500))
 
     current_file, credential_data = cred_result
+    credential_generation = credential_data.get("_quota_generation")
+    credential_content_version = credential_data.get("_quota_credential_version")
     access_token = credential_data.get("access_token") or credential_data.get("token")
     project_id = credential_data.get("project_id", "")
     enable_credit = bool(credential_data.get("enable_credit", False))
 
     if not access_token:
-        log.error(f"[ANTIGRAVITY] No access token in credential: {current_file}")
+        log.error(f"[ANTIGRAVITY] No access token in credential: [credential]")
         return build_error_response("凭证中没有访问令牌", 500)
 
     # 2. 构建URL和请求头
@@ -845,7 +871,7 @@ async def _non_stream_request(
 
     # 内部函数：快速更新凭证(只更新token和project_id,避免重建整个请求)
     async def refresh_credential_fast():
-        nonlocal current_file, access_token, auth_headers, project_id, final_payload
+        nonlocal current_file, access_token, auth_headers, project_id, final_payload, credential_generation, credential_content_version
         cred_result = await credential_manager.get_valid_credential(
             mode="antigravity", model_name=model_name,
             excluded_credentials=excluded_credentials,
@@ -853,6 +879,8 @@ async def _non_stream_request(
         if not cred_result:
             return None
         current_file, credential_data = cred_result
+        credential_generation = credential_data.get("_quota_generation")
+        credential_content_version = credential_data.get("_quota_credential_version")
         access_token = credential_data.get("access_token") or credential_data.get("token")
         project_id = credential_data.get("project_id", "")
         if not access_token:
@@ -867,8 +895,10 @@ async def _non_stream_request(
         return True
 
     def apply_cred_result(cred_result: Tuple[str, Dict[str, Any]]) -> bool:
-        nonlocal current_file, access_token, project_id, auth_headers, final_payload
+        nonlocal current_file, access_token, project_id, auth_headers, final_payload, credential_generation, credential_content_version
         current_file, credential_data = cred_result
+        credential_generation = credential_data.get("_quota_generation")
+        credential_content_version = credential_data.get("_quota_credential_version")
         access_token = credential_data.get("access_token") or credential_data.get("token")
         project_id = credential_data.get("project_id", "")
         if not access_token or not project_id:
@@ -883,52 +913,40 @@ async def _non_stream_request(
 
     try:
         for attempt in range(max_retries + 1):
+            admission = None
             need_retry = False  # 标记是否需要重试
 
             try:
-                response = await observe_post(post_async(
+                while True:
+                    diagnostic_attempt = Attempt(attempt + 1, current_file)
+                    admission = await credential_manager.quota_admit(current_file, model_name, credential_generation, credential_content_version)
+                    emit_admission(diagnostic_attempt, model_name, admission)
+                    if admission is not None:
+                        break
+                    excluded_credentials.add(current_file)
+                    if not await refresh_credential_fast() or current_file in excluded_credentials:
+                        break
+                if admission is None:
+                    return attach_local_unavailable(build_error_response("当前无可用凭证", 500))
+                response = await _observed_post(post_async(
                     url=target_url,
                     json=final_payload,
                     headers=auth_headers,
                     timeout=current_budget.get().limits.http_timeout(),
                     response_header_timeout=current_budget.get().limits.headers
-                ), Attempt(attempt + 1, current_file))
+                ), diagnostic_attempt, model_name)
 
                 status_code = response.status_code
 
                 # 成功
                 if status_code == 200:
-                    # 检查是否为空回复
-                    if not response.content or len(response.content) == 0:
-                        log.warning(f"[ANTIGRAVITY] 收到200响应但内容为空，凭证: {current_file}")
-
-                        # 记录错误
-                        await record_api_call_error(
-                            credential_manager, current_file, 200,
-                            None, mode="antigravity", model_name=model_name,
-                            error_message="Empty response from API"
-                        )
-
-                        if attempt < max_retries:
-                            need_retry = True
-                        else:
-                            log.error(f"[ANTIGRAVITY] 空回复达到最大重试次数")
-                            return attach_model_api_error(
-                                build_error_response("服务返回空回复", 500),
-                                make_model_api_error(origin=ErrorOrigin.UPSTREAM, kind=ErrorKind.BAD_FORMAT),
-                            )
-                    else:
-                        # 正常响应
-                        await record_api_call_success(
-                            credential_manager, current_file, mode="antigravity", model_name=model_name
-                        )
-                        if is_smart_429_protection_enabled():
-                            smart_429_service.record_success("antigravity", model_name, current_file)
-                        return Response(
-                            content=response.content,
-                            status_code=200,
-                            headers=dict(response.headers)
-                        )
+                    validate_json(response.content)
+                    await record_api_call_success(
+                        credential_manager, current_file, mode="antigravity", model_name=model_name, admission=admission
+                    )
+                    if is_smart_429_protection_enabled():
+                        smart_429_service.record_success("antigravity", model_name, current_file)
+                    return Response(content=response.content, status_code=200, headers=dict(response.headers))
 
                 # 失败 - 记录最后一次错误
                 if status_code != 200:
@@ -946,8 +964,9 @@ async def _non_stream_request(
                     except Exception:
                         pass
 
+                    emit_error(diagnostic_attempt, model_name, status_code, error_text, response.headers, admission)
                     if _is_retryable_status(status_code, DISABLE_ERROR_CODES):
-                        log.warning(f"[ANTIGRAVITY] 非流式请求失败 (status={status_code}), 凭证: {current_file}, 响应: {error_text[:500] if error_text else '无'}")
+                        log.warning("[ANTIGRAVITY] upstream response observed; see structured diagnostics")
 
                         # 解析冷却时间
                         cooldown_until = None
@@ -960,13 +979,13 @@ async def _non_stream_request(
                             status_code, error_text, model_name, current_file
                         )
                         if smart_cooldown is not None:
-                            cooldown_until = smart_cooldown
+                            cooldown_until = None  # capacity backoff is not a shared quota deadline
 
                         smart_error_recorded = False
                         if is_smart_429_protection_enabled():
                             await record_api_call_error(
                                 credential_manager, current_file, status_code,
-                                cooldown_until, mode="antigravity", model_name=model_name,
+                                cooldown_until, mode="antigravity", model_name=model_name, admission=admission,
                                 error_message=error_text,
                             )
                             smart_error_recorded = True
@@ -986,7 +1005,7 @@ async def _non_stream_request(
                         if not smart_error_recorded:
                             await record_api_call_error(
                                 credential_manager, current_file, status_code,
-                                cooldown_until, mode="antigravity", model_name=model_name,
+                                cooldown_until, mode="antigravity", model_name=model_name, admission=admission,
                                 error_message=error_text
                             )
 
@@ -994,9 +1013,11 @@ async def _non_stream_request(
                         should_retry = await handle_error_with_retry(
                             credential_manager, status_code, current_file,
                             retry_config["retry_enabled"], attempt, max_retries, retry_interval,
-                            mode="antigravity"
+                            mode="antigravity", admission=admission,
                         )
 
+                        if not should_retry:
+                            emit_retry(diagnostic_attempt, model_name, False, 0)
                         if should_retry and attempt < max_retries:
                             need_retry = True
                         else:
@@ -1005,10 +1026,10 @@ async def _non_stream_request(
                             return last_error_response
                     else:
                         # 错误码不在禁用码当中，直接返回，无需重试
-                        log.error(f"[ANTIGRAVITY] 非流式请求失败，非重试错误码 (status={status_code}), 凭证: {current_file}, 响应: {error_text[:500] if error_text else '无'}")
+                        log.error("[ANTIGRAVITY] upstream response observed; see structured diagnostics")
                         await record_api_call_error(
                             credential_manager, current_file, status_code,
-                            None, mode="antigravity", model_name=model_name,
+                            None, mode="antigravity", model_name=model_name, admission=admission,
                             error_message=error_text
                         )
                         return last_error_response
@@ -1017,13 +1038,17 @@ async def _non_stream_request(
                 if need_retry:
                     log.info(f"[ANTIGRAVITY] 重试请求 (attempt {attempt + 2}/{max_retries + 1})...")
 
+                    retry_wait = smart_retry_delay(attempt, retry_interval) if retry_config.get("smart_429") else retry_interval
+                    emit_retry(diagnostic_attempt, model_name, True, retry_wait)
+                    previous_file = current_file
                     switched, next_cred_task = await _switch_credential_for_retry(
                         next_cred_task=next_cred_task,
-                        retry_interval=(smart_retry_delay(attempt, retry_interval) if retry_config.get("smart_429") else retry_interval),
+                        retry_interval=retry_wait,
                         refresh_credential_fast=refresh_credential_fast,
                         apply_cred_result=apply_cred_result,
                         log_prefix="[ANTIGRAVITY]",
                     )
+                    emit_retry(diagnostic_attempt, model_name, switched, 0, current_file != previous_file)
                     if not switched:
                         log.error("[ANTIGRAVITY] 重试时无可用凭证或令牌")
                         return attach_local_unavailable(Response(
@@ -1031,20 +1056,27 @@ async def _non_stream_request(
                             status_code=500,
                             media_type="application/json"
                         ))
-                    else:
-                        if not is_smart_429_protection_enabled():
-                            await asyncio.sleep(retry_interval)
                     continue  # 重试
 
+            except ModelApiErrorException as exc:
+                if exc.error.origin == ErrorOrigin.UPSTREAM:
+                    await record_api_call_error(credential_manager, current_file, 502, mode="antigravity",
+                                                model_name=model_name, error_message="", admission=admission)
+                if exc.error.origin == ErrorOrigin.LOCAL:
+                    return attach_model_api_error(build_error_response("Local state unavailable", exc.error.status), exc.error)
+                return attach_model_api_error(build_error_response("Invalid upstream response", exc.error.status), exc.error)
             except Exception as e:
-                log.error(f"[ANTIGRAVITY] 非流式请求异常: {e}, 凭证: {current_file}")
+                if admission is not None:
+                    await record_api_call_error(credential_manager, current_file, 502, mode="antigravity",
+                                                model_name=model_name, error_message="", admission=admission)
+                log.error(f"[ANTIGRAVITY] 非流式请求异常: {type(e).__name__}, 凭证: [credential]")
                 if attempt < max_retries:
                     log.info(f"[ANTIGRAVITY] 异常后重试 (attempt {attempt + 2}/{max_retries + 1})...")
                     await asyncio.sleep(retry_interval)
                     continue
                 else:
                     # 所有重试都失败，返回最后一次的错误（如果有）或500错误
-                    log.error(f"[ANTIGRAVITY] 所有重试均失败，最后异常: {e}")
+                    log.error(f"[ANTIGRAVITY] 所有重试均失败，最后异常: {type(e).__name__}")
                     if last_error_response:
                         return last_error_response
                     else:
@@ -1079,11 +1111,16 @@ async def non_stream_request(
         if inherited is None:
             await budget.close()
     if record_logical:
-        from src.logical_request_stats import record_logical_request, response_has_valid_body
+        from src.logical_request_stats import record_logical_request
 
-        await record_logical_request(
-            str(body.get("model") or ""), "antigravity", response_has_valid_body(response)
-        )
+        valid = False
+        if response.status_code == 200:
+            try:
+                validate_json(response.body)
+                valid = True
+            except ModelApiErrorException:
+                pass
+        await record_logical_request(str(body.get("model") or ""), "antigravity", valid)
     return response
 
 
@@ -1109,7 +1146,7 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
     access_token = credential_data.get("access_token") or credential_data.get("token")
 
     if not access_token:
-        log.error(f"[ANTIGRAVITY] No access token in credential: {current_file}")
+        log.error(f"[ANTIGRAVITY] No access token in credential: [credential]")
         return []
 
     # 构建请求头
@@ -1127,7 +1164,7 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
 
         if response.status_code == 200:
             data = response.json()
-            log.debug(f"[ANTIGRAVITY] Raw models response: {json.dumps(data, ensure_ascii=False)[:500]}")
+            log.debug("[ANTIGRAVITY] upstream response observed; see structured diagnostics")
 
             # 转换为 OpenAI 格式的模型列表，使用 Model 类
             model_list = []
@@ -1148,98 +1185,53 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
             log.info(f"[ANTIGRAVITY] Fetched {len(model_list)} available models")
             return model_list
         else:
-            log.error(f"[ANTIGRAVITY] Failed to fetch models ({response.status_code}): {response.text[:500]}")
+            log.error("[ANTIGRAVITY] upstream response observed; see structured diagnostics")
             return []
 
     except Exception as e:
         import traceback
-        log.error(f"[ANTIGRAVITY] Failed to fetch models: {e}")
-        log.error(f"[ANTIGRAVITY] Traceback: {traceback.format_exc()}")
+        log.error(f"[ANTIGRAVITY] Failed to fetch models: {type(e).__name__}")
+        log.error("[ANTIGRAVITY] upstream response observed; see structured diagnostics")
         return []
 
 
 async def fetch_quota_info(access_token: str) -> Dict[str, Any]:
-    """
-    获取指定凭证的额度信息
-
-    Args:
-        access_token: Antigravity 访问令牌
-
-    Returns:
-        包含额度信息的字典，格式为：
-        {
-            "success": True/False,
-            "models": {
-                "model_name": {
-                    "remaining": 0.95,
-                    "resetTime": "12-20 10:30",
-                    "resetTimeRaw": "2025-12-20T02:30:00Z"
-                }
-            },
-            "error": "错误信息" (仅在失败时)
-        }
-    """
-
+    """Read quota only; preserve missing values and the observation clock."""
+    from datetime import timedelta
+    from src.antigravity_quota import fraction, rolling_week, timestamp
     headers = build_antigravity_headers(access_token, model_name="agent")
-
     try:
         antigravity_url = await get_antigravity_api_url()
-
+        sent_at = time.time()
         response = await post_async(
-            url=f"{antigravity_url}/v1internal:fetchAvailableModels",
-            json={},
-            headers=headers,
-            timeout=30.0
+            url=f"{antigravity_url}/v1internal:fetchAvailableModels", json={}, headers=headers, timeout=30.0
         )
-
-        if response.status_code == 200:
-            data = response.json()
-            log.debug(f"[ANTIGRAVITY QUOTA] Raw response: {json.dumps(data, ensure_ascii=False)[:500]}")
-
-            quota_info = {}
-
-            if 'models' in data and isinstance(data['models'], dict):
-                for model_id, model_data in data['models'].items():
-                    if isinstance(model_data, dict) and 'quotaInfo' in model_data:
-                        quota = model_data['quotaInfo']
-                        remaining = quota.get('remainingFraction', 0)
-                        reset_time_raw = quota.get('resetTime', '')
-
-                        # 转换为北京时间
-                        reset_time_beijing = 'N/A'
-                        if reset_time_raw:
-                            try:
-                                utc_date = datetime.fromisoformat(reset_time_raw.replace('Z', '+00:00'))
-                                # 转换为北京时间 (UTC+8)
-                                from datetime import timedelta
-                                beijing_date = utc_date + timedelta(hours=8)
-                                reset_time_beijing = beijing_date.strftime('%m-%d %H:%M')
-                            except Exception as e:
-                                log.warning(f"[ANTIGRAVITY QUOTA] Failed to parse reset time: {e}")
-
-                        quota_info[model_id] = {
-                            "remaining": remaining,
-                            "resetTime": reset_time_beijing,
-                            "resetTimeRaw": reset_time_raw,
-                            **describe_antigravity_model(model_id),
-                        }
-
-            return {
-                "success": True,
-                "models": quota_info
+        observation = {"sentAt": sent_at, "receivedAt": time.time(), "serverDate": response.headers.get("date")}
+        if response.status_code != 200:
+            return {"success": False, "error": f"API返回错误: {response.status_code}"}
+        data = response.json()
+        models = data.get("models", {})
+        if not isinstance(models, dict):
+            return {"success": False, "error": "invalid_quota_response"}
+        result = {}
+        for model_id, model_data in models.items():
+            quota = model_data.get("quotaInfo") if isinstance(model_data, dict) else None
+            present = isinstance(quota, dict)
+            quota = quota if present else {}
+            raw = quota.get("resetTime", "")
+            ts = timestamp(raw)
+            remaining = fraction(quota.get("remainingFraction"))
+            result[model_id] = {
+                "remaining": remaining,
+                "quotaInfoPresent": present,
+                "remainingPresent": "remainingFraction" in quota,
+                "remainingValid": remaining is not None,
+                "resetTime": (datetime.fromtimestamp(ts, timezone.utc) + timedelta(hours=8)).strftime("%m-%d %H:%M") if ts is not None else "N/A",
+                "resetTimeRaw": raw if isinstance(raw, str) else "",
+                "rolling168h": rolling_week(raw, observation),
+                **describe_antigravity_model(model_id),
             }
-        else:
-            log.error(f"[ANTIGRAVITY QUOTA] Failed to fetch quota ({response.status_code}): {response.text[:500]}")
-            return {
-                "success": False,
-                "error": f"API返回错误: {response.status_code}"
-            }
-
-    except Exception as e:
-        import traceback
-        log.error(f"[ANTIGRAVITY QUOTA] Failed to fetch quota: {e}")
-        log.error(f"[ANTIGRAVITY QUOTA] Traceback: {traceback.format_exc()}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": True, "models": result, "observation": observation}
+    except Exception as exc:
+        log.warning(f"[ANTIGRAVITY QUOTA] query failed: {type(exc).__name__}")
+        return {"success": False, "error": "quota_query_failed"}

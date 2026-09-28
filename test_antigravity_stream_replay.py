@@ -4,6 +4,9 @@ from src.api import antigravity
 
 
 class _CredentialManager:
+    async def quota_admit(self, *args):
+        return {"generation": "synthetic", "group": "gemini-shared", "revision": 0, "purpose": "business"}
+
     async def get_valid_credential(self, **kwargs):
         return (
             "synthetic.json",
@@ -51,7 +54,7 @@ async def test_stream_exception_before_body_is_retried(monkeypatch):
         calls += 1
         if calls == 1:
             raise RuntimeError("synthetic pre-body failure")
-        yield "data: synthetic-body"
+        yield 'data: {"candidates":[{"content":{"parts":[{"text":"synthetic-body"}]},"finishReason":"STOP"}]}'
 
     await _configure_stream(monkeypatch, fake_stream)
 
@@ -62,7 +65,7 @@ async def test_stream_exception_before_body_is_retried(monkeypatch):
         )
     ]
 
-    assert chunks == ["data: synthetic-body"]
+    assert "synthetic-body" in "".join(chunks) and "STOP" in "".join(chunks)
     assert calls == 2
 
 
@@ -72,7 +75,7 @@ async def test_stream_exception_after_body_is_not_replayed(monkeypatch):
     async def fake_stream(**kwargs):
         nonlocal calls
         calls += 1
-        yield "data: synthetic-body"
+        yield 'data: {"candidates":[{"content":{"parts":[{"text":"synthetic-body"}]}}]}'
         raise RuntimeError("synthetic post-body failure")
 
     await _configure_stream(monkeypatch, fake_stream)
@@ -80,36 +83,23 @@ async def test_stream_exception_after_body_is_not_replayed(monkeypatch):
         {"model": "gemini-3.7-flash", "request": {}}
     )
 
-    assert await anext(stream) == "data: synthetic-body"
+    assert await anext(stream) == 'data: {"candidates":[{"content":{"parts":[{"text":"synthetic-body"}]}}]}'
     with pytest.raises(RuntimeError, match="post-body"):
         await anext(stream)
     assert calls == 1
 
 
-async def test_empty_heartbeat_and_done_chunks_do_not_block_retry(monkeypatch):
+async def test_done_only_stream_is_not_replayed(monkeypatch):
+    from src.router.model_api_errors import ModelApiErrorException
     calls = 0
-
     async def fake_stream(**kwargs):
         nonlocal calls
         calls += 1
-        if calls == 1:
-            yield ""
-            yield ": heartbeat"
-            yield "data: [DONE]"
-            raise RuntimeError("synthetic metadata-only failure")
-        yield "data: synthetic-body"
-
+        yield "data: [DONE]"
     await _configure_stream(monkeypatch, fake_stream)
-
-    chunks = [
-        chunk
-        async for chunk in antigravity.stream_request(
-            {"model": "gemini-3.7-flash", "request": {}}
-        )
-    ]
-
-    assert chunks == ["", ": heartbeat", "data: [DONE]", "data: synthetic-body"]
-    assert calls == 2
+    with pytest.raises(ModelApiErrorException):
+        _ = [chunk async for chunk in antigravity.stream_request({"model": "gemini-3.7-flash", "request": {}})]
+    assert calls == 1
 
 
 async def test_closing_downstream_stream_closes_upstream_generator(monkeypatch):
@@ -118,8 +108,8 @@ async def test_closing_downstream_stream_closes_upstream_generator(monkeypatch):
     async def fake_stream(**kwargs):
         nonlocal upstream_closed
         try:
-            yield "data: synthetic-body"
-            yield "data: second-body"
+            yield 'data: {"candidates":[{"content":{"parts":[{"text":"synthetic-body"}]}}]}'
+            yield 'data: {"candidates":[{"content":{"parts":[{"text":"second-body"}]}}]}'
         finally:
             upstream_closed = True
 
@@ -128,6 +118,6 @@ async def test_closing_downstream_stream_closes_upstream_generator(monkeypatch):
         {"model": "gemini-3.7-flash", "request": {}}
     )
 
-    assert await anext(stream) == "data: synthetic-body"
+    assert await anext(stream) == 'data: {"candidates":[{"content":{"parts":[{"text":"synthetic-body"}]}}]}'
     await stream.aclose()
     assert upstream_closed is True

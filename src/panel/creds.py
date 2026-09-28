@@ -198,9 +198,18 @@ async def sync_model_cooldowns_from_quota(
     filename: str,
     mode: str,
     models: dict,
+    *, observation=None, snapshot=None,
 ) -> dict:
     """按实时模型额度双向同步冷却，返回本次变更摘要。"""
     backend = getattr(storage_adapter, "_backend", None)
+    if mode == "antigravity":
+        return await backend.quota_sync(
+            filename, models, observation or {}, snapshot,
+            fallback_seconds=(await get_quota_fallback_cooldown_minutes()) * 60,
+            # Direct routes accept unknown model IDs: the routable universe is
+            # not enumerable. Keep timed cooldowns until expiry/manual clear.
+            required_models=None,
+        )
     if not hasattr(backend, "set_model_cooldown"):
         return {"cleared": [], "added": []}
 
@@ -949,6 +958,7 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
 
     storage_adapter = await get_storage_adapter()
     previous_state = await storage_adapter.get_credential_state(filename, mode=mode)
+    quota_snapshot = await storage_adapter._backend.quota_credential_fence(filename) if mode == "antigravity" else None
 
     # 获取凭证数据
     credential_data = await storage_adapter.get_credential(filename, mode=mode)
@@ -963,9 +973,10 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
 
     # 如果token被刷新了，更新存储
     if token_refreshed:
-        log.info(f"Token已自动刷新: {filename} (mode={mode})")
+        log.info(f"[CREDENTIAL VERIFY] token_refreshed mode={mode}")
         credential_data = credentials.to_dict()
-        await storage_adapter.store_credential(filename, credential_data, mode=mode)
+        if mode != "antigravity":
+            await storage_adapter.store_credential(filename, credential_data, mode=mode)
 
     # 重新获取project id（仅 antigravity 模式请求积分）
     if mode == "antigravity":
@@ -1025,7 +1036,8 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
         credential_data["project_id"] = project_id
 
     if project_id or subscription_tier:
-        await storage_adapter.store_credential(filename, credential_data, mode=mode)
+        if mode != "antigravity":
+            await storage_adapter.store_credential(filename, credential_data, mode=mode)
 
         # 检验成功后自动解除禁用状态并清除错误码
         state_update = {
@@ -1042,7 +1054,14 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
         if mode == "geminicli":
             state_update["preview"] = True
 
-        await storage_adapter.update_credential_state(filename, state_update, mode=mode)
+        if mode == "antigravity":
+            saved = await storage_adapter._backend.quota_refresh_credential(
+                filename, (quota_snapshot or {}).get("quota_credential_generation"), credential_data,
+                expected_version=(quota_snapshot or {}).get("_quota_credential_version"), state_updates=state_update)
+            if not saved:
+                raise HTTPException(status_code=409, detail="credential_changed")
+        else:
+            await storage_adapter.update_credential_state(filename, state_update, mode=mode)
 
         log.info(f"检验 {mode} 凭证成功: {filename} - Project ID: {project_id}, Tier: {subscription_tier} - 已解除禁用并清除错误码")
 
@@ -1063,6 +1082,12 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
 
         return JSONResponse(content=response_data)
     else:
+        if mode == "antigravity" and token_refreshed:
+            saved = await storage_adapter._backend.quota_refresh_credential(
+                filename, (quota_snapshot or {}).get("quota_credential_generation"), credential_data,
+                expected_version=(quota_snapshot or {}).get("_quota_credential_version"))
+            if not saved:
+                raise HTTPException(status_code=409, detail="credential_changed")
         return JSONResponse(
             status_code=400,
             content={
@@ -1274,6 +1299,17 @@ async def creds_action(
             if not credential_data:
                 log.error(f"凭证未找到: {filename} (mode={mode})")
                 raise HTTPException(status_code=404, detail="凭证文件不存在")
+
+        if action == "release_quota_group":
+            from src.antigravity_quota import valid_group
+            if mode != "antigravity" or not valid_group(request.group):
+                raise HTTPException(status_code=400, detail="无效的额度组")
+            from src.storage.antigravity_quota import InvalidQuotaState
+            try:
+                state = await storage_adapter._backend.quota_release(filename, request.group)
+            except InvalidQuotaState:
+                raise HTTPException(status_code=409, detail="quota_state_invalid: repair required; no restrictions were cleared") from None
+            return JSONResponse(content={"success": True, "message": "已解除该组异常额度拦截；计时冷却仍有效", **(state or {})})
 
         if action == "enable":
             log.info(f"Web请求: 启用文件 {filename} (mode={mode})")
@@ -1697,6 +1733,8 @@ async def get_credential_quota(
 
         storage_adapter = await get_storage_adapter()
 
+        quota_snapshot = await storage_adapter._backend.quota_snapshot(filename) if mode == "antigravity" else None
+
         # 获取凭证数据
         credential_data = await storage_adapter.get_credential(filename, mode=mode)
         if not credential_data:
@@ -1713,8 +1751,8 @@ async def get_credential_quota(
         # 如果 token 被刷新了，更新存储
         updated_data = creds.to_dict()
         if updated_data != credential_data:
-            log.info(f"Token已自动刷新: {filename}")
-            await storage_adapter.store_credential(filename, updated_data, mode=mode)
+            log.info(f"Token已自动刷新: {'[credential]' if mode == 'antigravity' else filename}")
+            updated_data = await _save_refreshed_quota_credential(storage_adapter, filename, updated_data, mode, quota_snapshot)
             credential_data = updated_data
 
         # 获取访问令牌
@@ -1740,26 +1778,31 @@ async def get_credential_quota(
                 )
 
         if quota_info.get("success"):
-            # 实时额度与模型冷却双向同步：0% 加冷，正额度解除旧误冷。
+            # Antigravity uses grouped, fenced synchronization; partial positives cannot clear a group.
+            sync_result = {}
             try:
                 models = quota_info.get("models", {}) or {}
                 sync_result = await sync_model_cooldowns_from_quota(
-                    storage_adapter, filename, mode, models
+                    storage_adapter, filename, mode, models,
+                    observation=quota_info.get("observation"), snapshot=quota_snapshot,
                 )
                 if sync_result["cleared"] or sync_result["added"]:
                     log.info(
-                        f"[QUOTA SYNC] {filename}: "
+                        f"[QUOTA SYNC] {'[credential]' if mode == 'antigravity' else filename}: "
                         f"解除 {len(sync_result['cleared'])} 个，"
                         f"写入 {len(sync_result['added'])} 个模型冷却"
                     )
             except Exception as sync_err:
-                log.warning(f"[QUOTA SYNC] {filename}: 同步冷却失败: {sync_err}")
+                log.warning(f"[QUOTA SYNC] synchronization failed: {type(sync_err).__name__}")
+                if mode == "antigravity":
+                    raise HTTPException(status_code=503, detail="quota_state_unavailable") from None
 
             return JSONResponse(content={
                 "success": True,
                 "filename": filename,
                 "mode": mode,
-                "models": quota_info.get("models", {})
+                "models": quota_info.get("models", {}),
+                **({"quota_group_states": sync_result.get("quota_group_states", {}), "model_cooldowns": sync_result.get("model_cooldowns", {}), "quota_groups": sync_result.get("quota_groups", {})} if mode == "antigravity" else {}),
             })
         else:
             if mode == "geminicli" and is_smart_429_protection_enabled():
@@ -1783,7 +1826,7 @@ async def get_credential_quota(
     except HTTPException:
         raise
     except Exception as e:
-        log.error(f"获取凭证额度失败 {filename}: {e}")
+        log.error(f"获取凭证额度失败 {'[credential]' if mode == 'antigravity' else filename}: {type(e).__name__ if mode == 'antigravity' else str(e)}")
         raise HTTPException(status_code=500, detail=f"获取额度失败: {str(e)}")
 
 
@@ -1841,6 +1884,20 @@ def _model_family(model_name: str) -> Optional[str]:
     return None
 
 
+async def _save_refreshed_quota_credential(storage, filename, data, mode, snapshot):
+    if mode == "antigravity":
+        saved = await storage._backend.quota_refresh_credential(filename, (snapshot or {}).get("quota_credential_generation"), data,
+                                                              expected_version=(snapshot or {}).get("_quota_credential_version"))
+        if not saved:
+            current = await storage._backend.quota_current_credential(filename, (snapshot or {}).get("quota_credential_generation"))
+            if current and (current.get("access_token") or current.get("token")) and not await credential_manager._should_refresh_token(current):
+                return current
+            raise HTTPException(status_code=409, detail="credential_changed")
+    else:
+        await storage.store_credential(filename, data, mode=mode)
+    return data
+
+
 async def _fetch_quota_for_credential(filename: str, mode: str) -> dict:
     """获取单个凭证的额度信息，不会主动同步 cooldown。
 
@@ -1852,6 +1909,7 @@ async def _fetch_quota_for_credential(filename: str, mode: str) -> dict:
         }
     """
     storage_adapter = await get_storage_adapter()
+    quota_snapshot = await storage_adapter._backend.quota_snapshot(filename) if mode == "antigravity" else None
     credential_data = await storage_adapter.get_credential(filename, mode=mode)
     if not credential_data:
         return {"success": False, "error": "凭证不存在"}
@@ -1860,7 +1918,7 @@ async def _fetch_quota_for_credential(filename: str, mode: str) -> dict:
     await creds.refresh_if_needed()
     updated_data = creds.to_dict()
     if updated_data != credential_data:
-        await storage_adapter.store_credential(filename, updated_data, mode=mode)
+        updated_data = await _save_refreshed_quota_credential(storage_adapter, filename, updated_data, mode, quota_snapshot)
         credential_data = updated_data
 
     access_token = credential_data.get("access_token") or credential_data.get("token")
@@ -1869,6 +1927,7 @@ async def _fetch_quota_for_credential(filename: str, mode: str) -> dict:
 
     if mode == "antigravity":
         info = await fetch_quota_info(access_token)
+        info["_quota_snapshot"] = quota_snapshot
     else:
         if is_smart_429_protection_enabled():
             health_result = await smart_429_service.verify_credential(
@@ -1894,7 +1953,9 @@ async def batch_refresh_cooldown(
     mode: str = "geminicli",
     _token: str = Depends(verify_panel_token),
 ):
-    """批量检测凭证额度，按模型实时 quota 双向同步 cooldown。
+    """批量检测凭证额度。Antigravity 使用共享组与持久异常拦截。
+
+    以下按具体模型的双向同步仅适用于 Gemini CLI。
 
     双向逻辑（精确按模型名匹配）：
       1. 逐个凭证拉取 quota
@@ -1947,6 +2008,16 @@ async def batch_refresh_cooldown(
                         remaining = info.get("remaining")
                         if remaining is not None and remaining > 0:
                             family_has_quota[family] = True
+
+                    if mode == "antigravity":
+                        result = await sync_model_cooldowns_from_quota(
+                            storage_adapter, filename, mode, models,
+                            observation=quota.get("observation"), snapshot=quota.get("_quota_snapshot"),
+                        )
+                        return {"filename": filename, "success": True, "family_has_quota": family_has_quota,
+                                "cleared": result["cleared"], "added_cooldown": result["added"],
+                                "skipped_no_quota": [], "skipped_unknown": [], "cooldown_skipped_active": [],
+                                "model_count": len(models), "quota_group_states": result.get("quota_group_states", {})}
 
                     # 获取该凭证现有 cooldown
                     detail = await storage_adapter.get_credential_state(filename, mode=mode)
@@ -2036,7 +2107,7 @@ async def batch_refresh_cooldown(
                         "model_count": len(models),
                     }
                 except Exception as e:
-                    log.warning(f"[BATCH REFRESH COOLDOWN] {filename} 失败: {e}")
+                    log.warning(f"[BATCH REFRESH COOLDOWN] {'[credential]' if mode == 'antigravity' else filename} 失败: {type(e).__name__ if mode == 'antigravity' else str(e)}")
                     return {
                         "filename": filename,
                         "success": False,
@@ -2070,7 +2141,7 @@ async def batch_refresh_cooldown(
     except HTTPException:
         raise
     except Exception as e:
-        log.error(f"批量检测额度失败: {e}")
+        log.error(f"批量检测额度失败: {type(e).__name__ if mode == 'antigravity' else str(e)}")
         raise HTTPException(status_code=500, detail=f"批量检测额度失败: {str(e)}")
 
 
@@ -2271,6 +2342,41 @@ async def configure_preview_channel(
         raise HTTPException(status_code=500, detail=f"配置失败: {str(e)}")
 
 
+async def _finish_antigravity_test(storage, filename, model, admission, response, strict, requested_model=None):
+    from src.antigravity_completion import validate_json
+    from src.router.model_api_errors import ModelApiErrorException
+    from src.api.utils import parse_and_log_cooldown
+    from src.diagnostics.antigravity import safe_error
+    status = response.status_code
+    content = {"success": status in (200, 429), "status_code": status, "filename": filename}
+    valid = False
+    if status == 200:
+        try:
+            validate_json(response.content)
+            valid = True
+        except ModelApiErrorException:
+            content.update(success=False, verified_reply=False, error="invalid_upstream_response")
+            status = 502
+        if valid and strict:
+            valid = _is_expected_antigravity_model_test_reply(_extract_antigravity_model_test_reply(response))
+            content.update(success=valid, verified_reply=valid, expected_reply=ANTIGRAVITY_MODEL_TEST_EXPECTED_REPLY)
+            if valid:
+                content["model_reply"] = ANTIGRAVITY_MODEL_TEST_EXPECTED_REPLY
+            else:
+                status = 424
+    elif strict and status == 429:
+        content.update(success=False, verified_reply=False, expected_reply=ANTIGRAVITY_MODEL_TEST_EXPECTED_REPLY)
+    cooldown = await parse_and_log_cooldown(response.text, mode="antigravity") if response.status_code in (429, 503) else None
+    await storage._backend.quota_record_result(
+        filename, admission, model, valid, response.status_code, cooldown,
+        safe_error(response.status_code, response.text) if not valid else None,
+    )
+    if strict:
+        await record_logical_request(requested_model or model, "antigravity", valid)
+    content["message"] = "测试成功" if valid else "模型未通过响应验证" if response.status_code == 200 else "模型当前不可用"
+    return JSONResponse(status_code=status, content=content)
+
+
 async def test_credential_common(filename: str, mode: str = "geminicli", model: str = None) -> JSONResponse:
     """
     测试指定凭证是否可用
@@ -2305,6 +2411,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         storage_adapter = await get_storage_adapter()
 
         # 获取凭证数据
+        quota_snapshot = await storage_adapter._backend.quota_snapshot(filename) if mode == "antigravity" else None
         credential_data = await storage_adapter.get_credential(filename, mode=mode)
         if not credential_data:
             raise HTTPException(status_code=404, detail="凭证不存在")
@@ -2315,9 +2422,9 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
 
         # 如果 token 被刷新了，更新存储
         if token_refreshed:
-            log.info(f"Token已自动刷新: {filename} (mode={mode})")
+            log.info(f"Token已自动刷新: {'[credential]' if mode == 'antigravity' else filename} (mode={mode})")
             credential_data = credentials.to_dict()
-            await storage_adapter.store_credential(filename, credential_data, mode=mode)
+            credential_data = await _save_refreshed_quota_credential(storage_adapter, filename, credential_data, mode, quota_snapshot)
 
         # 获取访问令牌
         access_token = credential_data.get("access_token") or credential_data.get("token")
@@ -2366,6 +2473,14 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                 "User-Agent": GEMINICLI_USER_AGENT,
             }
 
+        admission = None
+        if mode == "antigravity":
+            from src.storage.antigravity_quota import credential_version
+            version = credential_data.get("_quota_credential_version") or credential_version(credential_data)
+            admission = await storage_adapter._backend.quota_admit(filename, upstream_test_model, "credential_test", (quota_snapshot or {}).get("quota_credential_generation"), version)
+            if admission is None:
+                return JSONResponse(status_code=503, content={"success": False, "status_code": 503, "error": "quota_group_unavailable"})
+
         # 第一次测试：使用 gemini-2.5-flash
         response = await post_async(
             url=f"{api_base_url}/v1internal:generateContent",
@@ -2387,6 +2502,8 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
 
         # 返回实际的状态码和详细信息
         status_code = response.status_code
+        if mode == "antigravity":
+            return await _finish_antigravity_test(storage_adapter, filename, upstream_test_model, admission, response, strict_antigravity_model_test, test_model)
 
         if (
             status_code == 429
@@ -2461,7 +2578,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
             )
 
         if status_code == 200 or status_code == 429:
-            log.info(f"凭证测试成功: {filename} (mode={mode}, model={test_model}, status={status_code})")
+            log.info(f"凭证测试成功: {'[credential]' if mode == 'antigravity' else filename} (mode={mode}, model={test_model}, status={status_code})")
             # 测试成功时清除错误状态
             if status_code == 200:
                 model_reply = None
@@ -2471,7 +2588,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                         reply_preview = _safe_model_test_reply_preview(model_reply)
                         log.warning(
                             "Antigravity 模型语义测试失败: "
-                            f"{filename} (model={test_model}, reply={reply_preview})"
+                            f"{'[credential]' if mode == 'antigravity' else filename} (model={test_model}, reply={reply_preview})"
                         )
                         if hasattr(storage_adapter._backend, "record_failure"):
                             await storage_adapter._backend.record_failure(
@@ -2512,7 +2629,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                 # 如果是 geminicli 模式且第一次测试成功，继续测试 gemini-3-flash-preview（仅在未指定具体模型时）
                 if mode == "geminicli" and not skip_preview_test:
                     preview_model = "gemini-3-flash-preview"
-                    log.info(f"开始测试 preview 模型: {filename} (model={preview_model})")
+                    log.info(f"开始测试 preview 模型: {'[credential]' if mode == 'antigravity' else filename} (model={preview_model})")
 
                     try:
                         preview_response = await post_async(
@@ -2533,18 +2650,18 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
 
                         if preview_status == 200 or preview_status == 429:
                             # preview 模型测试成功，设置 preview=True
-                            log.info(f"Preview 模型测试成功: {filename} (status={preview_status})")
+                            log.info(f"Preview 模型测试成功: {'[credential]' if mode == 'antigravity' else filename} (status={preview_status})")
                             await storage_adapter.update_credential_state(filename, {
                                 "preview": True
                             }, mode=mode)
                         elif preview_status == 404:
                             # preview 模型返回 404 时只记录，不再自动覆盖用户设置的 preview=True。
-                            log.warning(f"Preview 模型测试返回404，保持当前Preview状态不变: {filename} (status=404)")
+                            log.warning(f"Preview 模型测试返回404，保持当前Preview状态不变: {'[credential]' if mode == 'antigravity' else filename} (status=404)")
                         else:
                             # 其他错误，保持默认 preview 状态
-                            log.warning(f"Preview 模型测试失败: {filename} (status={preview_status})")
+                            log.warning(f"Preview 模型测试失败: {'[credential]' if mode == 'antigravity' else filename} (status={preview_status})")
                     except Exception as e:
-                        log.error(f"Preview 模型测试异常: {filename} - {e}")
+                        log.error(f"Preview 模型测试异常: {'[credential]' if mode == 'antigravity' else filename} - {type(e).__name__ if mode == 'antigravity' else str(e)}")
             else:
                 error_text = response.text if hasattr(response, 'text') else ""
                 if hasattr(storage_adapter._backend, "record_failure"):
@@ -2576,13 +2693,13 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                 content=success_content,
             )
         else:
-            log.warning(f"凭证测试失败: {filename} (mode={mode}, status={status_code})")
+            log.warning(f"凭证测试失败: {'[credential]' if mode == 'antigravity' else filename} (mode={mode}, status={status_code})")
             # 测试失败时保存错误码和错误消息（覆盖模式，只保存最新的一个错误）
             try:
                 error_text = response.text if hasattr(response, 'text') else ""
 
                 # 打印详细错误内容到日志
-                log.error(f"凭证测试错误详情 - 文件: {filename}, 模式: {mode}, 状态码: {status_code}, 错误内容: {error_text}")
+                log.error(f"凭证测试错误详情 - 文件: {'[credential]' if mode == 'antigravity' else filename}, 模式: {mode}, 状态码: {status_code}, 错误内容: {error_text}")
 
                 if hasattr(storage_adapter._backend, "record_failure"):
                     await storage_adapter._backend.record_failure(
@@ -2603,7 +2720,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                         "error_messages": error_messages
                     }, mode=mode)
 
-                log.info(f"已保存测试错误信息: {filename} - 错误码 {status_code}")
+                log.info(f"已保存测试错误信息: {'[credential]' if mode == 'antigravity' else filename} - 错误码 {status_code}")
 
                 # 测试失败也触发自动封禁（与真实业务调用对齐）：
                 # auto_ban_enabled=True 且 status_code 在 auto_ban_error_codes 列表内时
@@ -2612,15 +2729,15 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
                     if await check_should_auto_ban(status_code):
                         log.warning(
                             f"[BATCH-TEST AUTO_BAN] Status {status_code} triggers auto-ban "
-                            f"for credential: {filename} (mode={mode})"
+                            f"for credential: {'[credential]' if mode == 'antigravity' else filename} (mode={mode})"
                         )
                         await credential_manager.set_cred_disabled(
                             filename, True, mode=mode
                         )
                 except Exception as ban_err:
-                    log.error(f"测试失败自动封禁触发异常 {filename}: {ban_err}")
+                    log.error(f"测试失败自动封禁触发异常 {'[credential]' if mode == 'antigravity' else filename}: {ban_err}")
             except Exception as e:
-                log.error(f"保存测试错误信息失败: {e}")
+                log.error(f"保存测试错误信息失败: {type(e).__name__ if mode == 'antigravity' else str(e)}")
 
         if strict_antigravity_model_test:
             await record_strict_test_result(False)
@@ -2642,7 +2759,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
     except HTTPException:
         raise
     except Exception as e:
-        log.error(f"测试凭证失败 {filename}: {e}")
+        log.error(f"测试凭证失败 {'[credential]' if mode == 'antigravity' else filename}: {type(e).__name__ if mode == 'antigravity' else str(e)}")
         await record_strict_test_result(False)
         raise HTTPException(status_code=500, detail=f"测试失败: {str(e)}")
 

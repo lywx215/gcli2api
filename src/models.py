@@ -370,6 +370,7 @@ class AuthCallbackUrlRequest(BaseModel):
 
 
 class CredFileActionRequest(BaseModel):
+    group: Optional[str] = None
     filename: str
     action: str  # enable, disable, delete
 

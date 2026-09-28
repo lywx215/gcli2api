@@ -79,10 +79,8 @@ async def test_missing_usage_is_not_fabricated_as_zero():
         _sse_stream({"candidates": [{"content": {"parts": [{"text": "x" * 322}]}}]})
     )
     payload = _response_json(response)
-    assert response.status_code == 200
+    assert response.status_code == 502
     assert "usageMetadata" not in payload
-    assert payload["candidates"][0]["finishReason"] is None
-    assert payload["candidates"][0]["content"]["parts"][0]["text"] == "x" * 322
 
 
 @pytest.mark.asyncio
@@ -147,7 +145,7 @@ async def test_antigravity_non_stream_retains_terminal_outcome(monkeypatch, term
 
     async def fake_stream_request(*args, **kwargs):
         async for item in _sse_stream(
-            {"response": {"candidates": [{"content": {"parts": [{"text": "answer"}]}}]}},
+            {"response": {"candidates": [{"content": {"parts": [{"text": "answer"}]}, "finishReason": "STOP"}]}},
             {"response": terminal},
         ):
             yield item
@@ -212,7 +210,7 @@ async def test_last_non_empty_grounding_snapshot_wins():
 
     response = await collect_streaming_response(
         _sse_stream(
-            {"candidates": [{"groundingMetadata": first}]},
+            {"candidates": [{"groundingMetadata": first, "content": {"parts": [{"text": "answer"}]}, "finishReason": "STOP"}]},
             {"candidates": [{"groundingMetadata": last}]},
             {"candidates": [{"groundingMetadata": {}}]},
         )
@@ -250,7 +248,7 @@ async def test_grounding_is_collected_from_metadata_only_final_chunk():
             {"candidates": [{"content": {"role": "model", "parts": [{"text": "Result"}]}}]},
             {
                 "candidates": [
-                    {"content": {"role": "model", "parts": []}, "groundingMetadata": grounding}
+                    {"content": {"role": "model", "parts": []}, "groundingMetadata": grounding, "finishReason": "STOP"}
                 ]
             },
             as_bytes=True,
@@ -338,6 +336,7 @@ async def test_non_stream_request_returns_collected_grounding(monkeypatch):
                                 "parts": [{"text": "Search result"}],
                             },
                             "groundingMetadata": grounding,
+                            "finishReason": "STOP",
                         }
                     ]
                 }

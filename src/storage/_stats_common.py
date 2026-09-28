@@ -61,9 +61,9 @@ def has_active_model_cooldown(value: Any, current_time: Optional[float] = None) 
 def normalize_antigravity_cooldown_key(model_name: str) -> str:
     """Return the effective Antigravity cooldown family for a model/key."""
     model = str(model_name or "").strip().lower()
-    if model == "gemini-shared" or model.startswith(
-        ("gemini-3.1-pro", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash")
-    ):
+    from src.utils import get_base_model_from_feature_model, normalize_antigravity_model_alias
+    model = normalize_antigravity_model_alias(get_base_model_from_feature_model(model))
+    if model == "gemini-shared" or model.startswith("gemini-"):
         return "gemini-shared"
     if model == "claude-gpt-shared" or model.startswith(("claude-", "gpt-oss-")):
         return "claude-gpt-shared"

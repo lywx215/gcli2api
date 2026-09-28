@@ -115,6 +115,8 @@ async def generate_content(
 
     # 处理模型名称和功能检测
     use_anti_truncation = is_anti_truncation_model(model)
+    from src.diagnostics.antigravity import requested_model
+    requested_model(model)
     real_model = normalize_antigravity_model_alias(get_base_model_from_feature_model(model))
     if request is not None:
         request.state.model_api_model = real_model
@@ -194,6 +196,8 @@ async def stream_generate_content(
     # 处理模型名称和功能检测
     use_fake_streaming = is_fake_streaming_model(model)
     use_anti_truncation = is_anti_truncation_model(model)
+    from src.diagnostics.antigravity import requested_model
+    requested_model(model)
     real_model = normalize_antigravity_model_alias(get_base_model_from_feature_model(model))
 
     # 更新模型名为真实模型名

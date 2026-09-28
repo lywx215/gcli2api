@@ -228,7 +228,15 @@ class StorageAdapter:
     async def store_credential(self, filename: str, credential_data: Dict[str, Any], mode: str = "geminicli") -> bool:
         """存储凭证数据"""
         self._ensure_initialized()
-        return await self._backend.store_credential(filename, credential_data, mode)
+        result = await self._backend.store_credential(filename, credential_data, mode)
+        if result and mode == "antigravity":
+            try:
+                await self._backend.quota_ensure_generation(filename)
+            except Exception as exc:
+                # The credential write already committed. Lazy initialization
+                # remains mandatory before admission; do not claim upload failed.
+                log.warning(f"[ANTIGRAVITY] identity initialization pending: {type(exc).__name__}")
+        return result
 
     async def get_credential(self, filename: str, mode: str = "geminicli") -> Optional[Dict[str, Any]]:
         """获取凭证数据"""
@@ -255,7 +263,15 @@ class StorageAdapter:
     async def get_credential_state(self, filename: str, mode: str = "geminicli") -> Dict[str, Any]:
         """获取凭证状态"""
         self._ensure_initialized()
-        return await self._backend.get_credential_state(filename, mode)
+        state = await self._backend.get_credential_state(filename, mode)
+        if mode == "antigravity":
+            try:
+                protection = await self._backend.quota_control_snapshot(filename)
+            except Exception:
+                protection = {"quota_state_unavailable": True}
+            if protection:
+                state.update(protection)
+        return state
 
     async def get_all_credential_states(self, mode: str = "geminicli") -> Dict[str, Dict[str, Any]]:
         """获取所有凭证状态"""

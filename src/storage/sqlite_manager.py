@@ -39,7 +39,11 @@ from src.subscription_tiers import (
 )
 
 
-class SQLiteManager:
+from src.storage.antigravity_quota import AntigravityQuotaMixin
+
+
+class SQLiteManager(AntigravityQuotaMixin):
+    QUOTA_ENGINE = 'sqlite'
     """SQLite 数据库管理器"""
 
     # 状态字段常量
@@ -113,6 +117,8 @@ class SQLiteManager:
             ("last_success", "REAL"),
             ("user_email", "TEXT"),
             ("model_cooldowns", "TEXT DEFAULT '{}'"),
+                ("quota_group_states", "TEXT DEFAULT '{}'"),
+                ("quota_credential_generation", "TEXT"),
             ("tier", "TEXT DEFAULT 'pro'"),
             ("enable_credit", "INTEGER DEFAULT 0"),
             ("rotation_order", "INTEGER DEFAULT 0"),
@@ -326,6 +332,8 @@ class SQLiteManager:
 
                 -- 模型级 CD 支持 (JSON: {model_name: cooldown_timestamp})
                 model_cooldowns TEXT DEFAULT '{}',
+                quota_group_states TEXT DEFAULT '{}',
+                quota_credential_generation TEXT,
 
                 -- tier 状态 (默认为 pro)
                 tier TEXT DEFAULT 'pro',
@@ -582,7 +590,7 @@ class SQLiteManager:
 
     # ============ SQL 方法 ============
 
-    async def get_next_available_credential(
+    async def _get_next_available_credential_legacy(
         self,
         mode: str = "geminicli",
         model_name: Optional[str] = None,
@@ -2363,7 +2371,7 @@ class SQLiteManager:
 
     # ============ 模型级冷却管理 ============
 
-    async def set_model_cooldown(
+    async def _set_model_cooldown_legacy(
         self,
         filename: str,
         model_name: str,
@@ -2499,7 +2507,7 @@ class SQLiteManager:
                 """, (self._bump_cycle_stats(stats_row[0] if stats_row else None, model_name), filename,))
 
                 # 条件删除模型冷却：只有模型键存在时才写入
-                if model_name:
+                if model_name and mode != "antigravity":
                     async with db.execute(f"""
                         SELECT model_cooldowns FROM {table_name} WHERE filename = ?
                     """, (filename,)) as cursor:
