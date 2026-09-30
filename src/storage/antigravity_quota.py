@@ -350,6 +350,212 @@ class AntigravityQuotaMixin:
             return public_state(row)
         return await self._quota_atomic(filename, operation)
 
+    async def manual_snapshot(self, filename):
+        """Trusted panel snapshot; corrupt scheduling data never blocks a probe."""
+        rows = await self._quota_rows(filename)
+        if not rows:
+            return None
+        reliable = True
+        if not rows[0].get("quota_credential_generation"):
+            try:
+                await self.quota_ensure_generation(filename)
+                rows = await self._quota_rows(filename)
+            except Exception:
+                reliable = False
+            if not rows:
+                return None
+        raw = copy.deepcopy(rows[0])
+        return {"raw": raw, "credential_data": _object(raw.get("credential_data")),
+                "generation": raw.get("quota_credential_generation") if reliable else None,
+                "version": credential_version(raw.get("credential_data"))}
+
+    async def manual_current_credential(self, filename, generation):
+        current = await self.manual_snapshot(filename)
+        return current if current and generation and current["generation"] == generation else None
+
+    @staticmethod
+    def _manual_identity(row, snapshot):
+        return bool(snapshot and snapshot.get("generation")
+                    and snapshot["generation"] == row.get("quota_credential_generation")
+                    and snapshot["version"] == credential_version(row.get("credential_data")))
+
+    @staticmethod
+    def _manual_fields_match(row, snapshot, fields):
+        def value(raw):
+            if isinstance(raw, str):
+                try:
+                    return json.loads(raw)
+                except ValueError:
+                    pass
+            return raw
+        return all(value(row.get(k)) == value(snapshot["raw"].get(k)) for k in fields)
+
+    @staticmethod
+    def _manual_policy(row, snapshot, group):
+        try:
+            current, prior = _decode(row), _decode(snapshot["raw"])
+        except InvalidQuotaState:
+            return None, "invalid_policy"
+        cooldowns = lambda r: {k: v for k, v in r["model_cooldowns"].items() if group_for(k) == group}
+        if (current["quota_group_states"].get(group) != prior["quota_group_states"].get(group)
+                or cooldowns(current) != cooldowns(prior)):
+            return None, "state_conflict"
+        return current, None
+
+    @staticmethod
+    def _manual_result(status, reason=None):
+        return {"status": status, **({"reason": reason} if reason else {})}
+
+    @staticmethod
+    def _manual_restore(row, group):
+        row["model_cooldowns"], _ = prepare_antigravity_cooldown(row["model_cooldowns"], group, None)
+        prior = row["quota_group_states"].get(group)
+        if prior:
+            row["quota_group_states"][group] = {**prior, "state": "manual_override", "revision": prior["revision"] + 1}
+
+    async def manual_save_project(self, filename, snapshot, data, tier):
+        def operation(row):
+            if not self._manual_identity(row, snapshot):
+                return self._manual_result("skipped", "credential_changed")
+            if not self._manual_fields_match(row, snapshot, ("tier", "error_codes", "error_messages")):
+                return self._manual_result("skipped", "state_conflict")
+            row.update(credential_data=data, tier=tier, error_codes=[], error_messages={})
+            return self._manual_result("applied")
+        return await self._quota_atomic(filename, operation, validate=False)
+
+    async def manual_record_result(self, filename, snapshot, model, success, *, status=None,
+                                   error=None, cooldown=None, auto_ban=False):
+        if snapshot.get("settlement_started"):
+            return {"counts": self._manual_result("skipped", "already_settled")}
+        snapshot["settlement_started"] = True
+        def operation(row):
+            if not self._manual_identity(row, snapshot):
+                return {"counts": self._manual_result("skipped", "credential_changed")}
+            result = {}
+            counter = "success_count" if success else "failure_count"
+            for key in (counter, "call_count"):
+                if key in row:
+                    row[key] = (row[key] or 0) + 1
+            if success:
+                row["last_success"] = time.time()
+            result["counts"] = self._manual_result("applied")
+            if not success and status is None:
+                result["diagnostics"] = self._manual_result("skipped", "no_upstream_response")
+            elif self._manual_fields_match(row, snapshot, ("error_codes", "error_messages")):
+                row["error_codes"] = [] if success or status is None else [status]
+                row["error_messages"] = {} if success or status is None else {str(status): error}
+                result["diagnostics"] = self._manual_result("applied")
+            else:
+                result["diagnostics"] = self._manual_result("skipped", "state_conflict")
+            if auto_ban:
+                if self._manual_fields_match(row, snapshot, ("disabled", "permanent_disabled")):
+                    row["disabled"] = True
+                    result["disabled"] = self._manual_result("applied")
+                else:
+                    result["disabled"] = self._manual_result("skipped", "state_conflict")
+            group = group_for(model)
+            policy, reason = self._manual_policy(row, snapshot, group)
+            cycle_ok = self._manual_fields_match(row, snapshot, ("cycle_stats", "last_cycle_stats"))
+            try:
+                _object(row.get("cycle_stats"))
+                _object(row.get("last_cycle_stats"))
+            except InvalidQuotaState:
+                cycle_ok = False
+            if policy is not None and cycle_ok and hasattr(self, "_bump_cycle_stats"):
+                try:
+                    policy["cycle_stats"] = self._bump_cycle_stats(row.get("cycle_stats"), model)
+                    row["cycle_stats"] = policy["cycle_stats"]
+                    result["cycle_stats"] = self._manual_result("applied")
+                except (TypeError, ValueError, OverflowError):
+                    cycle_ok = False
+                    result["cycle_stats"] = self._manual_result("skipped", "invalid_cycle_stats")
+            elif hasattr(self, "_bump_cycle_stats"):
+                result["cycle_stats"] = self._manual_result("skipped", reason or "state_conflict")
+            if policy is None:
+                result["quota"] = self._manual_result("skipped", reason)
+            else:
+                if success:
+                    self._manual_restore(policy, group)
+                elif cooldown is not None:
+                    key = self._escape_model_name(model) if self.QUOTA_ENGINE == "mongo" else model
+                    policy["model_cooldowns"], close = prepare_antigravity_cooldown(policy["model_cooldowns"], key, cooldown)
+                    if close and cycle_ok and hasattr(self, "_close_cycle_stats"):
+                        try:
+                            row["cycle_stats"], row["last_cycle_stats"] = self._close_cycle_stats(policy.get("cycle_stats"), model)
+                        except (TypeError, ValueError, OverflowError):
+                            result["cycle_stats"] = self._manual_result("skipped", "invalid_cycle_stats")
+                row["quota_group_states"] = policy["quota_group_states"]
+                row["model_cooldowns"] = policy["model_cooldowns"]
+                result["quota"] = self._manual_result("applied" if success or cooldown else "skipped",
+                                                     None if success or cooldown else "no_recovery_evidence")
+            return result
+        result = await self._quota_atomic(filename, operation, validate=False)
+        result = result or {"counts": self._manual_result("skipped", "credential_changed")}
+        if result["counts"]["status"] == "applied":
+            try:
+                await self._quota_result_stats(model, success)
+                result["statistics"] = self._manual_result("applied")
+            except Exception:
+                result["statistics"] = self._manual_result("failed", "statistics_update_failed")
+        return result
+
+    async def manual_sync_quota(self, filename, models, observation, snapshot, fallback_seconds=300):
+        def operation(row):
+            result = {"cleared": [], "added": [], "state_update": {}}
+            if not self._manual_identity(row, snapshot):
+                result["state_update"]["quota"] = self._manual_result("skipped", "credential_changed")
+                return result
+            grouped = {}
+            cycle_matches = self._manual_fields_match(row, snapshot, ("cycle_stats", "last_cycle_stats"))
+            for model, info in models.items():
+                if isinstance(model, str) and isinstance(info, dict):
+                    grouped.setdefault(group_for(model), {})[model] = info
+            now = time.time()
+            for group, entries in grouped.items():
+                policy, reason = self._manual_policy(row, snapshot, group)
+                if policy is None:
+                    result["state_update"][group] = self._manual_result("skipped", reason)
+                    continue
+                zeros = [(m, i) for m, i in entries.items() if fraction(i.get("remaining")) == 0]
+                if zeros:
+                    for model, info in zeros:
+                        existing = get_antigravity_cooldown_until(policy["model_cooldowns"], model)
+                        if existing and existing > now:
+                            continue
+                        deadline = timestamp(info.get("resetTimeRaw"))
+                        deadline = deadline if deadline and deadline > now else now + fallback_seconds
+                        key = self._escape_model_name(model) if self.QUOTA_ENGINE == "mongo" else model
+                        policy["model_cooldowns"], close = prepare_antigravity_cooldown(policy["model_cooldowns"], key, deadline)
+                        # Preserve corrupt/conflicting cycle state while applying valid quota evidence.
+                        try:
+                            _object(row.get("cycle_stats")); _object(row.get("last_cycle_stats"))
+                            if close and cycle_matches and hasattr(self, "_close_cycle_stats"):
+                                row["cycle_stats"], row["last_cycle_stats"] = self._close_cycle_stats(row.get("cycle_stats"), model)
+                            elif close and not cycle_matches:
+                                result["state_update"]["cycle_stats"] = self._manual_result("skipped", "state_conflict")
+                        except (InvalidQuotaState, TypeError, ValueError, OverflowError):
+                            result["state_update"]["cycle_stats"] = self._manual_result("skipped", "invalid_cycle_stats")
+                        result["added"].append(model)
+                elif any(fraction(i.get("remaining")) is None for i in entries.values()):
+                    result["state_update"][group] = self._manual_result("skipped", "incomplete_quota")
+                    continue
+                else:
+                    if not policy["quota_group_states"].get(group):
+                        anomalous = next((i for i in entries.values() if rolling_week(i.get("resetTimeRaw"), observation)), None)
+                        if anomalous:
+                            observe_week(policy, group, anomalous, now)
+                    self._manual_restore(policy, group)
+                    result["cleared"].extend(entries)
+                row["model_cooldowns"] = policy["model_cooldowns"]
+                row["quota_group_states"] = policy["quota_group_states"]
+                result["state_update"][group] = self._manual_result("applied")
+            try:
+                result.update(public_state(_decode(row)))
+            except InvalidQuotaState:
+                result["quota_state_invalid"] = True
+            return result
+        return await self._quota_atomic(filename, operation, validate=False)
+
     async def quota_business_result(self, filename, admission, status):
         def operation(row):
             if status == 429 and admission and admission.get("purpose") == "business" and matches(row, admission):
@@ -390,9 +596,14 @@ class AntigravityQuotaMixin:
                 self._quota_cooldown(row, model, cooldown)
             return True
         recorded = await self._quota_atomic(filename, operation)
-        if recorded and hasattr(self, "_bump_stats_buffer"):
+        if recorded:
+            await self._quota_result_stats(model, success)
+        return bool(recorded)
+
+    async def _quota_result_stats(self, model, success):
+        if hasattr(self, "_bump_stats_buffer"):
             self._bump_stats_buffer(model, "antigravity", is_success=success)
-        if recorded and self.QUOTA_ENGINE == "postgres":
+        if self.QUOTA_ENGINE == "postgres":
             from src.storage._stats_common import _today_beijing_str, normalize_model_family
             count = "success_count" if success else "failure_count"
             today, family = _today_beijing_str(), normalize_model_family(model)
@@ -401,7 +612,6 @@ class AntigravityQuotaMixin:
                     await conn.execute(f"INSERT INTO daily_stats (date,mode,{count},updated_at) VALUES ($1,'antigravity',1,EXTRACT(EPOCH FROM NOW())) ON CONFLICT (date,mode) DO UPDATE SET {count}=daily_stats.{count}+1", today)
                     await conn.execute(f"INSERT INTO daily_model_stats (date,mode,model_family,{count},updated_at) VALUES ($1,'antigravity',$2,1,EXTRACT(EPOCH FROM NOW())) ON CONFLICT (date,mode,model_family) DO UPDATE SET {count}=daily_model_stats.{count}+1", today, family)
                     await conn.execute("INSERT INTO minute_model_stats (minute_ts,mode,model_family,count) VALUES ($1,'antigravity',$2,1) ON CONFLICT (minute_ts,mode,model_family) DO UPDATE SET count=minute_model_stats.count+1", int(time.time()//60)*60, family)
-        return bool(recorded)
 
     def _quota_cooldown(self, row, model, deadline):
         # Mongo's legacy model keys replace dots with hyphens.

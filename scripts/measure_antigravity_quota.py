@@ -4,6 +4,9 @@ The runner targets an already running gcli2api instance.  It reads the source
 SQLite database in read-only mode, never prints credential identifiers or
 secrets, and stores only model IDs, aggregate usage metadata, quota fractions,
 HTTP status codes, and hashes/lengths of generated text.
+
+Quota sampling calls the authenticated manual panel endpoint and can clear cooldowns or release quota-group blocks on the target service. Source SQLite read-only access does not make these HTTP operations read-only.
+
 """
 
 from __future__ import annotations
@@ -1051,7 +1054,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(epilog='Quota sampling calls the authenticated manual panel endpoint and can clear cooldowns or release quota-group blocks on the target service. Source SQLite read-only access does not make these HTTP operations read-only.')
     parser.add_argument("--source-db", type=Path, required=True)
     parser.add_argument("--live-url", default="http://127.0.0.1:7861")
     parser.add_argument("--output-dir", type=Path)

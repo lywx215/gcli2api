@@ -1067,7 +1067,7 @@ function createCredCard(credInfo, manager) {
         ) : ''}
         ${managerType !== 'antigravity' ? `<button class="cred-btn" onclick="configurePreviewChannel('${filename}')" title="配置Preview通道，启用实验性功能">设置预览</button>` : ''}
         <button class="cred-btn" data-filename="${filename}" data-action="remark" title="给该凭证设置备注/标签">备注</button>
-        <button class="cred-btn" onclick="verify${managerType === 'antigravity' ? 'Antigravity' : ''}ProjectId('${filename}')" title="重新获取Project ID，可恢复403错误">检验</button>
+        <button class="cred-btn" onclick="verify${managerType === 'antigravity' ? 'Antigravity' : ''}ProjectId('${filename}')" title="${managerType === 'antigravity' ? '重新获取Project ID，保持禁用状态不变' : '重新获取Project ID，可恢复403错误'}">检验</button>
         <button class="cred-btn" onclick="test${managerType === 'antigravity' ? 'Antigravity' : ''}Credential('${filename}')" title="测试凭证是否可用">消息测试</button>
         <button class="cred-btn" onclick="toggle${managerType === 'antigravity' ? 'Antigravity' : ''}ErrorDetails('${pathId}')" title="查看该凭证的详细报错信息">查看报错</button>
         <button class="cred-btn delete" data-filename="${filename}" data-action="delete">删除</button>
@@ -2101,16 +2101,16 @@ async function verifyAntigravityProjectId(filename) {
             const creditLine = data.credit_amount !== undefined && data.credit_amount !== null
                 ? `\n积分: ${data.credit_amount}`
                 : '';
-            const successMsg = `✅ 检验成功！\n文件: ${filename}\nProject ID: ${data.project_id}${tierLine}${creditLine}\n\n${data.message}`;
-            showStatus(successMsg.replace(/\n/g, '<br>'), 'success');
+            const successMsg = `✅ 检验成功！\n文件: ${filename}\nProject ID: ${data.project_id}${tierLine}${creditLine}\n\n${data.message}\n${manualResultSummary(data)}`;
+            showStatus(successMsg.replace(/\n/g, '<br>'), manualUpdateIncomplete(data) ? 'info' : 'success');
 
             // 弹出成功提示
-            showMessageModal('检验成功', `✅ Antigravity检验成功！\n\n文件: ${filename}\nProject ID: ${data.project_id}${tierLine}${creditLine}\n\n${data.message}`, 'success');
+            showMessageModal('检验成功', `✅ Antigravity检验成功！\n\n文件: ${filename}\nProject ID: ${data.project_id}${tierLine}${creditLine}\n\n${data.message}\n${manualResultSummary(data)}`, manualUpdateIncomplete(data) ? 'info' : 'success');
 
             await AppState.antigravityCreds.refresh();
         } else {
             // 失败时显示红色错误消息
-            const errorMsg = data.message || '检验失败';
+            const errorMsg = `${data.message || data.error || '检验失败'}\n${manualResultSummary(data)}`;
             showStatus(`❌ ${errorMsg}`, 'error');
             showMessageModal('检验失败', `❌ 检验失败\n\n${errorMsg}`, 'error');
         }
@@ -2169,6 +2169,34 @@ async function testCredential(filename) {
     }
 }
 
+// New fields are present only on Antigravity manual operations.
+function manualResultSummary(data) {
+    const lines = [];
+    if (!Object.prototype.hasOwnProperty.call(data, 'upstream_status')) return '';
+    const phases = {oauth: 'Token 刷新', project: '项目检验', generation: '模型请求', quota: '额度查询', preparation: '本地准备'};
+    if (data.phase) lines.push(`阶段：${phases[data.phase] || '请求处理'}`);
+    lines.push(data.upstream_status == null ? '未取得 Google HTTP 响应' : `Google HTTP ${data.upstream_status}`);
+    for (const event of data.phases || []) {
+        lines.push(`${phases[event.phase] || '辅助请求'}：Google HTTP ${event.upstream_status}`);
+    }
+    if (data.verified_reply === false) lines.push('本地回复校验：未通过');
+    else if (data.verified_reply === true) lines.push('本地回复校验：通过');
+    const reasons = {incomplete_quota: '额度信息不完整', invalid_policy: '本地额度状态损坏',
+        credential_changed: '凭证已变化', state_conflict: '状态已被其他操作更新',
+        no_recovery_evidence: '没有恢复依据', statistics_update_failed: '统计更新失败',
+        state_update_failed: '状态更新失败', invalid_cycle_stats: '周期统计损坏'};
+    for (const [key, item] of Object.entries(data.state_update || {})) {
+        if (!item || !item.status) continue;
+        const label = item.status === 'applied' ? '已更新' : item.status === 'failed' ? '更新失败' : '未更新';
+        lines.push(`状态 ${key}：${label}${item.reason ? `（${reasons[item.reason] || '未应用'}）` : ''}`);
+    }
+    return lines.join('\n');
+}
+
+function manualUpdateIncomplete(data) {
+    return Object.values(data.state_update || {}).some(item => item && item.status && item.status !== 'applied');
+}
+
 async function testAntigravityCredential(filename) {
     try {
         // 显示加载状态
@@ -2182,6 +2210,13 @@ async function testAntigravityCredential(filename) {
         // 解析JSON响应
         const data = await response.json();
 
+        if (Object.prototype.hasOwnProperty.call(data, 'upstream_status')) {
+            const tone = !data.success ? 'error' : manualUpdateIncomplete(data) ? 'info' : 'success';
+            showStatus(data.success ? 'Google 测试成功，请查看状态更新结果' : '测试未通过，请查看 Google 与校验结果', tone);
+            showMessageModal('人工测试结果', `${data.message || data.error || ''}\n${manualResultSummary(data)}`, tone);
+            await AppState.antigravityCreds.refresh();
+            return;
+        }
         if (response.status === 200) {
             // 凭证可用
             const successMsg = `✅ 测试成功！\n文件: ${filename}\n状态: ${data.message || 'Antigravity凭证可用'} (${data.status_code || 200})`;
@@ -2252,7 +2287,7 @@ async function batchTestCredentials(manager, label) {
             const prefix = result.success ? '成功' : '失败';
             const status = result.status_code ? `HTTP ${result.status_code}` : '无状态码';
             const message = result.message || result.error || '';
-            return `${prefix} ${result.filename}: ${status}${message ? ' - ' + message : ''}`;
+            return `${prefix} ${result.filename}: ${status}${message ? ' - ' + message : ''}${manualResultSummary(result) ? '\n' + manualResultSummary(result) : ''}`;
         });
 
         await manager.refresh();
@@ -2320,7 +2355,7 @@ async function batchRefreshCooldownCredentials(manager, label) {
 
         const lines = results.map(r => {
             if (!r.success) {
-                return `❌ ${r.filename}: ${r.error || '检测失败'}`;
+                return `❌ ${r.filename}: ${r.error || '检测失败'}${manualResultSummary(r) ? '\n' + manualResultSummary(r) : ''}`;
             }
             const cleared = (r.cleared && r.cleared.length) ? ` ✅解除: ${r.cleared.join(', ')}` : '';
             const added = (r.added_cooldown && r.added_cooldown.length) ? ` 🧊补冷: ${r.added_cooldown.join(', ')}` : '';
@@ -2329,7 +2364,7 @@ async function batchRefreshCooldownCredentials(manager, label) {
             const anyChange = !!(cleared || added);
             const tag = anyChange ? '🔄' : '✅';
             const trail = (cleared || added || kept || unknown) ? '' : ' 无需调整';
-            return `${tag} ${r.filename}:${cleared}${added}${kept}${unknown}${trail}`;
+            return `${tag} ${r.filename}:${cleared}${added}${kept}${unknown}${trail}${manualResultSummary(r) ? '\n' + manualResultSummary(r) : ''}`;
         });
 
         await manager.refresh();
@@ -2615,7 +2650,10 @@ async function _toggleQuotaDetails(pathId, mode) {
                         });
                     }
 
-                    showStatus('✅ 成功加载额度信息', 'success');
+                    if (mode === 'antigravity') {
+                        contentDiv.insertAdjacentHTML('afterbegin', `<pre style="white-space:pre-wrap">${escapeHtml(manualResultSummary(data))}</pre>`);
+                    }
+                    showStatus('✅ 成功加载额度信息', manualUpdateIncomplete(data) ? 'info' : 'success');
                 } else {
                     // 失败时显示格式化的错误信息
                     const rawError = data.error || data.detail || '获取额度信息失败';
@@ -2681,6 +2719,7 @@ async function _toggleQuotaDetails(pathId, mode) {
                     }
 
                     contentDiv.innerHTML = errorDisplayHTML;
+                    if (mode === 'antigravity') contentDiv.insertAdjacentHTML('afterbegin', `<pre>${escapeHtml(manualResultSummary(data))}</pre>`);
                     showStatus(`❌ 获取额度信息失败`, 'error');
                 }
             } catch (error) {
@@ -2988,10 +3027,11 @@ async function batchVerifyAntigravityProjectIds() {
                     filename,
                     projectId: data.project_id,
                     creditAmount: data.credit_amount,
-                    message: data.message
+                    updateIncomplete: manualUpdateIncomplete(data),
+                    message: `${data.message || ''}\n${manualResultSummary(data)}`
                 };
             } else {
-                return { success: false, filename, error: data.message || '失败' };
+                return { success: false, filename, error: `${data.message || data.error || '失败'}\n${manualResultSummary(data)}` };
             }
         } catch (error) {
             return { success: false, filename, error: error.message };
@@ -3012,7 +3052,7 @@ async function batchVerifyAntigravityProjectIds() {
             const creditSuffix = result.creditAmount !== undefined && result.creditAmount !== null
                 ? ` (积分: ${result.creditAmount})`
                 : '';
-            resultMessages.push(`✅ ${result.filename}: ${result.projectId}${creditSuffix}`);
+            resultMessages.push(`✅ ${result.filename}: ${result.projectId}${creditSuffix}\n${result.message || ''}`);
         } else {
             failCount++;
             resultMessages.push(`❌ ${result.filename}: ${result.error}`);
@@ -3021,9 +3061,13 @@ async function batchVerifyAntigravityProjectIds() {
 
     await AppState.antigravityCreds.refresh();
 
-    const summary = `Antigravity批量检验完成！\n\n成功: ${successCount} 个\n失败: ${failCount} 个\n总计: ${selectedFiles.length} 个\n\n详细结果:\n${resultMessages.join('\n')}`;
+    const incompleteCount = results.filter(result => result.success && result.updateIncomplete).length;
+    const summary = `Antigravity批量检验完成！\n\nGoogle 检验成功: ${successCount} 个\n其中状态回写未完成: ${incompleteCount} 个\n失败: ${failCount} 个\n总计: ${selectedFiles.length} 个\n\n详细结果:\n${resultMessages.join('\n')}`;
 
-    if (failCount === 0) {
+    if (failCount === 0 && incompleteCount > 0) {
+        showStatus(`⚠️ Google 检验成功 ${successCount}/${selectedFiles.length} 个，${incompleteCount} 个状态回写未完成`, 'info');
+        showMessageModal('Antigravity批量检验完成', summary, 'info');
+    } else if (failCount === 0) {
         showStatus(`✅ 全部检验成功！成功检验 ${successCount}/${selectedFiles.length} 个Antigravity凭证`, 'success');
         showMessageModal('Antigravity批量检验完成', summary, 'success');
     } else if (successCount === 0) {
@@ -4579,6 +4623,13 @@ async function testModelQuota(btn, filename, modelName, mode, displayName) {
         );
         const data = await response.json();
 
+        if (mode === 'antigravity' && Object.prototype.hasOwnProperty.call(data, 'upstream_status')) {
+            btn.textContent = data.success ? '✓' : '✗';
+            const tone = !data.success ? 'error' : manualUpdateIncomplete(data) ? 'info' : 'success';
+            showStatus(`${displayModelName}: ${data.success ? '测试成功' : '测试未通过'}`, tone);
+            showMessageModal(`${displayModelName} 人工测试结果`, `${data.message || data.error || ''}\n${manualResultSummary(data)}`, tone);
+            return;
+        }
         if ((response.ok || response.status === 429) && data.success === true) {
             btn.textContent = '✓';
             btn.style.borderColor = '#28a745';

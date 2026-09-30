@@ -74,7 +74,7 @@ async def test_sync_longer_explicit_reset_extends_only_its_group(store):
 
 
 @pytest.mark.parametrize("entry", ["single", "batch", "management"])
-async def test_three_sync_entries_enforce_same_week_policy(store, monkeypatch, entry):
+async def test_manual_sync_recovers_while_management_keeps_week_policy(store, monkeypatch, entry):
     import src.google_oauth_api as oauth
     adapter = SimpleNamespace(_backend=store, get_credential=store.get_credential, get_credential_state=store.get_credential_state)
     async def storage(): return adapter
@@ -87,9 +87,10 @@ async def test_three_sync_entries_enforce_same_week_policy(store, monkeypatch, e
         def to_dict(self): return self.data
     monkeypatch.setattr(panel, "Credentials", Credentials)
     monkeypatch.setattr(oauth, "Credentials", Credentials)
-    async def quota(_):
+    async def quota(_, *, origin="legacy"):
         models, observation = week()
-        return {"success": True, "models": models, "observation": observation}
+        return {"success": True, "models": models, "observation": observation,
+                **({"upstream_status": 200, "response_source": "google"} if origin == "manual" else {})}
     monkeypatch.setattr(panel, "fetch_quota_info", quota)
     if entry == "single":
         response = await panel.get_credential_quota(NAME, token="synthetic", mode="antigravity")
@@ -100,7 +101,7 @@ async def test_three_sync_entries_enforce_same_week_policy(store, monkeypatch, e
     else:
         result = await PanelActiveOperations._sync_cooldown(filename=NAME, mode="antigravity", storage=adapter)
         assert result["success"] and "model_cooldowns" in result
-    assert await store.quota_admit(NAME, GEMINI) is None
+    assert bool(await store.quota_admit(NAME, GEMINI)) == (entry != "management")
     assert await store.quota_admit(NAME, CLAUDE)
     assert (await store.quota_snapshot(NAME))["model_cooldowns"] == {}
 

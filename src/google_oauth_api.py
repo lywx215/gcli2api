@@ -16,7 +16,9 @@ from config import (
     get_resource_manager_api_url,
     get_service_usage_api_url,
 )
-from log import log
+from src.manual_google import HelperLog, observe_response, protected_helper_error
+
+log = HelperLog()
 
 from src.httpx_client import get_async, post_async
 from src.subscription_tiers import (
@@ -95,6 +97,7 @@ class Credentials:
                 data=data,
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
+            observe_response(response)
             response.raise_for_status()
 
             token_data = response.json()
@@ -125,7 +128,7 @@ class Credentials:
                 error_msg = f"Token刷新失败: {error_msg}"
 
             log.error(error_msg)
-            token_error = TokenError(error_msg)
+            token_error = TokenError(protected_helper_error(error_msg))
             token_error.status_code = status_code
             raise token_error
 
@@ -819,6 +822,7 @@ async def _try_load_code_assist(
         headers=headers,
         timeout=30.0,
     )
+    observe_response(response)
 
     log.debug(f"[loadCodeAssist] Response status: {response.status_code}")
 
@@ -922,6 +926,7 @@ async def _try_onboard_user(
             headers=headers,
             timeout=30.0,
         )
+        observe_response(response)
 
         log.debug(f"[onboardUser] Response status: {response.status_code}")
 
@@ -989,6 +994,7 @@ async def _get_onboard_tier(
         headers=headers,
         timeout=30.0,
     )
+    observe_response(response)
 
     if response.status_code == 200:
         data = response.json()

@@ -67,8 +67,10 @@ python scripts/validate_antigravity_model_catalog.py `
 Each probe asks the model to reply only `测试成功`. HTTP 2xx, non-empty
 reasoning, or a retirement/migration notice does not pass unless the final
 answer matches that marker. The panel's per-model test uses the same rule and
-returns HTTP 424 with a short reply preview when an upstream HTTP 200 contains
-an unavailable-model notice.
+preserves Google HTTP 200 with success=false and a fixed English error when
+the reply fails validation or contains a known retirement notice. It does not
+return a raw reply preview on failure; verified_reply and state_update describe
+validation and persistence separately.
 
 `--live-url http://127.0.0.1:7861` sends the probes through the running
 gcli2api service and therefore updates its normal SQLite usage statistics.
@@ -76,3 +78,20 @@ The dashboard counts upstream attempts rather than only final client
 responses, so retries can make the statistics delta larger than the number of
 logical probes. Isolated validation remains the safe default because failed
 internal models cannot change production credential health state.
+
+## Manual quota sampling and recovery
+
+Antigravity panel tests dispatch with the selected credential regardless of local
+cooldowns, quota-group blocks or disabled flags. Success may restore that quota
+group, but never enables a disabled credential. Quota reads use the Google quota
+response to restore scheduling without extra generation probes. Unknown returned
+quota entries preserve state; explicit zero takes precedence over positive values.
+
+Both diagnostic scripts use the authenticated panel quota endpoint. Sampling can
+therefore clear cooldowns, release blocks and update manual override revisions.
+The measurement script targets its running service; catalog validation defaults
+to a temporary instance but `--live-url` changes the specified running service.
+Read-only source SQLite access does not make these HTTP operations read-only.
+Measurements include manual recovery effects and cannot establish admission
+behavior under the original cooldown/block state. The existing `models` and
+`quota_group_states` response fields and diagnostic protocol remain unchanged.

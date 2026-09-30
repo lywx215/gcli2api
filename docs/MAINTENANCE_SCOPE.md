@@ -27,6 +27,10 @@
 
 ## Antigravity：改善进度
 
+2026-09-29，所有者明确启动[人工直连测试修复](ANTIGRAVITY_MANUAL_TESTS.md)，
+仅覆盖Antigravity面板人工测试、额度恢复和项目检验及必要共享兼容分支。
+Gemini CLI专属内容从此任务排除，不恢复其SMART、健康状态或统计改造。
+
 前四项已完成修复，配置、兼容影响和验证证据见 [稳定性修复说明](ANTIGRAVITY_STABILITY.md)：
 
 1. 已完成：上传结果真实性。存储失败应向上传递，成功数量必须与实际落库一致。

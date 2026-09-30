@@ -5,6 +5,9 @@ copied to an automatically deleted temporary SQLite database, and the
 candidate service is started against that temporary database only. The script
 never prints credential identifiers, account metadata, or tokens; model output
 is limited to a short reply preview needed for semantic availability checks.
+
+Quota discovery uses manual panel semantics and can clear cooldowns or release quota-group blocks. The default target is the isolated temporary service; --live-url applies these state changes to that running service.
+
 """
 
 from __future__ import annotations
@@ -417,7 +420,7 @@ def _validate_live_service(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(epilog='Quota discovery uses manual panel semantics and can clear cooldowns or release quota-group blocks. The default target is the isolated temporary service; --live-url applies these state changes to that running service.')
     parser.add_argument("--source-db", type=Path, required=True)
     parser.add_argument("--port", type=int, default=7862)
     parser.add_argument(

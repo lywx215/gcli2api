@@ -947,8 +947,11 @@ async def deduplicate_credentials_by_email_common(mode: str = "geminicli") -> JS
         )
 
 
-async def verify_credential_project_common(filename: str, mode: str = "geminicli") -> JSONResponse:
+async def verify_credential_project_common(filename: str, mode: str = "geminicli", *, origin="legacy") -> JSONResponse:
     """验证并重新获取凭证的project id的通用函数"""
+    if mode == "antigravity" and origin == "manual":
+        from .antigravity_manual import project
+        return await project(filename)
     mode = validate_mode(mode)
 
     # 验证文件名
@@ -1657,7 +1660,7 @@ async def verify_credential_project(
     """
     try:
         mode = validate_mode(mode)
-        return await verify_credential_project_common(filename, mode=mode)
+        return await verify_credential_project_common(filename, mode=mode, **({"origin": "manual"} if mode == "antigravity" else {}))
     except HTTPException:
         raise
     except Exception as e:
@@ -1724,6 +1727,11 @@ async def get_credential_quota(
     - geminicli: 调用 cloudcode-pa retrieveUserQuota（需 project_id）
     - antigravity: 调用 fetchAvailableModels
     """
+    if mode == "antigravity":
+        from .antigravity_manual import quota
+        result = await quota(filename, sync=True)
+        return JSONResponse(status_code=result["status_code"], content=result)
+
     try:
         mode = validate_mode(mode)
         # 验证文件名
@@ -1898,7 +1906,7 @@ async def _save_refreshed_quota_credential(storage, filename, data, mode, snapsh
     return data
 
 
-async def _fetch_quota_for_credential(filename: str, mode: str) -> dict:
+async def _fetch_quota_for_credential(filename: str, mode: str, *, origin="legacy") -> dict:
     """获取单个凭证的额度信息，不会主动同步 cooldown。
 
     返回结构:
@@ -1908,6 +1916,9 @@ async def _fetch_quota_for_credential(filename: str, mode: str) -> dict:
             "error": str,         # 可选
         }
     """
+    if mode == "antigravity" and origin == "manual":
+        from .antigravity_manual import quota
+        return await quota(filename)
     storage_adapter = await get_storage_adapter()
     quota_snapshot = await storage_adapter._backend.quota_snapshot(filename) if mode == "antigravity" else None
     credential_data = await storage_adapter.get_credential(filename, mode=mode)
@@ -1990,6 +2001,13 @@ async def batch_refresh_cooldown(
         async def run_one(filename: str) -> dict:
             async with semaphore:
                 try:
+                    if mode == "antigravity":
+                        from .antigravity_manual import quota as manual_quota
+                        result = await manual_quota(filename, sync=True)
+                        return {**result, "added_cooldown": result.get("added", []),
+                                "family_has_quota": {}, "skipped_no_quota": [],
+                                "skipped_unknown": [], "cooldown_skipped_active": [],
+                                "model_count": len(result.get("models", {}))}
                     quota = await _fetch_quota_for_credential(filename, mode=mode)
                     if not quota.get("success"):
                         return {
@@ -2111,7 +2129,7 @@ async def batch_refresh_cooldown(
                     return {
                         "filename": filename,
                         "success": False,
-                        "error": str(e),
+                        "error": "Request failed." if mode == "antigravity" else str(e),
                     }
 
         results = await asyncio.gather(*(run_one(filename) for filename in filenames))
@@ -2142,7 +2160,7 @@ async def batch_refresh_cooldown(
         raise
     except Exception as e:
         log.error(f"批量检测额度失败: {type(e).__name__ if mode == 'antigravity' else str(e)}")
-        raise HTTPException(status_code=500, detail=f"批量检测额度失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="Request failed." if mode == "antigravity" else f"批量检测额度失败: {str(e)}")
 
 
 @router.post("/configure-preview/{filename}")
@@ -2377,7 +2395,7 @@ async def _finish_antigravity_test(storage, filename, model, admission, response
     return JSONResponse(status_code=status, content=content)
 
 
-async def test_credential_common(filename: str, mode: str = "geminicli", model: str = None) -> JSONResponse:
+async def test_credential_common(filename: str, mode: str = "geminicli", model: str = None, *, origin="legacy") -> JSONResponse:
     """
     测试指定凭证是否可用
 
@@ -2391,6 +2409,9 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         - 429: 凭证被限流但有效
         - 其他: 凭证失败（返回实际错误码）
     """
+    if mode == "antigravity" and origin == "manual":
+        from .antigravity_manual import test
+        return await test(filename, model)
     strict_antigravity_model_test = False
     strict_test_counted = False
     test_model = model or ""
@@ -2771,7 +2792,7 @@ async def test_credential(
     model: str = None,
     _token: str = Depends(verify_panel_token)
 ):
-    return await test_credential_common(filename, mode=mode, model=model)
+    return await test_credential_common(filename, mode=mode, model=model, **({"origin": "manual"} if mode == "antigravity" else {}))
 
 
 @router.post("/batch-test")
@@ -2794,8 +2815,10 @@ async def batch_test_credentials(
         async def run_one(filename: str) -> dict:
             async with semaphore:
                 try:
-                    response = await test_credential_common(filename, mode=mode)
+                    response = await test_credential_common(filename, mode=mode, **({"origin": "manual"} if mode == "antigravity" else {}))
                     body = json.loads(response.body.decode("utf-8"))
+                    if mode == "antigravity":
+                        return {**body, "filename": filename}
                     ok = response.status_code == 200 and body.get("success", False)
                     return {
                         "filename": filename,
@@ -2809,15 +2832,15 @@ async def batch_test_credentials(
                         "filename": filename,
                         "success": False,
                         "status_code": e.status_code,
-                        "message": str(e.detail),
+                        "message": "Request failed." if mode == "antigravity" else str(e.detail),
                     }
                 except Exception as e:
-                    log.error(f"批量测试凭证失败 {filename}: {e}")
+                    log.error("[MANUAL ANTIGRAVITY] Batch test failed." if mode == "antigravity" else f"批量测试凭证失败 {filename}: {e}")
                     return {
                         "filename": filename,
                         "success": False,
                         "status_code": 500,
-                        "message": str(e),
+                        "message": "Request failed." if mode == "antigravity" else str(e),
                     }
 
         results = await asyncio.gather(*(run_one(filename) for filename in filenames))

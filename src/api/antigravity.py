@@ -1195,11 +1195,12 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
         return []
 
 
-async def fetch_quota_info(access_token: str) -> Dict[str, Any]:
+async def fetch_quota_info(access_token: str, *, origin="legacy") -> Dict[str, Any]:
     """Read quota only; preserve missing values and the observation clock."""
     from datetime import timedelta
     from src.antigravity_quota import fraction, rolling_week, timestamp
     headers = build_antigravity_headers(access_token, model_name="agent")
+    metadata = {"upstream_status": None, "response_source": "transport"} if origin == "manual" else {}
     try:
         antigravity_url = await get_antigravity_api_url()
         sent_at = time.time()
@@ -1207,12 +1208,21 @@ async def fetch_quota_info(access_token: str) -> Dict[str, Any]:
             url=f"{antigravity_url}/v1internal:fetchAvailableModels", json={}, headers=headers, timeout=30.0
         )
         observation = {"sentAt": sent_at, "receivedAt": time.time(), "serverDate": response.headers.get("date")}
+        if origin == "manual":
+            metadata.update(upstream_status=response.status_code, response_source="google")
         if response.status_code != 200:
+            if origin == "manual":
+                from src.panel.antigravity_manual import error_message
+                return {"success": False, "error": error_message(response.status_code), **metadata}
             return {"success": False, "error": f"API返回错误: {response.status_code}"}
         data = response.json()
+        if origin == "manual":
+            from src.router.model_api_errors import error_from_model_payload
+            if not isinstance(data, dict) or error_from_model_payload(data) is not None or "models" not in data:
+                return {"success": False, "error": "Invalid upstream response.", **metadata}
         models = data.get("models", {})
         if not isinstance(models, dict):
-            return {"success": False, "error": "invalid_quota_response"}
+            return {"success": False, "error": "Invalid upstream response." if origin == "manual" else "invalid_quota_response", **metadata}
         result = {}
         for model_id, model_data in models.items():
             quota = model_data.get("quotaInfo") if isinstance(model_data, dict) else None
@@ -1231,7 +1241,8 @@ async def fetch_quota_info(access_token: str) -> Dict[str, Any]:
                 "rolling168h": rolling_week(raw, observation),
                 **describe_antigravity_model(model_id),
             }
-        return {"success": True, "models": result, "observation": observation}
+        return {"success": True, "models": result, "observation": observation, **metadata}
     except Exception as exc:
         log.warning(f"[ANTIGRAVITY QUOTA] query failed: {type(exc).__name__}")
-        return {"success": False, "error": "quota_query_failed"}
+        return {"success": False, "error": ("Invalid upstream response." if metadata.get("upstream_status") is not None
+                else "Service temporarily unavailable.") if origin == "manual" else "quota_query_failed", **metadata}
