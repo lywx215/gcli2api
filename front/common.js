@@ -2651,6 +2651,19 @@ async function _toggleQuotaDetails(pathId, mode) {
                     }
 
                     if (mode === 'antigravity') {
+                        // Only an actual returned model map can establish missing tiers.
+                        if (data.models && typeof data.models === 'object' && !Array.isArray(data.models)) {
+                            const opusTiers = ['low', 'medium', 'high'];
+                            const missingTiers = opusTiers.filter(tier =>
+                                !Object.prototype.hasOwnProperty.call(data.models, `claude-opus-5-5-${tier}`));
+                            if (missingTiers.length > 0) {
+                                const missingLabels = missingTiers.map(tier => tier[0].toUpperCase() + tier.slice(1)).join('、');
+                                const notice = missingTiers.length === opusTiers.length
+                                    ? '本次 Google 官方模型目录未返回 Claude Opus 5.5，暂无对应额度或可测试模型。'
+                                    : `本次 Google 官方模型目录未返回 Claude Opus 5.5 的 ${missingLabels} 档位；仅显示已返回档位的额度与测试入口。`;
+                                contentDiv.insertAdjacentHTML('afterbegin', `<div data-opus-catalog-notice style="margin-bottom:10px;padding:10px;border-radius:4px;background:#e3f2fd;color:#0d47a1;font-size:12px;line-height:1.6;">${notice}</div>`);
+                            }
+                        }
                         contentDiv.insertAdjacentHTML('afterbegin', `<pre style="white-space:pre-wrap">${escapeHtml(manualResultSummary(data))}</pre>`);
                     }
                     showStatus('✅ 成功加载额度信息', manualUpdateIncomplete(data) ? 'info' : 'success');

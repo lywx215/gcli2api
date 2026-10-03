@@ -20,9 +20,11 @@ async def _backend_quota_fixtures(monkeypatch):
     retired = {"claude-opus-4-6-thinking": {"quotaInfo": {
         "remainingFraction": 0.99, "resetTime": "2026-10-07T00:00:00Z",
     }}}
-    internal = {"gemini-3.8-flash-tiered": {"quotaInfo": {
-        "remainingFraction": 0.13, "resetTime": "2026-10-08T00:00:00Z",
-    }}}
+    internal = {"gemini-3.8-flash-tiered": {
+        # Labels do not establish the actual routing ID or an available Opus tier.
+        "displayName": "Claude Opus 5.5 (High)", "model": "claude-opus-5-5-high",
+        "quotaInfo": {"remainingFraction": 0.13, "resetTime": "2026-10-08T00:00:00Z"},
+    }}
     upstream = {}
 
     class Response:
@@ -46,8 +48,12 @@ async def _backend_quota_fixtures(monkeypatch):
         "live": current,
         "mixed": {**retired, **current, **internal},
         "onlyOld": retired,
+        "empty": {},
+        "internal": internal,
         "missing": {"claude-opus-5-5-low": current["claude-opus-5-5-low"],
                     "claude-opus-5-5-medium": {}},
+        **{f"only_{tier}": {f"claude-opus-5-5-{tier}": current[f"claude-opus-5-5-{tier}"]}
+           for tier in ("low", "medium", "high")},
     }.items():
         response = await antigravity_api.fetch_quota_info("synthetic-access-token")
         assert response["success"] is True
@@ -78,12 +84,15 @@ async def test_retired_opus_cards_probes_and_historical_stats(monkeypatch):
     helpers_start = source.index("function isRetiredAntigravityOpusModel(")
     script = "const backend = " + json.dumps(fixtures) + ";\n" + r'''
 const assert = require('node:assert/strict');
-let payload, status, fetches = [];
+let payload, status, responseOk = true, fetches = [];
 const content = {innerHTML: '', getAttribute: () => 'synthetic.json',
-    querySelectorAll: () => [], insertAdjacentHTML: () => {}};
+    querySelectorAll: () => [], insertAdjacentHTML(position, html) {
+        assert.equal(position, 'afterbegin');
+        this.innerHTML = html + this.innerHTML;
+    }};
 const details = {style: {display: 'none'}, querySelector: () => content};
 global.document = {getElementById: () => details};
-global.fetch = async (url) => {fetches.push(url); return {ok: true, status: 200, json: async () => payload};};
+global.fetch = async (url) => {fetches.push(url); return {ok: responseOk, status: responseOk ? 200 : 403, json: async () => payload};};
 global.getAuthHeaders = () => ({});
 global.escapeHtml = global.escapeHtmlAttribute = String;
 global.manualResultSummary = () => '';
@@ -106,12 +115,19 @@ global.setTimeout = (callback) => callback();
         assert.equal(isRetiredAntigravityOpusModel(model), false);
     }
 
-    async function render(models, mode = 'antigravity') {
+    async function renderResponse(data, mode = 'antigravity', ok = true) {
         details.style.display = 'none';
-        payload = {success: true, models};
+        payload = data;
+        responseOk = ok;
+        fetches = [];
         await _toggleQuotaDetails('synthetic', mode);
+        // Rendering notices must not probe a model or dispatch a management action.
+        assert.deepEqual(fetches, [`./creds/quota/synthetic.json?mode=${mode}`]);
         assert.doesNotMatch(content.innerHTML, /网络错误/);
         return content.innerHTML;
+    }
+    async function render(models, mode = 'antigravity') {
+        return renderResponse({success: true, models}, mode);
     }
     const live = backend.live.models;
     const cardStart = '<div style="background: white; border-left:';
@@ -120,6 +136,8 @@ global.setTimeout = (callback) => callback();
     }
     const mixedBefore = JSON.stringify(backend.mixed);
     const mixedHtml = await render(backend.mixed.models);
+    assert.doesNotMatch(mixedHtml, /data-opus-catalog-notice/);
+    assert.doesNotMatch(await renderResponse(backend.live), /data-opus-catalog-notice/);
     const publicHtml = mixedHtml.split('data-quota-model-group="public"')[1]
         .split('data-quota-model-group="compatible"')[0];
     const compatibleHtml = mixedHtml.split('data-quota-model-group="compatible"')[1];
@@ -151,12 +169,22 @@ global.setTimeout = (callback) => callback();
     }
     const missingHtml = await render(backend.missing.models);
     assert.equal(modelCards(missingHtml).length, 2);
+    assert.match(missingHtml, /data-opus-catalog-notice/);
+    assert.match(missingHtml, /未返回 Claude Opus 5\.5 的 High 档位/);
     assert.match(missingHtml, /data-quota-model-group="public"/);
     assert.doesNotMatch(missingHtml, /claude-opus-5-5-high|内部\/兼容/);
     const unknownCard = modelCards(missingHtml).find(card => card.includes('Claude Opus 5.5 (Medium)'));
     assert.match(unknownCard, /剩余未知 - N\/A/);
     assert.equal(backend.missing.models['claude-opus-5-5-medium'].remaining, null);
     assert.equal(backend.missing.models['claude-opus-5-5-medium'].resetTimeRaw, '');
+    for (const tier of ['low', 'medium', 'high']) {
+        const html = await renderResponse(backend[`only_${tier}`]);
+        const missingLabels = ['Low', 'Medium', 'High'].filter(label => label.toLowerCase() !== tier).join('、');
+        assert.ok(html.includes(`未返回 Claude Opus 5.5 的 ${missingLabels} 档位`));
+        assert.equal(modelCards(html).length, 1);
+        assert.equal((html.match(/onclick="testModelQuota/g) || []).length, 1);
+        assert.ok(html.includes(`'claude-opus-5-5-${tier}', 'antigravity'`));
+    }
     for (const legacy of [
         {'claude-opus-4-6-thinking': {remaining: 0.99}},
         {'claude-opus-4-6': {remaining: 0.99, visible: true, rawModelId: 'claude-opus-5-5-high'}},
@@ -180,11 +208,31 @@ global.setTimeout = (callback) => callback();
         assert.ok(!html.includes('99%'));
         assert.equal(JSON.stringify(models), before);
     }
-    const onlyOld = await render(backend.onlyOld.models);
-    assert.ok(!onlyOld.includes('onclick="testModelQuota'));
-    assert.ok(!onlyOld.includes('claude-opus-5-5'));
+    for (const scenario of ['onlyOld', 'empty', 'internal']) {
+        const before = JSON.stringify(backend[scenario]);
+        const html = await renderResponse(backend[scenario]);
+        const notice = html.match(/<div data-opus-catalog-notice[^>]*>([^<]+)<\/div>/)[1];
+        assert.equal(notice, '本次 Google 官方模型目录未返回 Claude Opus 5.5，暂无对应额度或可测试模型。');
+        assert.doesNotMatch(html, /testModelQuota\(this, 'synthetic.json', 'claude-opus/);
+        assert.equal(modelCards(html).length, scenario === 'internal' ? 1 : 0);
+        assert.equal(JSON.stringify(backend[scenario]), before);
+        if (scenario === 'internal') {
+            assert.match(html, /data-model-availability="compatible"/);
+            assert.match(html, /gemini-3\.8-flash-tiered/);
+        }
+    }
+    // Missing/invalid model maps and failed responses cannot establish catalog absence.
+    for (const models of [undefined, null, []]) {
+        assert.doesNotMatch(await renderResponse({success: true, models}), /data-opus-catalog-notice/);
+    }
+    for (const [ok, success] of [[true, false], [false, false], [false, true]]) {
+        const html = await renderResponse({success, models: {}, error: 'synthetic failure'}, 'antigravity', ok);
+        assert.match(html, /获取额度信息失败/);
+        assert.doesNotMatch(html, /data-opus-catalog-notice|目录未返回|账号|权限/);
+    }
     const cli = await render({'claude-opus-4-6': {remaining: 0.9}}, 'geminicli');
     assert.ok(cli.includes('claude-opus-4-6'));
+    assert.doesNotMatch(cli, /data-opus-catalog-notice/);
 
     fetches = [];
     for (const model of retired) await testModelQuota(button, 'synthetic.json', model, 'antigravity');
