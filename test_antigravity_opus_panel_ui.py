@@ -1,22 +1,82 @@
 """Run the panel's actual quota rendering and probe functions without a browser."""
+import json
 from pathlib import Path
 import shutil
 import subprocess
 
 import pytest
 
+from src.api import antigravity as antigravity_api
 
-def test_retired_opus_cards_probes_and_historical_stats():
+
+async def _backend_quota_fixtures(monkeypatch):
+    """Exercise production metadata conversion; never supply public/UI flags."""
+    current = {
+        f"claude-opus-5-5-{tier}": {"quotaInfo": {
+            "remainingFraction": (index + 1) / 4,
+            "resetTime": f"2026-10-0{index + 4}T00:00:00Z",
+        }} for index, tier in enumerate(("low", "medium", "high"))
+    }
+    retired = {"claude-opus-4-6-thinking": {"quotaInfo": {
+        "remainingFraction": 0.99, "resetTime": "2026-10-07T00:00:00Z",
+    }}}
+    internal = {"gemini-3.8-flash-tiered": {"quotaInfo": {
+        "remainingFraction": 0.13, "resetTime": "2026-10-08T00:00:00Z",
+    }}}
+    upstream = {}
+
+    class Response:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return {"models": upstream}
+
+    async def fake_post_async(**kwargs):
+        assert kwargs["url"] == "https://antigravity.invalid/v1internal:fetchAvailableModels"
+        return Response()
+
+    async def fake_url():
+        return "https://antigravity.invalid"
+
+    monkeypatch.setattr(antigravity_api, "post_async", fake_post_async)
+    monkeypatch.setattr(antigravity_api, "get_antigravity_api_url", fake_url)
+    fixtures = {}
+    for name, upstream in {
+        "live": current,
+        "mixed": {**retired, **current, **internal},
+        "onlyOld": retired,
+        "missing": {"claude-opus-5-5-low": current["claude-opus-5-5-low"],
+                    "claude-opus-5-5-medium": {}},
+    }.items():
+        response = await antigravity_api.fetch_quota_info("synthetic-access-token")
+        assert response["success"] is True
+        assert set(response["models"]) == set(upstream)
+        for model, raw in upstream.items():
+            entry = response["models"][model]
+            quota = raw.get("quotaInfo", {})
+            assert entry["rawModelId"] == model
+            assert entry["testModel"] == model
+            assert entry["remaining"] == quota.get("remainingFraction")
+            assert entry["resetTimeRaw"] == quota.get("resetTime", "")
+        fixtures[name] = response
+    assert fixtures["mixed"]["models"]["claude-opus-4-6-thinking"]["visible"] is False
+    assert fixtures["mixed"]["models"]["gemini-3.8-flash-tiered"]["public"] is False
+    return fixtures
+
+
+async def test_retired_opus_cards_probes_and_historical_stats(monkeypatch):
     node = shutil.which("node")
     if not node:
         pytest.skip("Node runtime unavailable")
+    fixtures = await _backend_quota_fixtures(monkeypatch)
     source = (Path(__file__).parent / "front/common.js").read_text(encoding="utf-8")
     quota_start = source.index("async function _toggleQuotaDetails(")
     quota_end = source.index("\nasync function ", quota_start + 1)
     stats_start = source.index("const MODEL_FAMILY_DISPLAY =")
     stats_end = source.index("async function refreshTodayStats(", stats_start)
     helpers_start = source.index("function isRetiredAntigravityOpusModel(")
-    script = r'''
+    script = "const backend = " + json.dumps(fixtures) + ";\n" + r'''
 const assert = require('node:assert/strict');
 let payload, status, fetches = [];
 const content = {innerHTML: '', getAttribute: () => 'synthetic.json',
@@ -53,10 +113,50 @@ global.setTimeout = (callback) => callback();
         assert.doesNotMatch(content.innerHTML, /网络错误/);
         return content.innerHTML;
     }
-    const live = Object.fromEntries(['low', 'medium', 'high'].map((tier, i) => {
-        const name = `claude-opus-5-5-${tier}`;
-        return [name, {remaining: (i + 1) / 4, public: true, testModel: name}];
-    }));
+    const live = backend.live.models;
+    const cardStart = '<div style="background: white; border-left:';
+    function modelCards(html) {
+        return html.split(cardStart).slice(1).map(card => card.split('<div data-quota-model-group=')[0]);
+    }
+    const mixedBefore = JSON.stringify(backend.mixed);
+    const mixedHtml = await render(backend.mixed.models);
+    const publicHtml = mixedHtml.split('data-quota-model-group="public"')[1]
+        .split('data-quota-model-group="compatible"')[0];
+    const compatibleHtml = mixedHtml.split('data-quota-model-group="compatible"')[1];
+    assert.match(publicHtml, /终端可选模型/);
+    assert.equal(modelCards(publicHtml).length, 3);
+    assert.doesNotMatch(publicHtml, /内部\/兼容|data-model-availability=/);
+    assert.doesNotMatch(mixedHtml, /claude-opus-4-6|99%/);
+    assert.match(compatibleHtml, /gemini-3.8-flash-tiered/);
+    assert.match(compatibleHtml, /data-model-availability="compatible"/);
+    assert.doesNotMatch(publicHtml, /gemini-3.8-flash-tiered/);
+    assert.equal(JSON.stringify(backend.mixed), mixedBefore);
+    const button = {textContent: '测试', disabled: false, style: {}};
+    for (const [index, tier] of ['low', 'medium', 'high'].entries()) {
+        const model = `claude-opus-5-5-${tier}`;
+        const display = `Claude Opus 5.5 (${tier[0].toUpperCase() + tier.slice(1)})`;
+        const card = modelCards(publicHtml).find(card => card.includes(`(原始: ${model})`));
+        assert.ok(card, `Missing public card for ${model}`);
+        assert.ok(card.includes(display));
+        assert.ok(card.includes(`剩余${(index + 1) * 25}% - 10-0${index + 4} 08:00`));
+        assert.doesNotMatch(card, /data-model-availability=|内部\/兼容/);
+        const onclick = card.match(/onclick="([^"]+)"/)[1];
+        fetches = [];
+        payload = {success: true};
+        // Execute the generated button handler, not a manually chosen model ID.
+        const click = new Function('testModelQuota', `return function () { return ${onclick}; };`)(testModelQuota);
+        await click.call(button);
+        assert.deepEqual(fetches, [`./creds/test/synthetic.json?mode=antigravity&model=${model}`]);
+        assert.equal(button.disabled, false);
+    }
+    const missingHtml = await render(backend.missing.models);
+    assert.equal(modelCards(missingHtml).length, 2);
+    assert.match(missingHtml, /data-quota-model-group="public"/);
+    assert.doesNotMatch(missingHtml, /claude-opus-5-5-high|内部\/兼容/);
+    const unknownCard = modelCards(missingHtml).find(card => card.includes('Claude Opus 5.5 (Medium)'));
+    assert.match(unknownCard, /剩余未知 - N\/A/);
+    assert.equal(backend.missing.models['claude-opus-5-5-medium'].remaining, null);
+    assert.equal(backend.missing.models['claude-opus-5-5-medium'].resetTimeRaw, '');
     for (const legacy of [
         {'claude-opus-4-6-thinking': {remaining: 0.99}},
         {'claude-opus-4-6': {remaining: 0.99, visible: true, rawModelId: 'claude-opus-5-5-high'}},
@@ -80,13 +180,12 @@ global.setTimeout = (callback) => callback();
         assert.ok(!html.includes('99%'));
         assert.equal(JSON.stringify(models), before);
     }
-    const onlyOld = await render({'claude-opus-4-6': {remaining: 0.9}});
+    const onlyOld = await render(backend.onlyOld.models);
     assert.ok(!onlyOld.includes('onclick="testModelQuota'));
     assert.ok(!onlyOld.includes('claude-opus-5-5'));
     const cli = await render({'claude-opus-4-6': {remaining: 0.9}}, 'geminicli');
     assert.ok(cli.includes('claude-opus-4-6'));
 
-    const button = {textContent: '测试', disabled: false, style: {}};
     fetches = [];
     for (const model of retired) await testModelQuota(button, 'synthetic.json', model, 'antigravity');
     assert.equal(fetches.length, 0);

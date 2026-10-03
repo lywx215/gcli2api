@@ -372,9 +372,17 @@ def test_opus_55_catalog_preserves_native_effort(tier):
     assert model in PUBLIC_ANTIGRAVITY_MODEL_IDS
     assert get_base_model_name(model, mode="antigravity") == model
     metadata = describe_antigravity_model(model)
-    assert metadata["family"] == "claude-opus-5-5"
-    assert metadata["tier"] == tier
-    assert metadata["displayName"] == f"Claude Opus 5.5 ({tier.title()})"
+    assert metadata == {
+        "displayName": f"Claude Opus 5.5 ({tier.title()})",
+        "rawModelId": model,
+        "public": True,
+        "family": "claude-opus-5-5",
+        "tier": tier,
+        "testModel": model,
+        "visible": True,
+        "availability": "public",
+        "badge": None,
+    }
     for alias in ["claude-opus-5-5", "claude-opus-5-5-thinking"]:
         assert alias not in PUBLIC_ANTIGRAVITY_MODEL_IDS
         assert normalize_antigravity_model_alias(alias) == "claude-opus-5-5-medium"
