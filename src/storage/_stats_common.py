@@ -143,6 +143,7 @@ MODEL_FAMILY_RULES = [
     ("gemini-2.0-pro",                ("2.0-pro",        "2.0-pro")),
     # Antigravity 专用别名（无版本号 agent 后缀）
     ("gemini-pro-agent",              ("pro-agent",      "pro-agent")),
+    ("claude-opus-5-5",               ("claude-opus-5-5","claude-opus-5-5")),
     ("claude-opus-4-6",               ("claude-opus-4-6","claude-opus-4-6")),
     ("claude-sonnet-4-6",             ("claude-sonnet-4-6","claude-sonnet-4-6")),
     ("gpt-oss-120b",                  ("gpt-oss-120b",   "gpt-oss-120b")),
@@ -216,6 +217,8 @@ def normalize_logical_request_model_family(model_name: Optional[str]) -> Optiona
             return version
     if cleaned.startswith("claude-sonnet-4-6"):
         return "claude-sonnet-4-6"
+    if cleaned.startswith("claude-opus-5-5"):
+        return "claude-opus-5-5"
     if cleaned.startswith("claude-opus-4-6"):
         return "claude-opus-4-6"
     if cleaned.startswith("gpt-oss-120b"):

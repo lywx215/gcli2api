@@ -1,10 +1,13 @@
 # Antigravity model catalog
 
-Updated: 2026-09-21
+Updated: 2026-10-03
 
 The public Antigravity model-list endpoints advertise the intersection of the
-current credential's live `fetchAvailableModels` response and the model slugs
-documented for Antigravity CLI 1.2.7. Quota details continue to expose every
+current credential's live `fetchAvailableModels` response and the project's
+current canonical model catalog. Opus 5.5 uses the `low`, `medium`, and `high`
+IDs returned directly by Google's official endpoint on 2026-10-03; see
+[Opus 5.5 evidence and compatibility](ANTIGRAVITY_OPUS_55.md).
+Quota details continue to expose every
 raw upstream model so operators can inspect and test compatibility and service
 models without advertising those IDs to ordinary API clients. Each raw quota
 entry also has presentation-only `visible`, `availability`, and optional
@@ -22,7 +25,8 @@ Compatibility notes:
 
 - Existing OpenAI and Gemini model-list response schemas are unchanged.
 - Raw, legacy, `tiered`, `chat_*`, `tab_*`, and `*-agent` IDs remain directly
-  routable but are not advertised by the public list endpoints.
+  routable but are not advertised by the public list endpoints, except for
+  explicitly rejected models such as Opus 4.6.
 - The quota panel filters only entries with `visible: false`; raw quota API
   responses still include them. `chat_20706`, `chat_23310`,
   `tab_flash_lite_preview`, `tab_jump_flash_lite_preview`, `gemini-2.5-pro`,
@@ -37,6 +41,11 @@ Compatibility notes:
   `/antigravity/v1/models` or `/antigravity/v1beta/models` catalog.
 - Bare Gemini family names and Claude/GPT compatibility names are normalized
   to current upstream IDs at the Antigravity route boundary.
+- Bare `claude-opus-5-5` defaults to `claude-opus-5-5-medium`; explicit Opus
+  5.5 `low`, `medium`, and `high` IDs preserve their requested effort tier.
+  Opus 4.6 requests return local HTTP 400 without an upstream request or a
+  redirect to 5.5. Opus 4.6 is absent from public lists and hidden in the quota
+  panel; raw quota API entries and historical cooldown/statistics remain intact.
 - The public `gemini-3.1-pro-high` slug uses the current
   `gemini-pro-agent` service route. GPT-OSS requests omit Gemini-only safety,
   `topK`, and thinking fields that its route rejects.
@@ -55,6 +64,14 @@ The validator opens the source SQLite database read-only, copies one enabled
 Pro credential to a temporary SQLite database, uses a random local API
 password, suppresses service logs, reports only model/status/timing metadata,
 and deletes the temporary database after stopping the candidate service.
+
+To validate only the three Opus 5.5 effort IDs, once each without automatic
+generation retries, add `--models claude-opus-5-5-low claude-opus-5-5-medium
+claude-opus-5-5-high --workers 1`. This exact selection is mutually exclusive
+with family/all-model selection and cannot be combined with `--live-url`.
+Every requested ID must be present in the current public list before any
+generation is dispatched. See the linked Opus 5.5 evidence for the current
+validation status.
 
 To probe every live raw model concurrently with strict semantic validation:
 

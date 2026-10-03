@@ -22,6 +22,7 @@ from config import (
     is_smart_429_protection_enabled,
 )
 from log import log
+from src.antigravity_models import reject_retired_antigravity_opus_model
 from src.antigravity_completion import Completion, validate_json, bad_format, separate_terminal, finalize_terminal_usage
 from src.diagnostics.antigravity import emit_error, emit_admission, emit_retry, dispatch_scope
 from src.antigravity_limits import current_budget
@@ -418,6 +419,7 @@ async def _switch_credential_for_retry(
 # ==================== 新的流式和非流式请求函数 ====================
 
 async def stream_request(body, native=False, headers=None, events=False):
+    reject_retired_antigravity_opus_model(body.get("model", ""))
     from src.antigravity_limits import (
         GenerationBudget, GenerationLimits, GenerationTimeout, current_budget, timeout_response,
     )
@@ -467,6 +469,7 @@ async def _stream_request(
     Yields:
         Response对象（错误时）或 bytes流/str流（成功时）
     """
+    reject_retired_antigravity_opus_model(body.get("model", ""))
     model_name = body.get("model", "")
     breaker_response = _capacity_breaker_response(model_name)
     if breaker_response is not None:
@@ -796,6 +799,7 @@ async def _non_stream_request(
     Returns:
         Response对象
     """
+    reject_retired_antigravity_opus_model(body.get("model", ""))
     # 检查是否启用流式收集模式
     if await get_antigravity_stream2nostream():
         log.debug("[ANTIGRAVITY] 使用流式收集模式实现非流式请求")
@@ -1100,6 +1104,7 @@ async def non_stream_request(
     protected: bool = False,
 ) -> Response:
     """Execute one client logical request after all internal retry attempts."""
+    reject_retired_antigravity_opus_model(body.get("model", ""))
     from src.antigravity_limits import GenerationBudget, GenerationLimits, timeout_response
     inherited = current_budget.get()
     budget = inherited or GenerationBudget(GenerationLimits.load(), non_stream=True)

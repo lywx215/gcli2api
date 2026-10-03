@@ -2519,10 +2519,10 @@ async function _toggleQuotaDetails(pathId, mode) {
                         let modelEntries = Object.entries(models);
                         if (mode === 'antigravity') {
                             // The quota API deliberately preserves every raw upstream
-                            // model for diagnostics and direct-route compatibility.
-                            // Only the panel presentation honors the catalog's safe
-                            // visibility metadata; older API payloads remain visible.
-                            modelEntries = modelEntries.filter(([_, quotaData]) => quotaData.visible !== false);
+                            // model for diagnostics and quota recovery. Hide retired
+                            // Opus identities even in older payloads without metadata.
+                            modelEntries = modelEntries.filter(([name, quotaData]) =>
+                                isVisibleAntigravityQuotaModel(name, quotaData));
                             modelEntries.sort(([nameA, dataA], [nameB, dataB]) => {
                                 const quotaGroup = (data) => {
                                     if (data.public === true) return 'public';
@@ -4311,6 +4311,7 @@ const MODEL_FAMILY_DISPLAY = [
     { key: '2.0-flash',                label: 'gemini-2.0-flash',              color: '#78909c' },
     { key: '2.0-pro',                  label: 'Gemini 2.0 Pro',               color: '#8d6e63' },
     { key: 'pro-agent',                label: 'Gemini Pro Agent (legacy)',    color: '#ef6c00' },
+    { key: 'claude-opus-5-5',          label: 'Claude Opus 5.5',               color: '#ad1457' },
     { key: 'claude-opus-4-6',          label: 'Claude Opus 4.6',               color: '#c62828' },
     { key: 'claude-sonnet-4-6',        label: 'Claude Sonnet 4.6',             color: '#d84315' },
     { key: 'gpt-oss-120b',             label: 'GPT-OSS 120B',                 color: '#546e7a' },
@@ -4609,7 +4610,22 @@ async function switchStorageEngine() {
 // 额度卡片中的单模型测试 (dev2 自定义)
 // =====================================================================
 
+function isRetiredAntigravityOpusModel(modelName) {
+    // Match every identity the converter's permissive Claude/Opus fallback accepts.
+    return String(modelName || '').toLowerCase().split('/')
+        .some(part => /claude-opus-4(?:-6|\.6)(?:-|$)/.test(part.trim()));
+}
+
+function isVisibleAntigravityQuotaModel(modelName, quotaData) {
+    return quotaData.visible !== false &&
+        ![modelName, quotaData.rawModelId, quotaData.testModel].some(isRetiredAntigravityOpusModel);
+}
+
 async function testModelQuota(btn, filename, modelName, mode, displayName) {
+    if (mode === 'antigravity' && isRetiredAntigravityOpusModel(modelName)) {
+        showStatus('Claude Opus 4.6 已停用，请刷新额度信息并选择 Claude Opus 5.5。', 'error');
+        return;
+    }
     const originalText = btn.textContent;
     const displayModelName = displayName || modelName;
     btn.textContent = '…';

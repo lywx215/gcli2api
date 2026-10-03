@@ -88,6 +88,9 @@ async def prepare(filename, events):
 
 async def test(filename, model=None):
     from . import creds as p
+    retired_response = p._retired_antigravity_test_response(model)
+    if retired_response is not None:
+        return retired_response
     from src.httpx_client import post_async
     from src.api.antigravity import build_antigravity_headers
     from src.converter.gemini_fix import map_antigravity_gemini_model
@@ -121,7 +124,7 @@ async def test(filename, model=None):
             try:
                 await storage._backend.manual_record_result(filename, snapshot, upstream_model, False)
                 if strict:
-                    await p.record_logical_request(requested_model, "antigravity", False)
+                    await p.record_logical_request(p._antigravity_test_stats_model(requested_model, upstream_model), "antigravity", False)
             except Exception:
                 p.log.warning("[MANUAL ANTIGRAVITY] Cancelled request settlement failed.")
         raise
@@ -138,7 +141,7 @@ async def test(filename, model=None):
                 result["state_update"] = {"settlement": failed_update()}
             if strict:
                 try:
-                    await p.record_logical_request(requested_model, "antigravity", False)
+                    await p.record_logical_request(p._antigravity_test_stats_model(requested_model, upstream_model), "antigravity", False)
                 except Exception:
                     result["state_update"]["logical_statistics"] = failed_update("statistics_update_failed")
         return JSONResponse(status_code=result["status_code"], content=result)
@@ -174,7 +177,7 @@ async def test(filename, model=None):
         result["state_update"] = {"settlement": failed_update()}
     if strict:
         try:
-            await p.record_logical_request(requested_model, "antigravity", valid)
+            await p.record_logical_request(p._antigravity_test_stats_model(requested_model, upstream_model), "antigravity", valid)
         except Exception:
             result["state_update"]["logical_statistics"] = failed_update("statistics_update_failed")
     return JSONResponse(status_code=status, content=result)

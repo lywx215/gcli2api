@@ -17,7 +17,10 @@ from src.logical_request_stats import (
 )
 from src.panel import creds as credential_routes
 from src.router import stream_passthrough
-from src.storage._stats_common import normalize_logical_request_model_family
+from src.storage._stats_common import (
+    normalize_logical_request_model_family,
+    normalize_model_family,
+)
 from src.storage.sqlite_manager import SQLiteManager
 
 
@@ -40,6 +43,47 @@ from src.storage.sqlite_manager import SQLiteManager
 )
 def test_logical_request_model_family_is_specific_and_safe(model_name, expected):
     assert normalize_logical_request_model_family(model_name) == expected
+
+
+@pytest.mark.parametrize(
+    ("model_name", "expected"),
+    [
+        ("claude-opus-5-5-low", "claude-opus-5-5"),
+        ("claude-opus-5-5-medium", "claude-opus-5-5"),
+        ("claude-opus-5-5-high", "claude-opus-5-5"),
+        ("流式抗截断/claude-opus-5-5-high", "claude-opus-5-5"),
+        ("claude-opus-4-6", "claude-opus-4-6"),
+        ("claude-opus-4-6-thinking", "claude-opus-4-6"),
+    ],
+)
+def test_opus_stats_preserve_historical_generation(model_name, expected):
+    assert normalize_model_family(model_name) == expected
+    assert normalize_logical_request_model_family(model_name) == expected
+
+
+@pytest.mark.asyncio
+async def test_sqlite_opus_stats_group_new_tiers_without_merging_history(tmp_path, monkeypatch):
+    monkeypatch.setenv("CREDENTIALS_DIR", str(tmp_path))
+    manager = SQLiteManager()
+    await manager.initialize()
+    try:
+        await manager.record_logical_request("claude-opus-4-6-thinking", "antigravity", True)
+        await manager._flush_stats_to_db()
+        for tier in ("low", "medium", "high"):
+            await manager.record_logical_request(f"claude-opus-5-5-{tier}", "antigravity", True)
+        await manager.record_logical_request("claude-opus-5-5-medium", "antigravity", False)
+        await manager._flush_stats_to_db()
+
+        by_family = (await manager.get_today_stats_by_model("antigravity"))["by_family"]
+        assert set(by_family) == {"claude-opus-4-6", "claude-opus-5-5"}
+        assert by_family["claude-opus-4-6"] == {
+            "success": 1, "failure": 0, "total": 1, "rpm": 1,
+        }
+        assert by_family["claude-opus-5-5"] == {
+            "success": 3, "failure": 1, "total": 4, "rpm": 4,
+        }
+    finally:
+        await manager.close()
 
 
 @pytest.mark.asyncio

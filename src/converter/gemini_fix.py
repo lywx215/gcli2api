@@ -8,7 +8,11 @@ from typing import Any, Dict, Optional
 from fastapi import HTTPException
 
 from log import log
-from src.antigravity_models import ANTIGRAVITY_NATIVE_MODEL_IDS
+from src.antigravity_models import (
+    ANTIGRAVITY_NATIVE_MODEL_IDS,
+    reject_retired_antigravity_opus_model,
+    resolve_antigravity_opus_model,
+)
 from src.geminicli_models import GEMINI_38_FLASH_MODEL, GEMINI_38_FLASH_THINKING_LEVELS
 from src.converter.thoughtSignature_fix import SKIP_THOUGHT_SIGNATURE_VALIDATOR
 
@@ -768,6 +772,8 @@ async def normalize_gemini_request(
     Returns:
         规范化后的请求
     """
+    if mode == "antigravity":
+        reject_retired_antigravity_opus_model(request.get("model", ""))
     # 导入配置函数
     from config import get_return_thoughts_to_frontend
 
@@ -934,6 +940,11 @@ async def normalize_gemini_request(
                     thinking_config["includeThoughts"] = return_thoughts
 
             if "claude" in model.lower():
+                if "opus" in model.lower():
+                    thinking_config = generation_config.setdefault("thinkingConfig", {})
+                    thinking_config.pop("thinkingBudget", None)
+                    thinking_config.pop("thinkingLevel", None)
+                    thinking_config["includeThoughts"] = return_thoughts
                 contents = result.get("contents", [])
                 has_tool_calls = any(
                     isinstance(content, dict) and
@@ -961,10 +972,9 @@ async def normalize_gemini_request(
                                 log.debug("[ANTIGRAVITY] Inserted Claude thinking block")
                             break
 
-                model = get_base_model_name(model).replace("-thinking", "")
                 original_model = model
                 if "opus" in model.lower():
-                    model = "claude-opus-4-6-thinking"
+                    model = resolve_antigravity_opus_model(model)
                 elif "sonnet" in model.lower():
                     model = "claude-sonnet-4-6"
                 elif "haiku" in model.lower():
@@ -977,7 +987,7 @@ async def normalize_gemini_request(
                     log.debug(f"[ANTIGRAVITY] Mapped model: {original_model} -> {model}")
         # 5. 模型特殊处理：循环移除末尾的 model 消息，保证以用户消息结尾
         # 因为该模型不支持预填充
-        if "claude-opus-4-6-thinking" in model.lower() or "claude-sonnet-4-6" in model.lower():
+        if "claude-opus-5-5-" in model.lower() or "claude-sonnet-4-6" in model.lower():
             contents = result.get("contents", [])
             removed_count = 0
             while contents and isinstance(contents[-1], dict) and contents[-1].get("role") == "model":
@@ -1090,7 +1100,12 @@ async def normalize_gemini_request(
         while contents and isinstance(contents[-1], dict) and contents[-1].get("role") == "model":
             contents.pop()
 
-    if generation_config:
+    # An Opus tool call can remove the final config field; do not retain its input copy.
+    if generation_config or (
+        mode == "antigravity"
+        and "claude-opus-5-5-" in model.lower()
+        and "generationConfig" in result
+    ):
         result["generationConfig"] = generation_config
 
     return result

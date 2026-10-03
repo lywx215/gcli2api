@@ -2360,6 +2360,30 @@ async def configure_preview_channel(
         raise HTTPException(status_code=500, detail=f"配置失败: {str(e)}")
 
 
+def _retired_antigravity_test_response(model):
+    from src.antigravity_models import is_retired_antigravity_opus_model
+
+    if not is_retired_antigravity_opus_model(model):
+        return None
+    return JSONResponse(status_code=400, content={
+        "success": False,
+        "status_code": 400,
+        "upstream_status": None,
+        "response_source": "local",
+        "phase": "validation",
+        "phases": [],
+        "error": "Invalid request. Check the request parameters and try again.",
+        "state_update": {},
+    })
+
+
+def _antigravity_test_stats_model(requested_model, upstream_model):
+    """Count current Opus probes by routed generation without rewriting history."""
+    if upstream_model in {"claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-high"}:
+        return upstream_model
+    return requested_model or upstream_model
+
+
 async def _finish_antigravity_test(storage, filename, model, admission, response, strict, requested_model=None):
     from src.antigravity_completion import validate_json
     from src.router.model_api_errors import ModelApiErrorException
@@ -2390,7 +2414,7 @@ async def _finish_antigravity_test(storage, filename, model, admission, response
         safe_error(response.status_code, response.text) if not valid else None,
     )
     if strict:
-        await record_logical_request(requested_model or model, "antigravity", valid)
+        await record_logical_request(_antigravity_test_stats_model(requested_model, model), "antigravity", valid)
     content["message"] = "测试成功" if valid else "模型未通过响应验证" if response.status_code == 200 else "模型当前不可用"
     return JSONResponse(status_code=status, content=content)
 
@@ -2409,17 +2433,22 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         - 429: 凭证被限流但有效
         - 其他: 凭证失败（返回实际错误码）
     """
+    if mode == "antigravity":
+        retired_response = _retired_antigravity_test_response(model)
+        if retired_response is not None:
+            return retired_response
     if mode == "antigravity" and origin == "manual":
         from .antigravity_manual import test
         return await test(filename, model)
     strict_antigravity_model_test = False
     strict_test_counted = False
     test_model = model or ""
+    upstream_test_model = test_model
 
     async def record_strict_test_result(success: bool) -> None:
         nonlocal strict_test_counted
         if strict_antigravity_model_test and not strict_test_counted:
-            await record_logical_request(test_model, mode, success)
+            await record_logical_request(_antigravity_test_stats_model(test_model, upstream_test_model), mode, success)
             strict_test_counted = True
 
     try:

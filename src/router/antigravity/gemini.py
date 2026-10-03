@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 # 本地模块 - 配置和日志
 from config import get_anti_truncation_max_attempts
 from log import log
+from src.antigravity_models import reject_retired_antigravity_opus_model
 
 # 本地模块 - 工具和认证
 from src.utils import (
@@ -103,6 +104,7 @@ async def generate_content(
         model: 模型名称
         api_key: API 密钥
     """
+    reject_retired_antigravity_opus_model(model)
     log.debug(f"[ANTIGRAVITY] Non-streaming request for model: {model}")
 
     # 转换为字典
@@ -188,6 +190,7 @@ async def stream_generate_content(
         model: 模型名称
         api_key: API 密钥
     """
+    reject_retired_antigravity_opus_model(model)
     log.debug(f"[ANTIGRAVITY] Streaming request for model: {model}")
 
     # 转换为字典
@@ -452,6 +455,7 @@ async def count_tokens(
 
     使用简单的启发式方法：大约4字符=1token
     """
+    reject_retired_antigravity_opus_model(request.path_params.get("model", ""))
 
     try:
         request_data = await request.json()

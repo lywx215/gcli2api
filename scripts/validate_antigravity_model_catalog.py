@@ -67,7 +67,14 @@ FAMILY_PREFERENCES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     ("gemini-3.1-pro", ("gemini-3.1-pro-high", "gemini-3.1-pro-low")),
     ("claude-sonnet-4-6", ("claude-sonnet-4-6",)),
-    ("claude-opus-4-6", ("claude-opus-4-6-thinking",)),
+    (
+        "claude-opus-5-5",
+        (
+            "claude-opus-5-5-medium",
+            "claude-opus-5-5-high",
+            "claude-opus-5-5-low",
+        ),
+    ),
     ("gpt-oss-120b", ("gpt-oss-120b-medium",)),
 )
 
@@ -146,7 +153,7 @@ async def _create_temporary_sqlite(directory: Path, credential: dict[str, Any]) 
 
 
 def _candidate_environment(
-    directory: Path, port: int, validation_password: str
+    directory: Path, port: int, validation_password: str, *, single_attempt: bool = False
 ) -> dict[str, str]:
     environment = os.environ.copy()
     environment.update(
@@ -163,8 +170,18 @@ def _candidate_environment(
             "GCLI_SERVER_NAME": "",
             "REDIS_URL": "",
             "KEEPALIVE_URL": "",
+            "DATABASE_URL": "",
+            "NODE_MANAGEMENT_TOKEN": "",
+            "ENABLE_LOG": "0",
+            "LOG_FILE": str(directory / "validation.log"),
         }
     )
+    if single_attempt:
+        environment.update(
+            RETRY_429_ENABLED="false",
+            RETRY_429_MAX_RETRIES="0",
+            SMART_429_PROTECTION_ENABLED="false",
+        )
     return environment
 
 
@@ -197,6 +214,22 @@ def _choose_family_models(
     if missing:
         raise RuntimeError("Live public list is missing families: " + ", ".join(missing))
     return selected
+
+
+def _choose_exact_models(
+    public_model_ids: set[str], requested_models: list[str]
+) -> list[tuple[str, str]]:
+    """Select each explicitly requested public ID once, without alias routing."""
+    unique_models = list(dict.fromkeys(requested_models))
+    missing = [model for model in unique_models if model not in public_model_ids]
+    if missing:
+        raise RuntimeError("Live public list is missing models: " + ", ".join(missing))
+    families = {
+        model: family
+        for family, preferences in FAMILY_PREFERENCES
+        for model in preferences
+    }
+    return [(families.get(model, model), model) for model in unique_models]
 
 
 def _safe_error_metadata(response: httpx.Response) -> dict[str, Any]:
@@ -294,6 +327,7 @@ def _validate_live_service(
     all_public_models: bool,
     all_internal_models: bool,
     workers: int,
+    requested_models: list[str] | None = None,
 ) -> dict[str, Any]:
     api_headers = {"Authorization": f"Bearer {api_password}"}
     panel_headers = {"Authorization": f"Bearer {panel_password}"}
@@ -334,7 +368,9 @@ def _validate_live_service(
             for item in model_payload.get("data", [])
             if isinstance(item, dict) and isinstance(item.get("id"), str)
         }
-        if all_models or all_public_models or all_internal_models:
+        if requested_models:
+            selected_models = _choose_exact_models(public_model_ids, requested_models)
+        elif all_models or all_public_models or all_internal_models:
             selected_models = [
                 (
                     str(info.get("family") or model_id),
@@ -419,7 +455,7 @@ def _validate_live_service(
     }
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(epilog='Quota discovery uses manual panel semantics and can clear cooldowns or release quota-group blocks. The default target is the isolated temporary service; --live-url applies these state changes to that running service.')
     parser.add_argument("--source-db", type=Path, required=True)
     parser.add_argument("--port", type=int, default=7862)
@@ -437,6 +473,14 @@ def main() -> int:
         choices=[family for family, _ in FAMILY_PREFERENCES],
         default=[],
         help="Validate only the selected family; may be repeated",
+    )
+    selection.add_argument(
+        "--models",
+        nargs="+",
+        help=(
+            "Validate only these exact public model IDs once each, without "
+            "automatic generation retries; requires an isolated candidate"
+        ),
     )
     selection.add_argument(
         "--all-models",
@@ -459,9 +503,11 @@ def main() -> int:
         default=6,
         help="Number of concurrent model probes (1-12, default: 6)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if not 1 <= args.workers <= 12:
         parser.error("--workers must be between 1 and 12")
+    if args.models and args.live_url:
+        parser.error("--models requires an isolated candidate; omit --live-url")
 
     source_filename, credential = _read_enabled_pro_credential(args.source_db)
     if args.live_url:
@@ -477,6 +523,7 @@ def main() -> int:
             args.all_public_models,
             args.all_internal_models,
             args.workers,
+            requested_models=args.models,
         )
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0 if all(item["ok"] for item in report["results"]) else 1
@@ -492,7 +539,8 @@ def main() -> int:
             [sys.executable, "web.py"],
             cwd=REPOSITORY_ROOT,
             env=_candidate_environment(
-                temporary_directory, args.port, validation_password
+                temporary_directory, args.port, validation_password,
+                single_attempt=bool(args.models),
             ),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -510,6 +558,7 @@ def main() -> int:
                 args.all_public_models,
                 args.all_internal_models,
                 args.workers,
+                requested_models=args.models,
             )
         finally:
             process.terminate()

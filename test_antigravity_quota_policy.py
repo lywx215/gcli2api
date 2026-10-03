@@ -44,12 +44,64 @@ def test_every_gemini_variant_shares(model):
     assert group_for("unknown-model") == "unknown-model"
 
 
+@pytest.mark.parametrize("tier", ["low", "medium", "high"])
+async def test_opus_55_tiers_share_claude_gpt_quota_without_blocking_gemini(store, tier):
+    model = f"claude-opus-5-5-{tier}"
+    assert group_for(model) == "claude-gpt-shared"
+    await store.set_model_cooldown(NAME, model, time.time() + 300, "antigravity")
+    shared_models = [
+        "claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-high",
+        CLAUDE, "claude-sonnet-4-6", "gpt-oss-120b",
+    ]
+    for shared_model in shared_models:
+        assert await store.quota_admit(NAME, shared_model) is None
+    assert await store.quota_admit(NAME, GEMINI)
+
+    await store.set_model_cooldown(NAME, "gpt-oss-120b", None, "antigravity")
+    for shared_model in shared_models:
+        assert await store.quota_admit(NAME, shared_model)
+
+
 def test_week_clock_uses_server_date_and_bounded_local_interval():
     reset = "2026-10-04T09:05:12Z"
     assert rolling_week(reset, {"serverDate": "Sun, 27 Sep 2026 09:05:12 GMT"})
     assert not rolling_week(reset, {"serverDate": "Sun, 27 Sep 2026 10:05:12 GMT"})
     assert not rolling_week(reset, {"sentAt": 0, "receivedAt": 100})
     assert not rolling_week("invalid", {})
+
+
+@pytest.mark.parametrize("sync_mode", ["manual", "automatic"])
+@pytest.mark.parametrize("old_remaining", [0, None])
+async def test_hidden_opus_raw_quota_keeps_shared_cooldown_until_real_recovery(store, sync_mode, old_remaining):
+    current = "claude-opus-5-5-medium"
+    deadline = time.time() + 300
+    await store.set_model_cooldown(NAME, CLAUDE, deadline, "antigravity")
+    models = {
+        CLAUDE: {"remaining": old_remaining, "visible": False,
+                 "resetTimeRaw": datetime.fromtimestamp(deadline, timezone.utc).isoformat()},
+        current: {"remaining": 0.8, "visible": True},
+    }
+    original = json.loads(json.dumps(models))
+
+    async def sync():
+        if sync_mode == "manual":
+            return await store.manual_sync_quota(NAME, models, {}, await store.manual_snapshot(NAME))
+        return await store.quota_sync(NAME, models, {}, await store.quota_snapshot(NAME),
+                                      required_models=[current])
+
+    result = await sync()
+    assert result["cleared"] == []
+    assert result["model_cooldowns"] == {CLAUDE: deadline}
+    assert models == original
+    for model in ["claude-opus-5-5-low", current, "claude-opus-5-5-high", "gpt-oss-120b"]:
+        assert await store.quota_admit(NAME, model) is None
+    assert await store.quota_admit(NAME, GEMINI)
+
+    models[CLAUDE]["remaining"] = 0.2
+    recovered = await sync()
+    assert recovered["model_cooldowns"] == {}
+    assert await store.quota_admit(NAME, current)
+    assert models[CLAUDE]["remaining"] == 0.2 and models[current]["remaining"] == 0.8
 
 
 async def test_independent_groups_and_credentials(store):

@@ -4,7 +4,22 @@ import time
 import pytest
 
 from src.storage.sqlite_manager import SQLiteManager
-from src.storage._stats_common import has_active_model_cooldown
+from src.storage._stats_common import (
+    get_antigravity_cooldown_until,
+    has_active_model_cooldown,
+    normalize_antigravity_cooldown_key,
+)
+
+
+@pytest.mark.parametrize("tier", ["low", "medium", "high"])
+def test_opus_55_keeps_shared_claude_gpt_cooldown(tier):
+    model = f"claude-opus-5-5-{tier}"
+    assert normalize_antigravity_cooldown_key(model) == "claude-gpt-shared"
+    assert get_antigravity_cooldown_until(
+        {"claude-opus-4-6-thinking": 200, "gpt-oss-120b": 300, "gemini-shared": 400},
+        model,
+    ) == 300
+    assert get_antigravity_cooldown_until({model: 300}, "claude-sonnet-4-6") == 300
 
 
 def test_active_cooldown_detection_accepts_persisted_and_parsed_values():

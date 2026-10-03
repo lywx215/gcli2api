@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 import config
 
 from src.antigravity_models import (
@@ -54,7 +56,7 @@ def test_public_catalog_intersects_upstream_in_stable_order():
         "gemini-3.6-flash-medium",
         "claude-sonnet-4-6",
     ]
-    assert len(PUBLIC_ANTIGRAVITY_MODEL_IDS) == len(set(PUBLIC_ANTIGRAVITY_MODEL_IDS)) == 14
+    assert len(PUBLIC_ANTIGRAVITY_MODEL_IDS) == len(set(PUBLIC_ANTIGRAVITY_MODEL_IDS)) == 16
 
 
 def test_quota_metadata_preserves_raw_internal_models():
@@ -153,9 +155,7 @@ def test_bare_and_claude_aliases_resolve_to_real_upstream_ids():
     assert normalize_antigravity_model_alias("claude-sonnet-4-6-thinking") == (
         "claude-sonnet-4-6"
     )
-    assert normalize_antigravity_model_alias("claude-opus-4-6") == (
-        "claude-opus-4-6-thinking"
-    )
+    assert normalize_antigravity_model_alias("claude-opus-4-6") == "claude-opus-4-6"
     assert normalize_antigravity_model_alias("gpt-oss-120b") == "gpt-oss-120b-medium"
     assert map_antigravity_gemini_model("gemini-3.1-pro-high", None, None) == (
         "gemini-pro-agent"
@@ -218,6 +218,9 @@ async def test_fetch_available_models_advertises_only_public_intersection(monkey
             "chat_23310": {},
             "gemini-3.8-flash-medium": {},
             "claude-opus-4-6-thinking": {},
+            "claude-opus-5-5-low": {},
+            "claude-opus-5-5-medium": {},
+            "claude-opus-5-5-high": {},
             "gemini-2.5-flash": {},
             "gemini-3.6-flash-high": {},
         }
@@ -240,7 +243,9 @@ async def test_fetch_available_models_advertises_only_public_intersection(monkey
     assert [model["id"] for model in models] == [
         "gemini-3.8-flash-medium",
         "gemini-3.6-flash-high",
-        "claude-opus-4-6-thinking",
+        "claude-opus-5-5-low",
+        "claude-opus-5-5-medium",
+        "claude-opus-5-5-high",
     ]
 
 
@@ -359,3 +364,91 @@ def test_quota_panel_filters_hidden_models_and_groups_visible_models():
     assert "available: 1" in source
     assert "&& data.success === true" in source
     assert "实际返回:" in source
+
+
+@pytest.mark.parametrize("tier", ["low", "medium", "high"])
+def test_opus_55_catalog_preserves_native_effort(tier):
+    model = f"claude-opus-5-5-{tier}"
+    assert model in PUBLIC_ANTIGRAVITY_MODEL_IDS
+    assert get_base_model_name(model, mode="antigravity") == model
+    metadata = describe_antigravity_model(model)
+    assert metadata["family"] == "claude-opus-5-5"
+    assert metadata["tier"] == tier
+    assert metadata["displayName"] == f"Claude Opus 5.5 ({tier.title()})"
+    for alias in ["claude-opus-5-5", "claude-opus-5-5-thinking"]:
+        assert alias not in PUBLIC_ANTIGRAVITY_MODEL_IDS
+        assert normalize_antigravity_model_alias(alias) == "claude-opus-5-5-medium"
+
+
+@pytest.mark.parametrize("model,expected", [
+    *[(f"claude-opus-5-5-{tier}", f"claude-opus-5-5-{tier}") for tier in ("low", "medium", "high")],
+    ("假流式/claude-opus-5-5-high", "claude-opus-5-5-high"),
+    ("CLAUDE-OPUS-5-5-LOW", "claude-opus-5-5-low"),
+    (" claude-opus-5-5-high ", "claude-opus-5-5-high"),
+    *[(alias, "claude-opus-5-5-medium") for alias in (
+        "claude-opus-5-5", "claude-opus-5-5-thinking", "claude-opus-4-5")],
+])
+@pytest.mark.parametrize("shared", [False, True])
+async def test_opus_routes_do_not_fall_back_to_retired_model(monkeypatch, model, expected, shared):
+    from src.converter.gemini_fix import normalize_gemini_request
+
+    async def thoughts():
+        return True
+
+    monkeypatch.setattr(config, "get_return_thoughts_to_frontend", thoughts)
+    request = {
+        "model": model,
+        "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
+        "generationConfig": {"thinkingConfig": {"thinkingBudget": 1024, "thinkingLevel": "HIGH"}},
+    }
+    result = await normalize_gemini_request(request, mode="antigravity") if shared else await normalize_antigravity_request(request)
+    assert result["model"] == expected
+    assert result["generationConfig"]["thinkingConfig"] == {"includeThoughts": True}
+
+
+def test_opus_retirement_keeps_raw_quota_metadata_outside_public_catalog():
+    retired = "claude-opus-4-6-thinking"
+    current = [f"claude-opus-5-5-{tier}" for tier in ("low", "medium", "high")]
+    assert select_public_model_ids([retired, *current]) == current
+    assert select_public_model_ids([retired]) == []
+    metadata = describe_antigravity_model(retired)
+    assert metadata["rawModelId"] == retired
+    assert metadata["family"] == "claude-opus-4-6"
+    assert metadata["public"] is False
+    assert metadata["visible"] is False
+    assert metadata["availability"] == "unavailable"
+
+
+@pytest.mark.parametrize("current_ids", [[], ["claude-opus-5-5-low"], [
+    "claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-high",
+]])
+async def test_opus_quota_never_renames_retired_values_or_fabricates_tiers(monkeypatch, current_ids):
+    retired = "claude-opus-4-6-thinking"
+    reset = "2026-10-10T00:00:00Z"
+    raw = {retired: {"quotaInfo": {"remainingFraction": 0.25, "resetTime": reset}}}
+    for index, model in enumerate(current_ids):
+        raw[model] = {"quotaInfo": {"remainingFraction": index / 2, "resetTime": reset}} if index != 1 else {}
+
+    async def fake_post_async(**kwargs):
+        return _FakeResponse({"models": raw})
+
+    async def fake_url():
+        return "https://antigravity.invalid"
+
+    monkeypatch.setattr(antigravity_api, "post_async", fake_post_async)
+    monkeypatch.setattr(antigravity_api, "get_antigravity_api_url", fake_url)
+    result = await antigravity_api.fetch_quota_info("fixture-access-token")
+    assert result["success"] is True
+    assert set(result["models"]) == set(raw)
+    old = result["models"][retired]
+    assert old["rawModelId"] == retired
+    assert old["remaining"] == 0.25
+    assert old["resetTimeRaw"] == reset
+    assert old["visible"] is False
+    for index, model in enumerate(current_ids):
+        entry = result["models"][model]
+        assert entry["rawModelId"] == model
+        assert entry["visible"] is True
+        assert entry["testModel"] == model
+        assert entry["remaining"] == (None if index == 1 else index / 2)
+        assert entry["resetTimeRaw"] == ("" if index == 1 else reset)

@@ -16,7 +16,9 @@ from src.converter.antigravity_fix import normalize_antigravity_request
 
 
 NO_PREFILL_MODELS = [
-    "claude-opus-4-6-thinking",
+    "claude-opus-5-5-low",
+    "claude-opus-5-5-medium",
+    "claude-opus-5-5-high",
     "claude-sonnet-4-6",
     "gemini-3.6-flash",
     "gemini-3.7-flash",

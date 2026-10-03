@@ -17,11 +17,14 @@
 
 | 组 | 范围 |
 | --- | --- |
-| `claude-gpt-shared` | `claude-*`、`gpt-oss-*`，包括 Opus/Sonnet 4.6 Thinking、GPT-OSS 120B Medium |
+| `claude-gpt-shared` | `claude-*`、`gpt-oss-*`，包括 Opus 5.5 Low/Medium/High、Sonnet 4.6、GPT-OSS 120B Medium，以及历史 Opus 4.6 冷却键 |
 | `gemini-shared` | 全部 `gemini-*`，包括 high/medium/low/tiered、Pro Agent、旧版、Lite、图像模型 |
 | 其他 | 未知模型各自独立 |
 
 两组分别计时。Claude/GPT 剩余 41 小时、Gemini 剩余 66 小时不会合并成 66 小时。保留旧具体模型键，读取时取同组最长有效期限；写入不缩短同组期限。显式清除一个模型计时冷却会清除其整组，统计仍按原模型粒度，周期不重复结算。
+
+Opus 4.6 仅保留历史冷却与统计保护，不再接受新请求；本地 HTTP 400 拒绝发生在上游调用前，
+不会因历史共享组状态而重新开放旧模型。Opus 5.5 切换证据见 [Opus 5.5 说明](ANTIGRAVITY_OPUS_55.md)。
 
 `quota_group_states` 和数值 `model_cooldowns` 分开持久化：
 

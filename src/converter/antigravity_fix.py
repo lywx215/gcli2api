@@ -8,6 +8,10 @@ import uuid
 from typing import Any, Dict, Optional
 
 from log import log
+from src.antigravity_models import (
+    reject_retired_antigravity_opus_model,
+    resolve_antigravity_opus_model,
+)
 from src.converter.gemini_fix import (
     get_thinking_settings,
     map_antigravity_gemini_model,
@@ -606,8 +610,8 @@ def _normalize_antigravity_request(
     return_thoughts: bool,
 ) -> str:
     """antigravity 模式专属处理，返回处理后的模型名"""
-    # 1. 思考模型处理：antigravity 模型名不带 -high/-low/-search 等后缀，
-    # 仅通过 "think" 是否出现在模型名中判断，命中则使用默认思考预算。
+    reject_retired_antigravity_opus_model(model)
+    # 1. 兼容旧 thinking 后缀；原生档位模型随后按其真实路由处理。
     thinking = is_thinking_model(model)
     thinking_budget, thinking_level = get_thinking_settings(model)
     if thinking_budget is None and thinking_level is None:
@@ -654,6 +658,13 @@ def _normalize_antigravity_request(
             thinking_config.pop("thinkingLevel", None)
             thinking_config["includeThoughts"] = return_thoughts
 
+        if "claude" in model.lower() and "opus" in model.lower():
+            # Opus 5.5 depth is selected by the upstream route, not a local budget.
+            thinking_config = generation_config.setdefault("thinkingConfig", {})
+            thinking_config.pop("thinkingBudget", None)
+            thinking_config.pop("thinkingLevel", None)
+            thinking_config["includeThoughts"] = return_thoughts
+
         # 检查最后一个 assistant 消息是否以 thinking 块开始
         contents = result.get("contents", [])
 
@@ -695,7 +706,7 @@ def _normalize_antigravity_request(
         # 使用关键词匹配而不是精确匹配，更灵活地处理各种变体
         original_model = model
         if "opus" in model.lower():
-            model = "claude-opus-4-6-thinking"
+            model = resolve_antigravity_opus_model(model)
         elif "sonnet" in model.lower():
             model = "claude-sonnet-4-6"
         elif "haiku" in model.lower():
@@ -728,6 +739,7 @@ async def normalize_antigravity_request(
     Returns:
         规范化后的请求
     """
+    reject_retired_antigravity_opus_model(request.get("model", ""))
     from src.diagnostics.semantic import normalization_start, normalization_end
     diagnostic_before = normalization_start(request)
     diagnostic_changes = []
@@ -899,7 +911,10 @@ async def normalize_antigravity_request(
             log.warning(f"[ANTIGRAVITY] 不支持预填充，移除了 {removed_count} 条末尾 model 消息")
             result["contents"] = contents
 
-    if generation_config:
+    # An Opus tool call can remove the final config field; do not retain its input copy.
+    if generation_config or (
+        "claude-opus-5-5-" in model.lower() and "generationConfig" in result
+    ):
         result["generationConfig"] = generation_config
 
     normalization_end(diagnostic_before, result, diagnostic_changes)

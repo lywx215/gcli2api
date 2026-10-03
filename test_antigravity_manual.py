@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from src.panel import creds as panel
 from src.panel import antigravity_manual as manual
@@ -34,6 +35,96 @@ def panel_store(store, monkeypatch):
 
 def reply(text="测试成功", finish="STOP"):
     return {"response": {"candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": finish}]}}
+
+
+@pytest.mark.parametrize("origin", ["legacy", "manual"])
+@pytest.mark.parametrize("outcome", ["success", "failure", "transport", "cancelled"])
+@pytest.mark.parametrize("requested,upstream,stats_model", [
+    ("claude-opus-5-5-low", "claude-opus-5-5-low", "claude-opus-5-5-low"),
+    ("claude-opus-5-5-medium", "claude-opus-5-5-medium", "claude-opus-5-5-medium"),
+    ("claude-opus-5-5-high", "claude-opus-5-5-high", "claude-opus-5-5-high"),
+    ("gemini-3.1-pro", "gemini-pro-agent", "gemini-3.1-pro"),
+])
+async def test_panel_probe_stats_use_routed_opus_generation(
+    panel_store, monkeypatch, origin, outcome, requested, upstream, stats_model,
+):
+    calls, records = [], []
+    started = asyncio.Event()
+
+    async def storage():
+        return SimpleNamespace(_backend=panel_store, get_credential=panel_store.get_credential)
+
+    async def api_url():
+        return "https://synthetic.invalid"
+
+    async def logical(*args):
+        records.append(args)
+
+    async def post(**kwargs):
+        calls.append(kwargs["json"]["model"])
+        started.set()
+        if outcome == "cancelled":
+            await asyncio.Event().wait()
+        if outcome == "transport":
+            raise httpx.ConnectError("synthetic transport failure")
+        return httpx.Response(200, json=reply() if outcome == "success" else reply("wrong"))
+
+    monkeypatch.setattr(panel, "get_storage_adapter", storage)
+    monkeypatch.setattr(panel, "get_antigravity_api_url", api_url)
+    monkeypatch.setattr(panel, "record_logical_request", logical)
+    monkeypatch.setattr("src.httpx_client.post_async", post)
+    probe = panel.test_credential_common(NAME, mode="antigravity", model=requested, origin=origin)
+    if outcome == "cancelled":
+        task = asyncio.create_task(probe)
+        await asyncio.wait_for(started.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    elif outcome == "transport" and origin == "legacy":
+        with pytest.raises(HTTPException) as error:
+            await probe
+        assert error.value.status_code == 500
+    else:
+        response = await probe
+        assert json.loads(response.body)["success"] is (outcome == "success")
+
+    assert calls == [upstream]
+    # Legacy cancellation does not settle a logical request; preserve that policy.
+    expected = [] if origin == "legacy" and outcome == "cancelled" else [
+        (stats_model, "antigravity", outcome == "success")
+    ]
+    assert records == expected
+
+
+@pytest.mark.parametrize("origin", ["legacy", "manual", "direct_manual"])
+@pytest.mark.parametrize("model", [
+    "claude-opus-4-6", "claude-opus-4-6-thinking", "claude-opus-4.6-high",
+    " CLAUDE-OPUS-4-6-LOW ", "假流式/claude-opus-4-6",
+    "抗截断/claude-opus-4.6", "流式抗截断/ 假流式/ CLAUDE-OPUS-4-6-thinking ",
+    "models/claude-opus-4-6-thinking", "arbitrary/claude-opus-4.6-high",
+    "models/ CLAUDE-OPUS-4-6 ",
+    "claude-opus-4-6/foo", "claude-opus-4.6/",
+    "prefix-claude-opus-4-6-thinking", "notclaude-opus-4.6-high",
+])
+async def test_retired_opus_panel_probe_rejected_before_any_side_effect(monkeypatch, origin, model):
+    async def forbidden(*args, **kwargs):
+        pytest.fail("Retired probe must not prepare credentials, dispatch, or record statistics")
+
+    monkeypatch.setattr(panel, "get_storage_adapter", forbidden)
+    monkeypatch.setattr(manual, "prepare", forbidden)
+    monkeypatch.setattr(panel, "record_logical_request", forbidden)
+    monkeypatch.setattr("src.httpx_client.post_async", forbidden)
+    if origin == "direct_manual":
+        response = await manual.test(NAME, model)
+    else:
+        response = await panel.test_credential_common(NAME, mode="antigravity", model=model, origin=origin)
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "success": False, "status_code": 400, "upstream_status": None,
+        "response_source": "local", "phase": "validation", "phases": [],
+        "error": "Invalid request. Check the request parameters and try again.",
+        "state_update": {},
+    }
 
 
 @pytest.mark.parametrize("disabled,permanent", [(False, False), (True, False), (True, True)])
@@ -89,6 +180,29 @@ async def test_google_success_survives_settlement_failure(panel_store, monkeypat
     assert result.status_code == 200 and body["success"]
     assert body["state_update"]["settlement"]["status"] == "failed"
     assert b"SECRET" not in result.body
+
+
+@pytest.mark.parametrize("old_remaining", [0, None])
+async def test_manual_quota_forwards_hidden_opus_raw_values_to_sync(panel_store, monkeypatch, old_remaining):
+    current = "claude-opus-5-5-medium"
+    deadline = time.time() + 300
+    await panel_store.set_model_cooldown(NAME, CLAUDE, deadline, "antigravity")
+    models = {
+        CLAUDE: {"remaining": old_remaining, "rawModelId": CLAUDE, "visible": False},
+        current: {"remaining": 0.8, "rawModelId": current, "visible": True},
+    }
+
+    async def fetch(*args, **kwargs):
+        return {"success": True, "models": models, "upstream_status": 200}
+
+    monkeypatch.setattr(panel, "fetch_quota_info", fetch)
+    result = await manual.quota(NAME, sync=True)
+    assert result["models"] == models
+    assert result["models"][CLAUDE]["remaining"] == old_remaining
+    assert result["models"][current]["remaining"] == 0.8
+    assert result["model_cooldowns"] == {CLAUDE: deadline}
+    assert result["cleared"] == []
+    assert await panel_store.quota_admit(NAME, current) is None
 
 
 @pytest.mark.parametrize("models,clears", [
