@@ -2631,9 +2631,92 @@ function modelAccessBatchText(summary) {
         .replace('当前其他筛选条件下', '本次批量结果').replace('覆盖全部分页', '查询失败保留已有证据');
 }
 
+function antigravityQuotaGroupState(data, group) {
+    const projected = data.quota_groups?.[group];
+    if (projected) return projected;
+    // Old responses can establish an unknown block, but absence is not release evidence.
+    return data.quota_group_states?.[group]?.state === 'blocked_unknown'
+        ? {blockedUnknown: true, restricted: true} : null;
+}
+
+function antigravityQuotaStatuses(data) {
+    const labels = {supported: '目录支持', unavailable: '暂不可用', unknown: '待确认'};
+    const access = ['claude-opus-5-5', 'claude-opus-4-6'].map(family => {
+        const status = modelAccessStatus(data.model_access_families, family);
+        const tone = status === 'unavailable' ? 'is-warning' : status === 'unknown' ? 'is-muted' : '';
+        return `<span class="ag-quota-badge ${tone}">Opus ${family === 'claude-opus-5-5' ? '5.5' : '4.6'} · ${labels[status]}</span>`;
+    });
+    const groups = ['gemini-shared', 'claude-gpt-shared'].map(group => {
+        const state = antigravityQuotaGroupState(data, group);
+        const tone = data.quota_state_invalid ? 'is-error' : !state ? 'is-muted'
+            : state.blockedUnknown || state.restricted || state.cooldownUntil > Date.now() / 1000 ? 'is-warning' : '';
+        return `<span class="ag-quota-badge ${tone}" data-quota-compact-group="${group}">${escapeHtml(quotaGroupText(group, state, Date.now() / 1000, data.quota_state_invalid))}</span>`;
+    });
+    return `<div class="ag-quota-statuses">${access.concat(groups).join('')}</div>`;
+}
+
+function antigravityQuotaWarnings(data, success) {
+    const messages = [];
+    if (!success) messages.push('查询失败，以下为已保存证据，保护限制未解除。');
+    else if (manualUpdateIncomplete(data)) messages.push('额度已加载，部分状态未更新。');
+    if (data.quota_state_invalid) messages.push('额度状态异常：额度受限，禁止派发。');
+    const otherGroups = [...new Set([...Object.keys(data.quota_groups || {}), ...Object.keys(data.quota_group_states || {})])].filter(group => {
+        const state = antigravityQuotaGroupState(data, group);
+        return !['gemini-shared', 'claude-gpt-shared'].includes(group) &&
+            (state?.restricted || state?.blockedUnknown || state?.cooldownUntil > Date.now() / 1000);
+    });
+    if (otherGroups.length) messages.push(`其他额度组受限 ${otherGroups.length} 项，详见冷却与查询详情。`);
+    return messages.length ? `<div class="ag-quota-warning" role="status">${messages.map(escapeHtml).join('<br>')}</div>` : '';
+}
+
+function antigravityQuotaExtra(data, success, errorHTML = '') {
+    const groups = new Set(['gemini-shared', 'claude-gpt-shared',
+        ...Object.keys(data.quota_group_states || {}), ...Object.keys(data.quota_groups || {})]);
+    const protection = Array.from(groups).map(group => {
+        const state = antigravityQuotaGroupState(data, group);
+        const until = Number(state?.cooldownUntil || 0);
+        const time = until > Date.now() / 1000 ? `<div>计时冷却至 ${new Date(until * 1000).toLocaleString()}</div>` : '';
+        const override = data.quota_group_states?.[group]?.state === 'manual_override'
+            ? '<div>管理员已解除异常拦截；保留计时冷却。</div>' : '';
+        return `<div class="ag-quota-section"><span data-quota-label="${escapeHtmlAttribute(group)}">${escapeHtml(quotaGroupText(group, state, Date.now() / 1000, data.quota_state_invalid && !state?.blockedUnknown))}</span>${time}${override}
+            ${success && state?.blockedUnknown ? `<button type="button" data-release-quota="${escapeHtmlAttribute(group)}">解除该组异常拦截（保留计时冷却）</button>` : ''}</div>`;
+    }).join('');
+    const missingOpus = success && data.models && typeof data.models === 'object' && !Array.isArray(data.models) &&
+        !Object.keys(data.models).some(name => /^claude-opus-5-5-(low|medium|high)$/.test(name));
+    const diagnostic = manualResultSummary(data);
+    return `<details class="ag-quota-details" data-quota-extra>
+        <summary>权限、冷却与查询详情</summary>
+        ${errorHTML ? `<div class="ag-quota-section">${errorHTML}</div>` : ''}
+        ${modelAccessSummary(data)}
+        <div class="ag-quota-section" data-quota-protection><strong>${success ? '共享额度保护' : '已保存的额度保护状态（查询失败未解除）'}</strong>${protection}</div>
+        ${missingOpus ? '<div class="ag-quota-section" data-opus-catalog-notice>本次 Google 官方模型目录未返回 Claude Opus 5.5，暂无对应额度或可测试模型。</div>' : ''}
+        <div class="ag-quota-section"><strong>模型分组说明</strong><div>终端可选模型：与当前 Antigravity CLI 公共模型目录一致。</div><div>可用模型：可通过现有 Antigravity 路由直接使用，但不在公共模型 API 中广告。</div><div>内部/兼容模型：保留上游原始 ID，可直接测试但不在公共模型 API 中广告。</div></div>
+        ${diagnostic ? `<div class="ag-quota-section"><strong>查询与状态同步记录</strong><pre class="ag-quota-diagnostics">${escapeHtml(diagnostic)}</pre></div>` : ''}
+    </details>`;
+}
+
+function scrollAntigravityQuotaIntoView(quotaDetails, contentDiv, requestId) {
+    const schedule = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : callback => callback();
+    schedule(() => {
+        const panel = document.getElementById('antigravity-manageTab');
+        if (quotaDetails._quotaRequestId !== requestId || quotaDetails.style.display !== 'block' ||
+            quotaDetails.isConnected === false || contentDiv.isConnected === false || document.hidden || (panel && !panel.classList?.contains('active'))) return;
+        const heading = contentDiv.querySelector?.('[data-quota-card-heading]');
+        if (!heading || heading.isConnected === false) return;
+        const rect = heading.getBoundingClientRect();
+        const height = window.innerHeight || document.documentElement?.clientHeight;
+        if (height && (rect.top < 0 || rect.bottom > height)) {
+            const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+            heading.scrollIntoView({block: 'nearest', behavior: reducedMotion ? 'auto' : 'smooth'});
+        }
+    });
+}
+
 async function _toggleQuotaDetails(pathId, mode) {
     const quotaDetails = document.getElementById('quota-' + pathId);
     if (!quotaDetails) return;
+    const requestId = mode === 'antigravity'
+        ? (quotaDetails._quotaRequestId = (quotaDetails._quotaRequestId || 0) + 1) : null;
 
     // 切换显示状态
     const isShowing = quotaDetails.style.display === 'block';
@@ -2658,6 +2741,8 @@ async function _toggleQuotaDetails(pathId, mode) {
                     headers: getAuthHeaders()
                 });
                 const data = await response.json();
+                if (mode === 'antigravity' && (quotaDetails._quotaRequestId !== requestId ||
+                    quotaDetails.style.display !== 'block' || quotaDetails.isConnected === false)) return;
 
                 if (response.ok && data.success) {
                     // 成功时渲染美化的额度信息
@@ -2671,7 +2756,9 @@ async function _toggleQuotaDetails(pathId, mode) {
                             </div>
                         `;
                     } else {
-                        let quotaHTML = `
+                        let quotaHTML = mode === 'antigravity'
+                            ? `<div class="ag-quota-view"><h4 class="ag-quota-heading">额度</h4>${antigravityQuotaStatuses(data)}${antigravityQuotaWarnings(data, true)}<div class="ag-quota-grid">`
+                            : `
                             <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 15px; border-radius: 8px 8px 0 0; margin: -10px -10px 15px -10px;">
                                 <h4 style="margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px;">
                                     <span style="font-size: 20px;">📊</span>
@@ -2681,27 +2768,6 @@ async function _toggleQuotaDetails(pathId, mode) {
                             </div>
                             <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;">
                         `;
-
-                        if (mode === 'antigravity') {
-                            const groups = new Map([['claude-gpt-shared', 'Claude / GPT-OSS'], ['gemini-shared', 'Gemini 全部模型']]);
-                            for (const group of new Set([...Object.keys(data.quota_group_states || {}), ...Object.keys(data.quota_groups || {})])) {
-                                if (!groups.has(group)) groups.set(group, group);
-                            }
-                            for (const [rawGroup, rawTitle] of groups) {
-                                const group = escapeHtmlAttribute(rawGroup);
-                                const title = escapeHtml(rawTitle);
-                                const state = (data.quota_group_states || {})[rawGroup] || {};
-                                // The server applies the same alias/group function used by admission.
-                                const until = Number((data.quota_groups || {})[rawGroup]?.cooldownUntil || 0);
-                                const timed = until * 1000 > Date.now() ? `计时冷却至 ${new Date(until * 1000).toLocaleString()}` : '无有效计时冷却';
-                                const label = state.state === 'blocked_unknown' ? '额度不可用，恢复时间未知'
-                                    : state.state === 'manual_override' ? '管理员已解除异常拦截' : '无异常额度拦截';
-                                quotaHTML += `<div style="grid-column:1/-1;padding:8px;border:1px solid #ccc;border-radius:4px;">
-                                    <strong>${title}</strong> · <span data-quota-label="${group}">${label}</span><br>${timed}
-                                    ${state.state === 'blocked_unknown' ? `<button type="button" data-release-quota="${group}">解除该组异常拦截（保留计时冷却）</button>` : ''}
-                                </div>`;
-                            }
-                        }
 
                         const _nowMs = Date.now();
                         let modelEntries = Object.entries(models);
@@ -2741,11 +2807,6 @@ async function _toggleQuotaDetails(pathId, mode) {
                                 const groupTitle = quotaGroup === 'public'
                                     ? '终端可选模型'
                                     : (quotaGroup === 'available' ? '可用模型' : '内部/兼容模型');
-                                const groupHint = quotaGroup === 'public'
-                                    ? '与当前 Antigravity CLI 公共模型目录一致'
-                                    : (quotaGroup === 'available'
-                                        ? '可通过现有 Antigravity 路由直接使用，但不在公共模型 API 中广告'
-                                        : '保留上游原始 ID，可直接测试但不在公共模型 API 中广告');
                                 const groupColors = {
                                     public: ['#e8f5e9', '#1b5e20'],
                                     available: ['#e3f2fd', '#0d47a1'],
@@ -2755,7 +2816,6 @@ async function _toggleQuotaDetails(pathId, mode) {
                                 quotaHTML += `
                                     <div data-quota-model-group="${quotaGroup}" style="grid-column: 1 / -1; margin-top: ${activeQuotaGroup ? '8px' : '0'}; padding: 7px 9px; border-radius: 4px; background: ${groupBackground}; color: ${groupColor};">
                                         <span style="font-size: 12px; font-weight: bold;">${groupTitle}</span>
-                                        <span style="font-size: 10px; margin-left: 6px; opacity: 0.85;">${groupHint}</span>
                                     </div>
                                 `;
                                 activeQuotaGroup = quotaGroup;
@@ -2793,8 +2853,8 @@ async function _toggleQuotaDetails(pathId, mode) {
                             const modelBadge = typeof quotaData.badge === 'string' ? quotaData.badge : '';
 
                             quotaHTML += `
-                                <div style="background: white; border-left: 4px solid ${percentageColor}; border-radius: 4px; padding: 8px 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                <div style="background: white; border-left: 4px solid ${percentageColor}; border-radius: 4px; padding: 8px 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);"${mode === 'antigravity' ? ' class="ag-quota-card" data-quota-card' : ''}>
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;"${mode === 'antigravity' ? ' data-quota-card-heading' : ''}>
                                         <div style="font-weight: bold; color: #333; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: 8px;" title="${displayName} - 剩余${remainingPercentage}${remainingFraction === null ? '' : '%'} - ${resetTime}${rawModelId !== displayName ? ` (原始: ${rawModelId})` : ''}">
                                             ${displayName}${mode === 'antigravity' && modelBadge ? ` <span data-model-availability="${availability}" style="font-size:9px;color:#b26a00;">${modelBadge}</span>` : ''}
                                         </div>
@@ -2816,6 +2876,10 @@ async function _toggleQuotaDetails(pathId, mode) {
                         }
 
                         quotaHTML += '</div>';
+                        if (mode === 'antigravity') {
+                            if (!modelEntries.length) quotaHTML += '<div class="ag-quota-empty">本次未返回可展示额度。</div>';
+                            quotaHTML += antigravityQuotaExtra(data, true) + '</div>';
+                        }
                         contentDiv.innerHTML = quotaHTML;
                         contentDiv.querySelectorAll('[data-release-quota]').forEach(button => {
                             button.addEventListener('click', async () => {
@@ -2828,6 +2892,11 @@ async function _toggleQuotaDetails(pathId, mode) {
                                     });
                                     if (!released.ok) throw new Error('解除失败');
                                     button.parentElement.querySelector('[data-quota-label]').textContent = '管理员已解除异常拦截；计时冷却仍有效';
+                                    contentDiv.querySelectorAll('[data-quota-compact-group]').forEach(badge => {
+                                        if (badge.dataset.quotaCompactGroup === group) {
+                                            badge.textContent = `${quotaGroupLabel(group)}：异常拦截已解除，冷却状态待刷新`;
+                                        }
+                                    });
                                     button.remove();
                                     await AppState.antigravityCreds.refresh();
                                 } catch (error) {
@@ -2838,16 +2907,7 @@ async function _toggleQuotaDetails(pathId, mode) {
                         });
                     }
 
-                    if (mode === 'antigravity') {
-                        // Only an actual returned model map can establish missing tiers.
-                        if (data.models && typeof data.models === 'object' && !Array.isArray(data.models)) {
-                            if (!Object.keys(data.models).some(name => /^claude-opus-5-5-(low|medium|high)$/.test(name))) {
-                                contentDiv.insertAdjacentHTML('afterbegin', '<div data-opus-catalog-notice style="margin-bottom:10px;padding:10px;background:#e3f2fd;font-size:12px;">本次 Google 官方模型目录未返回 Claude Opus 5.5，暂无对应额度或可测试模型。</div>');
-                            }
-                        }
-                        contentDiv.insertAdjacentHTML('afterbegin', modelAccessSummary(data));
-                        contentDiv.insertAdjacentHTML('afterbegin', `<pre style="white-space:pre-wrap">${escapeHtml(manualResultSummary(data))}</pre>`);
-                    }
+                    if (mode === 'antigravity') scrollAntigravityQuotaIntoView(quotaDetails, contentDiv, requestId);
                     showStatus('✅ 成功加载额度信息', manualUpdateIncomplete(data) ? 'info' : 'success');
                 } else {
                     // 失败时显示格式化的错误信息
@@ -2913,28 +2973,25 @@ async function _toggleQuotaDetails(pathId, mode) {
                         `;
                     }
 
-                    contentDiv.innerHTML = errorDisplayHTML;
                     if (mode === 'antigravity') {
-                        if (data.quota_groups || data.quota_group_states || data.quota_state_invalid) {
-                            const groups = new Set(['gemini-shared', 'claude-gpt-shared', ...Object.keys(data.quota_groups || {}), ...Object.keys(data.quota_group_states || {})]);
-                            const protection = Array.from(groups).map(group => {
-                                const state = data.quota_groups?.[group];
-                                const blocked = state?.blockedUnknown || data.quota_group_states?.[group]?.state === 'blocked_unknown';
-                                const until = Number(state?.cooldownUntil || 0);
-                                const label = blocked ? '额度受限（恢复时间未知）' : until > Date.now() / 1000 ? '额度受限（计时冷却）' : state ? (state.restricted ? '额度受限' : '额度未受限') : '状态暂不可用';
-                                const title = {'gemini-shared': 'Gemini', 'claude-gpt-shared': 'Claude / GPT-OSS'}[group] || group;
-                                return `<div>${escapeHtml(title)}：${label}${until > Date.now() / 1000 ? ' · 至 ' + new Date(until * 1000).toLocaleString() : ''}</div>`;
-                            }).join('');
-                            contentDiv.insertAdjacentHTML('afterbegin', `<div data-quota-protection>已保存的额度保护状态（查询失败未解除）：${protection}${data.quota_state_invalid ? '<div>额度状态异常：额度受限，禁止派发</div>' : ''}</div>`);
-                        }
-
-                        contentDiv.insertAdjacentHTML('afterbegin', modelAccessSummary(data));
-                        contentDiv.insertAdjacentHTML('afterbegin', `<pre>${escapeHtml(manualResultSummary(data))}</pre>`);
-                    }
+                        const message = String(parsed?.error?.message || rawError).split('\n')[0];
+                        contentDiv.innerHTML = `<div class="ag-quota-view"><h4 class="ag-quota-heading">获取额度信息失败</h4>
+                            <div class="ag-quota-warning" role="alert">${escapeHtml(message.slice(0, 240))}${message.length > 240 ? '…' : ''}</div>
+                            ${antigravityQuotaStatuses(data)}${antigravityQuotaWarnings(data, false)}${antigravityQuotaExtra(data, false, errorDisplayHTML)}</div>`;
+                    } else contentDiv.innerHTML = errorDisplayHTML;
                     showStatus(`❌ 获取额度信息失败`, 'error');
                 }
             } catch (error) {
-                contentDiv.innerHTML = `
+                if (mode === 'antigravity' && (quotaDetails._quotaRequestId !== requestId ||
+                    quotaDetails.style.display !== 'block' || quotaDetails.isConnected === false)) return;
+                if (mode === 'antigravity') {
+                    const saved = AppState.antigravityCreds.data?.[filename] || {};
+                    const message = String(error.message || '网络错误');
+                    contentDiv.innerHTML = `<div class="ag-quota-view"><h4 class="ag-quota-heading">获取额度信息失败</h4>
+                        <div class="ag-quota-warning" role="alert">网络错误：${escapeHtml(message.slice(0, 240))}${message.length > 240 ? '…' : ''}</div>
+                        ${antigravityQuotaStatuses(saved)}${antigravityQuotaWarnings(saved, false)}
+                        ${antigravityQuotaExtra(saved, false, `<div>网络错误：${escapeHtml(message)}</div>`)}</div>`;
+                } else contentDiv.innerHTML = `
                     <div style="text-align: center; padding: 20px; color: #dc3545;">
                         <div style="font-size: 48px; margin-bottom: 10px;">❌</div>
                         <div style="font-weight: bold; margin-bottom: 5px;">网络错误</div>

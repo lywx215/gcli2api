@@ -631,6 +631,135 @@
             }
         }
 
+        /* Antigravity quota layout: keep balances first on narrow screens. */
+        .ag-quota-view {
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+
+        .ag-quota-view .ag-quota-heading {
+            margin: 0 0 8px;
+            color: #263238;
+            font-size: 15px;
+            line-height: 1.4;
+        }
+
+        .ag-quota-view .ag-quota-statuses {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-start;
+            gap: 5px;
+            margin-bottom: 10px;
+        }
+
+        .ag-quota-view .ag-quota-badge {
+            display: inline-block;
+            box-sizing: border-box;
+            min-width: 0;
+            max-width: 100%;
+            padding: 3px 7px;
+            border: 1px solid #a7d7b4;
+            border-radius: 5px;
+            background: #f0faf3;
+            color: #246238;
+            font-size: 12px;
+            line-height: 1.4;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+
+        .ag-quota-view .ag-quota-badge.is-warning {
+            border-color: #e4c285;
+            background: #fff8e8;
+            color: #85520b;
+        }
+
+        .ag-quota-view .ag-quota-badge.is-error {
+            border-color: #e3a4a4;
+            background: #fff0f0;
+            color: #a52b2b;
+        }
+
+        .ag-quota-view .ag-quota-badge.is-muted {
+            border-color: #c9ced3;
+            background: #f4f5f6;
+            color: #59636b;
+        }
+
+        .ag-quota-view .ag-quota-warning {
+            margin: 0 0 10px;
+            padding: 7px 9px;
+            border-left: 3px solid #c88c20;
+            border-radius: 3px;
+            background: #fff8e8;
+            color: #78500f;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .ag-quota-view .ag-quota-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr));
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .ag-quota-view .ag-quota-card {
+            min-width: 0;
+        }
+
+        .ag-quota-view [data-quota-card-heading] {
+            scroll-margin-block: 16px;
+        }
+
+        .ag-quota-view .ag-quota-empty {
+            padding: 18px 10px;
+            color: #59636b;
+            text-align: center;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .ag-quota-view .ag-quota-details {
+            margin-top: 12px;
+            border-top: 1px solid #dce2e6;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .ag-quota-view .ag-quota-details > summary {
+            padding: 10px 0;
+            color: #365b77;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .ag-quota-view .ag-quota-details > summary:focus-visible {
+            outline: 2px solid #2672ab;
+            outline-offset: 2px;
+            border-radius: 3px;
+        }
+
+        .ag-quota-view .ag-quota-section {
+            margin: 0 0 10px;
+            min-width: 0;
+        }
+
+        .ag-quota-view .ag-quota-diagnostics {
+            box-sizing: border-box;
+            max-width: 100%;
+            max-height: 240px;
+            margin: 8px 0 0;
+            padding: 8px;
+            overflow: auto;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            background: #f4f6f8;
+            border-radius: 4px;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
         .cred-quota-content {
             background: linear-gradient(to bottom, #ffffff, #f8f9fa);
             border: 2px solid #17a2b8;

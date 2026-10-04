@@ -82,6 +82,8 @@ async def test_opus_version_cards_probes_and_historical_stats(monkeypatch):
     stats_start = source.index("const MODEL_FAMILY_DISPLAY =")
     stats_end = source.index("async function refreshTodayStats(", stats_start)
     helpers_start = source.index("function isVisibleAntigravityQuotaModel(")
+    group_helpers = source[source.index("function formatCooldownTime("):source.index("function formatErrorCodeLabel(")]
+    manual_helpers = source[source.index("function manualResultSummary("):source.index("async function testAntigravityCredential(")]
     script = "const backend = " + json.dumps(fixtures) + ";\n" + r'''
 const assert = require('node:assert/strict');
 let payload, status, responseOk = true, fetches = [];
@@ -90,17 +92,19 @@ const content = {innerHTML: '', getAttribute: () => 'synthetic.json',
         assert.equal(position, 'afterbegin');
         this.innerHTML = html + this.innerHTML;
     }};
-const details = {style: {display: 'none'}, querySelector: () => content};
-global.document = {getElementById: () => details};
+const details = {isConnected: true, style: {display: 'none'}, querySelector: () => content};
+global.document = {getElementById: id => id === 'antigravity-manageTab' ? {classList: {contains: () => true}} : details};
+global.window = {innerHeight: 800, innerWidth: 1200};
+global.requestAnimationFrame = () => {};
+content.isConnected = true;
+content.querySelector = () => null;
 global.fetch = async (url) => {fetches.push(url); return {ok: responseOk, status: responseOk ? 200 : 403, json: async () => payload};};
 global.getAuthHeaders = () => ({});
 global.escapeHtml = global.escapeHtmlAttribute = String;
-global.manualResultSummary = () => '';
-global.manualUpdateIncomplete = () => false;
 global.showStatus = (text, tone) => {status = {text, tone};};
 global.showMessageModal = () => {};
 global.setTimeout = (callback) => callback();
-''' + source[quota_start:quota_end] + "\n" + source[stats_start:stats_end] + "\n" + source[helpers_start:] + r'''
+''' + group_helpers + manual_helpers + source[quota_start:quota_end] + "\n" + source[stats_start:stats_end] + "\n" + source[helpers_start:] + r'''
 (async () => {
     async function renderResponse(data, mode = 'antigravity', ok = true) {
         details.style.display = 'none';
@@ -133,9 +137,9 @@ global.setTimeout = (callback) => callback();
     assert.match(accessFailed, /目录查询失败，保留原限制/);
     assert.doesNotMatch(accessFailed, /已恢复/);
     const live = backend.live.models;
-    const cardStart = '<div style="background: white; border-left:';
+    const cardStart = /<div\b[^>]*\bdata-quota-card(?=[\s=>])(?:="[^"]*")?[^>]*>/;
     function modelCards(html) {
-        return html.split(cardStart).slice(1).map(card => card.split('<div data-quota-model-group=')[0]);
+        return html.split(cardStart).slice(1).map(card => card.split(/<div[^>]*data-quota-model-group=/)[0].split(/<details[^>]*data-quota-extra/)[0]);
     }
     const mixedBefore = JSON.stringify(backend.mixed);
     const mixedHtml = await render(backend.mixed.models);
@@ -175,7 +179,7 @@ global.setTimeout = (callback) => callback();
     assert.equal(modelCards(missingHtml).length, 2);
     assert.doesNotMatch(missingHtml, /data-opus-catalog-notice/);
     assert.match(missingHtml, /data-quota-model-group="public"/);
-    assert.doesNotMatch(missingHtml, /claude-opus-5-5-high|内部\/兼容/);
+    assert.doesNotMatch(missingHtml.split(/<details[^>]*data-quota-extra/)[0], /claude-opus-5-5-high|内部\/兼容/);
     const unknownCard = modelCards(missingHtml).find(card => card.includes('Claude Opus 5.5 (Medium)'));
     assert.match(unknownCard, /剩余未知 - N\/A/);
     assert.equal(backend.missing.models['claude-opus-5-5-medium'].remaining, null);
@@ -205,7 +209,7 @@ global.setTimeout = (callback) => callback();
     for (const scenario of ['onlyOld', 'empty', 'internal']) {
         const before = JSON.stringify(backend[scenario]);
         const html = await renderResponse(backend[scenario]);
-        const notice = html.match(/<div data-opus-catalog-notice[^>]*>([^<]+)<\/div>/)[1];
+        const notice = html.match(/<div\b[^>]*data-opus-catalog-notice[^>]*>([^<]+)<\/div>/)[1];
         assert.equal(notice, '本次 Google 官方模型目录未返回 Claude Opus 5.5，暂无对应额度或可测试模型。');
         if (scenario !== 'onlyOld') assert.doesNotMatch(html, /testModelQuota\(this, 'synthetic.json', 'claude-opus/);
         assert.equal(modelCards(html).length, scenario === 'empty' ? 0 : 1);
@@ -226,7 +230,8 @@ global.setTimeout = (callback) => callback();
     }
     const cli = await render({'claude-opus-4-6': {remaining: 0.9}}, 'geminicli');
     assert.ok(cli.includes('claude-opus-4-6'));
-    assert.doesNotMatch(cli, /data-opus-catalog-notice/);
+    assert.doesNotMatch(cli, /data-opus-catalog-notice|data-quota-card|data-quota-extra|ag-quota-view/);
+    assert.match(cli, /background: linear-gradient/);
 
     fetches = [];
     payload = {success: true};

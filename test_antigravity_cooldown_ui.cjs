@@ -9,7 +9,8 @@ function context() {
     const elements = new Map();
     const c = {URL, URLSearchParams, Set, Map, Date, Promise, console,
         document: {getElementById: id => elements.get(id), querySelectorAll: () => []},
-        window: {location: {href:'https://example.invalid/'}},
+        window: {location: {href:'https://example.invalid/'}, innerHeight:800, innerWidth:1200},
+        requestAnimationFrame: () => {},
         getAuthHeaders: () => ({}), showStatus: () => {}, escapeHtml: String, escapeHtmlAttribute: String};
     vm.createContext(c);
     vm.runInContext(section('function createCredsManager(', 'function createUploadManager(') +
@@ -83,10 +84,10 @@ test('all matching selection carries the exact group filter over pages', async (
 });
 test('empty quota model response renders group restriction and release control', async () => {
     const {c} = context();
-    vm.runInContext(section('function modelAccessSummary(', '\nasync function toggleErrorDetails('),c);
+    vm.runInContext(section('function modelAccessStatus(', '\nasync function toggleErrorDetails('),c);
     let html='';
-    const content={getAttribute:()=> 'empty.json',get innerHTML(){return html;},set innerHTML(value){html=value;},querySelectorAll:()=>[],insertAdjacentHTML:(_,value)=>{html=value+html;}};
-    c.document.getElementById=()=>({style:{display:'none'},querySelector:()=>content});
+    const content={isConnected:true,querySelector:()=>null,getAttribute:()=> 'empty.json',get innerHTML(){return html;},set innerHTML(value){html=value;},querySelectorAll:()=>[],insertAdjacentHTML:(_,value)=>{html=value+html;}};
+    c.document.getElementById=()=>({isConnected:true,style:{display:'none'},querySelector:()=>content,classList:{contains:()=>true}});
     c.manualResultSummary=()=>'';c.manualUpdateIncomplete=()=>false;
     c.fetch=async()=>({ok:true,json:async()=>({success:true,models:{},quota_groups:{'gemini-shared':{cooldownUntil:0,blockedUnknown:true}},quota_group_states:{'gemini-shared':{state:'blocked_unknown'}}})});
     await c._toggleQuotaDetails('empty','antigravity');
@@ -117,10 +118,10 @@ test('hidden Antigravity tab never polls cached status', async()=>{
 });
 test('failed quota lookup retains returned unknown and timed group protection',async()=>{
     const {c}=context();
-    vm.runInContext(section('function modelAccessSummary(', '\nasync function toggleErrorDetails('),c);
+    vm.runInContext(section('function modelAccessStatus(', '\nasync function toggleErrorDetails('),c);
     let html='';
-    const content={getAttribute:()=> 'failure.json',get innerHTML(){return html;},set innerHTML(v){html=v;},insertAdjacentHTML:(_,v)=>{html=v+html;}};
-    c.document.getElementById=()=>({style:{display:'none'},querySelector:()=>content});
+    const content={isConnected:true,querySelector:()=>null,getAttribute:()=> 'failure.json',get innerHTML(){return html;},set innerHTML(v){html=v;},insertAdjacentHTML:(_,v)=>{html=v+html;}};
+    c.document.getElementById=()=>({isConnected:true,style:{display:'none'},querySelector:()=>content,classList:{contains:()=>true}});
     c.manualResultSummary=()=>'';
     c.fetch=async()=>({ok:false,json:async()=>({success:false,error:'upstream unavailable',quota_groups:{'gemini-shared':{cooldownUntil:Date.now()/1000+100},'claude-gpt-shared':{blockedUnknown:true}},quota_state_invalid:true})});
     await c._toggleQuotaDetails('failure','antigravity');
@@ -128,12 +129,12 @@ test('failed quota lookup retains returned unknown and timed group protection',a
 });
 test('explicit group release refreshes cached list without another quota request',async()=>{
     const {c}=context();
-    vm.runInContext(section('function modelAccessSummary(', '\nasync function toggleErrorDetails('),c);
+    vm.runInContext(section('function modelAccessStatus(', '\nasync function toggleErrorDetails('),c);
     let handler,removed=false,refreshes=0;
     const label={};
     const button={dataset:{releaseQuota:'gemini-shared'},addEventListener:(_,callback)=>{handler=callback;},parentElement:{querySelector:()=>label},remove:()=>{removed=true;}};
-    const content={innerHTML:'',getAttribute:()=> 'release.json',querySelectorAll:()=>[button],insertAdjacentHTML:()=>{}};
-    c.document.getElementById=()=>({style:{display:'none'},querySelector:()=>content});
+    const content={isConnected:true,querySelector:()=>null,innerHTML:'',getAttribute:()=> 'release.json',querySelectorAll:()=>[button],insertAdjacentHTML:()=>{}};
+    c.document.getElementById=()=>({isConnected:true,style:{display:'none'},querySelector:()=>content,classList:{contains:()=>true}});
     c.manualResultSummary=()=>'';c.manualUpdateIncomplete=()=>false;
     c.AppState={antigravityCreds:{refresh:async()=>{refreshes++;}}};
     const urls=[];
