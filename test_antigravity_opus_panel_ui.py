@@ -66,22 +66,22 @@ async def _backend_quota_fixtures(monkeypatch):
             assert entry["remaining"] == quota.get("remainingFraction")
             assert entry["resetTimeRaw"] == quota.get("resetTime", "")
         fixtures[name] = response
-    assert fixtures["mixed"]["models"]["claude-opus-4-6-thinking"]["visible"] is False
+    assert fixtures["mixed"]["models"]["claude-opus-4-6-thinking"]["visible"] is True
     assert fixtures["mixed"]["models"]["gemini-3.8-flash-tiered"]["public"] is False
     return fixtures
 
 
-async def test_retired_opus_cards_probes_and_historical_stats(monkeypatch):
+async def test_opus_version_cards_probes_and_historical_stats(monkeypatch):
     node = shutil.which("node")
     if not node:
         pytest.skip("Node runtime unavailable")
     fixtures = await _backend_quota_fixtures(monkeypatch)
     source = (Path(__file__).parent / "front/common.js").read_text(encoding="utf-8")
-    quota_start = source.index("function modelAccessSummary(")
+    quota_start = source.index("function modelAccessStatus(")
     quota_end = source.index("\nasync function ", source.index("async function _toggleQuotaDetails(") + 1)
     stats_start = source.index("const MODEL_FAMILY_DISPLAY =")
     stats_end = source.index("async function refreshTodayStats(", stats_start)
-    helpers_start = source.index("function isRetiredAntigravityOpusModel(")
+    helpers_start = source.index("function isVisibleAntigravityQuotaModel(")
     script = "const backend = " + json.dumps(fixtures) + ";\n" + r'''
 const assert = require('node:assert/strict');
 let payload, status, responseOk = true, fetches = [];
@@ -102,19 +102,6 @@ global.showMessageModal = () => {};
 global.setTimeout = (callback) => callback();
 ''' + source[quota_start:quota_end] + "\n" + source[stats_start:stats_end] + "\n" + source[helpers_start:] + r'''
 (async () => {
-    const retired = ['claude-opus-4-6', 'claude-opus-4-6-thinking', 'claude-opus-4.6-high',
-        ' CLAUDE-OPUS-4-6-LOW ', '假流式/claude-opus-4-6', '抗截断/claude-opus-4.6',
-        '流式抗截断/ 假流式/ CLAUDE-OPUS-4-6-thinking ',
-        'models/claude-opus-4-6-thinking', 'arbitrary/claude-opus-4.6-high',
-        'models/ CLAUDE-OPUS-4-6 ', 'claude-opus-4-6/foo', 'claude-opus-4.6/',
-        'prefix-claude-opus-4-6-thinking', 'notclaude-opus-4.6-high'];
-    for (const model of retired) assert.equal(isRetiredAntigravityOpusModel(model), true);
-    for (const model of ['claude-opus-4-60', 'models/prefix-claude-opus-4-60/foo',
-        'notclaude-opus-4.60/', 'claude-sonnet-5-5', 'claude-opus-5-5-low',
-        'claude-opus-5-5-medium', 'claude-opus-5-5-high']) {
-        assert.equal(isRetiredAntigravityOpusModel(model), false);
-    }
-
     async function renderResponse(data, mode = 'antigravity', ok = true) {
         details.style.display = 'none';
         payload = data;
@@ -129,18 +116,19 @@ global.setTimeout = (callback) => callback();
     async function render(models, mode = 'antigravity') {
         return renderResponse({success: true, models}, mode);
     }
-    const access = Object.fromEntries(['low', 'medium', 'high'].map(tier => [`claude-opus-5-5-${tier}`, {
+    const access = Object.fromEntries(['claude-opus-5-5', 'claude-opus-4-6'].map(family => [family, {
         state: 'unavailable', reason: 'directory_missing', checked_at: 1791082800,
         next_check_at: 1791126000, blocked_until: 1791169200
     }]));
-    const accessEmpty = await renderResponse({success: true, models: {}, model_access_state: access});
+    const accessEmpty = await renderResponse({success: true, models: {}, model_access_families: access});
     assert.match(accessEmpty, /data-model-access/);
-    assert.match(accessEmpty, /Low|Medium|High/);
+    assert.doesNotMatch(accessEmpty, /Low|Medium|High/);
+    assert.equal((accessEmpty.match(/最近检查/g) || []).length, 2);
     assert.match(accessEmpty, /最近检查|下次复查|暂停期限/);
     assert.match(accessEmpty, /到期仍需目录确认/);
     assert.doesNotMatch(accessEmpty, /onclick="testModelQuota/);
     const failedAccess = Object.fromEntries(Object.entries(access).map(([id, value]) => [id, {...value, reason: 'directory_query_failed'}]));
-    const accessFailed = await renderResponse({success: false, error: 'query failed', model_access_state: failedAccess}, 'antigravity', false);
+    const accessFailed = await renderResponse({success: false, error: 'query failed', model_access_families: failedAccess}, 'antigravity', false);
     assert.match(accessFailed, /data-model-access/);
     assert.match(accessFailed, /目录查询失败，保留原限制/);
     assert.doesNotMatch(accessFailed, /已恢复/);
@@ -157,9 +145,10 @@ global.setTimeout = (callback) => callback();
         .split('data-quota-model-group="compatible"')[0];
     const compatibleHtml = mixedHtml.split('data-quota-model-group="compatible"')[1];
     assert.match(publicHtml, /终端可选模型/);
-    assert.equal(modelCards(publicHtml).length, 3);
+    assert.equal(modelCards(publicHtml).length, 4);
     assert.doesNotMatch(publicHtml, /内部\/兼容|data-model-availability=/);
-    assert.doesNotMatch(mixedHtml, /claude-opus-4-6|99%/);
+    assert.match(mixedHtml, /claude-opus-4-6/);
+    assert.match(mixedHtml, /99%/);
     assert.match(compatibleHtml, /gemini-3.8-flash-tiered/);
     assert.match(compatibleHtml, /data-model-availability="compatible"/);
     assert.doesNotMatch(publicHtml, /gemini-3.8-flash-tiered/);
@@ -184,8 +173,7 @@ global.setTimeout = (callback) => callback();
     }
     const missingHtml = await render(backend.missing.models);
     assert.equal(modelCards(missingHtml).length, 2);
-    assert.match(missingHtml, /data-opus-catalog-notice/);
-    assert.match(missingHtml, /未返回 Claude Opus 5\.5 的 High 档位/);
+    assert.doesNotMatch(missingHtml, /data-opus-catalog-notice/);
     assert.match(missingHtml, /data-quota-model-group="public"/);
     assert.doesNotMatch(missingHtml, /claude-opus-5-5-high|内部\/兼容/);
     const unknownCard = modelCards(missingHtml).find(card => card.includes('Claude Opus 5.5 (Medium)'));
@@ -195,32 +183,23 @@ global.setTimeout = (callback) => callback();
     for (const tier of ['low', 'medium', 'high']) {
         const html = await renderResponse(backend[`only_${tier}`]);
         const missingLabels = ['Low', 'Medium', 'High'].filter(label => label.toLowerCase() !== tier).join('、');
-        assert.ok(html.includes(`未返回 Claude Opus 5.5 的 ${missingLabels} 档位`));
+        assert.doesNotMatch(html, /data-opus-catalog-notice/);
         assert.equal(modelCards(html).length, 1);
         assert.equal((html.match(/onclick="testModelQuota/g) || []).length, 1);
         assert.ok(html.includes(`'claude-opus-5-5-${tier}', 'antigravity'`));
     }
     for (const legacy of [
         {'claude-opus-4-6-thinking': {remaining: 0.99}},
-        {'claude-opus-4-6': {remaining: 0.99, visible: true, rawModelId: 'claude-opus-5-5-high'}},
-        {'legacy-raw-card': {remaining: 0.99, rawModelId: 'claude-opus-4.6', visible: true}},
-        {'legacy-test-card': {remaining: 0.99, testModel: '假流式/claude-opus-4-6-thinking'}},
-        {'models/claude-opus-4-6-thinking': {remaining: 0.99}},
-        {'legacy-path-card': {remaining: 0.99, testModel: 'arbitrary/claude-opus-4.6-high'}},
-        {'legacy-suffix-card': {remaining: 0.99, rawModelId: 'claude-opus-4-6/foo'}},
-        {'claude-opus-4.6/': {remaining: 0.99}},
-        {'prefix-claude-opus-4-6-thinking': {remaining: 0.99}},
-        {'legacy-keyword-card': {remaining: 0.99, testModel: 'notclaude-opus-4.6-high'}},
+        {'legacy-raw-card': {remaining: 0.99, rawModelId: 'claude-opus-4-6-thinking', visible: true}},
+        {'legacy-test-card': {remaining: 0.99, testModel: 'claude-opus-4-6-thinking'}},
     ]) {
         const models = {...legacy, ...live, 'hidden-card': {remaining: 0.9, visible: false}};
         const before = JSON.stringify(models);
         const html = await render(models);
-        assert.equal((html.match(/onclick="testModelQuota/g) || []).length, 3);
-        for (const name of Object.keys(legacy)) assert.ok(!html.includes(name));
+        assert.equal((html.match(/onclick="testModelQuota/g) || []).length, 4);
+        for (const name of Object.keys(legacy)) assert.ok(html.includes(name));
         assert.ok(!html.includes('hidden-card'));
-        for (const name of Object.keys(live)) assert.ok(html.includes(name));
-        for (const remaining of [25, 50, 75]) assert.ok(html.includes(`${remaining}%`));
-        assert.ok(!html.includes('99%'));
+        assert.ok(html.includes('99%'));
         assert.equal(JSON.stringify(models), before);
     }
     for (const scenario of ['onlyOld', 'empty', 'internal']) {
@@ -228,8 +207,8 @@ global.setTimeout = (callback) => callback();
         const html = await renderResponse(backend[scenario]);
         const notice = html.match(/<div data-opus-catalog-notice[^>]*>([^<]+)<\/div>/)[1];
         assert.equal(notice, '本次 Google 官方模型目录未返回 Claude Opus 5.5，暂无对应额度或可测试模型。');
-        assert.doesNotMatch(html, /testModelQuota\(this, 'synthetic.json', 'claude-opus/);
-        assert.equal(modelCards(html).length, scenario === 'internal' ? 1 : 0);
+        if (scenario !== 'onlyOld') assert.doesNotMatch(html, /testModelQuota\(this, 'synthetic.json', 'claude-opus/);
+        assert.equal(modelCards(html).length, scenario === 'empty' ? 0 : 1);
         assert.equal(JSON.stringify(backend[scenario]), before);
         if (scenario === 'internal') {
             assert.match(html, /data-model-availability="compatible"/);
@@ -243,21 +222,18 @@ global.setTimeout = (callback) => callback();
     for (const [ok, success] of [[true, false], [false, false], [false, true]]) {
         const html = await renderResponse({success, models: {}, error: 'synthetic failure'}, 'antigravity', ok);
         assert.match(html, /获取额度信息失败/);
-        assert.doesNotMatch(html, /data-opus-catalog-notice|目录未返回|账号|权限/);
+        assert.doesNotMatch(html, /data-opus-catalog-notice|目录未返回|账号/);
     }
     const cli = await render({'claude-opus-4-6': {remaining: 0.9}}, 'geminicli');
     assert.ok(cli.includes('claude-opus-4-6'));
     assert.doesNotMatch(cli, /data-opus-catalog-notice/);
 
     fetches = [];
-    for (const model of retired) await testModelQuota(button, 'synthetic.json', model, 'antigravity');
-    assert.equal(fetches.length, 0);
-    assert.match(status.text, /刷新.*Claude Opus 5.5/);
-    assert.equal(button.disabled, false);
     payload = {success: true};
-    for (const model of Object.keys(live)) await testModelQuota(button, 'synthetic.json', model, 'antigravity');
-    await testModelQuota(button, 'synthetic.json', 'claude-opus-4-6', 'geminicli');
+    for (const model of [...Object.keys(live), 'claude-opus-4-6-thinking']) await testModelQuota(button, 'synthetic.json', model, 'antigravity');
     assert.equal(fetches.length, 4);
+    assert.ok(fetches[3].endsWith('model=claude-opus-4-6-thinking'));
+    assert.equal(button.disabled, false);
 
     const table = {innerHTML: ''};
     _renderModelStatsRows({'claude-opus-4-6': {success: 2, total: 2},

@@ -139,6 +139,10 @@ def backend(request):
 
 async def test_concurrent_groups_release_old_request_and_override_429(backend):
     manager, db = backend
+    # Driver doubles skip initialization; establish real synthetic route evidence.
+    from src.antigravity_model_access import ROUTES
+    manager.model_access_storage_ready = True
+    await manager.model_access_observe(NAME, await manager.model_access_snapshot(NAME), ROUTES)
     original = await manager.quota_admit(NAME, GEMINI)
     models, observation = week()
     snapshot = await manager.quota_snapshot(NAME)

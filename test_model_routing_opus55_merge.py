@@ -26,25 +26,29 @@ def row(public, target, enabled=True):
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("retired", ["claude-opus-4-6", "claude-opus-4-6-thinking", "claude-opus-4.6-high",
                                     "wrapped-claude-opus-4-6-low"])
-def test_retired_names_cannot_be_routing_targets_or_public_overrides(enabled, retired):
+def test_opus46_restored_native_target_and_version_namespace_protection(enabled, retired):
     target, _ = compile_rows([row("public-alpha", retired, enabled)])
     public, _ = compile_rows([row(retired, "claude-opus-5-5-medium", enabled)])
-    assert not target.valid
-    assert any(issue.field == "upstream_name" and issue.reason == "UNSTABLE_TARGET_DISPATCH"
-               for issue in target.issues)
-    assert not public.valid
-    assert any(issue.field == "public_name" and issue.reason == "PROTECTED_ENTRY_CAPTURE"
-               for issue in public.issues)
+    if retired == "claude-opus-4-6-thinking":
+        assert target.valid, target.issues
+    else:
+        assert not target.valid
+        assert any(issue.field == "upstream_name" and issue.reason == "UNSTABLE_TARGET_DISPATCH"
+                   for issue in target.issues)
+    assert public.valid is (not enabled)
+    if enabled:
+        assert any(issue.field == "public_name" and issue.reason == "PROTECTED_ENTRY_CAPTURE"
+                   for issue in public.issues)
 
 
 @pytest.mark.parametrize("name", ["claude-opus-4-6", "假流式/claude-opus-4.6-low",
                                  "wrapper/claude-opus-4-6-thinking/other"])
-def test_retired_legacy_resolution_retains_local_400(name):
+def test_opus46_legacy_resolution_preserves_version(name):
     result, policy = compile_rows([])
     features = FeatureSnapshot()
     projection = project_request("antigravity", "gemini", name, raw("gemini", {}), features)
     outcome = resolve("antigravity", "gemini", name, projection, result.compiled, policy, features)
-    assert not outcome.accepted and outcome.error.status == 400
+    assert outcome.accepted and outcome.dispatch_model == "claude-opus-4-6-thinking"
 
 
 @pytest.mark.parametrize("public", ["claude-opus-5-5", "claude-opus-5-5-thinking"])
@@ -54,12 +58,12 @@ def test_existing_opus_aliases_prove_medium_identity(public):
     assert "namespace" in result.compiled.profiles[public].proofs
 
 
-@pytest.mark.parametrize("tier", ["low", "medium", "high"])
+@pytest.mark.parametrize("tier", ["low", "medium", "high", "4-6-thinking"])
 @pytest.mark.parametrize("protocol", ["gemini", "openai", "claude"])
 @pytest.mark.parametrize("return_thoughts", [False, True])
 @pytest.mark.parametrize("tools", [False, True])
 async def test_explicit_opus_route_matches_actual_normalizer(tier, protocol, return_thoughts, tools, monkeypatch):
-    target = "claude-opus-5-5-" + tier
+    target = "claude-opus-4-6-thinking" if tier == "4-6-thinking" else "claude-opus-5-5-" + tier
     result, policy = compile_rows([row("public-alpha", target)])
     assert result.valid, result.issues
     monkeypatch.setattr("config.get_return_thoughts_to_frontend", AsyncMock(return_value=return_thoughts))
@@ -94,7 +98,8 @@ async def test_explicit_opus_route_matches_actual_normalizer(tier, protocol, ret
     if tools:
         assert "thinkingConfig" not in expected.get("generationConfig", {})
     else:
-        assert expected["generationConfig"]["thinkingConfig"] == {"includeThoughts": return_thoughts}
+        assert expected["generationConfig"]["thinkingConfig"] == ({"includeThoughts": return_thoughts,
+            "thinkingBudget": 1024} if tier == "4-6-thinking" else {"includeThoughts": return_thoughts})
 
 
 @pytest.mark.parametrize("tier", ["low", "medium", "high"])
@@ -119,3 +124,43 @@ def test_opus55_policy_never_trusts_old_opus46_source(path, old_hash):
     result = compile_channel("antigravity", parsed, stale)
     assert not result.valid
     assert any(issue.reason == "AMBIGUOUS_COMPATIBILITY" for issue in result.issues)
+
+
+@pytest.mark.parametrize("path,old_hash", [
+    ("src/utils.py", "1b29b9d6ac09b30157972d06561c3c50235619005fa4dc27ba9bdfd4748c0492"),
+    ("src/antigravity_models.py", "f080954b7ddb0024c54fa1f8096fc32669038aced0b3af5ab0ff2753c0e063ea"),
+    ("src/converter/gemini_fix.py", "684926a87312ff06474b59be0c7eab9c69e3c2379a4b93d9f5c638efb44fcdd2"),
+    ("src/converter/antigravity_fix.py", "b7ec433a8b21717f4941eb6de96638b08f9f30cf0553a1a25a8a9c50362aaa64"),
+])
+def test_family_policy_refuses_previous_single_version_sources(path, old_hash):
+    policy = build_policy_snapshot()
+    rules = thaw(policy.static_rules)
+    rules["source_digests"][path] = old_hash
+    stale = replace(policy, static_rules=rules, digest=digest(rules))
+    result = compile_channel("antigravity", parse_route_table({"routes": [
+        row("public-alpha", "claude-opus-4-6-thinking")]}), stale)
+    assert not result.valid
+    assert any(issue.reason == "AMBIGUOUS_COMPATIBILITY" for issue in result.issues)
+
+
+def test_source_proof_uses_explicit_empty_ast_fields_on_both_dump_apis(monkeypatch):
+    import ast
+    from src.model_routing import policy as policy_module
+
+    policy_module._source_digests.cache_clear()
+    expected = policy_module._source_digests()
+    modern_dump = ast.dump
+
+    def legacy_dump(node, **kwargs):
+        if "show_empty" in kwargs:
+            raise TypeError("Synthetic pre-3.13 dump API")
+        return modern_dump(node, show_empty=True, **kwargs)
+
+    try:
+        monkeypatch.setattr(ast, "dump", legacy_dump)
+        policy_module._source_digests.cache_clear()
+        assert policy_module._source_digests() == expected
+        result, _ = compile_rows([row("public-alpha", "claude-opus-4-6-thinking")])
+        assert result.valid, result.issues
+    finally:
+        policy_module._source_digests.cache_clear()

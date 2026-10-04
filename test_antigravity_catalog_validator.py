@@ -107,3 +107,17 @@ def test_source_credential_selection_opens_read_only_and_copies_only_one(monkeyp
     assert filename == "fixture-0.json"
     assert credential == {"access_token": "fixture-token-0"}
     assert connections == [(source.resolve().as_uri() + "?mode=ro", {"uri": True})]
+
+
+def test_version_family_selection_uses_exact_native_ids_without_cross_version_fallback():
+    native46 = "claude-opus-4-6-thinking"
+    available = {*OPUS_MODELS, native46}
+    assert validator._choose_family_models(available, {"claude-opus-4-6"}) == [("claude-opus-4-6", native46)]
+    assert validator._choose_family_models(available, {"claude-opus-5-5"}) == [("claude-opus-5-5", OPUS_MODELS[1])]
+    for only_ids, requested in [({native46}, "claude-opus-5-5"), (set(OPUS_MODELS), "claude-opus-4-6")]:
+        with pytest.raises(RuntimeError):
+            validator._choose_family_models(only_ids, {requested})
+    assert validator._choose_exact_models(available, [native46, OPUS_MODELS[2], native46]) == [
+        ("claude-opus-4-6", native46), ("claude-opus-5-5", OPUS_MODELS[2])]
+    with pytest.raises(RuntimeError):
+        validator._choose_exact_models(available, ["claude-opus-4-6-high"])

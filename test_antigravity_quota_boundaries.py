@@ -89,6 +89,8 @@ async def test_manual_sync_recovers_while_management_keeps_week_policy(store, mo
     monkeypatch.setattr(oauth, "Credentials", Credentials)
     async def quota(_, *, origin="legacy"):
         models, observation = week()
+        from src.antigravity_model_access import ROUTES
+        models.update({model: {"remaining": 1} for model in ROUTES})
         return {"success": True, "models": models, "observation": observation,
                 **({"upstream_status": 200, "response_source": "google"} if origin == "manual" else {})}
     monkeypatch.setattr(panel, "fetch_quota_info", quota)

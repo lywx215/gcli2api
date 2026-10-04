@@ -9,6 +9,7 @@ advertised through the public model-list endpoints.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Iterable, Optional
 
 
@@ -79,6 +80,9 @@ PUBLIC_ANTIGRAVITY_MODELS: tuple[AntigravityModelMetadata, ...] = (
         "claude-opus-5-5-high", "Claude Opus 5.5 (High)", "claude-opus-5-5", "high"
     ),
     AntigravityModelMetadata(
+        "claude-opus-4-6-thinking", "Claude Opus 4.6 (Thinking)", "claude-opus-4-6", "thinking"
+    ),
+    AntigravityModelMetadata(
         "gpt-oss-120b-medium", "GPT-OSS 120B (Medium)", "gpt-oss-120b", "medium"
     ),
 )
@@ -133,6 +137,9 @@ ANTIGRAVITY_MODEL_ALIASES = {
     "claude-sonnet-4-6-thinking": "claude-sonnet-4-6",
     "claude-opus-5-5": "claude-opus-5-5-medium",
     "claude-opus-5-5-thinking": "claude-opus-5-5-medium",
+    "claude-opus-4-6": "claude-opus-4-6-thinking",
+    "claude-opus-4.6": "claude-opus-4-6-thinking",
+    "claude-opus-4.6-thinking": "claude-opus-4-6-thinking",
     "gpt-oss-120b": "gpt-oss-120b-medium",
 }
 
@@ -202,10 +209,7 @@ def describe_antigravity_model(model_id: str) -> dict[str, object]:
             "badge": display_model.badge,
         }
 
-    unavailable = (
-        model_id in HIDDEN_ANTIGRAVITY_QUOTA_MODEL_IDS
-        or is_retired_antigravity_opus_model(model_id)
-    )
+    unavailable = model_id in HIDDEN_ANTIGRAVITY_QUOTA_MODEL_IDS
     return {
         "displayName": model_id,
         "rawModelId": model_id,
@@ -220,42 +224,11 @@ def describe_antigravity_model(model_id: str) -> dict[str, object]:
 
 
 def resolve_antigravity_opus_model(model_id: str) -> str:
-    """Preserve verified Opus effort routes; reject the retired 4.6 generation."""
-    reject_retired_antigravity_opus_model(model_id)
-    normalized = model_id.strip().lower().rsplit("/", 1)[-1].strip()
-    if normalized in {
-        "claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-high"
-    }:
-        return normalized
+    """Resolve aliases within the requested version, preserving native effort IDs."""
+    normalized = model_id.strip().lower()
+    if re.search(r"claude-opus-4(?:-6|\.6)(?=$|[-/])", normalized):
+        return "claude-opus-4-6-thinking"
+    effort = re.search(r"claude-opus-5(?:-5|\.5)-(low|medium|high)(?=$|-)", normalized)
+    if effort:
+        return "claude-opus-5-5-" + effort.group(1)
     return "claude-opus-5-5-medium"
-
-
-def is_retired_antigravity_opus_model(model_id: str) -> bool:
-    """Identify retired Opus names without changing raw quota or historical IDs."""
-    if not isinstance(model_id, str):
-        return False
-    # The converters accept Claude/Opus keywords anywhere in a model string.
-    # Inspect every path segment so wrapping a retired identifier cannot reach
-    # their medium fallback. The right boundary excludes versions such as 4-60.
-    for segment in model_id.lower().split("/"):
-        segment = segment.strip()
-        for retired in ("claude-opus-4-6", "claude-opus-4.6"):
-            offset = segment.find(retired)
-            while offset != -1:
-                suffix = segment[offset + len(retired):]
-                if not suffix or suffix.startswith("-"):
-                    return True
-                offset = segment.find(retired, offset + len(retired))
-    return False
-
-
-
-def reject_retired_antigravity_opus_model(model_id: str) -> None:
-    """Reject retired request names using the protected API's fixed HTTP 400."""
-    if is_retired_antigravity_opus_model(model_id):
-        from src.router.model_api_errors import (
-            ErrorKind, ErrorOrigin, ModelApiErrorException, make_model_api_error,
-        )
-        raise ModelApiErrorException(make_model_api_error(
-            origin=ErrorOrigin.LOCAL, kind=ErrorKind.HTTP, status=400,
-        ))

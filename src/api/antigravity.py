@@ -23,7 +23,6 @@ from config import (
     is_smart_429_protection_enabled,
 )
 from log import log
-from src.antigravity_models import reject_retired_antigravity_opus_model
 from src.antigravity_completion import Completion, validate_json, bad_format, separate_terminal, finalize_terminal_usage
 from src.diagnostics.antigravity import emit_error, emit_admission, emit_retry, dispatch_scope
 from src.antigravity_limits import current_budget
@@ -40,6 +39,7 @@ from src.router.model_api_errors import (
     attach_exception_error,
     attach_model_api_error,
     attach_local_unavailable,
+    error_from_retirement_body,
 )
 from src.diagnostics.semantic import Attempt, observe_post, observe_stream
 from src.models import Model, model_to_dict
@@ -420,10 +420,8 @@ async def _switch_credential_for_retry(
 # ==================== 新的流式和非流式请求函数 ====================
 
 async def stream_request(body, native=False, headers=None, events=False, *, route_context=None):
-    reject_retired_antigravity_opus_model(body.get("model", ""))
     from src.model_routing.stream_runtime import dispatch_request_body
     body = dispatch_request_body(body, route_context)
-    reject_retired_antigravity_opus_model(body.get("model", ""))
     from src.antigravity_limits import (
         GenerationBudget, GenerationLimits, GenerationTimeout, current_budget, timeout_response,
     )
@@ -476,7 +474,6 @@ async def _stream_request(
     Yields:
         Response对象（错误时）或 bytes流/str流（成功时）
     """
-    reject_retired_antigravity_opus_model(body.get("model", ""))
     model_name = body.get("model", "")
     breaker_response = _capacity_breaker_response(model_name)
     if breaker_response is not None:
@@ -612,6 +609,9 @@ async def _stream_request(
                     async for chunk in upstream_stream:
                         # 判断是否是Response对象
                         if isinstance(chunk, Response):
+                            retirement = error_from_retirement_body(chunk.body) if access_model(model_name) else None
+                            if retirement is not None:
+                                raise ModelApiErrorException(retirement)
                             status_code = chunk.status_code
                             last_error_response = chunk  # 记录最后一次错误
 
@@ -838,7 +838,6 @@ async def _non_stream_request(
     Returns:
         Response对象
     """
-    reject_retired_antigravity_opus_model(body.get("model", ""))
     # 检查是否启用流式收集模式
     stream2nostream = (route_context.feature_snapshot.antigravity_stream2nostream
                       if route_context is not None else await get_antigravity_stream2nostream())
@@ -983,6 +982,10 @@ async def _non_stream_request(
                 ), diagnostic_attempt, model_name)
 
                 status_code = response.status_code
+                if status_code != 200 and access_model(model_name):
+                    retirement = error_from_retirement_body(response.content)
+                    if retirement is not None:
+                        raise ModelApiErrorException(retirement)
 
                 # 成功
                 if status_code == 200:
@@ -1163,11 +1166,9 @@ async def non_stream_request(
     route_context=None,
 ) -> Response:
     """Execute one client logical request after all internal retry attempts."""
-    reject_retired_antigravity_opus_model(body.get("model", ""))
     from src.antigravity_limits import GenerationBudget, GenerationLimits, timeout_response
     from src.model_routing.stream_runtime import dispatch_request_body
     body = dispatch_request_body(body, route_context)
-    reject_retired_antigravity_opus_model(body.get("model", ""))
     inherited = current_budget.get()
     budget = inherited or GenerationBudget(GenerationLimits.load(), non_stream=True)
     try:
@@ -1204,6 +1205,10 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
     if cred_result:
         filename, data = cred_result
         snapshot = await backend.model_access_snapshot(filename) if ready else None
+        from src.storage.antigravity_quota import credential_version
+        if snapshot and (snapshot.get("version") != credential_version(data)
+                or data.get("_quota_credential_generation") not in (None, snapshot.get("generation"))):
+            snapshot = None
         result = await fetch_quota_info(data.get("access_token") or data.get("token"))
         if result.get("success"):
             other_ids = [name for name in result["models"] if not access_model(name)]

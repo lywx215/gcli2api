@@ -9,7 +9,7 @@ import httpx
 import pytest
 from fastapi import Response
 
-from src.antigravity_model_access import MODELS, PAUSE, RECHECK, QUERY_RETRY, access_model, eligible
+from src.antigravity_model_access import MODELS, FAMILIES, PAUSE, RECHECK, QUERY_RETRY, access_model, eligible
 from src.antigravity_access_runtime import ModelAccessService
 from src.storage.sqlite_manager import SQLiteManager
 from src.credential_manager import CredentialManager
@@ -51,13 +51,13 @@ async def test_virtual_clock_renew_recover_and_failed_query(access_store, monkey
     t0 = 1000000
     clock = [t0]
     monkeypatch.setattr("src.storage.antigravity_model_access.time.time", lambda: clock[0])
-    first = await observe(store, [LOW])
-    assert eligible(first["access"], LOW, t0)
+    first = await observe(store, [])
+    assert not eligible(first["access"], LOW, t0)
     entry = first["access"]["models"][HIGH]
     assert entry["blocked_until"] == t0 + PAUSE and entry["next_check_at"] == t0 + RECHECK
     clock[0] += RECHECK
     assert not eligible(first["access"], LOW, clock[0])
-    renewed = await observe(store, [LOW])
+    renewed = await observe(store, [])
     entry = renewed["access"]["models"][HIGH]
     assert entry["blocked_until"] == t0 + RECHECK + PAUSE
     clock[0] += 1
@@ -100,11 +100,11 @@ async def test_stale_404_does_not_overwrite_panel_recovery(access_store):
     assert await store.model_access_observe(NAME, current["model_access_snapshot"],
                                             model=HIGH, success=False, reason="generation_404")
     assert await store.quota_admit(NAME, HIGH) is None
-    assert await store.quota_admit(NAME, LOW)
+    assert not await store.quota_admit(NAME, LOW)
     assert not (await store._quota_rows(NAME))[0]["disabled"]
 
 
-async def test_stale_directory_fences_per_tier_and_replacement(access_store):
+async def test_stale_directory_fences_per_family_and_replacement(access_store):
     store = access_store
     await observe(store, MODELS)
     before = await store.model_access_snapshot(NAME)
@@ -327,7 +327,7 @@ async def test_disabled_accounts_never_receive_background_query(access_store, mo
 
 @pytest.mark.parametrize("origin", ["legacy", "manual"])
 @pytest.mark.parametrize("embedded", [False, True])
-async def test_manual_404_and_success_restore_only_target(access_store, monkeypatch, origin, embedded):
+async def test_manual_404_and_success_restore_target_family(access_store, monkeypatch, origin, embedded):
     from test_antigravity_manual import reply
     from src.panel import creds as panel
     store = access_store
@@ -355,7 +355,7 @@ async def test_manual_404_and_success_restore_only_target(access_store, monkeypa
     failed = await panel.test_credential_common(NAME, "antigravity", HIGH, origin=origin)
     assert failed.status_code == 404
     assert not await store.quota_admit(NAME, HIGH)
-    assert await store.quota_admit(NAME, LOW)
+    assert not await store.quota_admit(NAME, LOW)
     assert not (await store._quota_rows(NAME))[0]["disabled"]
     succeeded = await panel.test_credential_common(NAME, "antigravity", HIGH, origin=origin)
     assert succeeded.status_code == 200

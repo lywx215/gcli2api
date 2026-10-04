@@ -43,7 +43,7 @@ def credential_version(value):
 
 
 from src.storage.antigravity_model_access import AntigravityModelAccessMixin, row_state as access_row_state
-from src.antigravity_model_access import access_model, eligible as access_eligible
+from src.antigravity_model_access import access_model, check_due as access_check_due, eligible as access_eligible
 
 
 class AntigravityQuotaMixin(AntigravityModelAccessMixin):
@@ -329,8 +329,7 @@ class AntigravityQuotaMixin(AntigravityModelAccessMixin):
                 row = _decode(raw)
                 if access_target:
                     access = access_row_state(row)
-                    entry = access["models"].get(access_target, {})
-                    if not access_eligible(access, access_target) and entry.get("next_check_at", 0) > time.time():
+                    if not access_eligible(access, access_target) and not access_check_due(access, access_target):
                         continue
                 group = group_for(model_name)
                 state = row["quota_group_states"].get(group, {})

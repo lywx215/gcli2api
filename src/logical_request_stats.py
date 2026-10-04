@@ -98,12 +98,37 @@ def stream_item_is_error(item: Any) -> bool:
 
 
 def _payload_has_unavailable_notice(payload: dict[str, Any]) -> bool:
-    """Recognize the explicit HTTP-200 retirement notice returned upstream."""
-    normalized = json.dumps(payload, ensure_ascii=False).casefold()
-    return (
-        "is no longer available" in normalized
-        and "please switch to" in normalized
-    )
+    """Use the transport recognizer on displayed content, never arbitrary JSON."""
+    from src.router.model_retirement import is_model_retirement_notice
+
+    if is_model_retirement_notice(payload):
+        return True
+
+    def parts(value):
+        if isinstance(value, str):
+            return [{"text": value}]
+        if isinstance(value, list):
+            return [part for block in value for part in parts(block)]
+        if not isinstance(value, dict):
+            return []
+        # Public Claude thinking and OpenAI reasoning are not displayed text.
+        if value.get("type") in {"thinking", "thinking_delta", "signature_delta"}:
+            return []
+        if "content" in value:
+            return parts(value["content"])
+        return [value]
+
+    candidates = []
+    for key in ("content", "delta"):
+        if key in payload:
+            candidates.append({"content": {"parts": parts(payload[key])}})
+    choices = payload.get("choices", [])
+    for choice in choices if isinstance(choices, list) else []:
+        if isinstance(choice, dict):
+            for key in ("message", "delta"):
+                if key in choice:
+                    candidates.append({"content": {"parts": parts(choice[key])}})
+    return is_model_retirement_notice({"candidates": candidates})
 
 
 def _payload_has_body(payload: dict[str, Any]) -> bool:
@@ -127,6 +152,8 @@ def _payload_has_body(payload: dict[str, Any]) -> bool:
 def _value_has_body(value: Any) -> bool:
     if isinstance(value, str):
         return bool(value.strip())
+    if isinstance(value, list):
+        return any(_value_has_body(part) for part in value)
     if not isinstance(value, dict):
         return False
     if isinstance(value.get("text"), str) and value["text"].strip():

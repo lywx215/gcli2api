@@ -31,11 +31,13 @@ class _FakeCredentialManager:
         self._storage_adapter = SimpleNamespace(_backend=self)
         self.supported = set()
     async def _get_or_create(self): return self
-    async def model_access_snapshot(self, filename): return {"synthetic": True}
+    async def model_access_snapshot(self, filename):
+        from src.storage.antigravity_quota import credential_version
+        return {"generation": "synthetic-generation", "version": credential_version({"access_token": "fixture-access-token"})}
     async def model_access_observe(self, filename, snapshot, models=None, **kwargs):
-        from src.antigravity_model_access import MODELS
+        from src.antigravity_model_access import ROUTES
         if models is not None:
-            self.supported = set(models).intersection(MODELS)
+            self.supported = set(models).intersection(ROUTES)
     async def model_access_union(self): return self.supported
     async def get_valid_credential(self, mode="geminicli", model_name=None):
         return "fixture.json", {"access_token": "fixture-access-token"}
@@ -68,7 +70,7 @@ def test_public_catalog_intersects_upstream_in_stable_order():
         "gemini-3.6-flash-medium",
         "claude-sonnet-4-6",
     ]
-    assert len(PUBLIC_ANTIGRAVITY_MODEL_IDS) == len(set(PUBLIC_ANTIGRAVITY_MODEL_IDS)) == 16
+    assert len(PUBLIC_ANTIGRAVITY_MODEL_IDS) == len(set(PUBLIC_ANTIGRAVITY_MODEL_IDS)) == 17
 
 
 def test_quota_metadata_preserves_raw_internal_models():
@@ -167,7 +169,7 @@ def test_bare_and_claude_aliases_resolve_to_real_upstream_ids():
     assert normalize_antigravity_model_alias("claude-sonnet-4-6-thinking") == (
         "claude-sonnet-4-6"
     )
-    assert normalize_antigravity_model_alias("claude-opus-4-6") == "claude-opus-4-6"
+    assert normalize_antigravity_model_alias("claude-opus-4-6") == "claude-opus-4-6-thinking"
     assert normalize_antigravity_model_alias("gpt-oss-120b") == "gpt-oss-120b-medium"
     assert map_antigravity_gemini_model("gemini-3.1-pro-high", None, None) == (
         "gemini-pro-agent"
@@ -258,6 +260,7 @@ async def test_fetch_available_models_advertises_only_public_intersection(monkey
         "claude-opus-5-5-low",
         "claude-opus-5-5-medium",
         "claude-opus-5-5-high",
+        "claude-opus-4-6-thinking",
     ]
 
 
@@ -331,6 +334,16 @@ async def test_model_list_adds_features_only_to_public_models(monkeypatch):
 
 
 async def test_openai_and_gemini_model_list_contracts_remain_compatible(monkeypatch):
+    # Keep the catalog contract independent of local persisted route settings.
+    from src.model_routing.compiler import compile_channel, parse_route_table
+    from src.model_routing.policy import build_policy_snapshot
+    from src.model_routing.types import FeatureSnapshot
+    async def synthetic_context(channel):
+        policy = build_policy_snapshot()
+        result = compile_channel(channel, parse_route_table({"routes": []}), policy)
+        assert result.valid, result.issues
+        return result.compiled, policy, FeatureSnapshot()
+    monkeypatch.setattr(antigravity_model_list, "prepare_catalog_context", synthetic_context)
     models = [
         "gemini-3.8-flash-medium",
         "假流式/gemini-3.8-flash-medium",
@@ -409,7 +422,7 @@ def test_opus_55_catalog_preserves_native_effort(tier):
         "claude-opus-5-5", "claude-opus-5-5-thinking", "claude-opus-4-5")],
 ])
 @pytest.mark.parametrize("shared", [False, True])
-async def test_opus_routes_do_not_fall_back_to_retired_model(monkeypatch, model, expected, shared):
+async def test_opus_55_routes_preserve_version_and_native_effort(monkeypatch, model, expected, shared):
     from src.converter.gemini_fix import normalize_gemini_request
 
     async def thoughts():
@@ -426,23 +439,25 @@ async def test_opus_routes_do_not_fall_back_to_retired_model(monkeypatch, model,
     assert result["generationConfig"]["thinkingConfig"] == {"includeThoughts": True}
 
 
-def test_opus_retirement_keeps_raw_quota_metadata_outside_public_catalog():
-    retired = "claude-opus-4-6-thinking"
+def test_opus_46_catalog_restores_only_real_native_identity():
+    native = "claude-opus-4-6-thinking"
     current = [f"claude-opus-5-5-{tier}" for tier in ("low", "medium", "high")]
-    assert select_public_model_ids([retired, *current]) == current
-    assert select_public_model_ids([retired]) == []
-    metadata = describe_antigravity_model(retired)
-    assert metadata["rawModelId"] == retired
+    assert select_public_model_ids([native, *current]) == [*current, native]
+    assert select_public_model_ids([native]) == [native]
+    assert select_public_model_ids(["claude-opus-4-6", "claude-opus-4.6", "claude-opus-4-6-high"]) == []
+    metadata = describe_antigravity_model(native)
+    assert metadata["rawModelId"] == metadata["testModel"] == native
     assert metadata["family"] == "claude-opus-4-6"
-    assert metadata["public"] is False
-    assert metadata["visible"] is False
-    assert metadata["availability"] == "unavailable"
+    assert metadata["tier"] == "thinking"
+    assert metadata["public"] is True
+    assert metadata["visible"] is True
+    assert metadata["availability"] == "public"
 
 
 @pytest.mark.parametrize("current_ids", [[], ["claude-opus-5-5-low"], [
     "claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-high",
 ]])
-async def test_opus_quota_never_renames_retired_values_or_fabricates_tiers(monkeypatch, current_ids):
+async def test_opus_quota_never_renames_versions_or_fabricates_tiers(monkeypatch, current_ids):
     retired = "claude-opus-4-6-thinking"
     reset = "2026-10-10T00:00:00Z"
     raw = {retired: {"quotaInfo": {"remainingFraction": 0.25, "resetTime": reset}}}
@@ -464,7 +479,7 @@ async def test_opus_quota_never_renames_retired_values_or_fabricates_tiers(monke
     assert old["rawModelId"] == retired
     assert old["remaining"] == 0.25
     assert old["resetTimeRaw"] == reset
-    assert old["visible"] is False
+    assert old["visible"] is True
     for index, model in enumerate(current_ids):
         entry = result["models"][model]
         assert entry["rawModelId"] == model
@@ -472,3 +487,23 @@ async def test_opus_quota_never_renames_retired_values_or_fabricates_tiers(monke
         assert entry["testModel"] == model
         assert entry["remaining"] == (None if index == 1 else index / 2)
         assert entry["resetTimeRaw"] == ("" if index == 1 else reset)
+
+
+@pytest.mark.parametrize("routes", [
+    ["claude-opus-4-6-thinking"], ["claude-opus-5-5-low"],
+    ["claude-opus-4-6-thinking", "claude-opus-5-5-high"], [],
+])
+async def test_cached_union_keeps_only_evidenced_native_versions(monkeypatch, routes):
+    manager = _FakeCredentialManager()
+    await manager.model_access_observe("fixture.json", {}, models=routes)
+    monkeypatch.setattr(antigravity_api, "credential_manager", manager)
+    async def post(**kwargs):
+        return _FakeResponse({"models": {"gemini-3.8-flash-medium": {}}})
+    async def url(): return "https://antigravity.invalid"
+    monkeypatch.setattr(antigravity_api, "post_async", post)
+    monkeypatch.setattr(antigravity_api, "get_antigravity_api_url", url)
+    # Preserve observations from other credentials when refreshing this directory.
+    async def observe(*args, **kwargs): pass
+    monkeypatch.setattr(manager, "model_access_observe", observe)
+    result = await antigravity_api.fetch_available_models()
+    assert [entry["id"] for entry in result] == select_public_model_ids(["gemini-3.8-flash-medium", *routes])

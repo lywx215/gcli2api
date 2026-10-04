@@ -115,6 +115,10 @@ def is_anti_truncation_model(model_name: str) -> bool:
 
 def normalize_antigravity_model_alias(model_name: str) -> str:
     """Map stripped Antigravity model names back to real upstream IDs."""
+    normalized = model_name.strip().lower()
+    if "claude" in normalized and "opus" in normalized:
+        from src.antigravity_models import resolve_antigravity_opus_model
+        return resolve_antigravity_opus_model(normalized)
     return ANTIGRAVITY_MODEL_ALIASES.get(model_name, model_name)
 
 

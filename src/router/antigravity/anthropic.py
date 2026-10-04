@@ -23,7 +23,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 # 本地模块 - 配置和日志
 from config import get_anti_truncation_max_attempts, get_api_password
 from log import log
-from src.antigravity_models import reject_retired_antigravity_opus_model
 
 # 本地模块 - 工具和认证
 from src.utils import (
@@ -106,7 +105,6 @@ async def messages(
         claude_request: Anthropic/Claude格式的请求体
         token: Bearer认证令牌
     """
-    reject_retired_antigravity_opus_model(claude_request.model)
     log.debug(f"[ANTIGRAVITY-ANTHROPIC] Request for model: {claude_request.model}")
 
     # 转换为字典
@@ -416,7 +414,6 @@ async def count_tokens(
             content={"type": "error", "error": {"type": "invalid_request_error", "message": "缺少必填字段：model / messages"}}
         )
 
-    reject_retired_antigravity_opus_model(payload["model"])
 
     try:
         client_host = request.client.host if request.client else "unknown"

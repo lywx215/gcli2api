@@ -4,7 +4,8 @@ import hashlib
 import json
 import uuid
 
-from src.antigravity_model_access import MODELS, QUERY_RETRY, decode, eligible, observe, public
+from src.antigravity_model_access import (MODELS, ROUTES, FAMILIES, QUERY_RETRY, decode, eligible,
+    observe, observe_entry, public, public_families, project, access_family, check_due)
 
 
 def identity(row):
@@ -21,9 +22,9 @@ def row_state(row):
     try:
         state = decode(row.get("model_access_state"))
     except (ValueError, TypeError):
-        return {"models": {}}
+        return decode({})
     if state.get("identity") != identity(row):
-        return {"models": {}}
+        return decode({})
     return state
 
 
@@ -69,7 +70,14 @@ class AntigravityModelAccessMixin:
         rows = await self._quota_rows(filename)
         return public(row_state(rows[0])) if rows else {}
 
-    async def model_access_list_public(self):
+    async def model_access_family_public(self, filename):
+        rows = await self._quota_rows(filename)
+        return public_families(row_state(rows[0])) if rows else {}
+
+    async def model_access_list_family_public(self):
+        return await self.model_access_list_public(families=True)
+
+    async def model_access_list_public(self, *, families=False):
         """One cached read including disabled accounts; no per-row queries or writes.
 
         Credential contents are used only internally to validate the identity fence.
@@ -106,12 +114,12 @@ class AntigravityModelAccessMixin:
         for raw in rows:
             row = dict(raw)
             try:
-                result[row["filename"]] = public(row_state(row))
+                result[row["filename"]] = (public_families if families else public)(row_state(row))
             except (ValueError, TypeError):
-                result[row["filename"]] = public({})
+                result[row["filename"]] = (public_families if families else public)({})
         return result
 
-    async def model_access_claim(self, filename, *, force=False, now=None):
+    async def model_access_claim(self, filename, *, force=False, now=None, model=None):
         if not self.model_access_storage_ready:
             return None
         now = time.time() if now is None else now
@@ -122,7 +130,7 @@ class AntigravityModelAccessMixin:
             state = row_state(row)
             if state.get("lease", {}).get("until", 0) > now:
                 return None
-            if not force and state["models"] and not any(e.get("next_check_at", 0) <= now for e in state["models"].values()):
+            if not force and not check_due(state, model, now):
                 return None
             state["lease"] = {"id": lease_id, "until": now + 120}
             state["identity"] = identity(row)
@@ -136,16 +144,19 @@ class AntigravityModelAccessMixin:
     async def model_access_queue(self, filename):
         def operation(row):
             state = row_state(row)
-            for model in MODELS:
-                state["models"].setdefault(model, {"state": "unknown", "revision": 1, "next_check_at": time.time()})
+            for family in FAMILIES:
+                state["families"].setdefault(family, {"state": "unknown", "revision": 1, "next_check_at": time.time()})
+            project(state)
             state["identity"] = identity(row)
             row["model_access_state"] = state
         if self.model_access_storage_ready:
             await self._quota_atomic(filename, operation, validate=False)
 
     async def model_access_observe(self, filename, snapshot, models=None, *, model=None, success=None, reason=None, now=None):
-        """A directory observes all tiers; a generation observes only its exact tier."""
+        """Observe version permissions and only the native routes actually evidenced."""
         if not self.model_access_storage_ready:
+            return False
+        if models is None and success is not None and model not in ROUTES:
             return False
         now = time.time() if now is None else now
         def operation(row):
@@ -154,21 +165,36 @@ class AntigravityModelAccessMixin:
             state = row_state(row)
             if snapshot.get("lease_id") and state.get("lease", {}).get("id") != snapshot["lease_id"]:
                 return False
-            prior = snapshot.get("access", {}).get("models", {})
-            targets = (model,) if model in MODELS else MODELS
+            prior = decode(snapshot.get("access", {}))
+            targets = (access_family(model),) if model in ROUTES else FAMILIES
             applied = False
-            for target in targets:
-                entry = state["models"].get(target, {})
-                if entry.get("revision", 0) != prior.get(target, {}).get("revision", 0):
+            for family in targets:
+                entry = state["families"].get(family, {})
+                # Queueing or a failed query establishes no permission evidence.
+                def evidence_revision(value):
+                    return value.get("revision", 0) if "checked_at" in value else 0
+                if evidence_revision(entry) != evidence_revision(prior["families"].get(family, {})):
                     continue
-                if models is not None or success is not None:
-                    present = target in models if models is not None else success
-                    observe(state, target, present, reason or ("directory_supported" if present else "directory_missing"), now)
+                routes = [native for native in ROUTES if access_family(native) == family]
+                if models is not None:
+                    present = any(native in models for native in routes)
+                    observe_entry(state["families"], family, present,
+                                  reason or ("directory_supported" if present else "directory_missing"), now)
+                    for native in routes:
+                        if state["routes"].get(native, {}).get("revision", 0) != prior["routes"].get(native, {}).get("revision", 0):
+                            continue
+                        observe_entry(state["routes"], native, native in models,
+                                      "directory_supported" if native in models else "directory_missing", now)
+                elif success is not None and model in ROUTES:
+                    if state["routes"].get(model, {}).get("revision", 0) != prior["routes"].get(model, {}).get("revision", 0):
+                        continue
+                    observe(state, model, success, reason or ("generation_succeeded" if success else "generation_404"), now)
                 else:
-                    state["models"][target] = {**entry, "state": entry.get("state", "unknown"),
-                        "revision": entry.get("revision", 0) + 1, "reason": reason or "directory_query_failed",
+                    state["families"][family] = {**entry, "state": entry.get("state", "unknown"),
+                        "revision": entry.get("revision", 1), "reason": reason or "directory_query_failed",
                         "last_attempt_at": now, "next_check_at": now + QUERY_RETRY}
                 applied = True
+            project(state)
             if snapshot.get("lease_id"):
                 state.pop("lease", None)
             state["identity"] = identity(row)
@@ -185,7 +211,7 @@ class AntigravityModelAccessMixin:
                 continue
             try:
                 state = row_state(row)
-                result.update(model for model in MODELS if eligible(state, model))
+                result.update(model for model in ROUTES if eligible(state, model))
             except (ValueError, TypeError):
                 continue
         return result
@@ -200,7 +226,7 @@ class AntigravityModelAccessMixin:
             try:
                 state = row_state(row)
                 if (state.get("lease", {}).get("until", 0) <= now and
-                        (not state["models"] or any(e.get("next_check_at", 0) <= now for e in state["models"].values()))):
+                        check_due(state, now=now)):
                     result.append(row["filename"])
             except (ValueError, TypeError):
                 continue

@@ -182,3 +182,20 @@ async def test_usage_tail_survives_recognizer_finish_reason_flush():
     result = await collect_checked(values + [b'data: [DONE]\n\n'])
     assert len(result) == 3
     assert json.loads(result[1].splitlines()[0][6:]) == frames[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("envelope", [False, True])
+async def test_opus_retirement_is_typed_404_before_any_sse_content(envelope):
+    notice = "Claude Opus 4.6 is no longer available. Please switch to Claude Opus 5.5."
+    payloads = ([{"response": {"error": {"message": notice}}}] if envelope else
+                [{"response": {"candidates": [{"content": {"parts": [{"text": char}]}}]}}
+                 for char in notice])
+    frames = [("data: " + json.dumps(payload) + "\n\n").encode() for payload in payloads]
+    released = []
+    with pytest.raises(ModelApiErrorException) as caught:
+        async for event in _retirement_checked_events(normalize_sse_events(chunks(frames))):
+            released.append(event)
+    assert caught.value.error.status == 404
+    assert released == []
+    assert notice not in str(caught.value)

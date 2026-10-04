@@ -3,7 +3,7 @@ import asyncio
 import time
 
 from log import log
-from src.antigravity_model_access import access_model, eligible
+from src.antigravity_model_access import access_model, check_due, eligible
 
 QUERY_TIMEOUT = 10
 SELECTION_TIMEOUT = 30
@@ -16,11 +16,11 @@ class ModelAccessService:
         self._task = None
         self._workers = []
 
-    async def check(self, manager, filename, data=None, *, force=False):
+    async def check(self, manager, filename, data=None, *, force=False, model=None):
         backend = manager._storage_adapter._backend
         async with self._slots:
             async with asyncio.timeout(QUERY_TIMEOUT):
-                snapshot = await backend.model_access_claim(filename, force=force)
+                snapshot = await backend.model_access_claim(filename, force=force, model=model)
                 if snapshot is None:
                     return False
                 try:
@@ -76,11 +76,15 @@ class ModelAccessService:
                         snapshot = await backend.model_access_snapshot(filename)
                         if snapshot and eligible(snapshot["access"], target):
                             return result
+                        # A different version being due must not turn this
+                        # request into an early recheck of its paused version.
+                        if snapshot and not check_due(snapshot["access"], target):
+                            continue
                         await backend.model_access_queue(filename)
                         batch.append(result)
                     if not batch:
                         return None
-                    await asyncio.gather(*(self.check(manager, filename, data, force=True) for filename, data in batch),
+                    await asyncio.gather(*(self.check(manager, filename, data, model=target) for filename, data in batch),
                                          return_exceptions=True)
                     for filename, _ in batch:
                         snapshot = await backend.model_access_snapshot(filename)
@@ -105,7 +109,7 @@ class ModelAccessService:
             while not queue.empty():
                 name = queue.get_nowait()
                 try:
-                    await self.check(manager, name, force=True)
+                    await self.check(manager, name)
                 except Exception:
                     log.warning("[ANTIGRAVITY] model access check unavailable")
         await asyncio.gather(worker(), worker())

@@ -21,9 +21,9 @@ async def store(tmp_path, monkeypatch):
     manager = SQLiteManager()
     await manager.initialize()
     await manager.store_credential(NAME, {"access_token": "synthetic", "project_id": "synthetic"}, "antigravity")
-    from src.antigravity_model_access import MODELS
+    from src.antigravity_model_access import ROUTES
     snapshot = await manager.model_access_snapshot(NAME)
-    await manager.model_access_observe(NAME, snapshot, MODELS)
+    await manager.model_access_observe(NAME, snapshot, ROUTES)
     try:
         yield manager
     finally:
@@ -120,6 +120,8 @@ async def test_independent_groups_and_credentials(store):
     assert await store.quota_admit(NAME, GEMINI)
     assert await store.quota_admit(NAME, "gpt-oss-120b") is None
     await store.store_credential("second.json", {}, "antigravity")
+    from src.antigravity_model_access import ROUTES
+    await store.model_access_observe("second.json", await store.model_access_snapshot("second.json"), ROUTES)
     assert await store.quota_admit("second.json", CLAUDE)
 
 

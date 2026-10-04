@@ -9,7 +9,7 @@ from functools import lru_cache
 
 from src.antigravity_models import (ANTIGRAVITY_MODEL_ALIASES,
                                     ANTIGRAVITY_NATIVE_MODEL_IDS, PUBLIC_ANTIGRAVITY_MODEL_IDS,
-                                    is_retired_antigravity_opus_model, resolve_antigravity_opus_model)
+                                    resolve_antigravity_opus_model)
 from src.geminicli_models import GEMINI_38_FLASH_MODEL, GEMINI_38_FLASH_THINKING_LEVELS
 from .types import CONTRACT_VERSION, RoutingPolicySnapshot, thaw
 
@@ -40,26 +40,28 @@ _SOURCE_SELECTORS = {
     "src/model_routing/__init__.py": ("check_route_dispatch",),
 }
 PROVEN_SOURCE_DIGESTS = {
-    "src/utils.py": "1b29b9d6ac09b30157972d06561c3c50235619005fa4dc27ba9bdfd4748c0492",
-    "src/converter/gemini_fix.py": "f5f6b44682ee80b2df38ade5a552e9e30043ef06d216dcc9ae0a88ae16387318",
-    "src/converter/antigravity_fix.py": "7b95c5d721e7abf93507682a0c82746c904d059f6a80b3ca4a603f4b657e97ba",
+    "src/utils.py": "eaf4198125faf76e3f20ce142b5b1699a6f11bb9ea28ddf77db22c5d62bfee26",
+    "src/converter/gemini_fix.py": "7f472ba5f0179fbbb8bea0fca50f7f20d8982556ac6153a613d8f4d144adf615",
+    "src/converter/antigravity_fix.py": "b166e8a807a791cb0462abc9548a336ab6426e55273207e1f109f1f22e2fff6a",
     "src/converter/openai2gemini.py": "2d3b56714dddb86d74acf2ff96aae8020d4c7f7d44dac8b649e1958fa304369f",
     "src/converter/anthropic2gemini.py": "c0166a60768165d6d2efdfccd6e398a277dd7902e4056e060a9a74b51c2c6ff4",
     "src/converter/utils.py": "6f3491fe7a95302734ad31b90fa52551a7132cd151191cea1f9ece5f07863dab",
     "src/converter/thoughtSignature_fix.py": "2591fca1e8bfd959b764148cf74636cf85e1f17df63d0c03e8adcdf7c0ca3840",
-    "src/antigravity_models.py": "f080954b7ddb0024c54fa1f8096fc32669038aced0b3af5ab0ff2753c0e063ea",
+    "src/antigravity_models.py": "531104d648974bc86d1a152217c0ab53f6502506185bba8ef1fd9b97e975c2ac",
     "src/geminicli_models.py": "3128ad421b943730c5a8032dd448048530bc89600c3a1cb3bda889138c4048c2",
     "src/models.py": "01f40fce3cf3ecccb0e36fb393fbf7bb9fbc421276289d64775aa1384c3f9681",
     "src/model_routing/__init__.py": "3543b4693a36a1098850b8bc928887694ed59a6deb7d3dfd0339de01f55a77b6",
 }
 
-# D1004 baseline above retains Opus 5.5 route depth and retired-name guards.
+# Opus family baseline: differential tests prove stable 4.6 Thinking and
+# 5.5 effort routes, version namespace protection and all three protocols.
+# Previous single-version converter/catalog fingerprints are not accepted.
 # Reviewed integration candidate: keyword-only context defaults to
 # None, snapshots replace only config reads, and explicit dispatch is checked
 # without rewriting the normalized model. No implicit acceptance of new source.
 REVIEWED_CONTEXT_SOURCE_DIGESTS = {
-    "src/converter/gemini_fix.py": "684926a87312ff06474b59be0c7eab9c69e3c2379a4b93d9f5c638efb44fcdd2",
-    "src/converter/antigravity_fix.py": "b7ec433a8b21717f4941eb6de96638b08f9f30cf0553a1a25a8a9c50362aaa64",
+    "src/converter/gemini_fix.py": "7f472ba5f0179fbbb8bea0fca50f7f20d8982556ac6153a613d8f4d144adf615",
+    "src/converter/antigravity_fix.py": "b166e8a807a791cb0462abc9548a336ab6426e55273207e1f109f1f22e2fff6a",
     "src/converter/openai2gemini.py": "9458041ad12d284f9eb61a2c3e4416855f5d3f37e3f4e52845d086761a69e13c",
     "src/converter/anthropic2gemini.py": "d07dafed54e9836f3cbc4d4cdca46a7dd10ad284fd5aa6c78cd949a61e3a3902",
     "src/converter/utils.py": "7d800927426cd8b6c4bc71fcb8d0bf17b956b384d433bcf5026314977825c09d",
@@ -85,7 +87,14 @@ def _source_digests():
             getattr(node, "name", None) in names or isinstance(node, (ast.Assign, ast.AnnAssign)) and
             any(isinstance(target, ast.Name) and target.id in names for target in
                 getattr(node, "targets", (getattr(node, "target", None),)))]
-        result[relative] = hashlib.sha256(ast.dump(ast.Module(selected, type_ignores=[]), include_attributes=False).encode()).hexdigest()
+        module = ast.Module(selected, type_ignores=[])
+        # Python 3.13 changed dump's default to omit empty fields. Keep the
+        # original explicit-field representation across supported runtimes.
+        try:
+            source_ast = ast.dump(module, include_attributes=False, show_empty=True)
+        except TypeError:  # Python 3.12 already includes empty fields.
+            source_ast = ast.dump(module, include_attributes=False)
+        result[relative] = hashlib.sha256(source_ast.encode()).hexdigest()
     return result
 
 
@@ -103,7 +112,7 @@ def build_policy_snapshot() -> RoutingPolicySnapshot:
              "precedence": ("ag_image", "ag_pro_high_redirect", "ag_native", "ag_exact", "ag_suffix", "ag_body_level"),
              "parameter_rules": ("cli38_level_over_budget_validate", "cli_other_budget_over_level",
                 "name_over_body", "cli_client_include_over_default", "ag_gemini3_include_only",
-                "ag_think_budget_1024", "ag_opus_route_depth_include_only", "ag_claude_tool_call_removes_thinking", "gpt_oss_clamp_1_8192",
+                "ag_think_budget_1024", "ag_opus55_route_depth_include_only", "ag_opus46_thinking_budget", "ag_claude_tool_call_removes_thinking", "gpt_oss_clamp_1_8192",
                 "cli_ag_default_nonempty_gc_64000_topk64", "cli38_drop_sampling_count",
                 "ag_drop_penalty_stop", "image_client_config_size_name_priority", "clean_then_no_prefill"),
              "converter_rules": ("openai_presence_map", "openai_completion_tokens_truthy_priority",
@@ -143,6 +152,8 @@ def strip_suffixes(name, policy, *, native=False):
 
 def entry_alias(channel, name, policy):
     if channel == "antigravity":
+        if "claude" in name.lower() and "opus" in name.lower():
+            return resolve_antigravity_opus_model(name)
         return policy.static_rules["ag_aliases"].get(name, name)
     for public, target in policy.static_rules["cli_aliases"].items():
         if name == public:
@@ -229,8 +240,6 @@ def parameter_actions(channel, name, policy):
     These descriptors are a normal form for comparing names over all parameter
     classes. Integration still executes the existing content/tool normalizers.
     """
-    if channel == "antigravity" and is_retired_antigravity_opus_model(name):
-        return {"retired": True, "status": 400}
     lower = name.lower()
     budget, level = thinking_settings(name, policy)
     base = strip_suffixes(name, policy)
@@ -259,7 +268,7 @@ def parameter_actions(channel, name, policy):
                    "replace_gc": "candidateCount_1_imageConfig", "remove": ("systemInstruction", "tools", "toolConfig")}
     else:
         gemini = "gemini" in lower
-        opus = not gemini and "claude" in lower and "opus" in lower
+        opus = not gemini and "claude" in lower and "opus" in lower and resolve_antigravity_opus_model(name).startswith("claude-opus-5-5-")
         thinking = "think" in lower
         final_name = name
         if gemini:

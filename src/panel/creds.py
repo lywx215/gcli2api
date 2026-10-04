@@ -516,7 +516,8 @@ async def upload_credentials_common(
 async def get_creds_status_common(
     offset: int, limit: int, status_filter: str, mode: str = "geminicli",
     error_code_filter: str = None, cooldown_filter: str = None, preview_filter: str = None, tier_filter: str = None, remark_filter: str = None,
-    model_access_filter: str = "all", model_access_tier: str = "any"
+    model_access_filter: str = "all", model_access_tier: str = "any",
+    model_access_family: str = "claude-opus-5-5"
 ) -> JSONResponse:
     """获取凭证文件状态的通用函数"""
     mode = validate_mode(mode)
@@ -544,13 +545,19 @@ async def get_creds_status_common(
         raise HTTPException(status_code=400, detail="无效的 Opus 权限筛选")
     if model_access_tier not in ("any", "all_tiers", "low", "medium", "high"):
         raise HTTPException(status_code=400, detail="无效的 Opus 权限档位")
-    if mode != "antigravity" and (model_access_filter != "all" or model_access_tier != "any"):
+    if model_access_family not in ("claude-opus-5-5", "claude-opus-4-6"):
+        raise HTTPException(status_code=400, detail="无效的 Opus 权限版本")
+    if mode != "antigravity" and (model_access_filter != "all" or model_access_tier != "any" or model_access_family != "claude-opus-5-5"):
         raise HTTPException(status_code=400, detail="Opus 权限筛选仅支持 Antigravity")
 
     storage_adapter = await get_storage_adapter()
     backend_info = await storage_adapter.get_backend_info()
     backend_type = backend_info.get("backend_type", "unknown")
     supports_group_filter = getattr(storage_adapter._backend, "SUPPORTS_QUOTA_GROUP_FILTER", False) is True
+    family_reader = getattr(storage_adapter._backend, "model_access_list_family_public", None)
+    supports_family_filter = getattr(storage_adapter._backend, "model_access_storage_ready", False) is True and callable(family_reader)
+    if mode == "antigravity" and (model_access_filter != "all" or model_access_family != "claude-opus-5-5") and not supports_family_filter:
+        raise HTTPException(status_code=501, detail="当前存储后端不支持 Opus 版本权限筛选")
     if cooldown_filter in GROUP_FILTERS and not supports_group_filter:
         raise HTTPException(status_code=501, detail="当前存储后端不支持共享额度筛选")
 
@@ -575,8 +582,10 @@ async def get_creds_status_common(
         from src.antigravity_model_access import filter_summaries
         reader = getattr(storage_adapter._backend, "model_access_list_public", None)
         states = await reader() if callable(reader) else {}
+        families = await family_reader() if supports_family_filter else {}
         result = filter_summaries(result, states, offset=offset, limit=limit,
-                                  status=model_access_filter, tier=model_access_tier)
+                                  status=model_access_filter, tier=model_access_tier,
+                                  family=model_access_family, family_states=families)
 
     creds_list = []
     for summary in result["items"]:
@@ -607,6 +616,8 @@ async def get_creds_status_common(
         else:
             cred_info["enable_credit"] = summary.get("enable_credit", False)
             cred_info["model_access_state"] = summary.get("model_access_state", {})
+            if supports_family_filter:
+                cred_info["model_access_families"] = summary.get("model_access_families", {})
             if supports_group_filter:
                 cred_info["quota_groups"] = summary["quota_groups"]
                 cred_info["quota_state_invalid"] = summary["quota_state_invalid"]
@@ -621,7 +632,8 @@ async def get_creds_status_common(
         "has_more": (offset + limit) < result["total"],
         "stats": result.get("stats", {"total": 0, "normal": 0, "disabled": 0}),
         **({"model_access_summary": result["model_access_summary"]} if mode == "antigravity" else {}),
-        **({"panel_capabilities": [GROUP_FILTER_CAPABILITY] if supports_group_filter else []} if mode == "antigravity" else {}),
+        **({"panel_capabilities": ([GROUP_FILTER_CAPABILITY] if supports_group_filter else []) +
+           (["antigravity.model_access.family_filter"] if supports_family_filter else [])} if mode == "antigravity" else {}),
     })
 
 
@@ -1166,7 +1178,8 @@ async def get_creds_status(
     remark_filter: str = "__all__",
     mode: str = "geminicli",
     model_access_filter: str = "all",
-    model_access_tier: str = "any"
+    model_access_tier: str = "any",
+    model_access_family: str = "claude-opus-5-5"
 ):
     """
     获取凭证文件的状态（轻量级摘要，不包含完整凭证数据，支持分页和状态筛选）
@@ -1180,7 +1193,8 @@ async def get_creds_status(
         preview_filter: Preview筛选（all=全部, preview=支持preview, no_preview=不支持preview，仅geminicli模式有效）
         tier_filter: tier筛选（all=全部, free/pro/ultra）
         model_access_filter: Opus权限筛选（all/supported/unavailable/unknown，仅Antigravity）
-        model_access_tier: 权限档位（any/all_tiers/low/medium/high），先筛选再分页
+        model_access_tier: 废弃兼容参数，接受旧值并按版本权限判断
+        model_access_family: Opus版本（claude-opus-5-5/claude-opus-4-6），先筛选再分页
         mode: 凭证模式（geminicli 或 antigravity）
 
     Returns:
@@ -1196,7 +1210,8 @@ async def get_creds_status(
             tier_filter=tier_filter,
             remark_filter=remark_filter,
             model_access_filter=model_access_filter,
-            model_access_tier=model_access_tier
+            model_access_tier=model_access_tier,
+            model_access_family=model_access_family
         )
     except HTTPException:
         raise
@@ -1974,6 +1989,10 @@ async def _fetch_quota_for_credential(filename: str, mode: str, *, origin="legac
 
     if mode == "antigravity":
         access_snapshot = await storage_adapter._backend.model_access_snapshot(filename)
+        from src.storage.antigravity_quota import credential_version
+        if access_snapshot and (access_snapshot.get("version") != credential_version(credential_data)
+                or access_snapshot.get("generation") != (quota_snapshot or {}).get("quota_credential_generation")):
+            access_snapshot = None
         info = await fetch_quota_info(access_token)
         if access_snapshot:
             try:
@@ -1982,6 +2001,8 @@ async def _fetch_quota_for_credential(filename: str, mode: str, *, origin="legac
                     reason=None if info.get("success") else "directory_query_failed")
             except Exception:
                 log.warning("[ANTIGRAVITY] model access result persistence unavailable")
+        info["model_access_state"] = await storage_adapter._backend.model_access_public(filename)
+        info["model_access_families"] = await storage_adapter._backend.model_access_family_public(filename)
         info["_quota_snapshot"] = quota_snapshot
     else:
         if is_smart_429_protection_enabled():
@@ -2182,6 +2203,14 @@ async def batch_refresh_cooldown(
         added_total = sum(len(r.get("added_cooldown", [])) for r in results)
         affected_creds_cleared = sum(1 for r in results if r.get("cleared"))
         affected_creds_added = sum(1 for r in results if r.get("added_cooldown"))
+        access_summary = {}
+        if mode == "antigravity":
+            from src.antigravity_model_access import filter_summaries
+            access_summary = filter_summaries(
+                {"items": [{"filename": r["filename"]} for r in results]}, {},
+                offset=0, limit=len(results),
+                family_states={r["filename"]: r.get("model_access_families", {}) for r in results},
+            )["model_access_summary"]
 
         return JSONResponse(content={
             "success_count": success_count,
@@ -2193,6 +2222,7 @@ async def batch_refresh_cooldown(
             "affected_creds_cleared": affected_creds_cleared,
             "affected_creds_added": affected_creds_added,
             "results": results,
+            **({"model_access_summary": access_summary} if mode == "antigravity" else {}),
             "message": (
                 f"完成：{success_count}/{len(results)} 凭证拉取额度成功，"
                 f"解除 {cleared_total} 个冷却（涉及 {affected_creds_cleared} 凭证），"
@@ -2404,26 +2434,10 @@ async def configure_preview_channel(
         raise HTTPException(status_code=500, detail=f"配置失败: {str(e)}")
 
 
-def _retired_antigravity_test_response(model):
-    from src.antigravity_models import is_retired_antigravity_opus_model
-
-    if not is_retired_antigravity_opus_model(model):
-        return None
-    return JSONResponse(status_code=400, content={
-        "success": False,
-        "status_code": 400,
-        "upstream_status": None,
-        "response_source": "local",
-        "phase": "validation",
-        "phases": [],
-        "error": "Invalid request. Check the request parameters and try again.",
-        "state_update": {},
-    })
-
-
 def _antigravity_test_stats_model(requested_model, upstream_model):
     """Count current Opus probes by routed generation without rewriting history."""
-    if upstream_model in {"claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-high"}:
+    from src.antigravity_model_access import ROUTES
+    if upstream_model in ROUTES:
         return upstream_model
     return requested_model or upstream_model
 
@@ -2432,11 +2446,14 @@ async def _finish_antigravity_test(storage, filename, model, admission, response
     from src.antigravity_completion import validate_json
     from src.antigravity_model_access import access_model
     target = access_model(model)
-    from src.router.model_api_errors import ModelApiErrorException
+    from src.router.model_api_errors import ModelApiErrorException, error_from_retirement_body
     from src.api.utils import parse_and_log_cooldown
     from src.diagnostics.antigravity import safe_error
     status = response.status_code
-    content = {"success": status in (200, 429), "status_code": status, "filename": filename}
+    if target and error_from_retirement_body(response.content) is not None:
+        status = 404
+    content = {"success": status in (200, 429), "status_code": status, "filename": filename,
+               "upstream_status": response.status_code, "response_source": "google"}
     valid = False
     if status == 200:
         try:
@@ -2444,7 +2461,8 @@ async def _finish_antigravity_test(storage, filename, model, admission, response
             valid = True
         except ModelApiErrorException as exc:
             content.update(success=False, verified_reply=False, error="invalid_upstream_response")
-            status = 404 if target and exc.error.status == 404 else 502
+            status = (404 if target and exc.error.status == 404 else
+                      424 if strict and exc.error.status == 404 else 502)
         if valid and strict:
             valid = _is_expected_antigravity_model_test_reply(_extract_antigravity_model_test_reply(response))
             content.update(success=valid, verified_reply=valid, expected_reply=ANTIGRAVITY_MODEL_TEST_EXPECTED_REPLY)
@@ -2461,6 +2479,7 @@ async def _finish_antigravity_test(storage, filename, model, admission, response
                 model=target, success=valid, reason="generation_succeeded" if valid else "generation_404")
             content["model_access_update"] = {"status": "applied" if applied else "skipped"}
             content["model_access_state"] = await storage._backend.model_access_public(filename)
+            content["model_access_families"] = await storage._backend.model_access_family_public(filename)
         except Exception:
             content["model_access_update"] = {"status": "failed", "reason": "state_update_failed"}
     await storage._backend.quota_record_result(
@@ -2489,10 +2508,6 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         - 429: 凭证被限流但有效
         - 其他: 凭证失败（返回实际错误码）
     """
-    if mode == "antigravity":
-        retired_response = _retired_antigravity_test_response(model)
-        if retired_response is not None:
-            return retired_response
     if mode == "antigravity" and origin == "manual":
         from .antigravity_manual import test
         return await test(filename, model)

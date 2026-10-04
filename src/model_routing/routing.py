@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 import re
 
-from src.antigravity_models import is_retired_antigravity_opus_model
+from src.antigravity_models import resolve_antigravity_opus_model
 from src.router.model_api_errors import ErrorOrigin, error_from_http_status
 from .policy import entry_alias, map_ag_claude, map_ag_gemini, parameter_actions, strip_prefix, strip_suffixes, thinking_settings
 from .projection import generation_parameters
@@ -110,7 +110,7 @@ def _normalize_parameters(channel, name, gc, projection, features, policy):
                 thinking["thinkingBudget"] = 1024
                 thinking.pop("thinkingLevel", None)
                 thinking["includeThoughts"] = features.return_thoughts
-            if "claude" in lower and "opus" in lower:
+            if "claude" in lower and "opus" in lower and resolve_antigravity_opus_model(name).startswith("claude-opus-5-5-"):
                 thinking = gc.setdefault("thinkingConfig", {})
                 thinking.pop("thinkingBudget", None)
                 thinking.pop("thinkingLevel", None)
@@ -138,11 +138,6 @@ def _normalize_parameters(channel, name, gc, projection, features, policy):
 def legacy_resolution(channel, protocol, requested_model, projection, policy, feature_snapshot):
     public, prefix = strip_prefix(requested_model, policy)
     name = entry_alias(channel, public, policy)
-    if channel == "antigravity" and is_retired_antigravity_opus_model(requested_model):
-        return ResolutionOutcome(requested_model, name, public,
-            {"prefix": prefix, "normalization_model": name, "normalizer_input_model": name,
-             "fake_streaming": prefix == "假流式/", "anti_truncation": prefix in ("抗截断/", "流式抗截断/")},
-            False, TargetProfile(name, parameter_actions(channel, name, policy)), False, _safe_error(400))
     try:
         dispatch, values = _normalize_parameters(channel, name, generation_parameters(projection), projection, feature_snapshot, policy)
         error = values.get("error")

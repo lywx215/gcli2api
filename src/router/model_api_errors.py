@@ -185,11 +185,15 @@ def error_from_model_payload(
 ) -> Optional[ModelApiError]:
     """Classify an upstream JSON error envelope, including HTTP-200 errors.
 
-    The payload is inspected only for the presence of an error envelope and a
-    numeric HTTP-like code.  Its message and other fields never cross the
+    The payload is inspected for an error envelope, a known retirement notice,
+    and a numeric HTTP-like code. Its message and other fields never cross the
     protected route boundary.
     """
 
+    from src.router.model_retirement import is_opus_retirement_error
+
+    if is_opus_retirement_error(payload):
+        return error_from_http_status(404, origin=origin)
     candidate = payload
     seen = set()
     while isinstance(candidate, dict) and id(candidate) not in seen:
@@ -254,6 +258,23 @@ def error_from_retirement_payload(
     if result.action is RetirementAction.RETIRED:
         return error_from_http_status(404, origin=origin)
     return None
+
+
+def error_from_retirement_body(body: Any) -> Optional[ModelApiError]:
+    """Recognize provider retirement in generation HTTP bodies, irrespective of status."""
+    from src.router.model_retirement import is_opus_retirement_error
+    if isinstance(body, (bytes, bytearray)):
+        try:
+            body = bytes(body).decode("utf-8")
+        except UnicodeError:
+            return None
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError, RecursionError):
+        payload = {"error": body} if isinstance(body, str) else None
+    if is_opus_retirement_error(payload):
+        return error_from_http_status(404, origin=ErrorOrigin.UPSTREAM)
+    return error_from_retirement_payload(payload)
 
 
 def error_from_exception(exc: BaseException) -> ModelApiError:

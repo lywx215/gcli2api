@@ -5,7 +5,6 @@ from collections.abc import Mapping
 from functools import lru_cache
 import unicodedata
 
-from src.antigravity_models import is_retired_antigravity_opus_model
 from .policy import (PROVEN_SOURCE_DIGESTS, REVIEWED_CONTEXT_SOURCE_DIGESTS, SUFFIXES, build_policy_snapshot, digest, entry_alias, map_ag_claude, map_ag_gemini,
                      parameter_actions, strip_prefix, strip_suffixes, thinking_settings)
 from .types import (CHANNELS, CompileResult, CompiledChannel, ParsedRouteTable,
@@ -77,8 +76,6 @@ def _possible_dispatches(channel, name, policy):
     (the latter's protected error is retained by the normalizer profile).
     This is a selector proof, not a list of budget samples.
     """
-    if channel == "antigravity" and is_retired_antigravity_opus_model(name):
-        return frozenset()
     name = entry_alias(channel, name, policy)
     if channel == "geminicli":
         return frozenset((strip_suffixes(name, policy),))
@@ -235,8 +232,6 @@ def compile_channel(channel, parsed_table, policy_snapshot):
         return CompileResult(issues=tuple(issues))
     by_public, profiles = {}, {}
     for row in rows:
-        if channel == "antigravity" and is_retired_antigravity_opus_model(row.public_name):
-            issues.append(_issue(channel, row.row_index, "public_name", "PROTECTED_ENTRY_CAPTURE"))
         previous = by_public.get(row.public_name)
         if previous is not None:
             issues.append(_issue(channel, row.row_index, "public_name", "DUPLICATE_PUBLIC_NAME", (previous.row_index,)))
@@ -258,7 +253,10 @@ def compile_channel(channel, parsed_table, policy_snapshot):
         static.update(policy_snapshot.static_rules["ag_native"])
         static.update(policy_snapshot.static_rules["ag_exact"])
     for row in active:
-        direct = row.public_name in static or row.public_name in targets
+        # Opus version names remain protected even when the configured target
+        # pool contains only the other version. They cannot disguise an upgrade.
+        opus_name = channel == "antigravity" and "claude" in row.public_name.lower() and "opus" in row.public_name.lower()
+        direct = row.public_name in static or row.public_name in targets or opus_name
         old_targets = _possible_dispatches(channel, row.public_name, policy_snapshot)
         related = tuple(other.row_index for other in active if other is not row and other.upstream_name in old_targets)
         if direct or old_targets & targets:

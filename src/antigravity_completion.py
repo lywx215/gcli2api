@@ -3,6 +3,7 @@ import copy
 import json
 from src.router.model_api_errors import (
     ErrorKind, ErrorOrigin, ModelApiErrorException, make_model_api_error, parse_model_response,
+    error_from_retirement_payload,
 )
 
 TERMINALS = frozenset({"STOP", "MAX_TOKENS", "SAFETY", "RECITATION", "OTHER", "LANGUAGE",
@@ -86,6 +87,9 @@ class Completion:
 
     def json(self, raw):
         payload = parse_model_response(raw)
+        retirement = error_from_retirement_payload(payload)
+        if retirement is not None:
+            raise ModelApiErrorException(retirement)
         try:
             self.observe(payload)
         except (TypeError, AttributeError, ValueError):

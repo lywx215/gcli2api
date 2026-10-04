@@ -89,6 +89,11 @@ async def test_hundreds_combined_filter_before_pagination_and_read_only(store,mo
     async def access_reader():
         return {f'item-{i:04d}.json':{m:{'state':'supported' if i%3==0 else 'unavailable','checked_at':NOW} for m in MODELS} for i in range(603)}
     monkeypatch.setattr(store,'model_access_list_public',access_reader)
+    async def family_reader():
+        return {f'item-{i:04d}.json': {'claude-opus-5-5': {
+            'state': 'supported' if i%3==0 else 'unavailable', 'checked_at': NOW},
+            'claude-opus-4-6': {'state': 'unknown'}} for i in range(603)}
+    monkeypatch.setattr(store,'model_access_list_family_public',family_reader)
     forbidden = AsyncMock(side_effect=AssertionError('list performed network or write'))
     for name in ('quota_sync','quota_snapshot','quota_admit','_quota_atomic','update_credential_state','record_request_result'):
         monkeypatch.setattr(store,name,forbidden,raising=False)

@@ -406,3 +406,43 @@ class LogicalRequestStreamTests(unittest.TestCase):
         self.assertEqual(response.status_code, 424)
         self.assertEqual(recorded, [("gemini-3.1-pro", "antigravity", False)])
         self.assertEqual(len(storage._backend.failures), 1)
+
+
+@pytest.mark.parametrize("shape", ["gemini", "wrapped", "openai", "openai_delta", "claude", "claude_delta"])
+@pytest.mark.parametrize("text,retired", [
+    ("Claude Opus 4.6 is no longer available. Please switch to Claude Opus 5.5.", True),
+    ("Gemini gemini-2.5-pro is no longer available.", True),
+    ('The provider said: "Claude Opus 4.6 is no longer available. Please switch to Claude Opus 5.5."', False),
+    ('"Gemini gemini-2.5-pro is no longer available. Please switch to another model."', False),
+    ("An example is no longer available; please switch to another example.", False),
+    ("Claude Opus 4.6 is no longer available.", False),
+])
+def test_logical_retirement_uses_display_prefix_across_protocols(shape, text, retired):
+    candidate = {"candidates": [{"content": {"parts": [{"text": text}]}}]}
+    payload = {
+        "gemini": candidate,
+        "wrapped": {"response": candidate},
+        "openai": {"choices": [{"message": {"content": text}}]},
+        "openai_delta": {"choices": [{"delta": {"content": text}}]},
+        "claude": {"content": [{"type": "text", "text": text}]},
+        "claude_delta": {"delta": {"type": "text_delta", "text": text}},
+    }[shape]
+    serialized = json.dumps(payload).encode()
+    assert response_has_valid_body(Response(content=serialized, status_code=200)) is not retired
+    frame = b"data: " + serialized + b"\n\n"
+    assert stream_item_has_body(frame) is not retired
+    assert stream_item_is_error(frame) is retired
+
+
+def test_retirement_in_metadata_or_thinking_does_not_fail_normal_answer():
+    notice = "Claude Opus 4.6 is no longer available. Please switch to Claude Opus 5.5."
+    examples = [
+        {"content": "normal answer", "metadata": {"message": notice}},
+        {"content": [{"type": "thinking", "text": notice}, {"type": "text", "text": "normal answer"}]},
+        {"choices": [{"message": {"reasoning_content": notice, "content": "normal answer"}}]},
+    ]
+    for payload in examples:
+        serialized = json.dumps(payload).encode()
+        assert response_has_valid_body(Response(content=serialized, status_code=200))
+        assert stream_item_has_body(b"data: " + serialized + b"\n\n")
+        assert not stream_item_is_error(b"data: " + serialized + b"\n\n")

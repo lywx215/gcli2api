@@ -43,6 +43,8 @@ def reply(text="测试成功", finish="STOP"):
     ("claude-opus-5-5-low", "claude-opus-5-5-low", "claude-opus-5-5-low"),
     ("claude-opus-5-5-medium", "claude-opus-5-5-medium", "claude-opus-5-5-medium"),
     ("claude-opus-5-5-high", "claude-opus-5-5-high", "claude-opus-5-5-high"),
+    ("claude-opus-4-6", "claude-opus-4-6-thinking", "claude-opus-4-6-thinking"),
+    ("claude-opus-4.6", "claude-opus-4-6-thinking", "claude-opus-4-6-thinking"),
     ("gemini-3.1-pro", "gemini-pro-agent", "gemini-3.1-pro"),
 ])
 async def test_panel_probe_stats_use_routed_opus_generation(
@@ -103,28 +105,26 @@ async def test_panel_probe_stats_use_routed_opus_generation(
     "抗截断/claude-opus-4.6", "流式抗截断/ 假流式/ CLAUDE-OPUS-4-6-thinking ",
     "models/claude-opus-4-6-thinking", "arbitrary/claude-opus-4.6-high",
     "models/ CLAUDE-OPUS-4-6 ",
-    "claude-opus-4-6/foo", "claude-opus-4.6/",
-    "prefix-claude-opus-4-6-thinking", "notclaude-opus-4.6-high",
 ])
-async def test_retired_opus_panel_probe_rejected_before_any_side_effect(monkeypatch, origin, model):
-    async def forbidden(*args, **kwargs):
-        pytest.fail("Retired probe must not prepare credentials, dispatch, or record statistics")
-
-    monkeypatch.setattr(panel, "get_storage_adapter", forbidden)
-    monkeypatch.setattr(manual, "prepare", forbidden)
-    monkeypatch.setattr(panel, "record_logical_request", forbidden)
-    monkeypatch.setattr("src.httpx_client.post_async", forbidden)
+async def test_restored_opus_panel_probe_preserves_version(panel_store, monkeypatch, origin, model):
+    async def storage():
+        return SimpleNamespace(_backend=panel_store, get_credential=panel_store.get_credential)
+    async def endpoint():
+        return "https://synthetic.invalid"
+    calls = []
+    async def post(**kwargs):
+        calls.append(kwargs["json"]["model"])
+        return httpx.Response(200, json=reply())
+    monkeypatch.setattr(panel, "get_storage_adapter", storage)
+    monkeypatch.setattr(panel, "get_antigravity_api_url", endpoint)
+    monkeypatch.setattr("src.httpx_client.post_async", post)
     if origin == "direct_manual":
         response = await manual.test(NAME, model)
     else:
         response = await panel.test_credential_common(NAME, mode="antigravity", model=model, origin=origin)
-    assert response.status_code == 400
-    assert json.loads(response.body) == {
-        "success": False, "status_code": 400, "upstream_status": None,
-        "response_source": "local", "phase": "validation", "phases": [],
-        "error": "Invalid request. Check the request parameters and try again.",
-        "state_update": {},
-    }
+    assert response.status_code == 200
+    assert json.loads(response.body)["success"] is True
+    assert calls == ["claude-opus-4-6-thinking"]
 
 
 @pytest.mark.parametrize("disabled,permanent", [(False, False), (True, False), (True, True)])
@@ -566,3 +566,39 @@ global.AppState = {antigravityCreds: {selectedFiles: new Set(['one.json', 'two.j
 '''
     result = subprocess.run([node, "-"], input=script, text=True, encoding="utf-8", capture_output=True)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("upstream_status", [400, 500])
+async def test_legacy_non200_retirement_pauses_only_46_without_banning(panel_store, monkeypatch, upstream_status):
+    store = panel_store
+    opus46, opus55 = "claude-opus-4-6-thinking", "claude-opus-5-5-high"
+    snapshot = await store.model_access_snapshot(NAME)
+    assert await store.model_access_observe(NAME, snapshot, [opus46, opus55])
+    assert await store.quota_admit(NAME, opus46)
+    assert await store.quota_admit(NAME, opus55)
+    async def storage():
+        return SimpleNamespace(_backend=store, get_credential=store.get_credential)
+    async def endpoint(): return "https://synthetic.invalid"
+    records, calls = [], []
+    async def logical(*args): records.append(args)
+    async def ban(status): return True
+    notice = "Claude Opus 4.6 is no longer available. Please switch to Claude Opus 5.5."
+    async def post(**kwargs):
+        calls.append(kwargs["json"]["model"])
+        return httpx.Response(upstream_status, json={"error": {"message": notice}})
+    monkeypatch.setattr(panel, "get_storage_adapter", storage)
+    monkeypatch.setattr(panel, "get_antigravity_api_url", endpoint)
+    monkeypatch.setattr(panel, "record_logical_request", logical)
+    monkeypatch.setattr(panel, "check_should_auto_ban", ban)
+    monkeypatch.setattr("src.httpx_client.post_async", post)
+    response = await panel.test_credential_common(NAME, mode="antigravity", model=opus46, origin="legacy")
+    result = json.loads(response.body)
+    assert response.status_code == result["status_code"] == 404
+    assert result["upstream_status"] == upstream_status
+    assert result["success"] is False
+    assert notice.encode() not in response.body
+    assert calls == [opus46]
+    assert records == [(opus46, "antigravity", False)]
+    assert await store.quota_admit(NAME, opus46) is None
+    assert await store.quota_admit(NAME, opus55)
+    assert not (await store.get_credential_state(NAME, "antigravity"))["disabled"]

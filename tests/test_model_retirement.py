@@ -1,4 +1,5 @@
 import json
+import pytest
 
 from src.router.model_retirement import (
     BUFFER_OVERFLOW_STATUS_CODE,
@@ -257,3 +258,104 @@ def test_pydantic_like_objects_are_accepted_without_mutation():
             return {"response": {"candidates": [Candidate()]}}
 
     assert is_model_retirement_notice(Response())
+
+
+OPUS_NOTICE = "Claude Opus 4.6 is no longer available. Please switch to Claude Opus 5.5."
+
+
+def test_opus_http200_candidate_maps_to_safe_typed_404():
+    from src.router.model_api_errors import error_from_retirement_payload
+    raw = payload(candidate(text_part(OPUS_NOTICE), finish_reason="STOP"), response=True)
+    result = check_non_stream(raw)
+    error = error_from_retirement_payload(raw)
+    assert result.action is RetirementAction.RETIRED
+    assert result.events == ()
+    assert error.status == 404
+    assert OPUS_NOTICE not in repr(result) + repr(error)
+
+
+def test_opus_character_stream_waits_for_both_sentences_and_never_releases_notice():
+    stream = new_attempt()
+    for index, char in enumerate(OPUS_NOTICE):
+        result = stream.feed(payload(candidate(text_part(char)), response=True))
+        expected = RetirementAction.RETIRED if index == len(OPUS_NOTICE) - 1 else RetirementAction.BUFFER
+        assert result.action is expected
+        assert result.events == ()
+    assert stream.finish().status_code == 404
+
+
+def test_opus_incomplete_or_different_transition_and_quotes_are_ordinary():
+    for text in (
+        OPUS_NOTICE.split(" Please")[0],
+        OPUS_NOTICE.replace("5.5", "5.6"),
+        OPUS_NOTICE.replace("4.6", "4.7"),
+        '"' + OPUS_NOTICE + '"',
+        "The provider said: " + OPUS_NOTICE,
+        "```\n" + OPUS_NOTICE + "\n```",
+        " " * 65 + OPUS_NOTICE,
+    ):
+        raw = payload(candidate(text_part(text)))
+        assert check_non_stream(raw).action is RetirementAction.PASS
+        stream = new_attempt()
+        result = stream.feed(raw)
+        events = result.events + stream.finish().events
+        assert events == (raw,)
+
+
+def test_opus_notice_after_released_content_is_not_reclassified():
+    stream = new_attempt()
+    first = payload(candidate(text_part("Here is the answer. ")))
+    later = payload(candidate(text_part(OPUS_NOTICE)))
+    assert stream.feed(first).events == (first,)
+    assert stream.feed(later).events == (later,)
+    assert stream.finish().action is RetirementAction.PASS
+    assert new_attempt().feed(later).action is RetirementAction.RETIRED
+
+
+def test_opus_error_envelopes_without_code_and_wrapped_errors_are_safe_404():
+    from src.router.model_api_errors import (
+        ModelApiErrorException, error_from_model_payload, parse_model_response,
+    )
+    import pytest
+    for error in (OPUS_NOTICE, {"message": OPUS_NOTICE}, {"code": 400, "message": OPUS_NOTICE}):
+        for raw in ({"error": error}, {"response": {"error": error}}):
+            assert check_non_stream(raw).status_code == 404
+            assert error_from_model_payload(raw).status == 404
+            result = new_attempt().feed(raw)
+            assert result.status_code == 404 and result.events == ()
+            with pytest.raises(ModelApiErrorException) as caught:
+                parse_model_response(json.dumps(raw))
+            assert caught.value.error.status == 404
+            assert OPUS_NOTICE not in repr(caught.value.error)
+
+
+def test_quoted_opus_error_message_retains_original_error_code():
+    from src.router.model_api_errors import error_from_model_payload
+    raw = {"error": {"code": 400, "message": 'Example: "' + OPUS_NOTICE + '"'}}
+    assert check_non_stream(raw).action is RetirementAction.PASS
+    assert error_from_model_payload(raw).status == 400
+    assert check_non_stream({"metadata": {"message": OPUS_NOTICE}}).action is RetirementAction.PASS
+
+
+def test_opus_tool_or_thought_only_content_is_not_a_retirement_notice():
+    assert check_non_stream(payload(candidate(text_part(OPUS_NOTICE, thought=True)))).action is RetirementAction.PASS
+    raw = payload(candidate({"functionCall": {"name": "lookup", "args": {}}}, text_part(OPUS_NOTICE)))
+    assert check_non_stream(raw).action is RetirementAction.PASS
+    assert new_attempt().feed(raw).events == (raw,)
+
+
+# Generation HTTP error bodies may be plain UTF-8 instead of JSON envelopes.
+@pytest.mark.parametrize("body", [
+    b"Claude Opus 4.6 is no longer available. Please switch to Claude Opus 5.5.",
+    "Claude Opus 4.6 is no longer available. Please switch to Claude Opus 5.5.",
+])
+def test_plain_generation_http_retirement_body_is_typed_404(body):
+    from src.router.model_api_errors import error_from_retirement_body
+    error = error_from_retirement_body(body)
+    assert error is not None and error.status == 404
+
+
+@pytest.mark.parametrize("body", [b"\xff", b'User quoted "Claude Opus 4.6 is no longer available. Please switch to Claude Opus 5.5."'])
+def test_plain_generation_http_invalid_or_quoted_body_is_not_retirement(body):
+    from src.router.model_api_errors import error_from_retirement_body
+    assert error_from_retirement_body(body) is None

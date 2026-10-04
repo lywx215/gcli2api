@@ -75,6 +75,7 @@ FAMILY_PREFERENCES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "claude-opus-5-5-low",
         ),
     ),
+    ("claude-opus-4-6", ("claude-opus-4-6-thinking",)),
     ("gpt-oss-120b", ("gpt-oss-120b-medium",)),
 )
 

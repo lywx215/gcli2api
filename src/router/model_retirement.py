@@ -1,4 +1,4 @@
-"""Finite-buffer recognition of the known Gemini model retirement notice.
+"""Finite-buffer recognition of known model retirement notices.
 
 This module deliberately knows nothing about routes, credentials, transports,
 converters, or public error renderers.  It only classifies already parsed
@@ -29,6 +29,10 @@ BUFFER_OVERFLOW_STATUS_CODE = 502
 
 _NOTICE_HEAD = "gemini "
 _NOTICE_TAIL = " is no longer available."
+_OPUS_NOTICE = (
+    "claude opus 4.6 is no longer available. "
+    "please switch to claude opus 5.5."
+)
 _ALLOWED_NAME_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyz"
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -239,6 +243,11 @@ def _classify_display_prefix(text: str) -> RetirementAction:
         return RetirementAction.BUFFER
 
     lowered = core.casefold()
+    # Require the observed version transition, including both sentences.
+    if lowered.startswith(_OPUS_NOTICE):
+        return RetirementAction.RETIRED
+    if _OPUS_NOTICE.startswith(lowered):
+        return RetirementAction.BUFFER
     if len(lowered) < len(_NOTICE_HEAD):
         return (
             RetirementAction.BUFFER
@@ -400,6 +409,12 @@ class RetirementStream:
         if self._complete:
             return _pass()
 
+        if is_opus_retirement_error(event):
+            self._buffered_events.clear()
+            self._buffered_bytes = 0
+            self._terminal = _retired()
+            return self._terminal
+
         finish_indices = _finish_indices(event)
         for index in finish_indices:
             self._states.setdefault(index, _CandidateState()).finished = True
@@ -455,6 +470,8 @@ ModelRetirementStream = RetirementStream
 def inspect_non_stream(payload: Any) -> RetirementResult:
     """Inspect a complete response before conversion/rendering."""
 
+    if is_opus_retirement_error(payload):
+        return _retired()
     for candidate in _candidate_list(payload):
         observation = _observe_candidate(candidate)
         if observation.non_text_before_display or not observation.display_text:
@@ -462,6 +479,24 @@ def inspect_non_stream(payload: Any) -> RetirementResult:
         if _classify_display_prefix(observation.display_text[:MAX_DISPLAY_PREFIX_CHARS]) is RetirementAction.RETIRED:
             return _retired()
     return _pass(payload)
+
+
+def is_opus_retirement_error(payload: Any) -> bool:
+    """Recognize the exact notice only in an explicit error envelope.
+
+    Some upstreams send this with HTTP 200 and no numeric error code. Arbitrary
+    JSON fields and quoted messages must not be classified as retirement.
+    """
+    seen = set()
+    while (mapping := _as_mapping(payload)) is not None and id(payload) not in seen:
+        seen.add(id(payload))
+        error = mapping.get("error")
+        if error is not None:
+            error_map = _as_mapping(error)
+            message = error_map.get("message") if error_map is not None else error
+            return isinstance(message, str) and message.strip().casefold() == _OPUS_NOTICE
+        payload = mapping.get("response")
+    return False
 
 
 def check_non_stream(payload: Any) -> RetirementResult:

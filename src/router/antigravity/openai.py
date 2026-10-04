@@ -23,7 +23,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 # 本地模块 - 配置和日志
 from config import get_anti_truncation_max_attempts
 from log import log
-from src.antigravity_models import reject_retired_antigravity_opus_model
 
 # 本地模块 - 工具和认证
 from src.utils import (
@@ -103,7 +102,6 @@ async def chat_completions(
         openai_request: OpenAI格式的请求体
         token: Bearer认证令牌
     """
-    reject_retired_antigravity_opus_model(openai_request.model)
     log.debug(f"[ANTIGRAVITY-OPENAI] Request for model: {openai_request.model}")
 
     # 转换为字典

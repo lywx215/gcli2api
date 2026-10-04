@@ -226,7 +226,8 @@ function createCredsManager(type) {
         currentTierFilter: 'all',
         currentRemarkFilter: '__all__',
         currentModelAccessFilter: 'all',
-        currentModelAccessTier: 'any',
+        currentModelAccessFamily: 'claude-opus-5-5',
+        modelAccessFamilyCapability: false,
         statsData: {
             total: 0,
             normal: 0,
@@ -281,10 +282,22 @@ function createCredsManager(type) {
                 tier_filter: this.currentTierFilter || 'all',
                 remark_filter: this.currentRemarkFilter || '__all__'});
             if (this.type === 'antigravity') {
-                params.set('model_access_filter', this.currentModelAccessFilter || 'all');
-                params.set('model_access_tier', this.currentModelAccessTier || 'any');
+                if (this.modelAccessFamilyCapability) {
+                    params.set('model_access_filter', this.currentModelAccessFilter || 'all');
+                    params.set('model_access_family', this.currentModelAccessFamily);
+                }
             }
             return `${this.getEndpoint('status')}?${params}&${this.getModeParam()}`;
+        },
+
+        updateModelAccessCapability(capabilities) {
+            if (this.type !== 'antigravity') return;
+            this.modelAccessFamilyCapability = Array.isArray(capabilities) && capabilities.includes('antigravity.model_access.family_filter');
+            for (const id of ['antigravityModelAccessFamily', 'antigravityModelAccessFilter']) {
+                const element = document.getElementById(id);
+                if (element) element.disabled = !this.modelAccessFamilyCapability;
+            }
+            if (!this.modelAccessFamilyCapability) this.currentModelAccessFilter = 'all';
         },
 
         async selectAllMatching() {
@@ -335,6 +348,7 @@ function createCredsManager(type) {
 
                 if (response.ok) {
                     this.updateCooldownCapability(data.panel_capabilities);
+                    this.updateModelAccessCapability(data.panel_capabilities);
                     this.data = {};
                     data.items.forEach(item => {
                         if (typeof item.user_email === 'string' && item.user_email.trim()) {
@@ -357,6 +371,7 @@ function createCredsManager(type) {
                             quota_groups: item.quota_groups,
                             quota_state_invalid: item.quota_state_invalid === true,
                             model_access_state: item.model_access_state || {},
+                            model_access_families: this.modelAccessFamilyCapability ? item.model_access_families : undefined,
                             preview: item.preview,
                             tier: item.tier || (this.type === 'antigravity' ? 'pro' : 'unknown'),
                             tier_raw_id: item.tier_raw_id,
@@ -377,7 +392,7 @@ function createCredsManager(type) {
                     this.totalCount = data.total;
                     if (this.type === 'antigravity') {
                         const overview = document.getElementById('antigravityModelAccessOverview');
-                        if (overview) overview.textContent = modelAccessOverviewText(data.model_access_summary);
+                        if (overview) overview.textContent = modelAccessOverviewText(this.modelAccessFamilyCapability ? data.model_access_summary : null, this.currentModelAccessFamily);
                     }
                     // 使用后端返回的全局统计数据
                     if (data.stats) {
@@ -535,7 +550,7 @@ function createCredsManager(type) {
             this.currentTierFilter = tierFilterEl ? tierFilterEl.value : 'all';
             if (this.type === 'antigravity') {
                 this.currentModelAccessFilter = document.getElementById('antigravityModelAccessFilter')?.value || 'all';
-                this.currentModelAccessTier = document.getElementById('antigravityModelAccessTier')?.value || 'any';
+                this.currentModelAccessFamily = document.getElementById('antigravityModelAccessFamily')?.value || 'claude-opus-5-5';
             }
             const remarkValue = remarkFilterEl ? remarkFilterEl.value.trim() : '';
             this.currentRemarkFilter = remarkValue ? remarkValue : '__all__';
@@ -1218,7 +1233,7 @@ function createCredCard(credInfo, manager) {
             </div>
             <div class="cred-status">${statusBadges}</div>
         </div>
-        ${managerType === 'antigravity' ? modelAccessBadges(credInfo.model_access_state) : ''}
+        ${managerType === 'antigravity' ? modelAccessBadges(credInfo.model_access_families) : ''}
         <div class="cred-actions">${actionButtons}</div>
         <div class="cred-details" id="details-${pathId}">
             <div class="cred-content" data-filename="${filename}" data-loaded="false">点击"查看内容"按钮加载文件详情...</div>
@@ -2484,7 +2499,7 @@ async function batchRefreshCooldownCredentials(manager, label) {
 
         const addedTotal = data.added_total || 0;
         const affectedAdded = data.affected_creds_added || 0;
-        const accessSummary = manager.type === 'antigravity' ? '\n\n共享组同步规则：' + syncRules + '\n\n' + modelAccessBatchText(results) : '';
+        const accessSummary = manager.type === 'antigravity' ? '\n\n共享组同步规则：' + syncRules + '\n\n' + modelAccessBatchText(data.model_access_summary) : '';
         const summary = `${manager.type === 'antigravity' ? '批量额度检测 + 共享组冷却同步完成（以下数量沿用服务端同步记录计数）' : '批量额度检测 + 双向冷却同步完成'}\n\n查询成功: ${successCount} 个\n查询失败: ${failureCount} 个\n总计: ${data.total_count || selectedFiles.length} 个\n✅解除冷却: ${clearedTotal} 个（${affected} 凭证）\n🧊补加冷却: ${addedTotal} 个（${affectedAdded} 凭证）${accessSummary}\n\n详细结果:\n${lines.join('\n')}`;
 
         const tone = failureCount === 0 ? 'success' : (successCount === 0 ? 'error' : 'info');
@@ -2557,72 +2572,62 @@ async function toggleGeminicliQuotaDetails(pathId) {
     return _toggleQuotaDetails(pathId, 'geminicli');
 }
 
+function modelAccessStatus(families, family, now = Date.now() / 1000) {
+    const entry = families?.[family] || {};
+    const checked = entry.checked_at;
+    if (entry.state === 'supported' && Number.isFinite(checked) && checked <= now && now < checked + 43200) return 'supported';
+    return entry.state === 'unavailable' ? 'unavailable' : 'unknown';
+}
+
 function modelAccessSummary(data) {
-    if (!data.model_access_state) return '';
+    if (!data.model_access_families) return '<div data-model-access>当前服务未提供版本权限状态。</div>';
     const timeLabel = value => Number.isFinite(value) && value > 0
         ? new Date(value * 1000).toLocaleString() : '未知';
-    const labels = {supported: '目录已支持', unavailable: '该档位暂不可用', unknown: '权限待确认'};
-    const reasons = {generation_404: '生成返回 404', directory_missing: '目录未返回该档位',
+    const labels = {supported: '目录支持', unavailable: '暂不可用', unknown: '待确认 / 已过期'};
+    const reasons = {generation_404: '生成返回 404', directory_missing: '目录未返回该版本',
         directory_query_failed: '目录查询失败，保留原限制', directory_timeout: '目录查询超时，保留原限制'};
     return `<div data-model-access style="padding:10px;margin-bottom:10px;border:1px solid #ccc;border-radius:4px;overflow-wrap:anywhere;">
-        <strong>Claude Opus 5.5 权限</strong><div>目录支持有效期 12 小时；权限与额度分别判断。重新查询额度可立即复查权限。</div>
-        ${['low', 'medium', 'high'].map(tier => {
-            const entry = data.model_access_state[`claude-opus-5-5-${tier}`] || {};
-            const expired = entry.state === 'supported' && (!entry.checked_at || entry.checked_at * 1000 + 43200000 <= Date.now());
-            return `<div style="padding-top:8px;"><strong>${tier[0].toUpperCase() + tier.slice(1)}</strong> · ${expired ? '目录支持已过期，待复查' : labels[entry.state] || '权限待确认'}
+        <strong>Claude Opus 权限</strong><div>目录支持有效期 12 小时；权限与额度分别判断。重新查询额度可立即复查权限。</div>
+        ${['claude-opus-5-5', 'claude-opus-4-6'].map(family => {
+            const entry = data.model_access_families[family] || {};
+            return `<div style="padding-top:8px;"><strong>Opus ${family === 'claude-opus-5-5' ? '5.5' : '4.6'}</strong> · ${labels[modelAccessStatus(data.model_access_families, family)]}
                 ${reasons[entry.reason] ? ` · ${reasons[entry.reason]}` : ''}<br>
                 最近检查：${timeLabel(entry.last_attempt_at || entry.checked_at)}<br>下次复查：${timeLabel(entry.next_check_at)}
                 ${entry.blocked_until ? `<br>暂停期限：${timeLabel(entry.blocked_until)}（到期仍需目录确认）` : ''}</div>`;
         }).join('')}</div>`;
 }
 
-function modelAccessStatus(entries, tier, now = Date.now() / 1000) {
-    const entry = (entries || {})[`claude-opus-5-5-${tier}`] || {};
-    const checked = entry.checked_at;
-    if (entry.state === 'supported' && Number.isFinite(checked) && checked <= now && now < checked + 43200) return 'supported';
-    return entry.state === 'unavailable' ? 'unavailable' : 'unknown';
-}
-
-function modelAccessBadges(entries) {
+function modelAccessBadges(families) {
+    if (!families) return '<div data-model-access-badges>版本权限状态暂不可用</div>';
     const labels = {supported: '目录支持', unavailable: '暂不可用', unknown: '待确认'};
     const colors = {supported: '#167535', unavailable: '#a15c00', unknown: '#666'};
     return `<div data-model-access-badges style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;font-size:12px;">
-        <strong>Opus 5.5</strong>${['low', 'medium', 'high'].map(tier => {
-            const status = modelAccessStatus(entries, tier);
-            return `<span style="padding:2px 6px;border:1px solid ${colors[status]};border-radius:4px;color:${colors[status]};" title="目录支持有效期 12 小时；权限与额度分别判断。查看额度可复查详情。">${tier[0].toUpperCase() + tier.slice(1)} · ${labels[status]}</span>`;
+        ${['claude-opus-5-5', 'claude-opus-4-6'].map(family => {
+            const status = modelAccessStatus(families, family);
+            return `<span style="padding:2px 6px;border:1px solid ${colors[status]};border-radius:4px;color:${colors[status]};" title="目录支持有效期 12 小时；权限与额度分别判断。查看额度可复查详情。">Opus ${family === 'claude-opus-5-5' ? '5.5' : '4.6'} · ${labels[status]}</span>`;
         }).join('')}</div>`;
 }
 
-function modelAccessOverviewText(summary) {
-    if (!summary?.counts) return '当前服务未提供权限总览，请确认已部署最新版本。';
-    const labels = {any: '至少一档', all_tiers: '三档全部', low: 'Low', medium: 'Medium', high: 'High'};
-    return `Opus 5.5 权限总览（当前其他筛选条件下共 ${summary.total} 个凭证，覆盖全部分页）\n` +
-        Object.entries(labels).map(([tier, label]) => {
-            const count = summary.counts[tier] || {};
-            return `${label}：目录支持 ${count.supported || 0} / 暂不可用 ${count.unavailable || 0} / 待确认 ${count.unknown || 0}`;
+function modelAccessOverviewText(summary, family) {
+    if (!summary?.family_counts) return '当前服务未提供版本权限总览，权限筛选暂不可用。';
+    const families = family ? [family] : ['claude-opus-5-5', 'claude-opus-4-6'];
+    return `Opus 权限总览（当前其他筛选条件下共 ${summary.total} 个凭证，覆盖全部分页）\n` +
+        families.map(key => {
+            const count = summary.family_counts[key] || {};
+            return `Opus ${key === 'claude-opus-5-5' ? '5.5' : '4.6'}：目录支持 ${count.supported || 0} / 暂不可用 ${count.unavailable || 0} / 待确认 ${count.unknown || 0}`;
         }).join('\n') + '\n支持记录过期归为待确认；暂不可用需有效目录确认后恢复。权限不代表剩余额度或生成已验证。';
 }
 
 function modelAccessResultText(result) {
+    if (!result.model_access_families) return '版本权限状态暂不可用';
     const labels = {supported: '目录支持', unavailable: '暂不可用', unknown: '待确认'};
-    const values = ['low', 'medium', 'high'].map(tier =>
-        `${tier[0].toUpperCase() + tier.slice(1)}: ${labels[modelAccessStatus(result.model_access_state, tier)]}`);
-    return `Opus 5.5 · ${values.join(' / ')}${result.success ? '' : '（查询失败，以上为已有证据）'}`;
+    return ['claude-opus-5-5', 'claude-opus-4-6'].map(family =>
+        `Opus ${family === 'claude-opus-5-5' ? '5.5' : '4.6'}: ${labels[modelAccessStatus(result.model_access_families, family)]}`).join(' / ') +
+        (result.success ? '' : '（查询失败，以上为已有证据）');
 }
 
-function modelAccessBatchText(results) {
-    const counts = Object.fromEntries(['any', 'all_tiers', 'low', 'medium', 'high'].map(tier => [tier,
-        {supported: 0, unavailable: 0, unknown: 0}]));
-    results.forEach(result => {
-        const states = ['low', 'medium', 'high'].map(tier => {
-            const state = modelAccessStatus(result.model_access_state, tier);
-            counts[tier][state]++;
-            return state;
-        });
-        counts.any[states.includes('supported') ? 'supported' : states.every(s => s === 'unavailable') ? 'unavailable' : 'unknown']++;
-        counts.all_tiers[states.every(s => s === 'supported') ? 'supported' : states.includes('unavailable') ? 'unavailable' : 'unknown']++;
-    });
-    return modelAccessOverviewText({total: results.length, counts})
+function modelAccessBatchText(summary) {
+    return modelAccessOverviewText(summary)
         .replace('当前其他筛选条件下', '本次批量结果').replace('覆盖全部分页', '查询失败保留已有证据');
 }
 
@@ -2702,8 +2707,7 @@ async function _toggleQuotaDetails(pathId, mode) {
                         let modelEntries = Object.entries(models);
                         if (mode === 'antigravity') {
                             // The quota API deliberately preserves every raw upstream
-                            // model for diagnostics and quota recovery. Hide retired
-                            // Opus identities even in older payloads without metadata.
+                            // model for diagnostics and quota recovery; honor display metadata.
                             modelEntries = modelEntries.filter(([name, quotaData]) =>
                                 isVisibleAntigravityQuotaModel(name, quotaData));
                             modelEntries.sort(([nameA, dataA], [nameB, dataB]) => {
@@ -2837,15 +2841,8 @@ async function _toggleQuotaDetails(pathId, mode) {
                     if (mode === 'antigravity') {
                         // Only an actual returned model map can establish missing tiers.
                         if (data.models && typeof data.models === 'object' && !Array.isArray(data.models)) {
-                            const opusTiers = ['low', 'medium', 'high'];
-                            const missingTiers = opusTiers.filter(tier =>
-                                !Object.prototype.hasOwnProperty.call(data.models, `claude-opus-5-5-${tier}`));
-                            if (missingTiers.length > 0) {
-                                const missingLabels = missingTiers.map(tier => tier[0].toUpperCase() + tier.slice(1)).join('、');
-                                const notice = missingTiers.length === opusTiers.length
-                                    ? '本次 Google 官方模型目录未返回 Claude Opus 5.5，暂无对应额度或可测试模型。'
-                                    : `本次 Google 官方模型目录未返回 Claude Opus 5.5 的 ${missingLabels} 档位；仅显示已返回档位的额度与测试入口。`;
-                                contentDiv.insertAdjacentHTML('afterbegin', `<div data-opus-catalog-notice style="margin-bottom:10px;padding:10px;border-radius:4px;background:#e3f2fd;color:#0d47a1;font-size:12px;line-height:1.6;">${notice}</div>`);
+                            if (!Object.keys(data.models).some(name => /^claude-opus-5-5-(low|medium|high)$/.test(name))) {
+                                contentDiv.insertAdjacentHTML('afterbegin', '<div data-opus-catalog-notice style="margin-bottom:10px;padding:10px;background:#e3f2fd;font-size:12px;">本次 Google 官方模型目录未返回 Claude Opus 5.5，暂无对应额度或可测试模型。</div>');
                             }
                         }
                         contentDiv.insertAdjacentHTML('afterbegin', modelAccessSummary(data));
@@ -4815,22 +4812,11 @@ async function switchStorageEngine() {
 // 额度卡片中的单模型测试 (dev2 自定义)
 // =====================================================================
 
-function isRetiredAntigravityOpusModel(modelName) {
-    // Match every identity the converter's permissive Claude/Opus fallback accepts.
-    return String(modelName || '').toLowerCase().split('/')
-        .some(part => /claude-opus-4(?:-6|\.6)(?:-|$)/.test(part.trim()));
-}
-
 function isVisibleAntigravityQuotaModel(modelName, quotaData) {
-    return quotaData.visible !== false &&
-        ![modelName, quotaData.rawModelId, quotaData.testModel].some(isRetiredAntigravityOpusModel);
+    return quotaData.visible !== false;
 }
 
 async function testModelQuota(btn, filename, modelName, mode, displayName) {
-    if (mode === 'antigravity' && isRetiredAntigravityOpusModel(modelName)) {
-        showStatus('Claude Opus 4.6 已停用，请刷新额度信息并选择 Claude Opus 5.5。', 'error');
-        return;
-    }
     const originalText = btn.textContent;
     const displayModelName = displayName || modelName;
     btn.textContent = '…';

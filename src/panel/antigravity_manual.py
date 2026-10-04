@@ -94,15 +94,12 @@ async def prepare(filename, events):
 
 async def test(filename, model=None):
     from . import creds as p
-    retired_response = p._retired_antigravity_test_response(model)
-    if retired_response is not None:
-        return retired_response
     from src.httpx_client import post_async
     from src.api.antigravity import build_antigravity_headers
     from src.converter.gemini_fix import map_antigravity_gemini_model
     from src.utils import normalize_antigravity_model_alias
     from src.antigravity_completion import validate_json
-    from src.router.model_api_errors import parse_model_response, error_from_retirement_payload, ModelApiErrorException
+    from src.router.model_api_errors import parse_model_response, error_from_retirement_payload, error_from_retirement_body, ModelApiErrorException
 
     events, snapshot = [], None
     response = None
@@ -153,6 +150,8 @@ async def test(filename, model=None):
         return JSONResponse(status_code=result["status_code"], content=result)
 
     status = response.status_code
+    if access_model(upstream_model) and error_from_retirement_body(response.content) is not None:
+        status = 404
     p.log.info(f"[MANUAL ANTIGRAVITY] Generation response HTTP {status}")
     valid = False
     if status == 200:
@@ -189,6 +188,7 @@ async def test(filename, model=None):
                     model=target, success=valid, reason="generation_succeeded" if valid else "generation_404")
                 result["model_access_update"] = {"status": "applied" if applied else "skipped"}
                 result["model_access_state"] = await storage._backend.model_access_public(filename)
+                result["model_access_families"] = await storage._backend.model_access_family_public(filename)
             except Exception:
                 result["model_access_update"] = failed_update()
         result["state_update"] = await storage._backend.manual_record_result(
@@ -215,6 +215,7 @@ async def quota(filename, *, sync=False):
         try:
             storage = await p.get_storage_adapter()
             result["model_access_state"] = await storage._backend.model_access_public(filename)
+            result["model_access_families"] = await storage._backend.model_access_family_public(filename)
         except Exception:
             pass
         return result
@@ -226,6 +227,7 @@ async def quota(filename, *, sync=False):
                 result.get("models") if result.get("success") else None,
                 reason=None if result.get("success") else "directory_query_failed")
             result["model_access_state"] = await storage._backend.model_access_public(filename)
+            result["model_access_families"] = await storage._backend.model_access_family_public(filename)
             result["model_access_update"] = {"status": "applied" if access_applied else "skipped"}
         except Exception:
             result["model_access_update"] = failed_update()

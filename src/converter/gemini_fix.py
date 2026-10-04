@@ -10,7 +10,6 @@ from fastapi import HTTPException
 from log import log
 from src.antigravity_models import (
     ANTIGRAVITY_NATIVE_MODEL_IDS,
-    reject_retired_antigravity_opus_model,
     resolve_antigravity_opus_model,
 )
 from src.geminicli_models import GEMINI_38_FLASH_MODEL, GEMINI_38_FLASH_THINKING_LEVELS
@@ -774,13 +773,14 @@ async def normalize_gemini_request(
     Returns:
         规范化后的请求
     """
-    if mode == "antigravity":
-        reject_retired_antigravity_opus_model(request.get("model", ""))
     # 导入配置函数
     from config import get_return_thoughts_to_frontend
 
     result = request.copy()
     model = result.get("model", "")
+    if mode == "antigravity" and "claude" in model.lower() and "opus" in model.lower():
+        model = resolve_antigravity_opus_model(model)
+        result["model"] = model
     generation_config = (result.get("generationConfig") or {}).copy()  # 创建副本避免修改原对象
     is_cli_38_flash = mode == "geminicli" and get_base_model_name(model) == GEMINI_38_FLASH_MODEL
     if is_cli_38_flash:
@@ -946,7 +946,12 @@ async def normalize_gemini_request(
                     thinking_config["includeThoughts"] = return_thoughts
 
             if "claude" in model.lower():
-                if "opus" in model.lower():
+                if model == "claude-opus-4-6-thinking":
+                    thinking_config = generation_config.setdefault("thinkingConfig", {})
+                    thinking_config["thinkingBudget"] = 1024
+                    thinking_config.pop("thinkingLevel", None)
+                    thinking_config["includeThoughts"] = return_thoughts
+                if "opus" in model.lower() and resolve_antigravity_opus_model(model).startswith("claude-opus-5-5-"):
                     thinking_config = generation_config.setdefault("thinkingConfig", {})
                     thinking_config.pop("thinkingBudget", None)
                     thinking_config.pop("thinkingLevel", None)
@@ -993,7 +998,7 @@ async def normalize_gemini_request(
                     log.debug(f"[ANTIGRAVITY] Mapped model: {original_model} -> {model}")
         # 5. 模型特殊处理：循环移除末尾的 model 消息，保证以用户消息结尾
         # 因为该模型不支持预填充
-        if "claude-opus-5-5-" in model.lower() or "claude-sonnet-4-6" in model.lower():
+        if "claude-opus-" in model.lower() or "claude-sonnet-4-6" in model.lower():
             contents = result.get("contents", [])
             removed_count = 0
             while contents and isinstance(contents[-1], dict) and contents[-1].get("role") == "model":
