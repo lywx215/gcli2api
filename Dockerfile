@@ -4,6 +4,11 @@ FROM python:3.13-slim as base
 ARG BUILD_DATE=unknown
 ARG VERSION=unknown
 ARG REVISION=unknown
+ARG SOURCE_REF=
+ARG SOURCE_COMMIT_DATE=
+# Zeabur exposes Git metadata only while building; retain it for version display.
+ARG ZEABUR_GIT_BRANCH=
+ARG ZEABUR_GIT_COMMIT_SHA=
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -13,6 +18,10 @@ ENV PYTHONUNBUFFERED=1 \
     GCLI2API_BUILD_DATE=${BUILD_DATE} \
     GCLI2API_VERSION=${VERSION} \
     GCLI2API_REVISION=${REVISION} \
+    GCLI2API_SOURCE_REF=${SOURCE_REF} \
+    GCLI2API_COMMIT_DATE=${SOURCE_COMMIT_DATE} \
+    ZEABUR_GIT_BRANCH=${ZEABUR_GIT_BRANCH} \
+    ZEABUR_GIT_COMMIT_SHA=${ZEABUR_GIT_COMMIT_SHA} \
     TZ=Asia/Shanghai
 
 # Install tzdata, jemalloc and set timezone

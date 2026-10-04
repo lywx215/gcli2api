@@ -4208,16 +4208,16 @@ function updateCooldownDisplays() {
 // 版本信息管理
 // =====================================================================
 
-// 获取并显示版本信息（不检查更新）
+// 获取并显示当前运行分支的版本信息
 async function fetchAndDisplayVersion() {
     try {
-        const response = await fetch('./version/info');
+        const response = await fetch('./version/info', {cache: 'no-store'});
         const data = await response.json();
 
         const versionText = document.getElementById('versionText');
 
         if (data.success) {
-            const displayVersion = data.display_version || `v${data.version}`;
+            const displayVersion = data.display_version || data.version;
             versionText.textContent = displayVersion;
             versionText.title = `来源: ${data.source_ref || '未知'}\n完整版本: ${data.full_hash}\n提交信息: ${data.message}\n提交时间: ${data.commit_date || data.date}`;
             versionText.style.cursor = 'help';
@@ -4230,68 +4230,6 @@ async function fetchAndDisplayVersion() {
         const versionText = document.getElementById('versionText');
         if (versionText) {
             versionText.textContent = '版本信息获取失败';
-        }
-    }
-}
-
-// 检查更新
-async function checkForUpdates() {
-    const checkBtn = document.getElementById('checkUpdateBtn');
-    if (!checkBtn) return;
-
-    const originalText = checkBtn.textContent;
-
-    try {
-        // 显示检查中状态
-        checkBtn.textContent = '检查中...';
-        checkBtn.disabled = true;
-
-        // 调用API检查更新
-        const response = await fetch('./version/info?check_update=true');
-        const data = await response.json();
-
-        if (data.success) {
-            if (data.check_update === false) {
-                // 检查更新失败
-                showStatus(`检查更新失败: ${data.update_error || '未知错误'}`, 'error');
-            } else if (data.has_update === true) {
-                // 有更新
-                const updateMsg = `发现新版本！\n当前: v${data.version}\n最新: v${data.latest_version}\n\n更新内容: ${data.latest_message || '无'}`;
-                showStatus(updateMsg.replace(/\n/g, ' '), 'warning');
-
-                // 更新按钮样式
-                checkBtn.style.backgroundColor = '#ffc107';
-                checkBtn.textContent = '有新版本';
-
-                setTimeout(() => {
-                    checkBtn.style.backgroundColor = '#17a2b8';
-                    checkBtn.textContent = originalText;
-                }, 5000);
-            } else if (data.has_update === false) {
-                // 已是最新
-                showStatus('已是最新版本！', 'success');
-
-                checkBtn.style.backgroundColor = '#28a745';
-                checkBtn.textContent = '已是最新';
-
-                setTimeout(() => {
-                    checkBtn.style.backgroundColor = '#17a2b8';
-                    checkBtn.textContent = originalText;
-                }, 3000);
-            } else {
-                // 无法确定
-                showStatus('无法确定是否有更新', 'info');
-            }
-        } else {
-            showStatus(`检查更新失败: ${data.error}`, 'error');
-        }
-    } catch (error) {
-        console.error('检查更新失败:', error);
-        showStatus(`检查更新失败: ${error.message}`, 'error');
-    } finally {
-        checkBtn.disabled = false;
-        if (checkBtn.textContent === '检查中...') {
-            checkBtn.textContent = originalText;
         }
     }
 }

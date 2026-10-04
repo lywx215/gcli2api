@@ -15,8 +15,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _RELEASE_VERSION_RE = re.compile(r"^v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?$")
 _SAFE_ASSET_VERSION_RE = re.compile(r"[^0-9A-Za-z._-]+")
 _SAFE_SOURCE_REF_RE = re.compile(r"[^0-9A-Za-z._-]+")
-_SAFE_PANEL_VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$")
-_PANEL_VERSION_FILE = "panel-version.txt"
 _BEIJING_TIMEZONE = timezone(timedelta(hours=8))
 
 
@@ -33,26 +31,6 @@ def _read_version_file(project_root: Path) -> dict[str, str]:
                 key, value = line.split("=", 1)
                 version_data[key] = value
     return version_data
-
-
-def _read_key_value_file(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-
-    result: dict[str, str] = {}
-    try:
-        with path.open("r", encoding="utf-8") as file:
-            for raw_line in file:
-                line = raw_line.strip()
-                if "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                key = key.strip()
-                if key:
-                    result[key] = value.strip()
-    except (OSError, UnicodeError):
-        return {}
-    return result
 
 
 def _run_git(project_root: Path, *args: str) -> str:
@@ -137,6 +115,11 @@ def format_panel_display_version(
         return f"{_normalize_source_ref(source_ref)}-{parsed_date:%Y%m%d-%H%M}"
 
     fallback_version = fallback_version.strip() or "unknown"
+    if source_ref and source_type != "tag":
+        normalized_ref = _normalize_source_ref(source_ref)
+        if fallback_version != "unknown" and source_type != "detached":
+            return f"{normalized_ref}-{fallback_version}"
+        return normalized_ref
     if _RELEASE_VERSION_RE.fullmatch(fallback_version):
         return f"v{fallback_version.removeprefix('v')}"
     return fallback_version
@@ -183,77 +166,59 @@ def load_panel_version_metadata(
     project_root: Path | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """Return additive metadata used only by the control-panel version label."""
+    """Describe the running source build, without using a saved panel label."""
     root = project_root or PROJECT_ROOT
     env = os.environ if environ is None else environ
-    base = load_version_metadata(project_root=root, environ=env)
-    manual_info = _read_key_value_file(root / _PANEL_VERSION_FILE)
-    git_info = _read_git_metadata(root)
+    base = load_version_metadata(project_root=root, environ={})
 
-    git_source_ref = git_info.get("source_ref", "").strip()
-    git_source_type = git_info.get("source_type", "").strip()
-    environment_release = env.get("GCLI2API_VERSION", "").strip()
-    release_ref = (
-        environment_release
-        if _RELEASE_VERSION_RE.fullmatch(environment_release)
-        else ""
+    def build_value(key: str) -> str:
+        value = env.get(key, "").strip()
+        return "" if value.lower() == "unknown" or value.startswith("${") else value
+
+    # Zeabur's Git variables exist only at build time; Docker persists them.
+    deployed_branch = build_value("ZEABUR_GIT_BRANCH")
+    build_version = build_value("GCLI2API_VERSION")
+    release_ref = build_version if _RELEASE_VERSION_RE.fullmatch(build_version) else ""
+    explicit_source = build_value("GCLI2API_SOURCE_REF")
+    source_ref = deployed_branch or explicit_source or build_version
+    full_hash = (
+        build_value("ZEABUR_GIT_COMMIT_SHA")
+        if deployed_branch
+        else build_value("GCLI2API_REVISION") or build_value("ZEABUR_GIT_COMMIT_SHA")
     )
-    if not release_ref and git_source_type == "tag" and _RELEASE_VERSION_RE.fullmatch(git_source_ref):
-        release_ref = git_source_ref
-
-    manual_display_version = manual_info.get("display_version", "").strip()
-    manual_source_ref = manual_info.get("source_ref", "").strip()
-    manual_commit_date = manual_info.get("commit_date", "").strip()
-    has_manual_version = bool(
-        _SAFE_PANEL_VERSION_RE.fullmatch(manual_display_version)
-        and manual_source_ref
-        and _parse_commit_date(manual_commit_date)
+    source_type = (
+        "tag"
+        if release_ref and not deployed_branch and source_ref == release_ref
+        else "branch"
     )
+    commit_date = build_value("GCLI2API_COMMIT_DATE") or build_value("GCLI2API_BUILD_DATE")
+    message = ""
 
-    if release_ref:
-        source_ref = release_ref
-        source_type = "tag"
-        commit_date = (
-            git_info.get("commit_date", "")
-            or manual_commit_date
-            or base.get("date", "")
-        )
-        display_version = format_panel_display_version(
-            source_ref,
-            commit_date,
-            fallback_version=base.get("version", "unknown"),
-            source_type=source_type,
-        )
-    elif has_manual_version:
-        source_ref = manual_source_ref
-        source_type = "branch"
-        commit_date = manual_commit_date
-        display_version = manual_display_version
-    elif git_source_ref and _parse_commit_date(
-        git_info.get("commit_date", "")
-    ):
-        source_ref = git_source_ref
-        source_type = git_source_type
-        commit_date = git_info["commit_date"]
-        display_version = format_panel_display_version(
-            source_ref,
-            commit_date,
-            fallback_version=base.get("version", "unknown"),
-            source_type=source_type,
-        )
-    else:
-        source_ref = env.get("GCLI2API_VERSION", "").strip()
-        source_type = ""
-        commit_date = base.get("date", "")
+    if source_ref or full_hash:
         if not source_ref:
-            short_hash = base.get("version", "")
-            source_ref = f"detached-{short_hash}" if short_hash else ""
-        display_version = format_panel_display_version(
-            source_ref,
-            commit_date,
-            fallback_version=base.get("version", "unknown"),
-            source_type=source_type,
-        )
+            source_ref = f"detached-{full_hash[:7]}"
+            source_type = "detached"
+    else:
+        git_info = _read_git_metadata(root)
+        source_ref = git_info.get("source_ref", "")
+        source_type = git_info.get("source_type", "")
+        commit_date = git_info.get("commit_date", "")
+        full_hash = git_info.get("full_hash", "")
+        message = git_info.get("message", "")
+        if not source_ref and not full_hash:
+            # An archive without build metadata cannot prove its branch.
+            full_hash = base.get("full_hash", "")
+            commit_date = base.get("date", "")
+            message = base.get("message", "")
+
+    version = (
+        source_ref.removeprefix("v")
+        if source_type == "tag" and _RELEASE_VERSION_RE.fullmatch(source_ref)
+        else full_hash[:7] or "unknown"
+    )
+    display_version = format_panel_display_version(
+        source_ref, commit_date, fallback_version=version, source_type=source_type
+    )
 
     parsed_commit_date = _parse_commit_date(commit_date)
     normalized_commit_date = (
@@ -263,12 +228,13 @@ def load_panel_version_metadata(
     )
     return {
         **base,
+        "version": version,
         "display_version": display_version,
         "source_ref": _normalize_source_ref(source_ref) if source_ref else "",
         "commit_date": normalized_commit_date,
-        "full_hash": git_info.get("full_hash") or base.get("full_hash", ""),
-        "message": git_info.get("message") or base.get("message", ""),
-        "date": normalized_commit_date or base.get("date", ""),
+        "full_hash": full_hash,
+        "message": message,
+        "date": normalized_commit_date,
     }
 
 
