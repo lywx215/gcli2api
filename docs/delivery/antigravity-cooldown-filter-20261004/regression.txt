@@ -1,0 +1,132 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.6, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/andyliu/Developer/work/gcli2api
+configfile: pyproject.toml
+testpaths: .
+plugins: cov-7.1.0, asyncio-1.4.0, anyio-4.14.2
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 2238 items
+
+test_antigravity_access_overview.py .................                    [  0%]
+test_antigravity_catalog_validator.py ............                       [  1%]
+test_antigravity_completion_policy.py .................................. [  2%]
+                                                                         [  2%]
+test_antigravity_cooldown_regression.py .......                          [  3%]
+test_antigravity_cycle_settlement.py ......                              [  3%]
+test_antigravity_group_filter.py ......................                  [  4%]
+test_antigravity_group_filter_backends.py .............................. [  5%]
+............                                                             [  6%]
+test_antigravity_group_filter_panel.py ...............                   [  6%]
+test_antigravity_import.py .......                                       [  7%]
+test_antigravity_import_limits.py ...................                    [  8%]
+test_antigravity_manual.py ............................................. [ 10%]
+........................................................................ [ 13%]
+.......                                                                  [ 13%]
+test_antigravity_message_cleanup.py .................................... [ 15%]
+...................................................                      [ 17%]
+test_antigravity_model_access.py ....................................... [ 19%]
+.........................                                                [ 20%]
+test_antigravity_model_catalog.py ...................................... [ 22%]
+.                                                                        [ 22%]
+test_antigravity_opus_panel_ui.py .                                      [ 22%]
+test_antigravity_opus_retirement.py .................................... [ 23%]
+........................................................................ [ 26%]
+........................................................................ [ 30%]
+........................................................................ [ 33%]
+.....................................................................    [ 36%]
+test_antigravity_quota_backends.py ...............                       [ 37%]
+test_antigravity_quota_boundaries.py ........................            [ 38%]
+test_antigravity_quota_measurement.py ............                       [ 38%]
+test_antigravity_quota_policy.py ...........................             [ 39%]
+test_antigravity_request_compat.py ..                                    [ 40%]
+test_antigravity_review_regressions.py ................................. [ 41%]
+..............                                                           [ 42%]
+test_antigravity_shared_cooldowns.py ...                                 [ 42%]
+test_antigravity_stream_collection.py ................................   [ 43%]
+test_antigravity_stream_replay.py ....                                   [ 43%]
+test_antigravity_timeouts.py ....................................        [ 45%]
+test_cooldown_stats.py ......                                            [ 45%]
+test_credential_page_size.py .                                           [ 45%]
+test_diagnostics_r2.py ...............................................   [ 47%]
+test_diagnostics_revision.py .......................                     [ 48%]
+test_diagnostics_runtime.py .........................                    [ 50%]
+test_diagnostics_service.py .........................                    [ 51%]
+test_diagnostics_vectors.py ............................................ [ 53%]
+........................................................................ [ 56%]
+................................................                         [ 58%]
+test_error_classification.py .............................               [ 59%]
+test_error_classification_backends.py ....                               [ 60%]
+test_frontend_static.py ............                                     [ 60%]
+test_gemini35_tier_routing.py ........                                   [ 60%]
+test_geminicli_38_flash.py ............................................. [ 62%]
+........................................................................ [ 66%]
+...........................................................              [ 68%]
+test_geminicli_subscription_api.py ..........                            [ 69%]
+test_logical_request_stats.py ...............................            [ 70%]
+test_management_active_operations.py ....                                [ 70%]
+test_management_api.py ........                                          [ 71%]
+test_management_openapi.py ...                                           [ 71%]
+test_management_service.py ................                              [ 71%]
+test_panel_embed.py ...................                                  [ 72%]
+test_panel_version_generator.py ...                                      [ 72%]
+test_quota_fallback_cooldown.py .............................            [ 74%]
+test_security_config.py ........                                         [ 74%]
+test_selected_credential_tools.py .........                              [ 75%]
+test_smart_429.py ......                                                 [ 75%]
+test_sqlite_summary_bounded.py .......                                   [ 75%]
+test_sqlite_tier_storage.py ..                                           [ 75%]
+test_subscription_node_management.py ............................        [ 76%]
+test_subscription_tiers.py ............................                  [ 78%]
+test_upload_tier_detection.py ...                                        [ 78%]
+test_versioning.py .............                                         [ 78%]
+tests/test_antigravity_stability_integration.py ........................ [ 79%]
+...                                                                      [ 80%]
+tests/test_gemini_fix.py .........                                       [ 80%]
+tests/test_model_api_error_matrix.py ................................... [ 82%]
+........................................................................ [ 85%]
+........................................................................ [ 88%]
+........................................................................ [ 91%]
+.....................                                                    [ 92%]
+tests/test_model_api_errors.py ......................................... [ 94%]
+....................................                                     [ 96%]
+tests/test_model_api_transport_errors.py ............................... [ 97%]
+.........                                                                [ 97%]
+tests/test_model_retirement.py .................                         [ 98%]
+tests/test_openai2gemini_tool_calls.py ........                          [ 99%]
+tests/test_sse_events.py ......................                          [100%]
+
+=============================== warnings summary ===============================
+src/models.py:60
+  /Users/andyliu/Developer/work/gcli2api/src/models.py:60: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class OpenAIChatCompletionRequest(BaseModel):
+
+src/models.py:125
+  /Users/andyliu/Developer/work/gcli2api/src/models.py:125: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class GeminiPart(BaseModel):
+
+src/models.py:173
+  /Users/andyliu/Developer/work/gcli2api/src/models.py:173: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class GeminiRequest(BaseModel):
+
+src/models.py:236
+  /Users/andyliu/Developer/work/gcli2api/src/models.py:236: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class ClaudeRequest(BaseModel):
+
+src/models.py:272
+  /Users/andyliu/Developer/work/gcli2api/src/models.py:272: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class ClaudeStreamEvent(BaseModel):
+
+.venv/lib/python3.14/site-packages/pypinyin/pinyin_dict.py:15
+  /Users/andyliu/Developer/work/gcli2api/.venv/lib/python3.14/site-packages/pypinyin/pinyin_dict.py:15: DeprecationWarning: codecs.open() is deprecated. Use open() instead.
+    with open(_json_path, encoding='utf8') as fp:
+
+.venv/lib/python3.14/site-packages/pypinyin/phrases_dict.py:16
+  /Users/andyliu/Developer/work/gcli2api/.venv/lib/python3.14/site-packages/pypinyin/phrases_dict.py:16: DeprecationWarning: codecs.open() is deprecated. Use open() instead.
+    with open(_json_path, encoding='utf8') as fp:
+
+.venv/lib/python3.14/site-packages/fastapi/testclient.py:1
+  /Users/andyliu/Developer/work/gcli2api/.venv/lib/python3.14/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+====================== 2238 passed, 8 warnings in 37.67s =======================

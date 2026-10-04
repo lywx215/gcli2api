@@ -7,18 +7,13 @@ Antigravity selection/admission, so stale caches cannot grant model access.
 import copy
 import hashlib
 import json
-import math
 import os
 import random
 import time
 import uuid
 
-from src.antigravity_quota import GROUPS, valid_group, fraction, group_for, matches, observe_week, public_state, rolling_week, ticket, timestamp
+from src.antigravity_quota import GROUPS, InvalidQuotaState, decode_quota_fields, valid_group, fraction, group_for, matches, observe_week, public_state, rolling_week, ticket, timestamp
 from src.storage._stats_common import get_antigravity_cooldown_until, prepare_antigravity_cooldown
-
-
-class InvalidQuotaState(ValueError):
-    pass
 
 
 def _object(value):
@@ -35,14 +30,9 @@ def _object(value):
 
 def _decode(raw):
     row = dict(raw)
-    row["quota_group_states"] = _object(row.get("quota_group_states"))
-    row["model_cooldowns"] = _object(row.get("model_cooldowns"))
-    if any(type(d) not in (int, float) or not math.isfinite(d) for d in row["model_cooldowns"].values()):
-        raise InvalidQuotaState("invalid_quota_cooldown")
-    for state in row["quota_group_states"].values():
-        if (not isinstance(state, dict) or state.get("state") not in ("blocked_unknown", "manual_override")
-                or type(state.get("revision")) is not int or state["revision"] < 1):
-            raise InvalidQuotaState("invalid_quota_state")
+    row["quota_group_states"], row["model_cooldowns"] = decode_quota_fields(
+        row.get("quota_group_states"), row.get("model_cooldowns")
+    )
     row["quota_credential_generation"] = row.get("quota_credential_generation") or uuid.uuid4().hex
     return row
 

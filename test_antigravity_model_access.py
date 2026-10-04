@@ -431,12 +431,18 @@ async def test_directory_timeout_bound_and_durable_retry(access_store, monkeypat
     manager._storage_adapter = SimpleNamespace(_backend=store)
     async def no_refresh(data): return False
     manager._should_refresh_token = no_refresh
-    async def stalled(*args, **kwargs): await asyncio.Event().wait()
+    query_started = asyncio.Event()
+    async def stalled(*args, **kwargs):
+        query_started.set()
+        await asyncio.Event().wait()
     monkeypatch.setattr(api, "fetch_quota_info", stalled)
-    monkeypatch.setattr(runtime, "QUERY_TIMEOUT", .02)
+    # The timeout also covers SQLite claim/credential preparation. Leave enough
+    # room to reach the directory phase, whose cancellation this test verifies.
+    monkeypatch.setattr(runtime, "QUERY_TIMEOUT", .2)
     started = time.monotonic()
     assert not await ModelAccessService().select(manager, HIGH, set())
     assert time.monotonic() - started < 1
+    assert query_started.is_set()
     state = (await store.model_access_snapshot(NAME))["access"]
     assert state["models"][HIGH]["state"] == "unknown"
     assert state["models"][HIGH]["next_check_at"] > time.time() + 800

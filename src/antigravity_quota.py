@@ -1,4 +1,6 @@
 """Antigravity quota policy. No network calls, credentials or response bodies here."""
+import copy
+import json
 import math
 import re
 from datetime import datetime
@@ -8,6 +10,102 @@ from src.storage._stats_common import normalize_antigravity_cooldown_key as grou
 
 GROUPS = ("claude-gpt-shared", "gemini-shared")
 WEEK = 168 * 3600
+GROUP_FILTERS = frozenset({
+    "any_restricted", "gemini_restricted", "claude_gpt_restricted",
+    "gemini_unrestricted", "claude_gpt_unrestricted", "all_unrestricted",
+})
+GROUP_FILTER_CAPABILITY = "antigravity.cooldown.group_filter"
+
+
+class InvalidQuotaState(ValueError):
+    pass
+
+
+def finite_quota_deadline(value):
+    try:
+        return type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def decode_quota_fields(quota_group_states, model_cooldowns):
+    """Validate persisted policy without initializing generations or writing state."""
+    def object_field(value):
+        try:
+            value = json.loads(value) if isinstance(value, str) else value
+        except (ValueError, TypeError):
+            raise InvalidQuotaState("invalid_quota_state") from None
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise InvalidQuotaState("invalid_quota_state")
+        return copy.deepcopy(value)
+
+    states = object_field(quota_group_states)
+    cooldowns = object_field(model_cooldowns)
+    if any(not finite_quota_deadline(d) for d in cooldowns.values()):
+        raise InvalidQuotaState("invalid_quota_cooldown")
+    for state in states.values():
+        if (not isinstance(state, dict) or state.get("state") not in ("blocked_unknown", "manual_override")
+                or type(state.get("revision")) is not int or state["revision"] < 1):
+            raise InvalidQuotaState("invalid_quota_state")
+    return states, cooldowns
+
+
+def quota_summary(model_cooldowns, quota_group_states, now):
+    """Read-only group restrictions, using the same validation as final admission."""
+    try:
+        states, cooldowns = decode_quota_fields(quota_group_states, model_cooldowns)
+    except InvalidQuotaState:
+        return {
+            "quota_groups": {group: {"cooldownUntil": 0, "blockedUnknown": False, "restricted": True}
+                             for group in GROUPS},
+            "quota_state_invalid": True,
+        }
+    groups = set(GROUPS) | set(states)
+    groups.update(group_for(model) for model in cooldowns)
+    deadlines = {group: 0 for group in groups}
+    for model, until in cooldowns.items():
+        if until > now:
+            group = group_for(model)
+            deadlines[group] = max(deadlines[group], until)
+    result = {}
+    for group in sorted(groups, key=str):
+        blocked = states.get(group, {}).get("state") == "blocked_unknown"
+        result[group] = {"cooldownUntil": deadlines[group], "blockedUnknown": blocked,
+                         "restricted": blocked or deadlines[group] > now}
+    return {"quota_groups": result, "quota_state_invalid": False}
+
+
+def matches_quota_filter(summary, value):
+    if value not in GROUP_FILTERS:
+        raise ValueError("invalid Antigravity quota group filter")
+    groups = summary["quota_groups"]
+    if value in {"any_restricted", "all_unrestricted"}:
+        restricted = any(group["restricted"] for group in groups.values())
+        return restricted if value == "any_restricted" else not restricted
+    group = "gemini-shared" if value.startswith("gemini_") else "claude-gpt-shared"
+    restricted = groups[group]["restricted"]
+    return restricted if value.endswith("_restricted") else not restricted
+
+
+def empty_quota_stats():
+    return {key: 0 for key in ("quota_restricted", "quota_unrestricted", "quota_blocked_unknown", "quota_state_invalid", "quota_next_expiry")}
+
+
+def observe_quota_expiry(stats, summary):
+    """Earliest upcoming group expiry, including candidates excluded by a filter."""
+    deadlines = [state["cooldownUntil"] for state in summary["quota_groups"].values() if state["cooldownUntil"] > 0]
+    if deadlines:
+        stats["quota_next_expiry"] = min(deadlines + ([stats["quota_next_expiry"]] if stats["quota_next_expiry"] else []))
+
+
+def count_quota_summary(stats, summary):
+    """Count once per enabled credential, independently of list filters."""
+    stats["quota_restricted" if matches_quota_filter(summary, "any_restricted") else "quota_unrestricted"] += 1
+    stats["quota_blocked_unknown"] += int(any(group["blockedUnknown"] for group in summary["quota_groups"].values()))
+    stats["quota_state_invalid"] += int(summary["quota_state_invalid"])
+    observe_quota_expiry(stats, summary)
 
 
 def valid_group(group):

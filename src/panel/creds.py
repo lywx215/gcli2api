@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 from log import log
 from src.credential_manager import credential_manager, CredentialStorageError
 from src.antigravity_import_limits import import_slot, import_write_slot
+from src.antigravity_quota import GROUP_FILTERS, GROUP_FILTER_CAPABILITY
 from src.error_classification import get_error_classifications
 from src.models import (
     CredFileActionRequest,
@@ -526,8 +527,11 @@ async def get_creds_status_common(
         raise HTTPException(status_code=400, detail="limit 只能是 20、25、50、100、200、500 或 1000")
     if status_filter not in ["all", "enabled", "disabled", "permanent_disabled"]:
         raise HTTPException(status_code=400, detail="status_filter 只能是 all、enabled、disabled 或 permanent_disabled")
-    if cooldown_filter and cooldown_filter not in ["all", "in_cooldown", "no_cooldown", "pro_no_cooldown", "flash_no_cooldown"]:
-        raise HTTPException(status_code=400, detail="cooldown_filter 只能是 all、in_cooldown、no_cooldown、pro_no_cooldown 或 flash_no_cooldown")
+    legacy_cooldown_filters = {"all", "in_cooldown", "no_cooldown", "pro_no_cooldown", "flash_no_cooldown"}
+    if cooldown_filter and cooldown_filter not in legacy_cooldown_filters | GROUP_FILTERS:
+        raise HTTPException(status_code=400, detail="无效的 cooldown_filter")
+    if cooldown_filter in GROUP_FILTERS and mode != "antigravity":
+        raise HTTPException(status_code=400, detail="共享额度筛选仅支持 Antigravity")
     if preview_filter and preview_filter not in ["all", "preview", "no_preview"]:
         raise HTTPException(status_code=400, detail="preview_filter 只能是 all、preview 或 no_preview")
     allowed_tier_filters = ("all", *valid_tiers_for_mode(mode))
@@ -546,6 +550,9 @@ async def get_creds_status_common(
     storage_adapter = await get_storage_adapter()
     backend_info = await storage_adapter.get_backend_info()
     backend_type = backend_info.get("backend_type", "unknown")
+    supports_group_filter = getattr(storage_adapter._backend, "SUPPORTS_QUOTA_GROUP_FILTER", False) is True
+    if cooldown_filter in GROUP_FILTERS and not supports_group_filter:
+        raise HTTPException(status_code=501, detail="当前存储后端不支持共享额度筛选")
 
     # Antigravity counts and permission filters cover all matching summaries.
     # Keep the legacy Gemini CLI pagination path unchanged.
@@ -561,6 +568,9 @@ async def get_creds_status_common(
         remark_filter=remark_filter if remark_filter is not None and remark_filter != "__all__" else None,
         include_error_classifications=True,
     )
+    supports_group_filter = supports_group_filter and result.get("quota_group_filter_supported") is True
+    if cooldown_filter in GROUP_FILTERS and not supports_group_filter:
+        raise HTTPException(status_code=501, detail="当前存储后端未能提供共享额度状态")
     if mode == "antigravity":
         from src.antigravity_model_access import filter_summaries
         reader = getattr(storage_adapter._backend, "model_access_list_public", None)
@@ -597,6 +607,9 @@ async def get_creds_status_common(
         else:
             cred_info["enable_credit"] = summary.get("enable_credit", False)
             cred_info["model_access_state"] = summary.get("model_access_state", {})
+            if supports_group_filter:
+                cred_info["quota_groups"] = summary["quota_groups"]
+                cred_info["quota_state_invalid"] = summary["quota_state_invalid"]
 
         creds_list.append(cred_info)
 
@@ -608,6 +621,7 @@ async def get_creds_status_common(
         "has_more": (offset + limit) < result["total"],
         "stats": result.get("stats", {"total": 0, "normal": 0, "disabled": 0}),
         **({"model_access_summary": result["model_access_summary"]} if mode == "antigravity" else {}),
+        **({"panel_capabilities": [GROUP_FILTER_CAPABILITY] if supports_group_filter else []} if mode == "antigravity" else {}),
     })
 
 
@@ -1162,7 +1176,7 @@ async def get_creds_status(
         limit: 每页返回的记录数（默认50，可选：20, 25, 50, 100, 200, 500, 1000）
         status_filter: 状态筛选（all=全部, enabled=仅启用, disabled=仅禁用）
         error_code_filter: 错误码筛选（all、none、具体错误码，或403细分类）
-        cooldown_filter: 冷却状态筛选（all=全部, in_cooldown=冷却中, no_cooldown=未冷却）
+        cooldown_filter: 旧定时冷却筛选兼容；Antigravity 增加两共享组的 restricted/unrestricted 及 any_restricted/all_unrestricted
         preview_filter: Preview筛选（all=全部, preview=支持preview, no_preview=不支持preview，仅geminicli模式有效）
         tier_filter: tier筛选（all=全部, free/pro/ultra）
         model_access_filter: Opus权限筛选（all/supported/unavailable/unknown，仅Antigravity）

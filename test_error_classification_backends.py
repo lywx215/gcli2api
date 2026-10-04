@@ -22,6 +22,7 @@ def _antigravity_summary_dict():
         "user_email": None,
         "rotation_order": 1,
         "model_cooldowns": "{}",
+        "quota_group_states": "{}",
         "tier": "pro",
         "enable_credit": False,
         "success_count": 0,

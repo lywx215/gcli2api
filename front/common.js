@@ -219,6 +219,9 @@ function createCredsManager(type) {
         currentStatusFilter: 'all',
         currentErrorCodeFilter: 'all',
         currentCooldownFilter: 'all',
+        cooldownGroupCapability: false,
+        cooldownRefreshPending: false,
+        cooldownRefreshAfter: 0,
         currentPreviewFilter: 'all',
         currentTierFilter: 'all',
         currentRemarkFilter: '__all__',
@@ -273,7 +276,7 @@ function createCredsManager(type) {
             const params = new URLSearchParams({offset, limit,
                 status_filter: this.currentStatusFilter || 'all',
                 error_code_filter: this.currentErrorCodeFilter || 'all',
-                cooldown_filter: this.currentCooldownFilter || 'all',
+                cooldown_filter: this.type === 'antigravity' && !this.cooldownGroupCapability ? 'all' : (this.currentCooldownFilter || 'all'),
                 preview_filter: this.currentPreviewFilter || 'all',
                 tier_filter: this.currentTierFilter || 'all',
                 remark_filter: this.currentRemarkFilter || '__all__'});
@@ -331,6 +334,7 @@ function createCredsManager(type) {
                 const data = await response.json();
 
                 if (response.ok) {
+                    this.updateCooldownCapability(data.panel_capabilities);
                     this.data = {};
                     data.items.forEach(item => {
                         if (typeof item.user_email === 'string' && item.user_email.trim()) {
@@ -350,6 +354,8 @@ function createCredsManager(type) {
                             remark: item.remark || '',
                             user_email: item.user_email,
                             model_cooldowns: item.model_cooldowns || {},
+                            quota_groups: item.quota_groups,
+                            quota_state_invalid: item.quota_state_invalid === true,
                             model_access_state: item.model_access_state || {},
                             preview: item.preview,
                             tier: item.tier || (this.type === 'antigravity' ? 'pro' : 'unknown'),
@@ -390,6 +396,7 @@ function createCredsManager(type) {
                         msg += ` (筛选: ${this.currentStatusFilter === 'enabled' ? '仅启用' : (this.currentStatusFilter === 'permanent_disabled' ? '永久禁用' : '仅禁用')})`;
                     }
                     showStatus(msg, 'success');
+                    return true;
                 } else {
                     showStatus(`加载失败: ${data.detail || data.error || '未知错误'}`, 'error');
                 }
@@ -398,6 +405,18 @@ function createCredsManager(type) {
             } finally {
                 loading.style.display = 'none';
             }
+        },
+
+        updateCooldownCapability(capabilities) {
+            if (this.type !== 'antigravity') return;
+            this.cooldownGroupCapability = Array.isArray(capabilities) && capabilities.includes('antigravity.cooldown.group_filter');
+            const filter = document.getElementById(this.getElementId('CooldownFilter'));
+            if (filter) {
+                Array.from(filter.options).forEach(option => { option.disabled = option.value !== 'all' && !this.cooldownGroupCapability; });
+                filter.title = this.cooldownGroupCapability ? '' : '当前服务暂不支持额度组筛选';
+                if (!this.cooldownGroupCapability) filter.value = 'all';
+            }
+            if (!this.cooldownGroupCapability) this.currentCooldownFilter = 'all';
         },
 
         // 计算统计数据（仅用于兼容旧版本后端）
@@ -434,9 +453,15 @@ function createCredsManager(type) {
             const permanentEl = document.getElementById(this.getElementId('StatPermanentDisabled'));
             if (permanentEl) permanentEl.textContent = this.statsData.permanent_disabled || 0;
             const noCooldownEl = document.getElementById(this.getElementId('StatNoCooldown'));
-            if (noCooldownEl) noCooldownEl.textContent = this.statsData.no_cooldown || 0;
+            if (noCooldownEl) noCooldownEl.textContent = this.type === 'antigravity' ? (this.cooldownGroupCapability ? this.statsData.quota_unrestricted ?? '暂不可用' : '暂不可用') : this.statsData.no_cooldown || 0;
             const inCooldownEl = document.getElementById(this.getElementId('StatInCooldown'));
-            if (inCooldownEl) inCooldownEl.textContent = this.statsData.in_cooldown || 0;
+            if (inCooldownEl) inCooldownEl.textContent = this.type === 'antigravity' ? (this.cooldownGroupCapability ? this.statsData.quota_restricted ?? '暂不可用' : '暂不可用') : this.statsData.in_cooldown || 0;
+            if (this.type === 'antigravity') {
+                for (const [suffix, key] of [['StatBlockedUnknown', 'quota_blocked_unknown'], ['StatQuotaInvalid', 'quota_state_invalid']]) {
+                    const element = document.getElementById(this.getElementId(suffix));
+                    if (element) element.textContent = this.cooldownGroupCapability ? this.statsData[key] ?? '暂不可用' : '暂不可用';
+                }
+            }
         },
 
         // 渲染凭证列表
@@ -533,7 +558,8 @@ function createCredsManager(type) {
             );
             batchBtns.forEach(btn => btn && (btn.disabled = selectedCount === 0));
 
-            const selectAllCheckbox = document.getElementById(this.getElementId('SelectAllCheckbox'));
+            const selectAllCheckbox = document.getElementById(this.type === 'antigravity'
+                ? 'selectAllAntigravityCheckbox' : this.getElementId('SelectAllCheckbox'));
             if (!selectAllCheckbox) return;
 
             const checkboxes = document.querySelectorAll(`.${this.getElementId('file-checkbox')}`);
@@ -967,6 +993,30 @@ function formatCooldownTime(remainingSeconds) {
     return `${seconds}s`;
 }
 
+function quotaGroupLabel(group) {
+    return {'gemini-shared': 'Gemini', 'claude-gpt-shared': 'Claude / GPT-OSS'}[group] || group;
+}
+
+function quotaGroupText(group, state, now = Date.now() / 1000, invalid = false) {
+    const label = quotaGroupLabel(group);
+    if (invalid) return `${label}：额度受限（状态异常）`;
+    if (!state) return `${label}：状态暂不可用`;
+    const remaining = Math.max(0, Math.ceil((state.cooldownUntil || 0) - now));
+    if (state.blockedUnknown) return `${label}：额度受限（恢复时间未知）${remaining ? ' · ' + formatCooldownTime(remaining) : ''}`;
+    if (remaining) return `${label}：额度受限 · ${formatCooldownTime(remaining)}`;
+    return `${label}：${state.restricted ? '等待状态更新' : '额度未受限'}`;
+}
+
+function quotaGroupBadges(credInfo, capability) {
+    if (!capability) return '<span class="status-badge" style="background-color:#616161;color:#fff;">额度组状态暂不可用</span>';
+    const groups = credInfo.quota_groups || {};
+    const render = group => `<span class="cooldown-badge" data-cooldown-mode="antigravity" data-cooldown-filename="${escapeHtmlAttribute(credInfo.filename)}" data-cooldown-group="${escapeHtmlAttribute(group)}">${escapeHtml(quotaGroupText(group, groups[group], Date.now() / 1000, credInfo.quota_state_invalid))}</span>`;
+    const known = ['gemini-shared', 'claude-gpt-shared'];
+    const others = Object.keys(groups).filter(group => !known.includes(group));
+    return known.map(render).join(' ') + (others.length ? `<details><summary>其他额度组（${others.length}）</summary>${others.map(render).join(' ')}</details>` : '') +
+        (credInfo.quota_state_invalid ? '<span class="status-badge" style="background-color:#b71c1c;color:#fff;">额度状态异常：额度受限，禁止派发</span>' : '');
+}
+
 function formatErrorCodeLabel(errorCode, classifications = {}) {
     if (String(errorCode) !== '403') return String(errorCode);
 
@@ -1072,7 +1122,9 @@ function createCredCard(credInfo, manager) {
     }
 
     // 模型级冷却状态
-    if (credInfo.model_cooldowns && Object.keys(credInfo.model_cooldowns).length > 0) {
+    if (managerType === 'antigravity') {
+        statusBadges += quotaGroupBadges(credInfo, manager.cooldownGroupCapability);
+    } else if (credInfo.model_cooldowns && Object.keys(credInfo.model_cooldowns).length > 0) {
         const currentTime = Date.now() / 1000;
         const activeCooldowns = Object.entries(credInfo.model_cooldowns)
             .filter(([, until]) => until > currentTime)
@@ -1089,7 +1141,7 @@ function createCredCard(credInfo, manager) {
 
         if (activeCooldowns.length > 0) {
             activeCooldowns.slice(0, 2).forEach(item => {
-                statusBadges += `<span class="cooldown-badge" style="background-color: #17a2b8;" title="模型: ${item.fullModel}">⏰ ${item.model}: ${item.time}</span>`;
+                statusBadges += `<span class="cooldown-badge" data-cooldown-mode="geminicli" data-cooldown-filename="${escapeHtmlAttribute(filename)}" data-cooldown-group="${escapeHtmlAttribute(item.fullModel)}" style="background-color: #17a2b8;" title="模型: ${item.fullModel}">⏰ ${item.model}: ${item.time}</span>`;
             });
             if (activeCooldowns.length > 2) {
                 const remaining = activeCooldowns.length - 2;
@@ -2384,7 +2436,10 @@ async function batchRefreshCooldownCredentials(manager, label) {
         return;
     }
 
-    if (!confirm(`将对 ${selectedFiles.length} 个${label}凭证拉取实时额度，并按模型双向同步冷却：\n  ✅ 有额度但在冷却 → 解除\n  🧊 没额度但未冷却 → 补冷\n\n继续吗？`)) {
+    const syncRules = manager.type === 'antigravity'
+        ? '按共享额度组同步：Gemini 全部模型共享一组；Claude / GPT-OSS 共享一组。组内返回成员均有有效正额度才恢复；任一成员耗尽则保留或补加限制。未知或不完整结果不作为恢复依据；恢复时间未知的异常拦截不会随倒计时自动解除。Opus 权限独立判断。'
+        : '按模型双向同步冷却：\n  ✅ 有额度但在冷却 → 解除\n  🧊 没额度但未冷却 → 补冷';
+    if (!confirm(`将对 ${selectedFiles.length} 个${label}凭证拉取实时额度，并${syncRules}\n\n继续吗？`)) {
         return;
     }
 
@@ -2429,8 +2484,8 @@ async function batchRefreshCooldownCredentials(manager, label) {
 
         const addedTotal = data.added_total || 0;
         const affectedAdded = data.affected_creds_added || 0;
-        const accessSummary = manager.type === 'antigravity' ? '\n\n' + modelAccessBatchText(results) : '';
-        const summary = `批量额度检测 + 双向冷却同步完成\n\n查询成功: ${successCount} 个\n查询失败: ${failureCount} 个\n总计: ${data.total_count || selectedFiles.length} 个\n✅解除冷却: ${clearedTotal} 个（${affected} 凭证）\n🧊补加冷却: ${addedTotal} 个（${affectedAdded} 凭证）${accessSummary}\n\n详细结果:\n${lines.join('\n')}`;
+        const accessSummary = manager.type === 'antigravity' ? '\n\n共享组同步规则：' + syncRules + '\n\n' + modelAccessBatchText(results) : '';
+        const summary = `${manager.type === 'antigravity' ? '批量额度检测 + 共享组冷却同步完成（以下数量沿用服务端同步记录计数）' : '批量额度检测 + 双向冷却同步完成'}\n\n查询成功: ${successCount} 个\n查询失败: ${failureCount} 个\n总计: ${data.total_count || selectedFiles.length} 个\n✅解除冷却: ${clearedTotal} 个（${affected} 凭证）\n🧊补加冷却: ${addedTotal} 个（${affectedAdded} 凭证）${accessSummary}\n\n详细结果:\n${lines.join('\n')}`;
 
         const tone = failureCount === 0 ? 'success' : (successCount === 0 ? 'error' : 'info');
         showStatus(`额度检测完成：解除 ${clearedTotal} 个 / 补冷 ${addedTotal} 个（${selectedFiles.length} 凭证）`, tone);
@@ -2603,7 +2658,7 @@ async function _toggleQuotaDetails(pathId, mode) {
                     // 成功时渲染美化的额度信息
                     const models = data.models || {};
 
-                    if (Object.keys(models).length === 0) {
+                    if (Object.keys(models).length === 0 && mode !== 'antigravity') {
                         contentDiv.innerHTML = `
                             <div style="text-align: center; padding: 20px; color: #999;">
                                 <div style="font-size: 48px; margin-bottom: 10px;">📊</div>
@@ -2624,7 +2679,7 @@ async function _toggleQuotaDetails(pathId, mode) {
 
                         if (mode === 'antigravity') {
                             const groups = new Map([['claude-gpt-shared', 'Claude / GPT-OSS'], ['gemini-shared', 'Gemini 全部模型']]);
-                            for (const group of Object.keys(data.quota_group_states || {})) {
+                            for (const group of new Set([...Object.keys(data.quota_group_states || {}), ...Object.keys(data.quota_groups || {})])) {
                                 if (!groups.has(group)) groups.set(group, group);
                             }
                             for (const [rawGroup, rawTitle] of groups) {
@@ -2770,6 +2825,7 @@ async function _toggleQuotaDetails(pathId, mode) {
                                     if (!released.ok) throw new Error('解除失败');
                                     button.parentElement.querySelector('[data-quota-label]').textContent = '管理员已解除异常拦截；计时冷却仍有效';
                                     button.remove();
+                                    await AppState.antigravityCreds.refresh();
                                 } catch (error) {
                                     showStatus('解除异常额度拦截失败', 'error');
                                     button.disabled = false;
@@ -2862,6 +2918,19 @@ async function _toggleQuotaDetails(pathId, mode) {
 
                     contentDiv.innerHTML = errorDisplayHTML;
                     if (mode === 'antigravity') {
+                        if (data.quota_groups || data.quota_group_states || data.quota_state_invalid) {
+                            const groups = new Set(['gemini-shared', 'claude-gpt-shared', ...Object.keys(data.quota_groups || {}), ...Object.keys(data.quota_group_states || {})]);
+                            const protection = Array.from(groups).map(group => {
+                                const state = data.quota_groups?.[group];
+                                const blocked = state?.blockedUnknown || data.quota_group_states?.[group]?.state === 'blocked_unknown';
+                                const until = Number(state?.cooldownUntil || 0);
+                                const label = blocked ? '额度受限（恢复时间未知）' : until > Date.now() / 1000 ? '额度受限（计时冷却）' : state ? (state.restricted ? '额度受限' : '额度未受限') : '状态暂不可用';
+                                const title = {'gemini-shared': 'Gemini', 'claude-gpt-shared': 'Claude / GPT-OSS'}[group] || group;
+                                return `<div>${escapeHtml(title)}：${label}${until > Date.now() / 1000 ? ' · 至 ' + new Date(until * 1000).toLocaleString() : ''}</div>`;
+                            }).join('');
+                            contentDiv.insertAdjacentHTML('afterbegin', `<div data-quota-protection>已保存的额度保护状态（查询失败未解除）：${protection}${data.quota_state_invalid ? '<div>额度状态异常：额度受限，禁止派发</div>' : ''}</div>`);
+                        }
+
                         contentDiv.insertAdjacentHTML('afterbegin', modelAccessSummary(data));
                         contentDiv.insertAdjacentHTML('afterbegin', `<pre>${escapeHtml(manualResultSummary(data))}</pre>`);
                     }
@@ -4099,53 +4168,43 @@ function stopCooldownTimer() {
 }
 
 function updateCooldownDisplays() {
-    let needsRefresh = false;
-
-    // 检查模型级冷却是否过期
-    for (const credInfo of Object.values(AppState.creds.data)) {
-        if (credInfo.model_cooldowns && Object.keys(credInfo.model_cooldowns).length > 0) {
-            const currentTime = Date.now() / 1000;
-            const hasExpiredCooldowns = Object.entries(credInfo.model_cooldowns).some(([, until]) => until <= currentTime);
-
-            if (hasExpiredCooldowns) {
-                needsRefresh = true;
-                break;
-            }
-        }
+    const now = Date.now() / 1000;
+    const cli = AppState.creds;
+    if (Object.values(cli.data).some(info => Object.values(info.model_cooldowns || {}).some(until => until <= now))) {
+        cli.renderList();
     }
-
-    if (needsRefresh) {
-        AppState.creds.renderList();
-        return;
-    }
-
-    // 更新模型级冷却的显示
-    document.querySelectorAll('.cooldown-badge').forEach(badge => {
-        const card = badge.closest('.cred-card');
-        const filenameEl = card?.querySelector('.cred-filename');
-        if (!filenameEl) return;
-
-        const filename = filenameEl.textContent;
-        const credInfo = Object.values(AppState.creds.data).find(c => c.filename === filename);
-
-        if (credInfo && credInfo.model_cooldowns) {
-            const currentTime = Date.now() / 1000;
-            const titleMatch = badge.getAttribute('title')?.match(/模型: (.+)/);
-            if (titleMatch) {
-                const model = titleMatch[1];
-                const cooldownUntil = credInfo.model_cooldowns[model];
-                if (cooldownUntil) {
-                    const remaining = Math.max(0, Math.floor(cooldownUntil - currentTime));
-                    if (remaining > 0) {
-                        const shortModel = model.replace('gemini-', '').replace('-exp', '')
-                            .replace('2.0-', '2-').replace('1.5-', '1.5-');
-                        const timeDisplay = formatCooldownTime(remaining).replace(/s$/, '').replace(/ /g, '');
-                        badge.innerHTML = `⏰ ${shortModel}: ${timeDisplay}`;
-                    }
-                }
+    document.querySelectorAll('[data-cooldown-mode]').forEach(badge => {
+        const {cooldownMode: mode, cooldownFilename: filename, cooldownGroup: group} = badge.dataset;
+        const manager = mode === 'antigravity' ? AppState.antigravityCreds : cli;
+        const info = manager.data[filename];
+        if (!info) return;
+        if (mode === 'antigravity') {
+            badge.textContent = quotaGroupText(group, info.quota_groups?.[group], now, info.quota_state_invalid);
+        } else {
+            const until = info.model_cooldowns?.[group];
+            const remaining = Math.max(0, Math.floor(until - now));
+            if (remaining > 0) {
+                const shortModel = group.replace('gemini-', '').replace('-exp', '').replace('2.0-', '2-').replace('1.5-', '1.5-');
+                badge.textContent = `⏰ ${shortModel}: ${formatCooldownTime(remaining).replace(/s$/, '').replace(/ /g, '')}`;
             }
         }
     });
+    const ag = AppState.antigravityCreds;
+    const panel = document.getElementById('antigravity-manageTab');
+    const visible = !document.hidden && (!panel || panel.classList.contains('active'));
+    const nextExpiry = ag.statsData?.quota_next_expiry || 0;
+    const expired = visible && ag.cooldownGroupCapability && ((nextExpiry > 0 && nextExpiry <= now) ||
+        Object.values(ag.data).some(info => Object.values(info.quota_groups || {}).some(state =>
+            state.cooldownUntil > 0 && state.cooldownUntil <= now)));
+    if (expired && !ag.cooldownRefreshPending && now >= ag.cooldownRefreshAfter) {
+        ag.cooldownRefreshPending = true;
+        ag.cooldownRefreshAfter = now + 15;
+        // Only cached status is read here; never query Google quota from the timer.
+        Promise.resolve().then(() => ag.refresh()).catch(() => {}).finally(() => {
+            ag.cooldownRefreshPending = false;
+            ag.cooldownRefreshAfter = Date.now() / 1000 + 15;
+        });
+    }
 }
 
 // =====================================================================

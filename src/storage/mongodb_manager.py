@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from src.storage._stats_common import (
     _today_beijing_str,
+    active_model_cooldowns,
     clear_antigravity_cooldown_family,
     cooldowns_affect_antigravity_family,
     get_antigravity_cooldown_until,
@@ -35,10 +36,20 @@ from src.subscription_tiers import (
 from log import log
 
 
+from src.antigravity_quota import (
+    GROUP_FILTERS,
+    count_quota_summary,
+    empty_quota_stats,
+    finite_quota_deadline,
+    matches_quota_filter,
+    observe_quota_expiry,
+    quota_summary,
+)
 from src.storage.antigravity_quota import AntigravityQuotaMixin
 
 
 class MongoDBManager(AntigravityQuotaMixin):
+    SUPPORTS_QUOTA_GROUP_FILTER = True
     QUOTA_ENGINE = 'mongo'
     """MongoDB 数据库管理器"""
 
@@ -1260,6 +1271,13 @@ class MongoDBManager(AntigravityQuotaMixin):
         Returns:
             包含 items（凭证列表）、total（总数）、offset、limit 的字典
         """
+        if cooldown_filter in GROUP_FILTERS and mode != "antigravity":
+            raise ValueError("Antigravity quota group filters require antigravity mode")
+        if mode == "antigravity" and cooldown_filter not in (
+            None, "", "all", "in_cooldown", "no_cooldown",
+            "pro_no_cooldown", "flash_no_cooldown", *GROUP_FILTERS,
+        ):
+            raise ValueError("Unsupported Antigravity cooldown filter")
         self._ensure_initialized()
 
         try:
@@ -1303,6 +1321,7 @@ class MongoDBManager(AntigravityQuotaMixin):
                 "disabled": 0,
                 "in_cooldown": 0,
                 "no_cooldown": 0,
+                **(empty_quota_stats() if mode == "antigravity" else {}),
             }
             stats_pipeline = [
                 {
@@ -1350,6 +1369,10 @@ class MongoDBManager(AntigravityQuotaMixin):
                 "_id": 0
             }
 
+            if mode == "antigravity":
+                projection["quota_group_states"] = 1
+                projection["permanent_disabled"] = 1
+
             cursor = collection.find(query, projection=projection).sort("rotation_order", 1)
 
             all_summaries = []
@@ -1357,6 +1380,11 @@ class MongoDBManager(AntigravityQuotaMixin):
             count_cooldowns_from_cursor = not query
 
             async for doc in cursor:
+                row_quota = quota_summary(
+                    doc.get("model_cooldowns"), doc.get("quota_group_states"), current_time,
+                ) if mode == "antigravity" else None
+                if row_quota is not None:
+                    observe_quota_expiry(global_stats, row_quota)
                 if count_cooldowns_from_cursor and not bool(doc.get("disabled", False)):
                     cooldown_key = (
                         "in_cooldown"
@@ -1366,6 +1394,8 @@ class MongoDBManager(AntigravityQuotaMixin):
                         else "no_cooldown"
                     )
                     global_stats[cooldown_key] += 1
+                    if row_quota is not None and not bool(doc.get("permanent_disabled", False)):
+                        count_quota_summary(global_stats, row_quota)
                 error_codes = safe_json_list(doc.get("error_codes", []))
                 if is_http_403_classification_filter(error_code_filter):
                     if not has_error_code(error_codes, 403):
@@ -1379,7 +1409,13 @@ class MongoDBManager(AntigravityQuotaMixin):
 
                 # 自动过滤掉已过期的模型CD
                 active_cooldowns = {}
-                if model_cooldowns:
+                if mode == "antigravity":
+                    active_cooldowns, _ = active_model_cooldowns(model_cooldowns, current_time)
+                    active_cooldowns = {
+                        key: deadline for key, deadline in active_cooldowns.items()
+                        if finite_quota_deadline(deadline)
+                    }
+                elif model_cooldowns:
                     active_cooldowns = {
                         k: v for k, v in model_cooldowns.items()
                         if isinstance(v, (int, float)) and v > current_time
@@ -1402,6 +1438,9 @@ class MongoDBManager(AntigravityQuotaMixin):
                     "failure_count": doc.get("failure_count", 0),
                     "remark": doc.get("remark", ""),
                 }
+
+                if row_quota is not None:
+                    summary.update(row_quota)
 
                 if mode == "geminicli":
                     summary.update({
@@ -1433,7 +1472,10 @@ class MongoDBManager(AntigravityQuotaMixin):
                         continue
 
                 # 应用冷却筛选
-                if cooldown_filter == "in_cooldown":
+                if mode == "antigravity" and cooldown_filter in GROUP_FILTERS:
+                    if matches_quota_filter(summary, cooldown_filter):
+                        all_summaries.append(summary)
+                elif cooldown_filter == "in_cooldown":
                     # 只保留有冷却的凭证
                     if active_cooldowns:
                         all_summaries.append(summary)
@@ -1489,7 +1531,10 @@ class MongoDBManager(AntigravityQuotaMixin):
             if not count_cooldowns_from_cursor:
                 cooldown_cursor = collection.find(
                     {"disabled": {"$ne": True}},
-                    projection={"model_cooldowns": 1, "_id": 0},
+                    projection={
+                        "model_cooldowns": 1, "_id": 0,
+                        **({"quota_group_states": 1, "permanent_disabled": 1} if mode == "antigravity" else {}),
+                    },
                 )
                 async for cooldown_doc in cooldown_cursor:
                     cooldown_key = (
@@ -1500,6 +1545,11 @@ class MongoDBManager(AntigravityQuotaMixin):
                         else "no_cooldown"
                     )
                     global_stats[cooldown_key] += 1
+                    if mode == "antigravity" and not bool(cooldown_doc.get("permanent_disabled", False)):
+                        count_quota_summary(global_stats, quota_summary(
+                            cooldown_doc.get("model_cooldowns"),
+                            cooldown_doc.get("quota_group_states"), current_time,
+                        ))
 
             return {
                 "items": summaries,
@@ -1507,6 +1557,7 @@ class MongoDBManager(AntigravityQuotaMixin):
                 "offset": offset,
                 "limit": limit,
                 "stats": global_stats,
+                **({"quota_group_filter_supported": True} if mode == "antigravity" else {}),
             }
 
         except Exception as e:
@@ -1516,7 +1567,7 @@ class MongoDBManager(AntigravityQuotaMixin):
                 "total": 0,
                 "offset": offset,
                 "limit": limit,
-                "stats": {"total": 0, "normal": 0, "disabled": 0, "in_cooldown": 0, "no_cooldown": 0},
+                "stats": {"total": 0, "normal": 0, "disabled": 0, "in_cooldown": 0, "no_cooldown": 0, **(empty_quota_stats() if mode == "antigravity" else {})},
             }
 
     # ============ 配置管理（内存缓存 + 可选 Redis）============

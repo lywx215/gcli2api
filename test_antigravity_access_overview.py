@@ -164,11 +164,12 @@ def test_frontend_filters_badges_and_cross_page_selection():
     manager = source[source.index("function createCredsManager("):source.index("function createUploadManager(")]
     helpers = source[source.index("function modelAccessStatus("):source.index("async function _toggleQuotaDetails(")]
     card = source[source.index("function createCredCard("):source.index("async function updateCredRemark(")]
-    script = manager + helpers + card + r'''
+    cooldown_helpers = source[source.index("function formatCooldownTime("):source.index("function formatErrorCodeLabel(")]
+    script = manager + helpers + cooldown_helpers + card + r'''
 const assert = require('node:assert/strict');
 const elements = new Map();
 global.document = {getElementById(id) {
-    if (!elements.has(id)) elements.set(id, {style: {}, innerHTML: '', value: 'all', textContent: ''});
+    if (!elements.has(id)) elements.set(id, {style: {}, innerHTML: '', value: 'all', textContent: '', options: [{value:'all'}, {value:'gemini_restricted'}]});
     return elements.get(id);
 }, querySelectorAll: () => [], createElement: () => ({innerHTML: '', querySelectorAll: () => []})};
 global.window = {location: {href: 'http://localhost/control_panel'}};
@@ -192,10 +193,14 @@ assert.match(batch, /High：目录支持 0 \/ 暂不可用 0 \/ 待确认 2/);
 const ag = createCredsManager('antigravity');
 ag.currentModelAccessFilter = 'supported'; ag.currentModelAccessTier = 'high';
 ag.currentRemarkFilter = 'group & 1';
+ag.currentCooldownFilter = 'gemini_restricted';
+assert.equal(new URL(ag.getStatusUrl(0,25), window.location.href).searchParams.get('cooldown_filter'), 'all');
+ag.updateCooldownCapability(['antigravity.cooldown.group_filter']);
 let url = new URL(ag.getStatusUrl(25, 25), window.location.href);
 assert.equal(url.searchParams.get('model_access_filter'), 'supported');
 assert.equal(url.searchParams.get('model_access_tier'), 'high');
 assert.equal(url.searchParams.get('remark_filter'), 'group & 1');
+assert.equal(url.searchParams.get('cooldown_filter'), 'gemini_restricted');
 const legacy = createCredsManager('geminicli');
 assert.ok(!legacy.getStatusUrl(0,25).includes('model_access'));
 const info = {filename:'synthetic.json',status:{error_codes:[]},model_access_state:mixed};
@@ -208,6 +213,7 @@ assert.ok(!createCredCard(info, legacy).innerHTML.includes('data-model-access-ba
         const u = new URL(request); const offset = Number(u.searchParams.get('offset'));
         offsets.push(offset);
         assert.equal(u.searchParams.get('model_access_tier'), 'high');
+        assert.equal(u.searchParams.get('cooldown_filter'), 'gemini_restricted');
         return {ok:true, json:async () => ({items:Array.from({length:offset === 0 ? 1000 : 5}, (_,i) => ({filename:`synthetic-${offset+i}.json`})), has_more:offset===0})};
     };
     await ag.selectAllMatching();

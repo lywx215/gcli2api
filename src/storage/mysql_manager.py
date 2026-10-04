@@ -25,6 +25,7 @@ from src.error_classification import (
 )
 from src.storage._stats_common import (
     _today_beijing_str,
+    active_model_cooldowns,
     clear_antigravity_cooldown_family,
     cooldowns_affect_antigravity_family,
     get_antigravity_cooldown_until,
@@ -39,10 +40,20 @@ from src.subscription_tiers import (
 )
 
 
+from src.antigravity_quota import (
+    GROUP_FILTERS,
+    count_quota_summary,
+    empty_quota_stats,
+    finite_quota_deadline,
+    matches_quota_filter,
+    observe_quota_expiry,
+    quota_summary,
+)
 from src.storage.antigravity_quota import AntigravityQuotaMixin
 
 
 class MySQLManager(AntigravityQuotaMixin):
+    SUPPORTS_QUOTA_GROUP_FILTER = True
     QUOTA_ENGINE = 'mysql'
     """MySQL 数据库管理器"""
 
@@ -1456,6 +1467,13 @@ class MySQLManager(AntigravityQuotaMixin):
         include_error_classifications: bool = False,
     ) -> Dict[str, Any]:
         """获取凭证的摘要信息（支持分页和状态筛选）"""
+        if cooldown_filter in GROUP_FILTERS and mode != "antigravity":
+            raise ValueError("Antigravity quota group filters require antigravity mode")
+        if mode == "antigravity" and cooldown_filter not in (
+            None, "", "all", "in_cooldown", "no_cooldown",
+            "pro_no_cooldown", "flash_no_cooldown", *GROUP_FILTERS,
+        ):
+            raise ValueError("Unsupported Antigravity cooldown filter")
         self._ensure_initialized()
 
         try:
@@ -1470,6 +1488,7 @@ class MySQLManager(AntigravityQuotaMixin):
                         "disabled": 0,
                         "in_cooldown": 0,
                         "no_cooldown": 0,
+                        **(empty_quota_stats() if mode == "antigravity" else {}),
                     }
                     await cur.execute(f"""
                         SELECT disabled, COUNT(*) FROM {table_name}
@@ -1511,7 +1530,7 @@ class MySQLManager(AntigravityQuotaMixin):
                         query = f"""
                             SELECT filename, disabled, error_codes, last_success,
                                    user_email, rotation_order, model_cooldowns, tier,
-                                   remark
+                                   quota_group_states, remark
                             FROM {table_name}
                             {where_clause}
                             ORDER BY rotation_order
@@ -1527,11 +1546,16 @@ class MySQLManager(AntigravityQuotaMixin):
                     }
                     if not count_cooldowns_from_rows:
                         await cur.execute(f"""
-                            SELECT model_cooldowns FROM {table_name}
+                            SELECT model_cooldowns{", quota_group_states" if mode == "antigravity" else ""} FROM {table_name}
                             WHERE server_name = %s AND disabled = 0
                         """, (self._server_name,))
                         cooldown_rows = await cur.fetchall()
-                        for (model_cooldowns,) in cooldown_rows:
+                        for cooldown_row in cooldown_rows:
+                            model_cooldowns = cooldown_row[0]
+                            if mode == "antigravity":
+                                count_quota_summary(global_stats, quota_summary(
+                                    model_cooldowns, cooldown_row[1], current_time,
+                                ))
                             cooldown_key = (
                                 "in_cooldown"
                                 if has_active_model_cooldown(model_cooldowns, current_time)
@@ -1542,7 +1566,12 @@ class MySQLManager(AntigravityQuotaMixin):
                     for row in all_rows:
                         filename = row[0]
                         error_codes_json = row[2] or '[]'
-                        model_cooldowns_json = row[6] or '{}'
+                        model_cooldowns_json = row[6]
+                        row_quota = quota_summary(
+                            model_cooldowns_json, row[8], current_time,
+                        ) if mode == "antigravity" else None
+                        if row_quota is not None:
+                            observe_quota_expiry(global_stats, row_quota)
                         if count_cooldowns_from_rows and not bool(row[1]):
                             cooldown_key = (
                                 "in_cooldown"
@@ -1550,13 +1579,18 @@ class MySQLManager(AntigravityQuotaMixin):
                                 else "no_cooldown"
                             )
                             global_stats[cooldown_key] += 1
-                        model_cooldowns = json.loads(model_cooldowns_json)
-
-                        active_cooldowns = {}
-                        if model_cooldowns:
+                            if row_quota is not None:
+                                count_quota_summary(global_stats, row_quota)
+                        if mode == "antigravity":
+                            active_cooldowns, _ = active_model_cooldowns(model_cooldowns_json, current_time)
                             active_cooldowns = {
-                                k: v for k, v in model_cooldowns.items()
-                                if v > current_time
+                                key: deadline for key, deadline in active_cooldowns.items()
+                                if finite_quota_deadline(deadline)
+                            }
+                        else:
+                            model_cooldowns = json.loads(model_cooldowns_json or '{}')
+                            active_cooldowns = {
+                                k: v for k, v in model_cooldowns.items() if v > current_time
                             }
 
                         error_codes = safe_json_list(error_codes_json)
@@ -1581,6 +1615,9 @@ class MySQLManager(AntigravityQuotaMixin):
                             "model_cooldowns": active_cooldowns,
                             "remark": row_remark,
                         }
+
+                        if row_quota is not None:
+                            summary.update(row_quota)
 
                         if mode == "geminicli":
                             summary["preview"] = bool(row[7]) if row[7] is not None else True
@@ -1612,7 +1649,10 @@ class MySQLManager(AntigravityQuotaMixin):
                                 continue
 
                         # 冷却筛选
-                        if cooldown_filter == "in_cooldown":
+                        if mode == "antigravity" and cooldown_filter in GROUP_FILTERS:
+                            if matches_quota_filter(summary, cooldown_filter):
+                                all_summaries.append(summary)
+                        elif cooldown_filter == "in_cooldown":
                             if active_cooldowns:
                                 all_summaries.append(summary)
                         elif cooldown_filter == "no_cooldown":
@@ -1666,13 +1706,14 @@ class MySQLManager(AntigravityQuotaMixin):
                         "offset": offset,
                         "limit": limit,
                         "stats": global_stats,
+                        **({"quota_group_filter_supported": True} if mode == "antigravity" else {}),
                     }
 
         except Exception as e:
             log.error(f"Error getting credentials summary: {e}")
             return {
                 "items": [], "total": 0, "offset": offset,
-                "limit": limit, "stats": {"total": 0, "normal": 0, "disabled": 0, "in_cooldown": 0, "no_cooldown": 0},
+                "limit": limit, "stats": {"total": 0, "normal": 0, "disabled": 0, "in_cooldown": 0, "no_cooldown": 0, **(empty_quota_stats() if mode == "antigravity" else {})},
             }
 
     async def get_duplicate_credentials_by_email(self, mode: str = "geminicli") -> Dict[str, Any]:
