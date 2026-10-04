@@ -97,11 +97,15 @@ async def lifespan(app: FastAPI):
             pass
 
     cleanup_task = asyncio.create_task(_cleanup_minute_stats_loop())
+    from src.antigravity_access_runtime import model_access_service
+    await model_access_service.start()
 
     yield
 
     # 清理资源
     log.info("开始关闭 GCLI2API 主服务")
+
+    await model_access_service.close()
 
     # 停止分钟统计清理任务
     try:

@@ -66,6 +66,13 @@ class CredentialManager:
         # 初始化统一存储适配器
         self._storage_adapter = await get_storage_adapter()
         self._initialized = True
+        backend = self._storage_adapter._backend
+        if not getattr(backend, "model_access_storage_ready", False) and callable(getattr(backend, "model_access_initialize", None)):
+            try:
+                await backend.model_access_initialize()
+            except Exception:
+                backend.model_access_storage_ready = False
+                log.warning("[ANTIGRAVITY] model access storage unavailable")
 
     async def close(self):
         """清理资源"""
@@ -73,7 +80,15 @@ class CredentialManager:
         self._initialized = False
         log.debug("Credential manager closed")
 
-    async def get_valid_credential(
+    async def get_valid_credential(self, mode="geminicli", model_name=None, excluded_credentials=None):
+        from src.antigravity_model_access import access_model
+        if mode == "antigravity" and access_model(model_name):
+            await self._ensure_initialized()
+            from src.antigravity_access_runtime import model_access_service
+            return await model_access_service.select(self, model_name, excluded_credentials)
+        return await self._get_valid_credential_unchecked(mode, model_name, excluded_credentials)
+
+    async def _get_valid_credential_unchecked(
         self,
         mode: str = "geminicli",
         model_name: Optional[str] = None,
@@ -143,6 +158,20 @@ class CredentialManager:
         # 重试次数用尽
         log.error(f"重试{max_retries}次后仍无可用凭证 (mode={mode}, model_name={model_name})")
         return None
+
+    async def model_access_generation_result(self, filename, admission, model, status):
+        from src.antigravity_model_access import access_model
+        target = access_model(model)
+        if target and admission and status in (200, 404):
+            backend = self._storage_adapter._backend
+            try:
+                return await backend.model_access_observe(filename, admission.get("model_access_snapshot"),
+                    model=target, success=status == 200,
+                    reason="generation_succeeded" if status == 200 else "generation_404")
+            except Exception:
+                log.warning("[ANTIGRAVITY] model access result persistence unavailable")
+                return False
+        return False
 
     async def quota_disable(self, filename, generation, expected_version=None):
         await self._ensure_initialized()

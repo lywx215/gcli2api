@@ -1937,7 +1937,15 @@ async def _fetch_quota_for_credential(filename: str, mode: str, *, origin="legac
         return {"success": False, "error": "凭证中没有 access_token"}
 
     if mode == "antigravity":
+        access_snapshot = await storage_adapter._backend.model_access_snapshot(filename)
         info = await fetch_quota_info(access_token)
+        if access_snapshot:
+            try:
+                await storage_adapter._backend.model_access_observe(filename, access_snapshot,
+                    info.get("models") if info.get("success") else None,
+                    reason=None if info.get("success") else "directory_query_failed")
+            except Exception:
+                log.warning("[ANTIGRAVITY] model access result persistence unavailable")
         info["_quota_snapshot"] = quota_snapshot
     else:
         if is_smart_429_protection_enabled():
@@ -2386,6 +2394,8 @@ def _antigravity_test_stats_model(requested_model, upstream_model):
 
 async def _finish_antigravity_test(storage, filename, model, admission, response, strict, requested_model=None):
     from src.antigravity_completion import validate_json
+    from src.antigravity_model_access import access_model
+    target = access_model(model)
     from src.router.model_api_errors import ModelApiErrorException
     from src.api.utils import parse_and_log_cooldown
     from src.diagnostics.antigravity import safe_error
@@ -2396,9 +2406,9 @@ async def _finish_antigravity_test(storage, filename, model, admission, response
         try:
             validate_json(response.content)
             valid = True
-        except ModelApiErrorException:
+        except ModelApiErrorException as exc:
             content.update(success=False, verified_reply=False, error="invalid_upstream_response")
-            status = 502
+            status = 404 if target and exc.error.status == 404 else 502
         if valid and strict:
             valid = _is_expected_antigravity_model_test_reply(_extract_antigravity_model_test_reply(response))
             content.update(success=valid, verified_reply=valid, expected_reply=ANTIGRAVITY_MODEL_TEST_EXPECTED_REPLY)
@@ -2409,12 +2419,22 @@ async def _finish_antigravity_test(storage, filename, model, admission, response
     elif strict and status == 429:
         content.update(success=False, verified_reply=False, expected_reply=ANTIGRAVITY_MODEL_TEST_EXPECTED_REPLY)
     cooldown = await parse_and_log_cooldown(response.text, mode="antigravity") if response.status_code in (429, 503) else None
+    if target and admission and (valid or status == 404):
+        try:
+            applied = await storage._backend.model_access_observe(filename, admission.get("model_access_snapshot"),
+                model=target, success=valid, reason="generation_succeeded" if valid else "generation_404")
+            content["model_access_update"] = {"status": "applied" if applied else "skipped"}
+            content["model_access_state"] = await storage._backend.model_access_public(filename)
+        except Exception:
+            content["model_access_update"] = {"status": "failed", "reason": "state_update_failed"}
     await storage._backend.quota_record_result(
-        filename, admission, model, valid, response.status_code, cooldown,
-        safe_error(response.status_code, response.text) if not valid else None,
+        filename, admission, model, valid, 404 if status == 404 else response.status_code, cooldown,
+        safe_error(404 if status == 404 else response.status_code, response.text) if not valid else None,
     )
     if strict:
         await record_logical_request(_antigravity_test_stats_model(requested_model, model), "antigravity", valid)
+    if status == 404:
+        content["status_code"] = 404
     content["message"] = "测试成功" if valid else "模型未通过响应验证" if response.status_code == 200 else "模型当前不可用"
     return JSONResponse(status_code=status, content=content)
 

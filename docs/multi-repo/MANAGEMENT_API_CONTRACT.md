@@ -4,6 +4,8 @@
 
 契约版本：`management-schema 1.4`
 
+2026-10-04 Antigravity Opus 5.5 增量能力：`antigravity.model_access.protection`，仅在独立权限状态存储已确认可用时声明。Management schema 与动作枚举保持不变，manager 无需配套动作。详见 [权限保护与迁移](../ANTIGRAVITY_MODEL_ACCESS.md)。
+
 2026-09-27 Antigravity 增量兼容说明：支持权威额度组准入的后端增加 capability
 `antigravity.quota.protection`。既有 `sync_cooldown` 在 Antigravity 模式下应用独立共享组及
 动态 168 小时异常拦截，返回的现有 `cooldown_sync` 白名单结构不变；Gemini CLI 分支不变。

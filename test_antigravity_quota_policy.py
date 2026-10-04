@@ -21,6 +21,9 @@ async def store(tmp_path, monkeypatch):
     manager = SQLiteManager()
     await manager.initialize()
     await manager.store_credential(NAME, {"access_token": "synthetic", "project_id": "synthetic"}, "antigravity")
+    from src.antigravity_model_access import MODELS
+    snapshot = await manager.model_access_snapshot(NAME)
+    await manager.model_access_observe(NAME, snapshot, MODELS)
     try:
         yield manager
     finally:

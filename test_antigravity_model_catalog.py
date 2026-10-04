@@ -25,6 +25,18 @@ from src.utils import normalize_antigravity_model_alias
 
 
 class _FakeCredentialManager:
+    model_access_storage_ready = True
+    def __init__(self):
+        from types import SimpleNamespace
+        self._storage_adapter = SimpleNamespace(_backend=self)
+        self.supported = set()
+    async def _get_or_create(self): return self
+    async def model_access_snapshot(self, filename): return {"synthetic": True}
+    async def model_access_observe(self, filename, snapshot, models=None, **kwargs):
+        from src.antigravity_model_access import MODELS
+        if models is not None:
+            self.supported = set(models).intersection(MODELS)
+    async def model_access_union(self): return self.supported
     async def get_valid_credential(self, mode="geminicli", model_name=None):
         return "fixture.json", {"access_token": "fixture-access-token"}
 

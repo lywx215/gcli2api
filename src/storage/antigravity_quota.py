@@ -52,7 +52,11 @@ def credential_version(value):
     return hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-class AntigravityQuotaMixin:
+from src.storage.antigravity_model_access import AntigravityModelAccessMixin, row_state as access_row_state
+from src.antigravity_model_access import access_model, eligible as access_eligible
+
+
+class AntigravityQuotaMixin(AntigravityModelAccessMixin):
     async def _quota_rows(self, filename=None):
         """Read-only selection/control snapshot; final admission is separate."""
         filename = os.path.basename(filename) if filename else None
@@ -103,7 +107,7 @@ class AntigravityQuotaMixin:
     async def _quota_atomic(self, filename, operation, *, validate=True, cas_fields=None):
         """operation is synchronous; locks are never held across upstream I/O."""
         filename = os.path.basename(filename)
-        fields = ("quota_group_states", "quota_credential_generation", "model_cooldowns", "cycle_stats", "last_cycle_stats",
+        fields = ("model_access_state", "quota_group_states", "quota_credential_generation", "model_cooldowns", "cycle_stats", "last_cycle_stats",
                   "success_count", "failure_count", "call_count", "last_success", "error_codes", "error_messages", "credential_data", "disabled", "user_email", "tier")
 
         def apply(raw):
@@ -283,7 +287,20 @@ class AntigravityQuotaMixin:
             version = credential_version(row.get("credential_data"))
             if expected_version is not None and version != expected_version:
                 return None
+            access_target = access_model(model)
+            if purpose == "business" and access_target:
+                if not self.model_access_storage_ready:
+                    return None
+                try:
+                    access = access_row_state(row)
+                    if not access_eligible(access, access_target):
+                        return None
+                except (ValueError, TypeError):
+                    return None
             admission = ticket(row, model, purpose, version)
+            if access_target:
+                admission["model_access_snapshot"] = {"generation": row["quota_credential_generation"],
+                    "version": version, "access": access_row_state(row)}
             state = row["quota_group_states"].get(admission["group"], {})
             until = get_antigravity_cooldown_until(row["model_cooldowns"], model)
             if model and (state.get("state") == "blocked_unknown" or (until and until > time.time())):
@@ -291,13 +308,23 @@ class AntigravityQuotaMixin:
             return admission
         return await self._quota_atomic(filename, operation, cas_fields=(
             "quota_credential_generation", "quota_group_states", "model_cooldowns",
-            "disabled", "permanent_disabled", "credential_data"))
+            "disabled", "permanent_disabled", "credential_data", "model_access_state"))
 
     async def get_next_available_credential(self, mode="geminicli", model_name=None, excluded_credentials=None):
         if mode != "antigravity":
             return await self._get_next_available_credential_legacy(mode=mode, model_name=model_name, excluded_credentials=excluded_credentials)
         candidates = await self._quota_rows()
         random.shuffle(candidates)
+        access_target = access_model(model_name)
+        if access_target:
+            if not self.model_access_storage_ready:
+                return None
+            def rank(raw):
+                try:
+                    return not access_eligible(access_row_state(raw), access_target)
+                except (ValueError, TypeError):
+                    return True
+            candidates.sort(key=rank)
         excluded = set(excluded_credentials or ())
         for raw in candidates:
             filename = raw["filename"]
@@ -310,6 +337,11 @@ class AntigravityQuotaMixin:
                     continue
             try:
                 row = _decode(raw)
+                if access_target:
+                    access = access_row_state(row)
+                    entry = access["models"].get(access_target, {})
+                    if not access_eligible(access, access_target) and entry.get("next_check_at", 0) > time.time():
+                        continue
                 group = group_for(model_name)
                 state = row["quota_group_states"].get(group, {})
                 until = get_antigravity_cooldown_until(row["model_cooldowns"], model_name)
@@ -335,7 +367,7 @@ class AntigravityQuotaMixin:
                 data["enable_credit"] = bool(row.get("enable_credit"))
                 data["_quota_generation"] = row["quota_credential_generation"]
                 return filename, data
-            except InvalidQuotaState:
+            except (InvalidQuotaState, ValueError, TypeError):
                 from log import log
                 log.warning("[ANTIGRAVITY] candidate skipped: invalid_quota_state")
         return None

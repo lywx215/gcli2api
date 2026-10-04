@@ -77,8 +77,8 @@ async def test_retired_opus_cards_probes_and_historical_stats(monkeypatch):
         pytest.skip("Node runtime unavailable")
     fixtures = await _backend_quota_fixtures(monkeypatch)
     source = (Path(__file__).parent / "front/common.js").read_text(encoding="utf-8")
-    quota_start = source.index("async function _toggleQuotaDetails(")
-    quota_end = source.index("\nasync function ", quota_start + 1)
+    quota_start = source.index("function modelAccessSummary(")
+    quota_end = source.index("\nasync function ", source.index("async function _toggleQuotaDetails(") + 1)
     stats_start = source.index("const MODEL_FAMILY_DISPLAY =")
     stats_end = source.index("async function refreshTodayStats(", stats_start)
     helpers_start = source.index("function isRetiredAntigravityOpusModel(")
@@ -129,6 +129,21 @@ global.setTimeout = (callback) => callback();
     async function render(models, mode = 'antigravity') {
         return renderResponse({success: true, models}, mode);
     }
+    const access = Object.fromEntries(['low', 'medium', 'high'].map(tier => [`claude-opus-5-5-${tier}`, {
+        state: 'unavailable', reason: 'directory_missing', checked_at: 1791082800,
+        next_check_at: 1791126000, blocked_until: 1791169200
+    }]));
+    const accessEmpty = await renderResponse({success: true, models: {}, model_access_state: access});
+    assert.match(accessEmpty, /data-model-access/);
+    assert.match(accessEmpty, /Low|Medium|High/);
+    assert.match(accessEmpty, /最近检查|下次复查|暂停期限/);
+    assert.match(accessEmpty, /到期仍需目录确认/);
+    assert.doesNotMatch(accessEmpty, /onclick="testModelQuota/);
+    const failedAccess = Object.fromEntries(Object.entries(access).map(([id, value]) => [id, {...value, reason: 'directory_query_failed'}]));
+    const accessFailed = await renderResponse({success: false, error: 'query failed', model_access_state: failedAccess}, 'antigravity', false);
+    assert.match(accessFailed, /data-model-access/);
+    assert.match(accessFailed, /目录查询失败，保留原限制/);
+    assert.doesNotMatch(accessFailed, /已恢复/);
     const live = backend.live.models;
     const cardStart = '<div style="background: white; border-left:';
     function modelCards(html) {

@@ -113,6 +113,11 @@ class PSQLManager(AntigravityQuotaMixin):
                 await self._load_config_cache()
 
                 self._initialized = True
+                try:
+                    await self.model_access_initialize()
+                except Exception:
+                    self.model_access_storage_ready = False
+                    log.warning("[ANTIGRAVITY] model access storage unavailable")
                 log.info("PostgreSQL storage initialized")
 
             except Exception as e:
@@ -183,6 +188,7 @@ class PSQLManager(AntigravityQuotaMixin):
                 model_cooldowns TEXT DEFAULT '{}',
                 quota_group_states TEXT DEFAULT '{}',
                 quota_credential_generation TEXT,
+                model_access_state TEXT DEFAULT '{}',
                 tier TEXT DEFAULT 'pro',
                 enable_credit INTEGER DEFAULT 0,
 
@@ -331,6 +337,7 @@ class PSQLManager(AntigravityQuotaMixin):
                 ("model_cooldowns", "TEXT DEFAULT '{}'"),
                 ("quota_group_states", "TEXT DEFAULT '{}'"),
                 ("quota_credential_generation", "TEXT"),
+                ("model_access_state", "TEXT DEFAULT '{}'"),
                 ("tier", "TEXT DEFAULT 'pro'"),
                 ("enable_credit", "INTEGER DEFAULT 0"),
                 ("rotation_order", "INTEGER DEFAULT 0"),

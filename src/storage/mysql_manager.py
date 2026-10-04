@@ -142,6 +142,11 @@ class MySQLManager(AntigravityQuotaMixin):
                 await self._load_config_cache()
 
                 self._initialized = True
+                try:
+                    await self.model_access_initialize()
+                except Exception:
+                    self.model_access_storage_ready = False
+                    log.warning("[ANTIGRAVITY] model access storage unavailable")
                 log.info(
                     f"MySQL storage initialized "
                     f"(host={conn_params['host']}:{conn_params['port']}, "
@@ -227,6 +232,7 @@ class MySQLManager(AntigravityQuotaMixin):
 
                         -- 模型级 CD 支持 (JSON)
                         model_cooldowns TEXT,
+                        model_access_state LONGTEXT,
 
                         -- tier 等级 (free/pro/ultra)
                         tier VARCHAR(32) DEFAULT 'pro',
@@ -311,9 +317,14 @@ class MySQLManager(AntigravityQuotaMixin):
             async with conn.cursor() as cur:
                 await cur.execute("SHOW COLUMNS FROM gcli_antigravity_credentials")
                 columns = {row[0] for row in await cur.fetchall()}
-                for name, definition in (("quota_group_states", "LONGTEXT"), ("quota_credential_generation", "VARCHAR(32)")):
+                for name, definition in (("quota_group_states", "LONGTEXT"), ("quota_credential_generation", "VARCHAR(32)"), ("model_access_state", "LONGTEXT")):
                     if name not in columns:
-                        await cur.execute(f"ALTER TABLE gcli_antigravity_credentials ADD COLUMN {name} {definition}")
+                        try:
+                            await cur.execute(f"ALTER TABLE gcli_antigravity_credentials ADD COLUMN {name} {definition}")
+                        except Exception as exc:
+                            # Another worker may have completed the same additive migration.
+                            if not exc.args or exc.args[0] != 1060:
+                                raise
             await conn.commit()
 
     async def _load_logical_stats_enabled_at(self) -> float:

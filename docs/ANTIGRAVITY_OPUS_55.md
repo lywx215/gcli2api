@@ -1,5 +1,7 @@
 # Antigravity Claude Opus 5.5
 
+当前权限保护说明见 [按凭证权限保护](ANTIGRAVITY_MODEL_ACCESS.md)（2026-10-04）；以下保留首次模型切换及后续部署证据。
+
 更新日期：2026-10-03。范围仅为 Antigravity Opus 4.6 切换到 Opus 5.5；
 不恢复 Gemini CLI 或已取消的统一管理开发，不同时适配 Sonnet 5.5。
 

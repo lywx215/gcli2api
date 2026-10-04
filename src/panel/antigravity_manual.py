@@ -4,6 +4,8 @@ Legacy and management callers opt out by default in creds.py. No credentials or
 raw upstream errors may leave this module in responses or diagnostic messages.
 """
 import asyncio
+from src.antigravity_model_access import access_model
+from src.storage.antigravity_model_access import row_state as access_row_state
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
@@ -83,6 +85,10 @@ async def prepare(filename, events):
         # for this request; never persist it without an identity fence.
     if not (data.get("access_token") or data.get("token")):
         raise HTTPException(400)
+    access_snapshot = await storage._backend.model_access_snapshot(filename)
+    snapshot["access"] = (access_snapshot["access"] if access_snapshot and
+        access_snapshot["generation"] == snapshot["generation"] and access_snapshot["version"] == snapshot["version"]
+        else access_row_state(snapshot["raw"]))
     return storage, snapshot, data
 
 
@@ -155,10 +161,14 @@ async def test(filename, model=None):
             valid = isinstance(payload, dict) and error_from_retirement_payload(payload) is None
             if strict:
                 valid = valid and p._is_expected_antigravity_model_test_reply(p._extract_antigravity_model_test_reply(response))
-        except (ModelApiErrorException, ValueError, TypeError):
+        except ModelApiErrorException as exc:
+            valid = False
+            if access_model(upstream_model) and exc.error.status == 404:
+                status = 404
+        except (ValueError, TypeError):
             valid = False
     message = "Test succeeded." if valid else "Invalid upstream response." if status == 200 else error_message(status)
-    result = {"filename": filename, "success": valid, "status_code": status, "upstream_status": status,
+    result = {"filename": filename, "success": valid, "status_code": status, "upstream_status": response.status_code,
               "response_source": "google", "phase": "generation", "phases": events,
               "verified_reply": valid if strict else None, "message": message}
     if not valid:
@@ -170,6 +180,17 @@ async def test(filename, model=None):
     try:
         cooldown = await p.parse_and_log_cooldown(response.text, mode="antigravity") if status in (429, 503) else None
         ban = status != 200 and await p.check_should_auto_ban(status)
+        target = access_model(upstream_model)
+        if target and (valid or status == 404):
+            if status == 404:
+                ban = False
+            try:
+                applied = await storage._backend.model_access_observe(filename, snapshot,
+                    model=target, success=valid, reason="generation_succeeded" if valid else "generation_404")
+                result["model_access_update"] = {"status": "applied" if applied else "skipped"}
+                result["model_access_state"] = await storage._backend.model_access_public(filename)
+            except Exception:
+                result["model_access_update"] = failed_update()
         result["state_update"] = await storage._backend.manual_record_result(
             filename, snapshot, upstream_model, valid, status=status, error=message,
             cooldown=cooldown, auto_ban=ban)
@@ -190,9 +211,24 @@ async def quota(filename, *, sync=False):
         storage, snapshot, data = await prepare(filename, events)
         result = await p.fetch_quota_info(data.get("access_token") or data.get("token"), origin="manual")
     except Exception as exc:
-        return {**local_result(exc, events), "filename": filename}
+        result = {**local_result(exc, events), "filename": filename}
+        try:
+            storage = await p.get_storage_adapter()
+            result["model_access_state"] = await storage._backend.model_access_public(filename)
+        except Exception:
+            pass
+        return result
     result.update(filename=filename, phase="quota", phases=events)
     result["status_code"] = result.get("upstream_status") or 502
+    if getattr(storage._backend, "model_access_storage_ready", False):
+        try:
+            access_applied = await storage._backend.model_access_observe(filename, snapshot,
+                result.get("models") if result.get("success") else None,
+                reason=None if result.get("success") else "directory_query_failed")
+            result["model_access_state"] = await storage._backend.model_access_public(filename)
+            result["model_access_update"] = {"status": "applied" if access_applied else "skipped"}
+        except Exception:
+            result["model_access_update"] = failed_update()
     if not sync:
         result["_manual_snapshot"] = snapshot
         return result
@@ -208,6 +244,8 @@ async def quota(filename, *, sync=False):
                 result.update(applied)
         except Exception:
             result["state_update"] = {"quota": failed_update()}
+    if result.get("model_access_update"):
+        result.setdefault("state_update", {})["model_access"] = result["model_access_update"]
     result.setdefault("cleared", [])
     result.setdefault("added", [])
     return result

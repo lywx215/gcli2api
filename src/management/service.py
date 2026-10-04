@@ -240,6 +240,10 @@ class ManagementService:
         capabilities: list[str] = []
         if all(callable(getattr(backend, name, None)) for name in ("quota_admit", "quota_sync", "quota_release", "quota_snapshot")):
             capabilities.append("antigravity.quota.protection")
+        if (getattr(backend, "model_access_storage_ready", False) is True and
+                all(callable(getattr(backend, name, None)) for name in
+                    ("model_access_snapshot", "model_access_claim", "model_access_observe", "model_access_union", "model_access_due"))):
+            capabilities.append("antigravity.model_access.protection")
         if embed_capability:
             capabilities.append(embed_capability)
         if hasattr(backend, "get_credentials_summary"):

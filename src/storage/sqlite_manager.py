@@ -119,6 +119,7 @@ class SQLiteManager(AntigravityQuotaMixin):
             ("model_cooldowns", "TEXT DEFAULT '{}'"),
                 ("quota_group_states", "TEXT DEFAULT '{}'"),
                 ("quota_credential_generation", "TEXT"),
+                ("model_access_state", "TEXT DEFAULT '{}'"),
             ("tier", "TEXT DEFAULT 'pro'"),
             ("enable_credit", "INTEGER DEFAULT 0"),
             ("rotation_order", "INTEGER DEFAULT 0"),
@@ -213,6 +214,11 @@ class SQLiteManager(AntigravityQuotaMixin):
                 await self._load_config_cache()
 
                 self._initialized = True
+                try:
+                    await self.model_access_initialize()
+                except Exception:
+                    self.model_access_storage_ready = False
+                    log.warning("[ANTIGRAVITY] model access storage unavailable")
                 log.info(f"SQLite storage initialized at {self._db_path}")
 
                 # 启动统计刷写后台任务
@@ -334,6 +340,7 @@ class SQLiteManager(AntigravityQuotaMixin):
                 model_cooldowns TEXT DEFAULT '{}',
                 quota_group_states TEXT DEFAULT '{}',
                 quota_credential_generation TEXT,
+                model_access_state TEXT DEFAULT '{}',
 
                 -- tier 状态 (默认为 pro)
                 tier TEXT DEFAULT 'pro',

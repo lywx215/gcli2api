@@ -128,6 +128,11 @@ class MongoDBManager(AntigravityQuotaMixin):
             await self._load_config_cache()
 
             self._initialized = True
+            try:
+                await self.model_access_initialize()
+            except Exception:
+                self.model_access_storage_ready = False
+                log.warning("[ANTIGRAVITY] model access storage unavailable")
             log.info(f"MongoDB storage initialized (database: {database_name})")
 
             # 尝试初始化 Redis（可选）

@@ -2443,6 +2443,25 @@ async function toggleGeminicliQuotaDetails(pathId) {
     return _toggleQuotaDetails(pathId, 'geminicli');
 }
 
+function modelAccessSummary(data) {
+    if (!data.model_access_state) return '';
+    const timeLabel = value => Number.isFinite(value) && value > 0
+        ? new Date(value * 1000).toLocaleString() : '未知';
+    const labels = {supported: '目录已支持', unavailable: '该档位暂不可用', unknown: '权限待确认'};
+    const reasons = {generation_404: '生成返回 404', directory_missing: '目录未返回该档位',
+        directory_query_failed: '目录查询失败，保留原限制', directory_timeout: '目录查询超时，保留原限制'};
+    return `<div data-model-access style="padding:10px;margin-bottom:10px;border:1px solid #ccc;border-radius:4px;overflow-wrap:anywhere;">
+        <strong>Claude Opus 5.5 权限</strong><div>目录支持有效期 12 小时；权限与额度分别判断。重新查询额度可立即复查权限。</div>
+        ${['low', 'medium', 'high'].map(tier => {
+            const entry = data.model_access_state[`claude-opus-5-5-${tier}`] || {};
+            const expired = entry.state === 'supported' && (!entry.checked_at || entry.checked_at * 1000 + 43200000 <= Date.now());
+            return `<div style="padding-top:8px;"><strong>${tier[0].toUpperCase() + tier.slice(1)}</strong> · ${expired ? '目录支持已过期，待复查' : labels[entry.state] || '权限待确认'}
+                ${reasons[entry.reason] ? ` · ${reasons[entry.reason]}` : ''}<br>
+                最近检查：${timeLabel(entry.last_attempt_at || entry.checked_at)}<br>下次复查：${timeLabel(entry.next_check_at)}
+                ${entry.blocked_until ? `<br>暂停期限：${timeLabel(entry.blocked_until)}（到期仍需目录确认）` : ''}</div>`;
+        }).join('')}</div>`;
+}
+
 async function _toggleQuotaDetails(pathId, mode) {
     const quotaDetails = document.getElementById('quota-' + pathId);
     if (!quotaDetails) return;
@@ -2664,6 +2683,7 @@ async function _toggleQuotaDetails(pathId, mode) {
                                 contentDiv.insertAdjacentHTML('afterbegin', `<div data-opus-catalog-notice style="margin-bottom:10px;padding:10px;border-radius:4px;background:#e3f2fd;color:#0d47a1;font-size:12px;line-height:1.6;">${notice}</div>`);
                             }
                         }
+                        contentDiv.insertAdjacentHTML('afterbegin', modelAccessSummary(data));
                         contentDiv.insertAdjacentHTML('afterbegin', `<pre style="white-space:pre-wrap">${escapeHtml(manualResultSummary(data))}</pre>`);
                     }
                     showStatus('✅ 成功加载额度信息', manualUpdateIncomplete(data) ? 'info' : 'success');
@@ -2732,7 +2752,10 @@ async function _toggleQuotaDetails(pathId, mode) {
                     }
 
                     contentDiv.innerHTML = errorDisplayHTML;
-                    if (mode === 'antigravity') contentDiv.insertAdjacentHTML('afterbegin', `<pre>${escapeHtml(manualResultSummary(data))}</pre>`);
+                    if (mode === 'antigravity') {
+                        contentDiv.insertAdjacentHTML('afterbegin', modelAccessSummary(data));
+                        contentDiv.insertAdjacentHTML('afterbegin', `<pre>${escapeHtml(manualResultSummary(data))}</pre>`);
+                    }
                     showStatus(`❌ 获取额度信息失败`, 'error');
                 }
             } catch (error) {

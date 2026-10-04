@@ -4,6 +4,7 @@ Antigravity API Client - Handles communication with Google's Antigravity API
 """
 
 import asyncio
+from src.antigravity_model_access import access_model
 import copy
 import hashlib
 import json
@@ -569,6 +570,7 @@ async def _stream_request(
             success_recorded = False  # 标记是否已记录成功
             need_retry = False  # 标记是否需要重试
             received_data_event = False
+            access_retry = False
             completion = Completion()
             pending_terminal = []
             pending_size = 0
@@ -613,6 +615,21 @@ async def _stream_request(
                                 error_body = ""
 
                             emit_error(diagnostic_attempt, model_name, status_code, error_body, chunk.headers, admission)
+
+                            if status_code == 404 and access_model(model_name):
+                                await credential_manager.model_access_generation_result(current_file, admission, model_name, 404)
+                                await record_api_call_error(credential_manager, current_file, 404, mode="antigravity",
+                                    model_name=model_name, error_message="", admission=admission)
+                                excluded_credentials.add(current_file)
+                                if not (content_yielded or completion.candidates or completion.blocked) and attempt < max_retries:
+                                    need_retry = True
+                                    access_retry = True
+                                    break
+                                if not content_yielded:
+                                    yield attach_local_unavailable(build_error_response("当前无可用凭证", 503))
+                                else:
+                                    yield chunk
+                                return
 
                             # 如果错误码是429、503或者在禁用码当中，做好记录后进行重试
                             if _is_retryable_status(status_code, DISABLE_ERROR_CODES):
@@ -723,7 +740,7 @@ async def _stream_request(
                 if need_retry:
                     log.info(f"[ANTIGRAVITY STREAM] 重试请求 (attempt {attempt + 2}/{max_retries + 1})...")
 
-                    retry_wait = smart_retry_delay(attempt, retry_interval) if retry_config.get("smart_429") else retry_interval
+                    retry_wait = 0 if access_retry else (smart_retry_delay(attempt, retry_interval) if retry_config.get("smart_429") else retry_interval)
                     emit_retry(diagnostic_attempt, model_name, True, retry_wait)
                     previous_file = current_file
                     switched, next_cred_task = await _switch_credential_for_retry(
@@ -745,6 +762,17 @@ async def _stream_request(
                     continue  # 重试
 
             except ModelApiErrorException as exc:
+                if exc.error.origin == ErrorOrigin.UPSTREAM and exc.error.status == 404 and access_model(model_name):
+                    await credential_manager.model_access_generation_result(current_file, admission, model_name, 404)
+                    await record_api_call_error(credential_manager, current_file, 404, mode="antigravity",
+                        model_name=model_name, error_message="", admission=admission)
+                    excluded_credentials.add(current_file)
+                    if content_yielded or completion.candidates or completion.blocked:
+                        raise
+                    if attempt < max_retries and await refresh_credential_fast():
+                        continue
+                    yield attach_local_unavailable(build_error_response("当前无可用凭证", 503))
+                    return
                 if exc.error.origin == ErrorOrigin.UPSTREAM:
                     await record_api_call_error(credential_manager, current_file, 502, mode="antigravity",
                                                 model_name=model_name, error_message="", admission=admission)
@@ -969,6 +997,14 @@ async def _non_stream_request(
                         pass
 
                     emit_error(diagnostic_attempt, model_name, status_code, error_text, response.headers, admission)
+                    if status_code == 404 and access_model(model_name):
+                        await credential_manager.model_access_generation_result(current_file, admission, model_name, 404)
+                        await record_api_call_error(credential_manager, current_file, 404, mode="antigravity",
+                            model_name=model_name, error_message="", admission=admission)
+                        excluded_credentials.add(current_file)
+                        if attempt < max_retries and await refresh_credential_fast():
+                            continue
+                        return attach_local_unavailable(build_error_response("当前无可用凭证", 503))
                     if _is_retryable_status(status_code, DISABLE_ERROR_CODES):
                         log.warning("[ANTIGRAVITY] upstream response observed; see structured diagnostics")
 
@@ -1063,6 +1099,14 @@ async def _non_stream_request(
                     continue  # 重试
 
             except ModelApiErrorException as exc:
+                if exc.error.origin == ErrorOrigin.UPSTREAM and exc.error.status == 404 and access_model(model_name):
+                    await credential_manager.model_access_generation_result(current_file, admission, model_name, 404)
+                    await record_api_call_error(credential_manager, current_file, 404, mode="antigravity",
+                        model_name=model_name, error_message="", admission=admission)
+                    excluded_credentials.add(current_file)
+                    if attempt < max_retries and await refresh_credential_fast():
+                        continue
+                    return attach_local_unavailable(build_error_response("当前无可用凭证", 503))
                 if exc.error.origin == ErrorOrigin.UPSTREAM:
                     await record_api_call_error(credential_manager, current_file, 502, mode="antigravity",
                                                 model_name=model_name, error_message="", admission=admission)
@@ -1132,75 +1176,37 @@ async def non_stream_request(
 # ==================== 模型和配额查询 ====================
 
 async def fetch_available_models() -> List[Dict[str, Any]]:
-    """
-    获取可用模型列表，返回符合 OpenAI API 规范的格式
-
-    Returns:
-        模型列表，格式为字典列表（用于兼容现有代码）
-
-    Raises:
-        返回空列表如果获取失败
-    """
-    # 获取凭证管理器和可用凭证
-    cred_result = await credential_manager.get_valid_credential(mode="antigravity")
-    if not cred_result:
-        log.error("[ANTIGRAVITY] No valid credentials available for fetching models")
-        return []
-
-    current_file, credential_data = cred_result
-    access_token = credential_data.get("access_token") or credential_data.get("token")
-
-    if not access_token:
-        log.error(f"[ANTIGRAVITY] No access token in credential: [credential]")
-        return []
-
-    # 构建请求头
-    headers = build_antigravity_headers(access_token, model_name="agent")
-
-    try:
-        # 使用 POST 请求获取模型列表
-        antigravity_url = await get_antigravity_api_url()
-
-        response = await post_async(
-            url=f"{antigravity_url}/v1internal:fetchAvailableModels",
-            json={},  # 空的请求体
-            headers=headers
-        )
-
-        if response.status_code == 200:
-            data = response.json()
-            log.debug("[ANTIGRAVITY] upstream response observed; see structured diagnostics")
-
-            # 转换为 OpenAI 格式的模型列表，使用 Model 类
-            model_list = []
-            current_timestamp = int(datetime.now(timezone.utc).timestamp())
-
-            if 'models' in data and isinstance(data['models'], dict):
-                # 只广告官方终端可选择且当前凭证实际可用的模型。原始服务
-                # 模型仍由额度接口展示，也仍可通过请求路由直接使用。
-                public_model_ids = select_public_model_ids(data['models'].keys())
-                for model_id in public_model_ids:
-                    model = Model(
-                        id=model_id,
-                        object='model',
-                        created=current_timestamp,
-                        owned_by='google'
-                    )
-                    model_list.append(model_to_dict(model))
-            log.info(f"[ANTIGRAVITY] Fetched {len(model_list)} available models")
-            return model_list
-        else:
-            log.error("[ANTIGRAVITY] upstream response observed; see structured diagnostics")
-            return []
-
-    except Exception as e:
-        import traceback
-        log.error(f"[ANTIGRAVITY] Failed to fetch models: {type(e).__name__}")
-        log.error("[ANTIGRAVITY] upstream response observed; see structured diagnostics")
-        return []
+    """Opus advertisement is the enabled credential pool's confirmed union."""
+    manager = await credential_manager._get_or_create()
+    backend = manager._storage_adapter._backend
+    ready = getattr(backend, "model_access_storage_ready", False)
+    other_ids = []
+    cred_result = await manager.get_valid_credential(mode="antigravity")
+    if cred_result:
+        filename, data = cred_result
+        snapshot = await backend.model_access_snapshot(filename) if ready else None
+        result = await fetch_quota_info(data.get("access_token") or data.get("token"))
+        if result.get("success"):
+            other_ids = [name for name in result["models"] if not access_model(name)]
+            if snapshot:
+                await backend.model_access_observe(filename, snapshot, result["models"])
+        elif snapshot:
+            await backend.model_access_observe(filename, snapshot, reason="directory_query_failed")
+    opus_ids = await backend.model_access_union() if ready else set()
+    current_timestamp = int(datetime.now(timezone.utc).timestamp())
+    return [model_to_dict(Model(id=model_id, object="model", created=current_timestamp, owned_by="google"))
+            for model_id in select_public_model_ids([*other_ids, *opus_ids])]
 
 
-async def fetch_quota_info(access_token: str, *, origin="legacy") -> Dict[str, Any]:
+async def fetch_quota_info(access_token: str, *, origin="legacy", timeout=30.0, slot_held=False) -> Dict[str, Any]:
+    from src.antigravity_access_runtime import model_access_service
+    if slot_held:
+        return await _fetch_quota_info(access_token, origin=origin, timeout=timeout)
+    async with model_access_service._slots:
+        return await _fetch_quota_info(access_token, origin=origin, timeout=timeout)
+
+
+async def _fetch_quota_info(access_token: str, *, origin="legacy", timeout=30.0) -> Dict[str, Any]:
     """Read quota only; preserve missing values and the observation clock."""
     from datetime import timedelta
     from src.antigravity_quota import fraction, rolling_week, timestamp
@@ -1210,7 +1216,7 @@ async def fetch_quota_info(access_token: str, *, origin="legacy") -> Dict[str, A
         antigravity_url = await get_antigravity_api_url()
         sent_at = time.time()
         response = await post_async(
-            url=f"{antigravity_url}/v1internal:fetchAvailableModels", json={}, headers=headers, timeout=30.0
+            url=f"{antigravity_url}/v1internal:fetchAvailableModels", json={}, headers=headers, timeout=timeout
         )
         observation = {"sentAt": sent_at, "receivedAt": time.time(), "serverDate": response.headers.get("date")}
         if origin == "manual":
@@ -1221,10 +1227,9 @@ async def fetch_quota_info(access_token: str, *, origin="legacy") -> Dict[str, A
                 return {"success": False, "error": error_message(response.status_code), **metadata}
             return {"success": False, "error": f"API返回错误: {response.status_code}"}
         data = response.json()
-        if origin == "manual":
-            from src.router.model_api_errors import error_from_model_payload
-            if not isinstance(data, dict) or error_from_model_payload(data) is not None or "models" not in data:
-                return {"success": False, "error": "Invalid upstream response.", **metadata}
+        from src.router.model_api_errors import error_from_model_payload
+        if not isinstance(data, dict) or error_from_model_payload(data) is not None or "models" not in data:
+            return {"success": False, "error": "Invalid upstream response.", **metadata}
         models = data.get("models", {})
         if not isinstance(models, dict):
             return {"success": False, "error": "Invalid upstream response." if origin == "manual" else "invalid_quota_response", **metadata}
