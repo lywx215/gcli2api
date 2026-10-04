@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="gcli-embed-policy" content="__GCLI_EMBED_POLICY__">
+    <title>模型路由 · GCLI2API</title>
+    <link rel="stylesheet" href="./front/model_routing.css?v=__GCLI2API_ASSET_VERSION__">
+    <script defer src="./front/common.js?v=__GCLI2API_ASSET_VERSION__"></script>
+    <script defer src="./front/model_routing.js?v=__GCLI2API_ASSET_VERSION__"></script>
+</head>
+<body data-page="model-routing">
+    <main class="routing-shell">
+        <header class="page-heading">
+            <div><p class="eyebrow">GCLI2API 控制面板</p><h1>模型路由</h1></div>
+            <a id="backToPanel" href="./#config">返回控制面板</a>
+        </header>
+        <p id="routingStatus" class="status" role="status" aria-live="polite"></p>
+        <section id="routingLogin" class="card login-card">
+            <h2>登录控制面板</h2>
+            <p>使用现有控制面板访问密码。</p>
+            <form id="routingLoginForm">
+                <label for="routingPassword">访问密码</label>
+                <input id="routingPassword" type="password" autocomplete="current-password" required>
+                <button id="routingLoginButton" type="submit" class="primary">登录</button>
+            </form>
+        </section>
+        <section id="routingEditor" hidden>
+            <div class="editor-heading">
+                <p>为两个渠道设置公开名称。保存会一次提交全部路由；原名保护始终启用。</p>
+                <button id="routingLogout" type="button" class="quiet">退出登录</button>
+            </div>
+            <div class="routing-layout">
+                <section class="card routes-card" aria-label="模型路由草稿">
+                    <div class="channel-tabs" role="tablist" aria-label="渠道">
+                        <button id="tab-geminicli" type="button" role="tab" aria-controls="routePanel" aria-selected="true" data-channel="geminicli">Gemini CLI <span id="errors-geminicli" class="error-count" hidden></span></button>
+                        <button id="tab-antigravity" type="button" role="tab" aria-controls="routePanel" aria-selected="false" data-channel="antigravity">Antigravity <span id="errors-antigravity" class="error-count" hidden></span></button>
+                    </div>
+                    <div id="routePanel" role="tabpanel" aria-labelledby="tab-geminicli">
+                        <div class="table-heading"><h2 id="channelTitle">Gemini CLI 路由</h2><button id="addRoute" type="button">＋ 新增路由</button></div>
+                        <div id="validationSummary" class="validation-summary" role="alert" tabindex="-1" hidden></div>
+                        <p id="emptyRoutes" class="empty-state">该渠道尚无路由，现有模型名称保持原有行为。</p>
+                        <div class="route-columns" aria-hidden="true"><span>公开名称</span><span>目标名称</span><span>启用</span><span>操作</span></div>
+                        <div id="routeRows"></div>
+                    </div>
+                    <div class="save-bar">
+                        <span id="draftState" aria-live="polite">未修改</span>
+                        <div class="save-actions"><button id="reloadRoutes" type="button">重新加载</button><button id="saveRoutes" type="button" class="primary" disabled>保存全部路由</button></div>
+                    </div>
+                    <button id="repairRoutes" type="button" class="repair-button" hidden>以空表修复配置</button>
+                </section>
+                <aside class="card example-card" aria-label="当前渠道示例">
+                    <p class="eyebrow">请求与响应身份</p>
+                    <h2 id="exampleTitle">Gemini CLI 示例</h2>
+                    <p>配置公开名称 <code>public-alpha</code> 后：</p>
+                    <pre id="routingExample"></pre>
+                    <p id="channelHint"></p>
+                    <p class="muted">响应身份保留客户端完整请求名称。工具与正文数据保持原样；目标名称仅在此管理页面显示。</p>
+                    <p class="muted">名称区分大小写，同渠道公开名称唯一。目标是否有效由保存时的完整校验确定。</p>
+                </aside>
+            </div>
+        </section>
+    </main>
+    <dialog id="discardDialog" aria-labelledby="discardTitle" aria-describedby="discardMessage">
+        <form method="dialog">
+            <h2 id="discardTitle">确认丢弃草稿</h2>
+            <p id="discardMessage"></p>
+            <div class="dialog-actions">
+                <button id="cancelDiscard" type="submit" value="cancel" autofocus>取消，保留草稿</button>
+                <button type="submit" value="discard" class="primary">确认丢弃</button>
+            </div>
+        </form>
+    </dialog>
+</body>
+</html>

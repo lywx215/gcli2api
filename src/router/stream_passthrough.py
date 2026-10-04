@@ -109,13 +109,35 @@ async def build_streaming_response_or_error(
             media_type=media_type,
         )
 
+    outcome_recorded = False
+    source = prepend_async_item(first_item, iterator)
+    source_started = False
+    source_closed = False
+
+    async def close_source():
+        nonlocal source_closed
+        if source_closed:
+            return
+        source_closed = True
+        target = source if source_started else iterator
+        close = getattr(target, "aclose", None)
+        if close is not None:
+            await close()
+
+    async def count_once(success):
+        nonlocal outcome_recorded
+        if not outcome_recorded:
+            outcome_recorded = True
+            await record_logical_request(model_name, mode, success)
+
     async def tracked_iterator():
+        nonlocal source_started
         has_body = False
         saw_data_event = False
         terminal_error = False
         completed = False
-        source = prepend_async_item(first_item, iterator)
         try:
+            source_started = True
             async for item in source:
                 if protected:
                     item_has_data, item_is_error = _protected_item_state(item)
@@ -150,16 +172,17 @@ async def build_streaming_response_or_error(
             terminal_error = True
             raise
         finally:
-            await source.aclose()
+            await close_source()
             if completed or terminal_error:
-                await record_logical_request(
-                    model_name, mode, completed and has_body and not terminal_error
-                )
+                await count_once(completed and has_body and not terminal_error)
 
-    return StreamingResponse(
+    response = StreamingResponse(
         tracked_iterator(),
         media_type=media_type,
     )
+    response._model_api_stream_failure = lambda: count_once(False)
+    response._model_api_stream_resource_close = close_source
+    return response
 
 
 async def _antigravity_response(iterator, media_type, model_name, protocol, non_stream, protected):
@@ -264,4 +287,7 @@ async def _antigravity_response(iterator, media_type, model_name, protocol, non_
                 # tracked() starts and its own finally becomes active.
                 await close()
 
-    return ClosingStreamingResponse(tracked(), media_type=media_type)
+    response = ClosingStreamingResponse(tracked(), media_type=media_type)
+    response._model_api_stream_failure = lambda: count(False)
+    response._model_api_stream_resource_close = close
+    return response

@@ -1,0 +1,35 @@
+{
+  "task_id": "MR00",
+  "window": "I",
+  "base_sha": "170d989f545218920bc84794472a0f234490694f",
+  "contract_version": "routing-execution-1",
+  "status": "passed",
+  "authorization": {
+    "automatic_current_run": true,
+    "limited_cli_routing_only": true,
+    "latest_master": true,
+    "worker_model": "gpt-6.1-sol",
+    "reasoning": "ultra",
+    "final_claude_review": "requested_after_local_validation",
+    "live_models": false,
+    "production_data": false,
+    "commit_push_deploy": false
+  },
+  "master_check": "git ls-remote --exit-code origin refs/heads/master",
+  "changed_files": ["src/model_routing/__init__.py", "src/model_routing/types.py", "test_model_routing_contracts.py", "docs/model-routing/CONTRACTS.md", "docs/model-routing/manifest.json"],
+  "python": "3.12.14",
+  "actual_test_commands": [
+    "python -m pytest -q test_model_routing_contracts.py tests/test_sse_events.py tests/test_model_retirement.py tests/test_model_api_errors.py tests/test_model_api_transport_errors.py tests/test_model_api_error_matrix.py test_antigravity_stream_collection.py test_antigravity_stream_replay.py test_antigravity_timeouts.py test_antigravity_completion_policy.py test_antigravity_cycle_settlement.py test_antigravity_model_catalog.py test_antigravity_request_compat.py test_logical_request_stats.py"
+  ],
+  "results": {"passed": 584, "failed": 0, "warnings": 6, "duration_seconds": 11.11},
+  "mock_dependencies": ["upstream in-process responses/generators and ASGI transport in existing safety tests", "temporary isolated credentials directory", "cleared remote backend variables and external URLs pointed to closed loopback"],
+  "unverified": ["remote backend live integration", "actual Google/OAuth/model calls prohibited", "browser UI not built yet", "complete request-profile proofs delegated to R"],
+  "known_issues": ["existing Pydantic and Starlette deprecation warnings"],
+  "worktrees": {
+    "I": "C:/Users/lywx2/.codex/worktrees/model-routing-integration/gcli2api",
+    "R": "C:/Users/lywx2/.codex/worktrees/b156/gcli2api",
+    "P": "C:/Users/lywx2/.codex/worktrees/65fc/gcli2api",
+    "S": "C:/Users/lywx2/.codex/worktrees/dc58/gcli2api"
+  },
+  "next_gate": ["MR01", "MR04_typed_mock_preparation", "MR07"]
+}

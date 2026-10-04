@@ -1,0 +1,111 @@
+{
+  "synthetic_data_only": true,
+  "production_evidence": false,
+  "backend": "Windows SQLite",
+  "python": "3.12.14",
+  "command": "python -m src.model_routing.preflight",
+  "cases": [
+    {
+      "case": "valid_empty_table",
+      "exit_code": 0,
+      "report": {
+        "backend_identity_digest": "f0f26ab439ae8d4a7ff08f808de088873d97196739070a04c22bbba29eb844d6",
+        "config_digest": "0de0287ab93de0736994d83dd8b88e54239a534da099134657f5da55c00a0af1",
+        "policy_digest": "4a4833e9690f652272c519aabc251710b2721c9f9873648bbd762338ed7d21e4",
+        "validation": {
+          "antigravity": {
+            "issues": [],
+            "valid": true
+          },
+          "geminicli": {
+            "issues": [],
+            "valid": true
+          }
+        }
+      },
+      "source": "actual module CLI, real candidate compiler and temporary config-only SQLite",
+      "database_bytes_unchanged": true,
+      "sidefiles_created": false
+    },
+    {
+      "case": "invalid_unknown_channel",
+      "exit_code": 2,
+      "report": {
+        "backend_identity_digest": "bcd6a0540fedb06549fd13629b2edd4123921b666b9a5a1d8c7de873878ea98f",
+        "config_digest": "857bdfd7df548bb4bc8983a26c87cd2254429f0a302109c3f564a56111fc82e1",
+        "policy_digest": "4a4833e9690f652272c519aabc251710b2721c9f9873648bbd762338ed7d21e4",
+        "validation": {
+          "antigravity": {
+            "issues": [
+              {
+                "channel": null,
+                "field": "channel",
+                "message": "Invalid model routing configuration.",
+                "reason": "UNSUPPORTED_CHANNEL",
+                "related_rows": [],
+                "row": 0
+              }
+            ],
+            "valid": false
+          },
+          "geminicli": {
+            "issues": [
+              {
+                "channel": null,
+                "field": "channel",
+                "message": "Invalid model routing configuration.",
+                "reason": "UNSUPPORTED_CHANNEL",
+                "related_rows": [],
+                "row": 0
+              }
+            ],
+            "valid": false
+          }
+        }
+      },
+      "source": "actual module CLI, real candidate compiler and temporary config-only SQLite",
+      "database_bytes_unchanged": true,
+      "sidefiles_created": false
+    },
+    {
+      "case": "missing_database",
+      "exit_code": 3,
+      "report": {
+        "backend_identity_digest": null,
+        "config_digest": null,
+        "policy_digest": null,
+        "validation": {
+          "antigravity": {
+            "issues": [
+              {
+                "channel": null,
+                "field": null,
+                "message": "Invalid model routing configuration.",
+                "reason": "BACKEND_READ_FAILED",
+                "related_rows": [],
+                "row": null
+              }
+            ],
+            "valid": false
+          },
+          "geminicli": {
+            "issues": [
+              {
+                "channel": null,
+                "field": null,
+                "message": "Invalid model routing configuration.",
+                "reason": "BACKEND_READ_FAILED",
+                "related_rows": [],
+                "row": null
+              }
+            ],
+            "valid": false
+          }
+        }
+      },
+      "source": "actual module CLI with a fresh empty temporary directory; read failure before candidate compiler load",
+      "database_bytes_unchanged": true,
+      "sidefiles_created": false
+    }
+  ]
+}

@@ -423,6 +423,27 @@ _ATTACHED_MARKER_ATTR = "_model_api_error_attached_marker"
 _ERROR_ATTR = "_model_api_error_description"
 
 
+class _RenderedErrorEvent(bytes):
+    """Process-private provenance; serialized SSE remains exactly the same."""
+
+    def __new__(cls, data, error, protocol):
+        value = super().__new__(cls, data)
+        value._render_marker = _RENDER_MARKER
+        value._error = error
+        value._protocol = protocol
+        return value
+
+
+def get_rendered_error_event(item) -> Optional[ModelApiError]:
+    if isinstance(item, _RenderedErrorEvent) and item._render_marker is _RENDER_MARKER:
+        return item._error
+    return None
+
+
+def get_rendered_error_event_protocol(item) -> Optional[ModelApiProtocol]:
+    return item._protocol if get_rendered_error_event(item) is not None else None
+
+
 def is_rendered_model_api_error(response: Response) -> bool:
     """Return whether this exact process rendered the response."""
 
@@ -462,10 +483,10 @@ def render_error_event(error: ModelApiError, protocol: ModelApiProtocol | str) -
     ).encode("utf-8")
     protocol = _protocol(protocol)
     if protocol == ModelApiProtocol.OPENAI:
-        return b"data: " + data + b"\n\n" + b"data: [DONE]\n\n"
+        return _RenderedErrorEvent(b"data: " + data + b"\n\n" + b"data: [DONE]\n\n", error, protocol)
     if protocol == ModelApiProtocol.CLAUDE:
-        return b"event: error\n" + b"data: " + data + b"\n\n"
-    return b"data: " + data + b"\n\n"
+        return _RenderedErrorEvent(b"event: error\n" + b"data: " + data + b"\n\n", error, protocol)
+    return _RenderedErrorEvent(b"data: " + data + b"\n\n", error, protocol)
 
 
 LogicalRequestRecorder = Callable[[Request, bool], Awaitable[None] | None]
@@ -596,18 +617,41 @@ async def protect_streaming_response(
     use explicit at integration call sites; it does not consume the stream.
     """
 
+    if request is not None:
+        response._model_api_stream_request = request
+        response._model_api_stream_recorder = recorder
     if getattr(response, "_model_api_stream_protected", False):
         return response
     original_iterator = response.body_iterator
+    response._model_api_stream_original_iterator = original_iterator
     setattr(response, "_model_api_stream_protected", True)
 
     async def finish(success: bool) -> None:
-        if request is not None:
-            await record_logical_request_once(request, success, recorder=recorder)
+        if not success:
+            callback = getattr(response, "_model_api_stream_failure", None)
+            if callback is not None:
+                try:
+                    await callback()
+                except Exception:
+                    _log.exception("model API streaming outcome callback failed")
+        current_request = getattr(response, "_model_api_stream_request", request)
+        current_recorder = getattr(response, "_model_api_stream_recorder", recorder)
+        if current_request is not None:
+            await record_logical_request_once(current_request, success, recorder=current_recorder)
 
     async def adapted() -> Any:
+        # A success adapter installed before consumption belongs inside this
+        # same error/statistics boundary, even if protection was added earlier.
+        factory = getattr(response, "_model_api_success_adapter", None)
+        iterator = original_iterator
         try:
-            async for chunk in original_iterator:
+            if factory is not None:
+                iterator = factory(original_iterator)
+            async for chunk in iterator:
+                if get_rendered_error_event(chunk) is not None:
+                    await finish(False)
+                    yield chunk
+                    return
                 if isinstance(chunk, Response) and not 200 <= chunk.status_code < 300:
                     error = get_attached_model_api_error(chunk) or error_from_http_status(
                         chunk.status_code,
@@ -624,14 +668,15 @@ async def protect_streaming_response(
             await finish(False)
             yield render_error_event(error, protocol)
         finally:
-            close = getattr(original_iterator, "aclose", None)
-            if close is not None:
-                try:
-                    await close()
-                except (asyncio.CancelledError, GeneratorExit):
-                    raise
-                except Exception:
-                    _log.exception("model API streaming iterator close failed")
+            for source in (iterator,):
+                close = getattr(source, "aclose", None)
+                if close is not None:
+                    try:
+                        await close()
+                    except (asyncio.CancelledError, GeneratorExit):
+                        raise
+                    except Exception:
+                        _log.exception("model API streaming iterator close failed")
 
     response.body_iterator = adapted()
     return response

@@ -3,6 +3,7 @@
 """
 
 import os
+import unicodedata
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -20,7 +21,29 @@ from .utils import get_env_locked_keys
 
 # 创建路由器
 router = APIRouter(prefix="/config", tags=["config"])
-SENSITIVE_CONFIG_KEYS = frozenset((config.NODE_MANAGEMENT_TOKEN_HASH_KEY,))
+SENSITIVE_CONFIG_KEYS = frozenset((config.NODE_MANAGEMENT_TOKEN_HASH_KEY, "model_routing"))
+
+
+def _sensitive_key(key: str) -> bool:
+    # Reject obvious equivalent spellings before touching any storage. MySQL's
+    # real column collation is checked separately before an entire batch write.
+    normalized = "".join(
+        char for char in unicodedata.normalize("NFKD", key)
+        if unicodedata.category(char) not in {"Mn", "Cf"}
+    ).casefold().strip()
+    return normalized in SENSITIVE_CONFIG_KEYS
+
+
+async def _sensitive_backend_key(adapter, key: str) -> bool:
+    if _sensitive_key(key):
+        return True
+    backend = getattr(adapter, "_backend", None)
+    matches = getattr(backend, "config_key_matches", None)
+    if matches is not None:
+        for reserved in SENSITIVE_CONFIG_KEYS:
+            if await matches(key, reserved):
+                return True
+    return False
 
 
 @router.get("/debug-storage")
@@ -187,7 +210,7 @@ async def get_config(token: str = Depends(verify_panel_token)):
 
         # 合并存储系统配置（不覆盖环境变量）
         for key, value in storage_config.items():
-            if key not in env_locked_keys and key not in SENSITIVE_CONFIG_KEYS:
+            if key not in env_locked_keys and not await _sensitive_backend_key(storage_adapter, key):
                 current_config[key] = value
 
         # 通用存储合并后再次写入规范化值，避免历史或手工写入的非法值绕过 getter 校验。
@@ -225,7 +248,7 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
     try:
 
         new_config = request.config
-        if SENSITIVE_CONFIG_KEYS.intersection(new_config):
+        if any(_sensitive_key(key) for key in new_config):
             raise HTTPException(status_code=400, detail="敏感配置只能通过专用接口修改")
 
         if "smart_429_protection_enabled" in new_config:
@@ -384,6 +407,10 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
 
         # 直接使用存储适配器保存配置
         storage_adapter = await get_storage_adapter()
+        # Check every key against the backend before any of the batch is
+        # written. MySQL may equate distinct spellings under its collation.
+        if any([await _sensitive_backend_key(storage_adapter, key) for key in new_config]):
+            raise HTTPException(status_code=400, detail="敏感配置只能通过专用接口修改")
         for key, value in new_config.items():
             if key not in env_locked_keys:
                 await storage_adapter.set_config(key, value)

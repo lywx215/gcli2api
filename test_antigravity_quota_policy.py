@@ -77,7 +77,9 @@ def test_week_clock_uses_server_date_and_bounded_local_interval():
 @pytest.mark.parametrize("old_remaining", [0, None])
 async def test_hidden_opus_raw_quota_keeps_shared_cooldown_until_real_recovery(store, sync_mode, old_remaining):
     current = "claude-opus-5-5-medium"
-    deadline = time.time() + 300
+    # The resetTimeRaw wire value has datetime's microsecond precision. Use
+    # that same precision for both the fixture cooldown and exact assertion.
+    deadline = datetime.fromtimestamp(time.time() + 300, timezone.utc).timestamp()
     await store.set_model_cooldown(NAME, CLAUDE, deadline, "antigravity")
     models = {
         CLAUDE: {"remaining": old_remaining, "visible": False,

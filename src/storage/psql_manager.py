@@ -1235,6 +1235,13 @@ class PSQLManager(AntigravityQuotaMixin):
         self._ensure_initialized()
         return self._config_cache.copy()
 
+    async def get_config_fresh(self, key: str, default: Any = None) -> Any:
+        """Read one committed key from PostgreSQL, without cache changes."""
+        self._ensure_initialized()
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT value FROM config WHERE key = $1", key)
+        return default if row is None else json.loads(row["value"])
+
     async def delete_config(self, key: str) -> bool:
         """删除配置"""
         self._ensure_initialized()

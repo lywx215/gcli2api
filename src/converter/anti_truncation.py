@@ -4,6 +4,7 @@ Anti-Truncation Module - Ensures complete streaming output
 """
 
 import io
+from copy import deepcopy
 import json
 import re
 from typing import Any, AsyncGenerator, Dict, List, Tuple
@@ -79,7 +80,7 @@ def apply_regex_replacements(text: str) -> str:
     return processed_text
 
 
-def apply_regex_replacements_to_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+def apply_regex_replacements_to_payload(payload: Dict[str, Any], *, preserve_signed_parts: bool = False) -> Dict[str, Any]:
     """
     对请求payload中的文本内容应用正则替换
 
@@ -106,7 +107,7 @@ def apply_regex_replacements_to_payload(payload: Dict[str, Any]) -> Dict[str, An
                 if parts:
                     new_parts = []
                     for part in parts:
-                        if isinstance(part, dict) and "text" in part:
+                        if isinstance(part, dict) and "text" in part and not (preserve_signed_parts and "thoughtSignature" in part):
                             new_part = part.copy()
                             new_part["text"] = apply_regex_replacements(part["text"])
                             new_parts.append(new_part)
@@ -124,7 +125,7 @@ def apply_regex_replacements_to_payload(payload: Dict[str, Any]) -> Dict[str, An
     return modified_payload
 
 
-def apply_anti_truncation(payload: Dict[str, Any]) -> Dict[str, Any]:
+def apply_anti_truncation(payload: Dict[str, Any], *, route_context=None) -> Dict[str, Any]:
     """
     对请求payload应用反截断处理和正则替换
     在systemInstruction中添加提醒，要求模型在结束时输出DONE_MARKER标记
@@ -136,7 +137,10 @@ def apply_anti_truncation(payload: Dict[str, Any]) -> Dict[str, Any]:
         添加了反截断指令并应用了正则替换的payload
     """
     # 首先应用正则替换
-    modified_payload = apply_regex_replacements_to_payload(payload)
+    modified_payload = apply_regex_replacements_to_payload(
+        deepcopy(payload) if route_context is not None else payload,
+        preserve_signed_parts=route_context is not None,
+    )
     request_data = modified_payload.get("request", {})
 
     # 获取或创建systemInstruction
@@ -195,15 +199,51 @@ class AntiTruncationStreamProcessor:
         max_attempts: int = 3,
         enable_prefill_mode: bool = False,
         defer_intermediate_finish: bool = False,
+        *,
+        route_context=None,
     ):
         self.original_request_func = original_request_func
-        self.base_payload = payload.copy()
+        self.route_context = route_context
+        self.base_payload = deepcopy(payload) if route_context is not None else payload.copy()
         self.max_attempts = max_attempts
         self.enable_prefill_mode = enable_prefill_mode
-        self.defer_intermediate_finish = defer_intermediate_finish
+        # Anthropic's existing converter stops at the first finishReason. A
+        # routing snapshot must not silently turn that boundary into extra
+        # upstream turns; retain an explicitly requested legacy deferral.
+        self.defer_intermediate_finish = defer_intermediate_finish or (
+            route_context is not None and route_context.protocol != "claude"
+        )
         # 使用 StringIO 避免字符串拼接的内存问题
         self.collected_content = io.StringIO()
         self.current_attempt = 0
+
+    def _has_scoped_parts(self, data):
+        """These parts cannot be reconstructed in another model turn."""
+        obj = data.get("response", data)
+        candidates = obj.get("candidates", [])
+        return len(candidates) > 1 or any(
+            candidate.get("groundingMetadata") or candidate.get("citationMetadata") or any(
+                "thoughtSignature" in part
+                for part in candidate.get("content", {}).get("parts", [])
+            ) for candidate in candidates
+        )
+
+    async def _protected_frames(self, iterator):
+        from fastapi import Response
+        from src.httpx_client import normalize_sse_events
+        async def fragments():
+            async for item in iterator:
+                if isinstance(item, Response):
+                    raise ModelApiErrorException(error_from_response(item))
+                yield item
+        source = fragments()
+        frames = normalize_sse_events(source)
+        try:
+            async for frame in frames:
+                yield frame
+        finally:
+            await frames.aclose()
+            await source.aclose()
 
     def _get_collected_text(self) -> str:
         """获取收集的文本内容"""
@@ -232,6 +272,7 @@ class AntiTruncationStreamProcessor:
 
             # 发送请求
             response = None
+            framed = None
             try:
                 response = await self.original_request_func(current_payload)
 
@@ -243,8 +284,17 @@ class AntiTruncationStreamProcessor:
                 # 处理流式响应（按行处理）
                 chunk_buffer = io.StringIO()  # 使用 StringIO 缓存当前轮次的chunk
                 found_done_marker = False
+                scoped_parts = False
+                text_modified = False
+                pending_terminal = []
+                terminal_size = 0
+                usage = {}
+                reference_scope = False
+                from src.model_routing.stream_runtime import CandidateIdentityState, bad_stream
+                identities = CandidateIdentityState() if self.route_context is not None else None
+                framed = self._protected_frames(response.body_iterator) if identities is not None else response.body_iterator
 
-                async for line in response.body_iterator:
+                async for line in framed:
                     if not line:
                         yield line
                         continue
@@ -276,6 +326,9 @@ class AntiTruncationStreamProcessor:
                         # 检查是否是 [DONE] 标记
                         if payload_str.strip() == "[DONE]":
                             if found_done_marker:
+                                from src.antigravity_completion import finalize_terminal_usage
+                                for terminal in finalize_terminal_usage(pending_terminal, usage):
+                                    yield terminal
                                 log.info("Anti-truncation: Found [done] marker, output complete")
                                 yield line
                                 # 清理内存
@@ -290,6 +343,17 @@ class AntiTruncationStreamProcessor:
                         # 尝试解析 JSON 数据
                         try:
                             data = json.loads(payload_str)
+                            if identities is not None:
+                                data = identities.normalize(data)
+                                scoped_parts = scoped_parts or self._has_scoped_parts(data) or len(identities.known) > 1
+                                obj = data.get("response", data)
+                                reference_scope = reference_scope or any(candidate.get("groundingMetadata") or candidate.get("citationMetadata") for candidate in obj.get("candidates", []))
+                                if isinstance(obj.get("usageMetadata"), dict):
+                                    usage.update(deepcopy(obj["usageMetadata"]))
+                                if self.current_attempt > 1 and scoped_parts:
+                                    raise bad_stream()
+                                if scoped_parts and text_modified:
+                                    raise bad_stream()
                             content = self._extract_content_from_chunk(data)
 
                             log.debug(f"Anti-truncation: Extracted content: {repr(content[:100] if content else '')}")
@@ -321,6 +385,10 @@ class AntiTruncationStreamProcessor:
                                         for part in parts if isinstance(part, dict)
                                     )
                                     if candidate.get("finishReason") in ("STOP", "MAX_TOKENS") and not has_tool_call:
+                                        if identities is not None and scoped_parts:
+                                            # This terminal would require a new
+                                            # turn with unprovable part scope.
+                                            raise bad_stream()
                                         candidate.pop("finishReason")
                                         changed = True
                                 if changed:
@@ -329,7 +397,26 @@ class AntiTruncationStreamProcessor:
 
                             # 清理行中的[done]标记后再发送
                             cleaned_line = self._remove_done_marker_from_line(line, line_str, data)
-                            yield cleaned_line
+                            if identities is not None and cleaned_line != line:
+                                after = json.loads(cleaned_line.decode("utf-8")[6:])
+                                def texts(value):
+                                    return [part.get("text") for candidate in value.get("response", value).get("candidates", [])
+                                            for part in candidate.get("content", {}).get("parts", [])]
+                                text_modified = text_modified or texts(data) != texts(after)
+                                if reference_scope and text_modified:
+                                    raise bad_stream()
+                            if identities is not None and found_done_marker:
+                                from src.antigravity_completion import separate_terminal
+                                early, terminal = separate_terminal(cleaned_line)
+                                if terminal is not None:
+                                    pending_terminal.append(terminal)
+                                    terminal_size += len(terminal)
+                                    if terminal_size > 8 * 1024 * 1024:
+                                        raise bad_stream()
+                                if early is not None:
+                                    yield early
+                            else:
+                                yield cleaned_line
 
                         except (json.JSONDecodeError, ValueError):
                             # 无法解析的行，直接传递
@@ -351,6 +438,9 @@ class AntiTruncationStreamProcessor:
                 if found_done_marker:
                     # 立即清理内容释放内存
                     self._clear_content()
+                    from src.antigravity_completion import finalize_terminal_usage
+                    for terminal in finalize_terminal_usage(pending_terminal, usage):
+                        yield terminal
                     yield b"data: [DONE]\n\n"
                     return
 
@@ -366,6 +456,8 @@ class AntiTruncationStreamProcessor:
 
                 # 如果没找到done标记且不是最后一次尝试，准备续传
                 if self.current_attempt < self.max_attempts:
+                    if identities is not None and scoped_parts:
+                        raise bad_stream()
                     accumulated_text = self._get_collected_text()
                     total_length = len(accumulated_text)
                     log.info(
@@ -394,6 +486,8 @@ class AntiTruncationStreamProcessor:
                 # A [DONE] return/break can leave the HTTP iterator suspended.
                 # Close it before starting another round or sealing the request.
                 if isinstance(response, StreamingResponse):
+                    if framed is not None and framed is not response.body_iterator:
+                        await framed.aclose()
                     close = getattr(response.body_iterator, 'aclose', None)
                     if close is not None:
                         try:
@@ -414,7 +508,7 @@ class AntiTruncationStreamProcessor:
             return self.base_payload
 
         # 后续请求，添加续传指令
-        continuation_payload = self.base_payload.copy()
+        continuation_payload = deepcopy(self.base_payload) if self.route_context is not None else self.base_payload.copy()
         request_data = continuation_payload.get("request", {})
 
         # 获取原始对话内容
@@ -466,7 +560,7 @@ class AntiTruncationStreamProcessor:
                 if "content" in candidate:
                     parts = candidate["content"].get("parts", [])
                     for part in parts:
-                        if "text" in part:
+                        if "text" in part and not (self.route_context is not None and part.get("thought")):
                             content += part["text"]
         
         # 处理 OpenAI 流式格式（choices/delta）
@@ -534,6 +628,12 @@ class AntiTruncationStreamProcessor:
                     return content.encode() if isinstance(content, str) else content
 
                 # 检查是否包含done标记
+                if self.route_context is not None:
+                    from src.router.model_api_errors import parse_model_response, error_from_retirement_payload
+                    response_data = parse_model_response(content)
+                    error = error_from_retirement_payload(response_data)
+                    if error is not None:
+                        raise ModelApiErrorException(error)
                 text_content = self._extract_content_from_response(response_data)
                 has_done_marker = self._check_done_marker_in_text(text_content)
 
@@ -542,6 +642,9 @@ class AntiTruncationStreamProcessor:
                     return content.encode() if isinstance(content, str) else content
 
                 # 需要继续，收集内容并构建下一个请求
+                if self.route_context is not None and self._has_scoped_parts(response_data):
+                    from src.model_routing.stream_runtime import bad_stream
+                    raise bad_stream()
                 if text_content:
                     self._append_content(text_content)
 
@@ -645,7 +748,9 @@ class AntiTruncationStreamProcessor:
                                     modified_part = part.copy()
                                     original_text = part["text"]
                                     # 只在最后一个candidate中清理[done]标记
-                                    if is_last_candidate:
+                                    if is_last_candidate and not (self.route_context is not None and (
+                                        "thoughtSignature" in part or candidate.get("groundingMetadata") or candidate.get("citationMetadata")
+                                    )):
                                         modified_part["text"] = done_pattern.sub("", part["text"])
                                         if "[done]" in original_text.lower():
                                             log.debug(f"Anti-truncation: Removed [done] from text: '{original_text[:100]}' -> '{modified_part['text'][:100]}'")
@@ -710,6 +815,8 @@ async def apply_anti_truncation_to_stream(
     payload: Dict[str, Any],
     max_attempts: int = 3,
     enable_prefill_mode: bool = False,
+    *,
+    route_context=None,
 ) -> StreamingResponse:
     """
     对流式请求应用反截断处理
@@ -726,7 +833,7 @@ async def apply_anti_truncation_to_stream(
     """
 
     # 首先对payload应用反截断指令
-    anti_truncation_payload = apply_anti_truncation(payload)
+    anti_truncation_payload = apply_anti_truncation(payload, route_context=route_context)
 
     # 创建反截断处理器
     processor = AntiTruncationStreamProcessor(
@@ -734,6 +841,7 @@ async def apply_anti_truncation_to_stream(
         anti_truncation_payload,
         max_attempts,
         enable_prefill_mode,
+        route_context=route_context,
     )
 
     # 返回包装后的流式响应

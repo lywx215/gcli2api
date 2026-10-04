@@ -2309,6 +2309,17 @@ class SQLiteManager(AntigravityQuotaMixin):
         self._ensure_initialized()
         return self._config_cache.copy()
 
+    async def get_config_fresh(self, key: str, default: Any = None) -> Any:
+        """Read a single committed key without touching the normal cache."""
+        from pathlib import Path
+
+        self._ensure_initialized()
+        uri = Path(self._db_path).resolve().as_uri() + "?mode=ro"
+        async with aiosqlite.connect(uri, uri=True) as db:
+            async with db.execute("SELECT value FROM config WHERE key = ?", (key,)) as cursor:
+                row = await cursor.fetchone()
+        return default if row is None else json.loads(row[0])
+
     async def delete_config(self, key: str) -> bool:
         """删除配置"""
         self._ensure_initialized()

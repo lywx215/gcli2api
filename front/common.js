@@ -87,6 +87,10 @@ function readStoredAuthToken() {
     }
 }
 
+function isModelRoutingPage() {
+    return document.body?.dataset.page === 'model-routing';
+}
+
 function writeStoredAuthToken(token) {
     try {
         window.localStorage.setItem('gcli2api_auth_token', token);
@@ -1410,6 +1414,7 @@ function initTabSlider() {
 
 // 页面加载和窗口大小变化时初始化滑块
 document.addEventListener('DOMContentLoaded', () => {
+    if (isModelRoutingPage()) return;
     normalizeRequestedPanelTab();
     initTabSlider();
 });
@@ -1418,6 +1423,7 @@ window.addEventListener('resize', () => {
     if (activeTab) updateTabSlider(activeTab, false);
 });
 window.addEventListener('hashchange', () => {
+    if (isModelRoutingPage()) return;
     const safeTab = normalizeRequestedPanelTab();
     if (AppState.authToken) switchTab(safeTab, null);
 });
@@ -4238,6 +4244,7 @@ async function checkForUpdates() {
 // 页面初始化
 // =====================================================================
 window.onload = async function () {
+    if (isModelRoutingPage()) return;
     const autoLoginSuccess = await autoLogin();
 
     if (!autoLoginSuccess) {

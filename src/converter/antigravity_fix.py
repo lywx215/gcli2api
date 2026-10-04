@@ -723,6 +723,8 @@ def _normalize_antigravity_request(
 
 async def normalize_antigravity_request(
     request: Dict[str, Any],
+    *,
+    route_context: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     规范化 Antigravity 请求
@@ -757,11 +759,18 @@ async def normalize_antigravity_request(
     log.debug(f"[ANTIGRAVITY_FIX] 原始请求 - 模型: {model}, generationConfig: {generation_config}")
 
     # 获取配置值
-    return_thoughts = await get_return_thoughts_to_frontend()
+    return_thoughts = (
+        route_context.feature_snapshot.return_thoughts
+        if route_context is not None
+        else await get_return_thoughts_to_frontend()
+    )
 
     # 图片模型走独立的图片生成处理路径
     if "image" in model.lower():
         result = prepare_image_generation_request(result, model)
+        if route_context is not None:
+            from src.model_routing import check_route_dispatch
+            check_route_dispatch(result, route_context)
         normalization_end(diagnostic_before, result, diagnostic_changes)
         return result
 
@@ -918,4 +927,7 @@ async def normalize_antigravity_request(
         result["generationConfig"] = generation_config
 
     normalization_end(diagnostic_before, result, diagnostic_changes)
+    if route_context is not None:
+        from src.model_routing import check_route_dispatch
+        check_route_dispatch(result, route_context)
     return result

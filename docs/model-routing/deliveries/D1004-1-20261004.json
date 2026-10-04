@@ -1,0 +1,53 @@
+{
+  "task_id": "MODEL-ROUTING-D1004-1-INTEGRATION",
+  "date": "2026-10-04",
+  "status": "local-integration-verified",
+  "target_branch": "d1004-1",
+  "base_branch": "d1004",
+  "base_sha": "0ff4b2f1e13045d2ce77e5ba701bc1dc494c4c54",
+  "source_branch": "codex/model-routing-integration",
+  "source_head": "170d989f545218920bc84794472a0f234490694f",
+  "source_material": "Scoped uncommitted model-routing implementation exported through a temporary Git index; original index and source files preserved",
+  "integration_method": "Three-way patch onto d1004, followed by necessary Opus 5.5 semantic compatibility adjustments",
+  "contract_version": "routing-execution-1",
+  "scope": ["Gemini CLI existing model routing", "Antigravity existing model routing", "Required shared transport, converters, config storage and settings UI"],
+  "excluded": ["Vertex routing", "Management development", "Real credential or database mutations", "Google/OAuth calls", "Deployment", "Push", "New Claude review"],
+  "text_conflicts_resolved": ["src/api/antigravity.py"],
+  "semantic_adjustments": [
+    "Preserve d1004 Opus 5.5 low/medium/high dispatch, thought settings and tool-call behavior",
+    "Reject retired names as routing targets/public overrides and preserve local 400 for legacy retired requests",
+    "Retain per-credential access protection, 404 rotation and confirmed-union source catalog",
+    "Update verified AST fingerprints for d1004 semantics without disabling proof checks"
+  ],
+  "test_fixture_adjustments": [
+    {"file": "test_antigravity_access_overview.py", "change": "Send synthetic JavaScript to Node stdin instead of bounded Windows argv; existing JS and returncode assertions retained"},
+    {"file": "test_antigravity_model_access.py", "change": "Use a bounded Event to guarantee overlap; maximum concurrency == 2 and permission/union assertions retained"},
+    {"file": "test_antigravity_quota_policy.py", "change": "Align fixture deadline with ISO microsecond precision; exact equality, blocking and recovery assertions retained"}
+  ],
+  "validation": {
+    "routing_stage": {"passed": 584, "failed": 0, "seconds": 11.41},
+    "first_nonrouting_stage": {"passed": 2155, "failed": 3, "skipped": 1, "seconds": 91.42},
+    "original_d1004_three_node_reproduction": {"passed": 1, "failed": 2, "seconds": 1.33, "failures": ["Windows Node argv length", "Directory fixture overlap scheduling"]},
+    "adjusted_fixture_stage": {"passed": 108, "failed": 0, "seconds": 5.62},
+    "final_single_full_suite": {"collected": 2743, "passed": 2742, "failed": 0, "skipped": 1, "warnings": 6, "seconds": 101.47, "exit_code": 0},
+    "skip": "test_diagnostics_runtime.py:278 POSIX fork unavailable on Windows; loopback HTTP spawn/restart exercised",
+    "stage_counts_not_added_to_final_unique_count": true,
+    "final_command": "G:/code/gemini30/gcli2api/.venv/Scripts/python.exe -X utf8 -B C:/Users/lywx2/AppData/Local/Temp/gcli2api-d1004-1-merge-3f047c6db1dc422d9a052f6eca1531b3/isolated_pytest.py C:/Users/lywx2/.codex/worktrees/d1004-1-routing/gcli2api -o addopts=",
+    "isolation_harness_sha256": "d922b4d19962bfdec328623543042de93cb3cc0fb18727297250ca6a9a0890e9",
+    "isolation": "New temporary SQLite; dotenv/logs/external endpoints/remote DB/proxy/credential environment cleared; parent-process socket and audit guards; test child processes inherit sanitized environment, not Python guards, and use synthetic loopback endpoints",
+    "real_upstream_verified": false,
+    "git_diff_check": "passed"
+  },
+  "preserved": ["Original worktree and source staging area", "d1004 and master branch tips", "panel-version.txt", "Vertex handlers", "management contract", "Existing database schema", "User service and credentials"],
+  "capabilities": ["model.routing.aliases", "model.identity.public"],
+  "management_schema_change": false,
+  "database_schema_change": false,
+  "counterpart_action": "no_counterpart_action",
+  "claude_review": "Not run for this integration; historical source approval is not approval of the merge adjustments",
+  "remaining_boundaries": [
+    "Earlier real search HTTP503 and anti-truncation SSE502 are not fixed or revalidated by this integration",
+    "Existing upgrade preflight and deployment freeze requirements still apply",
+    "Remote storage backends remain unverified against live infrastructure"
+  ],
+  "rollback": "Return an isolated checkout to the recorded d1004 base or revert the integration commit; no data migration is required. Do not reset or clean a user's dirty worktree."
+}

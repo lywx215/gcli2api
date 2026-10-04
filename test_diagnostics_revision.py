@@ -135,8 +135,14 @@ async def test_antitruncation_nondict_frames_route_passthrough(records, monkeypa
     async def source(**kwargs): yield b'data: {}'
     async def processed(self):
         for frame in frames: yield frame
+    async def identity_boundary_out_of_scope(response, *, route_context):
+        # This test isolates diagnostic observation, not the new successful
+        # identity boundary, which correctly rejects non-object model frames.
+        # The real boundary is covered by model-routing integration tests.
+        return response
     monkeypatch.setattr(antigravity, 'stream_request', source)
     monkeypatch.setattr(AntiTruncationStreamProcessor, 'process_stream', processed)
+    monkeypatch.setattr(gemini, 'adapt_model_response', identity_boundary_out_of_scope)
     with request_context() as server:
         response = await gemini.stream_generate_content(GeminiRequest(contents=[{'role':'user','parts':[{'text':'synthetic'}]}]), model='抗截断/gemini-3.7-flash', api_key='synthetic')
         assert [chunk async for chunk in response.body_iterator] == frames

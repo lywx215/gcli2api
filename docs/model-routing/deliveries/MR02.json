@@ -1,0 +1,45 @@
+{
+  "task_id": "MR02",
+  "window": "R",
+  "base_sha": "170d989f545218920bc84794472a0f234490694f",
+  "contract_version": "routing-execution-1",
+  "status": "passed",
+  "execution_policy": "queue_only",
+  "worktree": "C:/Users/lywx2/.codex/worktrees/b156/gcli2api",
+  "python": "3.12.14",
+  "policy_digest": "4a4833e9690f652272c519aabc251710b2721c9f9873648bbd762338ed7d21e4",
+  "changed_files": [
+    "src/model_routing/compiler.py", "src/model_routing/policy.py",
+    "test_model_routing_compiler.py", "test_model_routing_policy_upgrade.py", "docs/model-routing/deliveries/MR02.json"
+  ],
+  "actual_test_commands": [
+    "& G:/code/gemini30/gcli2api/.venv/Scripts/python.exe -m pytest -q test_model_routing_projection.py test_model_routing_resolver.py test_model_routing_compiler.py test_model_routing_policy_upgrade.py test_model_routing_catalog.py test_model_routing_contracts.py"
+  ],
+  "results": {
+    "passed": 148, "failed": 0, "skipped": 0, "duration_seconds": 2.75,
+    "mr02_owned_test_items": 72,
+    "coverage": ["global versus channel-attributable faults", "strict fields and enabled boolean", "full-table row indexes and related rows", "enabled and disabled target admission", "native early redirects", "transparent unknown targets", "chains and cycles", "all deterministic static entrances", "original alias parameter and converter-schema equivalence", "channel-local policy upgrades", "missing or unknown source proof fails closed"]
+  },
+  "proof": {
+    "version": "symbolic-profile-and-token-dfa-1",
+    "CLI_language": "reserved-free base followed by the actual nine-token suffix language T*",
+    "algorithm": "exhaustive reachable fixed point of raw/lowercase substring DFA times exact finite entry-alias trie; no word-length or sample-count proof bound",
+    "parameter_equivalence": "compare symbolic normal forms containing arbitrary input references, name selection, converter schema branch, parameter priority, acceptance and cleanup operators",
+    "AG_language": "whole names plus one existing feature prefix; no suffix derivation",
+    "unknown_grammar_or_operators": "AMBIGUOUS_COMPATIBILITY; never silently accepted",
+    "target_dispatch": "exact analytic selector partition for all body-level classes and real mapper order"
+  },
+  "reviewed_candidate_source_digests": {
+    "src/converter/gemini_fix.py": "c030dc41a5ab2f473e720c39a41752d08f78593f94d48fb3268c4d918fbdf2ab",
+    "src/converter/antigravity_fix.py": "06c7eb5b9cd6717cd1690d3a368b37f64f7975926ea8179b6bdd2dedb0393866",
+    "src/converter/openai2gemini.py": "9458041ad12d284f9eb61a2c3e4416855f5d3f37e3f4e52845d086761a69e13c",
+    "src/converter/anthropic2gemini.py": "d07dafed54e9836f3cbc4d4cdca46a7dd10ad284fd5aa6c78cd949a61e3a3902",
+    "src/converter/utils.py": "7d800927426cd8b6c4bc71fcb8d0bf17b956b384d433bcf5026314977825c09d",
+    "src/model_routing/__init__.py.check_route_dispatch": "aff6c6cc32c5e3f185574fc380a376ab034436b74de084eceb102bcfb0981c03"
+  },
+  "source_review": "independently read exact I-owned diff; optional context leaves defaults intact, snapshots replace configuration reads, guard raises safe error without changing model; full converter/normalizer AST fingerprints include image/tool/signature helpers and static constants",
+  "mock_dependencies": ["synthetic policy upgrades and in-memory source-read mutation for negative proof tests; real compiler, resolver and actual candidate code used"],
+  "unverified": ["P storage/config/preflight integration awaits controller acceptance and real dependency transfer", "future source or proof changes require explicit re-proof", "live upstream availability is outside admission policy and is not promised"],
+  "known_issues": [],
+  "next_gate": "controller acceptance releases P real-compiler integration and MR03/MR10 use"
+}

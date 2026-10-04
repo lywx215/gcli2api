@@ -5,6 +5,7 @@ Panel模块 - 整合所有控制面板路由
 from fastapi import APIRouter
 
 from . import auth, creds, config_routes, logs, version, root
+from src.model_routing.settings_routes import router as model_routing_router
 
 
 def create_router() -> APIRouter:
@@ -16,6 +17,7 @@ def create_router() -> APIRouter:
     router.include_router(auth.router)
     router.include_router(creds.router)
     router.include_router(config_routes.router)
+    router.include_router(model_routing_router)
     router.include_router(logs.router)
     router.include_router(version.router)
 

@@ -159,7 +159,7 @@ def create_openai_heartbeat_chunk() -> Dict[str, Any]:
         ]
     }
 
-def build_gemini_fake_stream_chunks(content: str, reasoning_content: str, finish_reason: str, images: List[Dict[str, Any]] = None, chunk_size: int = 50) -> List[Dict[str, Any]]:
+def build_gemini_fake_stream_chunks(content: str, reasoning_content: str, finish_reason: str, images: List[Dict[str, Any]] = None, chunk_size: int = 50, *, full_response: Dict[str, Any] = None) -> List[Dict[str, Any]]:
     """构建假流式响应的数据块
 
     Args:
@@ -172,6 +172,18 @@ def build_gemini_fake_stream_chunks(content: str, reasoning_content: str, finish
     Returns:
         响应数据块列表
     """
+    if full_response is not None:
+        # Explicit CLI/AG native opt-in: one complete answer after heartbeats.
+        # Do not extract/rebuild signed parts, candidate identity or grounding.
+        from copy import deepcopy
+        from src.router.model_api_errors import (
+            ModelApiErrorException, error_from_model_payload, error_from_retirement_payload,
+        )
+        error = error_from_model_payload(full_response) or error_from_retirement_payload(full_response)
+        if error is not None:
+            raise ModelApiErrorException(error)
+        return [deepcopy(full_response.get("response", full_response))]
+
     if images is None:
         images = []
 

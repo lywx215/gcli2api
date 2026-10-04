@@ -1,0 +1,44 @@
+{
+  "task_id": "MR01",
+  "window": "R",
+  "base_sha": "170d989f545218920bc84794472a0f234490694f",
+  "contract_version": "routing-execution-1",
+  "status": "passed",
+  "execution_policy": "queue_only",
+  "worktree": "C:/Users/lywx2/.codex/worktrees/b156/gcli2api",
+  "python": "3.12.14",
+  "policy_digest": "4a4833e9690f652272c519aabc251710b2721c9f9873648bbd762338ed7d21e4",
+  "changed_files": [
+    "src/model_routing/projection.py", "src/model_routing/policy.py", "src/model_routing/routing.py",
+    "test_model_routing_projection.py", "test_model_routing_resolver.py", "docs/model-routing/deliveries/MR01.json"
+  ],
+  "actual_test_commands": [
+    "& G:/code/gemini30/gcli2api/.venv/Scripts/python.exe -m pytest -q test_model_routing_projection.py test_model_routing_resolver.py test_model_routing_compiler.py test_model_routing_policy_upgrade.py test_model_routing_catalog.py test_model_routing_contracts.py"
+  ],
+  "results": {
+    "passed": 148, "failed": 0, "skipped": 0, "duration_seconds": 2.75,
+    "mr01_owned_test_items": 56, "all_R_owned_test_items": 144, "shared_contract_test_items": 4,
+    "real_dependencies": ["master name helpers", "real protocol converters", "real channel normalizers", "reviewed I opt-in snapshot and dispatch-check candidate"],
+    "coverage": ["six protocol/channel chains", "empty table and unmatched differential", "name/body priority and JSON types", "output and stop parameters", "image size and invalid size types", "full requested identity", "AG exact-name matching", "public keyword isolation", "immutable feature snapshots"]
+  },
+  "isolation": {
+    "credentials_dir": "new empty OS temporary directory per test invocation",
+    "remote_backend_variables": "cleared in the child process",
+    "external_service_urls": "closed loopback",
+    "external_socket_connections": "fail immediately in resolver tests; Windows event-loop loopback self-pipe permitted",
+    "default_web_lifespan": false,
+    "production_credentials_database_or_env_files_read": false
+  },
+  "mock_dependencies": ["legacy asynchronous feature getters return explicit synthetic values; no compiler/resolver/converter/normalizer is mocked"],
+  "unverified": ["six HTTP handler end-to-end wiring belongs to MR10", "backend and UI integration belongs to P/I", "actual upstream availability and live model calls excluded"],
+  "known_issues": [],
+  "test_history": ["initial harness had 1 failure and 9 setup errors: thawed parameter lists and permitted Windows asyncio loopback self-pipe; final rerun passed without legacy fixture changes"],
+  "interface": {
+    "features.normalization_model": "entry-alias name for legacy; target plus the exact CLI-derived suffix for explicit aliases",
+    "features.normalizer_input_model": "same value as normalization_model",
+    "features.generation_config": "body-free parameter preview; opaque JSON values remain input symbols, not payload copies",
+    "target_profile.parameter_actions": "symbolic converter and normalizer branch operators with arbitrary input references",
+    "integration_rule": "execute actual converters/normalizers with captured features; verify dispatch, never overwrite a wrong-family dispatch"
+  },
+  "next_gate": "MR02 receipt is ready for controller acceptance; no automatic external execution"
+}

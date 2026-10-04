@@ -1,0 +1,151 @@
+{
+  "window": "I",
+  "base_sha": "170d989f545218920bc84794472a0f234490694f",
+  "contract_version": "routing-execution-1",
+  "status": "passed_local",
+  "cwd": "C:/Users/lywx2/.codex/worktrees/model-routing-integration/gcli2api",
+  "branch": "codex/model-routing-integration",
+  "python": "3.12.14",
+  "interpreter": "G:/code/gemini30/gcli2api/.venv/Scripts/python.exe",
+  "real_credentials": false,
+  "production_db": false,
+  "external_model_calls": 0,
+  "committed": false,
+  "task_id": "MR10",
+  "changed_files": [
+    "src/model_routing/__init__.py",
+    "src/model_routing/types.py",
+    "src/router/geminicli/gemini.py",
+    "src/router/geminicli/openai.py",
+    "src/router/geminicli/anthropic.py",
+    "src/router/geminicli/model_list.py",
+    "src/router/antigravity/gemini.py",
+    "src/router/antigravity/openai.py",
+    "src/router/antigravity/anthropic.py",
+    "src/router/antigravity/model_list.py",
+    "src/converter/anti_truncation.py",
+    "test_model_routing_integration.py",
+    "test_model_routing_hi.py",
+    "test_model_routing_acceptance.py",
+    "test_model_routing_vertex_boundary.py",
+    "test_antigravity_timeouts.py",
+    "test_diagnostics_revision.py",
+    "test_gemini35_tier_routing.py",
+    "src/model_routing/compiler.py",
+    "src/model_routing/policy.py",
+    "test_model_routing_policy_upgrade.py",
+    "docs/model-routing/UPGRADE.md",
+    "front/model_routing.js",
+    "test_model_routing_panel.py",
+    "test_model_routing_config_api.py"
+  ],
+  "root_shared_opt_in": [
+    "src/converter/gemini_fix.py",
+    "src/converter/antigravity_fix.py",
+    "src/converter/openai2gemini.py",
+    "src/converter/anthropic2gemini.py",
+    "src/converter/utils.py"
+  ],
+  "dependency_gate": "MR02/MR03/MR04/MR07/MR08/MR09 formal local receipts reviewed; only explicit owned files imported",
+  "results": {
+    "first_new_matrix": {
+      "passed": 62,
+      "failed": 8,
+      "reason": "New anti fixture omitted required [done]; fixed only synthetic fixture, kept strict call/termination assertions"
+    },
+    "corrected_new_matrix_and_hi": {
+      "passed": 70,
+      "failed": 0,
+      "warnings": 5,
+      "seconds": 5.85
+    },
+    "repair_selected": {
+      "passed": 177,
+      "failed": 0,
+      "warnings": 5,
+      "seconds": 68.89
+    },
+    "final_full_suite": {
+      "collected": 2130,
+      "passed": 2129,
+      "failed": 0,
+      "skipped": 1,
+      "warnings": 6,
+      "seconds": 112.38,
+      "exit_code": 0
+    },
+    "pre_claude_full_suite": {
+      "collected": 2095,
+      "passed": 2094,
+      "failed": 0,
+      "skipped": 1,
+      "warnings": 6,
+      "seconds": 122.37
+    },
+    "post_first_claude_full_suite": {
+      "collected": 2129,
+      "passed": 2128,
+      "failed": 0,
+      "skipped": 1,
+      "warnings": 6,
+      "seconds": 114.32
+    }
+  },
+  "path_evidence": {
+    "matrix": "2 channels x 3 protocols x 4 modes, actual context/feature snapshot, nonempty body and termination",
+    "native_metadata": "2 channels x 3 modes exact candidate/parts/signature/grounding equality",
+    "ag_actual_collector": "Actual non_stream_request + protected collector + native handler; upstream stream mocked",
+    "logical_400": "Three CLI non-stream protocols; real local normalizer; exactly one failure and zero upstream",
+    "claude_anti": "Both channels keep first finish boundary and close source; exactly one upstream",
+    "continuation_snapshot": "Native anti continuation uses same target/context across config change; next request fresh",
+    "catalog": "14 HTTP cases; validation before fetch, 30 sec timeout, cancellation, no target capability invention"
+  },
+  "integration_repairs": [
+    {
+      "type": "code_regression",
+      "issue": "CLI local normalizer 400 omitted logical failure",
+      "fix": "activate before converter/normalizer; after success update actual model only"
+    },
+    {
+      "type": "code_regression",
+      "issue": "route_context silently enabled Claude intermediate finish deferral and extra upstream turns",
+      "fix": "implicit deferral applies only non-Claude; explicit legacy flag retained"
+    },
+    {
+      "type": "test_wiring",
+      "issue": "Old timeout tests patched removed per-handler flags",
+      "fix": "use real public mode prefixes; preserve 504 and once-count assertions"
+    },
+    {
+      "type": "test_wiring",
+      "issue": "Old alias transport mock rejected optional context kwarg",
+      "fix": "accept keyword-only route_context; preserve actual model assertion"
+    },
+    {
+      "type": "test_isolation",
+      "issue": "Diagnostic observer passthrough fixture bypassed processor and used invalid final model arrays/strings",
+      "fix": "isolate diagnostic observer by identity no-op in this existing test; add actual identity 502 tests; unchanged passthrough assertion"
+    }
+  ],
+  "policy_digest": "4a4833e9690f652272c519aabc251710b2721c9f9873648bbd762338ed7d21e4",
+  "notes": [
+    "R pinned fingerprints of shared converter/normalizer increments; no frozen normalizer changes after proof",
+    "Final anti fix intentionally supersedes S MR08 pre-integration anti source digest; final MR11 snapshot authoritative",
+    "No runtime fallback on invalid config/storage read; requires existing initialized adapter",
+    "Stream statistic owner remains existing helper; no extra Request activation",
+    "No Vertex/MGMT/master retirement/panel version changes"
+  ],
+  "next_gate": "MR11 local acceptance and actual resumed Claude review passed; release and live calls not authorized",
+  "claude_repairs": [
+    "True empty-channel admission skips unused target proof; disabled/rejected rows retain gate",
+    "Cache installed AST fingerprints once per process; fixed local503 for source build failures",
+    "PUT 5xx results now explicitly uncertain, preserve drafts and require reload; real SQLite committed-then-readback503 and browser reload evidence added"
+  ],
+  "claude_final": {
+    "status": "approved",
+    "actual_rounds_total": 4,
+    "continued_group_rounds": 1,
+    "approved_code_digest": "cddf4060b23178919c3edfc937255274433f6392b613117160da91bdf264c604",
+    "evidence": "CLAUDE-final.json"
+  }
+}

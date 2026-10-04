@@ -1,0 +1,24 @@
+{
+  "task_id": "MR03",
+  "window": "R",
+  "base_sha": "170d989f545218920bc84794472a0f234490694f",
+  "contract_version": "routing-execution-1",
+  "status": "passed",
+  "execution_policy": "queue_only",
+  "worktree": "C:/Users/lywx2/.codex/worktrees/b156/gcli2api",
+  "python": "3.12.14",
+  "policy_digest": "4a4833e9690f652272c519aabc251710b2721c9f9873648bbd762338ed7d21e4",
+  "changed_files": ["src/model_routing/catalog.py", "test_model_routing_catalog.py", "docs/model-routing/deliveries/MR03.json"],
+  "actual_test_commands": [
+    "& G:/code/gemini30/gcli2api/.venv/Scripts/python.exe -m pytest -q test_model_routing_projection.py test_model_routing_resolver.py test_model_routing_compiler.py test_model_routing_policy_upgrade.py test_model_routing_catalog.py test_model_routing_contracts.py"
+  ],
+  "results": {
+    "passed": 148, "failed": 0, "skipped": 0, "duration_seconds": 2.75,
+    "mr03_owned_test_items": 16,
+    "coverage": ["three protocols times two channels", "empty/disabled table deep equality including duplicates and nested fields", "actual CLI hidden suffix closure", "AG independent suffix IDs", "public descriptions never copied from targets", "multiple aliases and identity once", "real resolver agreement", "filtered legacy nonidentity redirects retained", "unknown targets only base and existing advertised prefixes", "dynamic inputs cannot change compile or policy digest"]
+  },
+  "mock_dependencies": ["synthetic already-filtered catalog records; real compiled profiles and resolver used"],
+  "unverified": ["HTTP catalog fetch deadline/failure/cancellation and handlers belong to MR10", "actual upstream listing and live availability excluded"],
+  "known_issues": [],
+  "next_gate": "controller acceptance and MR10 catalog wiring"
+}

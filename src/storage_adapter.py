@@ -76,6 +76,10 @@ class StorageBackend(Protocol):
         """获取配置项"""
         ...
 
+    async def get_config_fresh(self, key: str, default: Any = None) -> Any:
+        """Read one authoritative key without using or refreshing caches."""
+        ...
+
     async def get_all_config(self) -> Dict[str, Any]:
         """获取所有配置"""
         ...
@@ -289,6 +293,11 @@ class StorageAdapter:
         """获取配置项"""
         self._ensure_initialized()
         return await self._backend.get_config(key, default)
+
+    async def get_config_fresh(self, key: str, default: Any = None) -> Any:
+        """Read one authoritative key; backend errors must propagate."""
+        self._ensure_initialized()
+        return await self._backend.get_config_fresh(key, default)
 
     async def get_all_config(self) -> Dict[str, Any]:
         """获取所有配置"""

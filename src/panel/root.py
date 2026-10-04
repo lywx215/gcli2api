@@ -16,6 +16,34 @@ from .utils import is_mobile_user_agent
 router = APIRouter(tags=["root"])
 
 
+@router.get("/model-routing", response_class=HTMLResponse)
+async def serve_model_routing(request: Request):
+    """Serve the dedicated editor; its API uses the existing panel login."""
+    try:
+        with open("front/model_routing.html", "r", encoding="utf-8") as f:
+            html_content = f.read()
+        embed_policy = await get_embed_policy()
+        html_content = html_content.replace(
+            "__GCLI2API_ASSET_VERSION__", get_asset_version()
+        ).replace(
+            "__GCLI_EMBED_POLICY__",
+            html.escape(
+                json.dumps({"mode": embed_policy.mode, "origins": embed_policy.origins}),
+                quote=True,
+            ),
+        )
+        return HTMLResponse(
+            content=html_content,
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Security-Policy": frame_ancestors_policy(embed_policy),
+            },
+        )
+    except Exception:
+        log.error("加载模型路由页面失败")
+        raise HTTPException(status_code=500, detail="服务器内部错误")
+
+
 @router.get("/", response_class=HTMLResponse)
 async def serve_control_panel(request: Request):
     """提供统一控制面板"""

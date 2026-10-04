@@ -419,7 +419,10 @@ async def _switch_credential_for_retry(
 
 # ==================== 新的流式和非流式请求函数 ====================
 
-async def stream_request(body, native=False, headers=None, events=False):
+async def stream_request(body, native=False, headers=None, events=False, *, route_context=None):
+    reject_retired_antigravity_opus_model(body.get("model", ""))
+    from src.model_routing.stream_runtime import dispatch_request_body
+    body = dispatch_request_body(body, route_context)
     reject_retired_antigravity_opus_model(body.get("model", ""))
     from src.antigravity_limits import (
         GenerationBudget, GenerationLimits, GenerationTimeout, current_budget, timeout_response,
@@ -428,7 +431,8 @@ async def stream_request(body, native=False, headers=None, events=False):
     inherited = current_budget.get()
     budget = inherited or GenerationBudget(GenerationLimits.load())
     budget.streaming = True
-    stream = _stream_request(body, native=native, headers=headers, events=events)
+    stream = _stream_request(body, native=native, headers=headers, events=events,
+                             **({"route_context": route_context} if route_context is not None else {}))
     budget.streams.append(stream)
     exposed = False
     try:
@@ -458,6 +462,8 @@ async def _stream_request(
     native: bool = False,
     headers: Optional[Dict[str, str]] = None,
     events: bool = False,
+    *,
+    route_context=None,
 ):
     """
     流式请求函数
@@ -572,6 +578,8 @@ async def _stream_request(
             received_data_event = False
             access_retry = False
             completion = Completion()
+            from src.model_routing.stream_runtime import CandidateIdentityState
+            candidate_identity = CandidateIdentityState() if route_context is not None else None
             pending_terminal = []
             pending_size = 0
             admission = None
@@ -705,6 +713,8 @@ async def _stream_request(
                                 yield chunk
                                 return
                         else:
+                            if candidate_identity is not None:
+                                chunk = candidate_identity.event(chunk)
                             protocol_done = completion.event(chunk)
                             received_data_event = received_data_event or _has_sse_data_event(chunk)
                             early, terminal = separate_terminal(chunk) if completion.terminal_seen else (chunk, None)
@@ -816,6 +826,7 @@ async def _non_stream_request(
     headers: Optional[Dict[str, str]] = None,
     *,
     protected: bool = False,
+    route_context=None,
 ) -> Response:
     """
     非流式请求函数
@@ -829,11 +840,14 @@ async def _non_stream_request(
     """
     reject_retired_antigravity_opus_model(body.get("model", ""))
     # 检查是否启用流式收集模式
-    if await get_antigravity_stream2nostream():
+    stream2nostream = (route_context.feature_snapshot.antigravity_stream2nostream
+                      if route_context is not None else await get_antigravity_stream2nostream())
+    if stream2nostream:
         log.debug("[ANTIGRAVITY] 使用流式收集模式实现非流式请求")
 
         # 调用stream_request获取流
-        stream = stream_request(body=body, native=False, headers=headers, **({"events": True} if protected else {}))
+        stream = stream_request(body=body, native=False, headers=headers, **({"events": True} if protected else {}),
+                                **({"route_context": route_context} if route_context is not None else {}))
 
         # 收集流式响应
         # stream_request是一个异步生成器，可能yield Response（错误）或流数据
@@ -1146,14 +1160,19 @@ async def non_stream_request(
     *,
     record_logical: bool = True,
     protected: bool = False,
+    route_context=None,
 ) -> Response:
     """Execute one client logical request after all internal retry attempts."""
     reject_retired_antigravity_opus_model(body.get("model", ""))
     from src.antigravity_limits import GenerationBudget, GenerationLimits, timeout_response
+    from src.model_routing.stream_runtime import dispatch_request_body
+    body = dispatch_request_body(body, route_context)
+    reject_retired_antigravity_opus_model(body.get("model", ""))
     inherited = current_budget.get()
     budget = inherited or GenerationBudget(GenerationLimits.load(), non_stream=True)
     try:
-        response = await budget.run(_non_stream_request(body=body, headers=headers, **({"protected": True} if protected else {})))
+        response = await budget.run(_non_stream_request(body=body, headers=headers, **({"protected": True} if protected else {}),
+            **({"route_context": route_context} if route_context is not None else {})))
     except (TimeoutError, httpx.TimeoutException):
         response = timeout_response()
     finally:

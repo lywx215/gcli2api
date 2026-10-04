@@ -1,0 +1,126 @@
+{
+  "task_id": "MR06",
+  "window": "P",
+  "base_sha": "170d989f545218920bc84794472a0f234490694f",
+  "contract_version": "routing-execution-1",
+  "status": "passed_local",
+  "changed_files": [
+    "src/model_routing/readonly.py",
+    "src/model_routing/preflight.py",
+    "test_model_routing_preflight.py",
+    "docs/model-routing/UPGRADE.md",
+    "docs/model-routing/deliveries/MR06-safe-preflight-fixtures.json",
+    "docs/model-routing/deliveries/MR06.json"
+  ],
+  "python": "3.12.14",
+  "cwd": "C:/Users/lywx2/.codex/worktrees/65fc/gcli2api",
+  "actual_test_commands": [
+    "G:/code/gemini30/gcli2api/.venv/Scripts/python.exe -c \"import socket,pytest; original=socket.socket.connect; socket.socket.connect=lambda self,address: original(self,address) if isinstance(address,tuple) and address[0] in ('127.0.0.1','::1') else (_ for _ in ()).throw(AssertionError('External network forbidden')); raise SystemExit(pytest.main(['-q','test_model_routing_storage.py','test_model_routing_config_api.py','test_model_routing_panel.py','test_model_routing_preflight.py','--basetemp=.pytest_cache/p-real-final2']))\"",
+    "python -m src.model_routing.preflight (three actual subprocess runs using the declared G:/.../.venv/Scripts/python.exe, fresh synthetic config-only SQLite, sanitized environment; exit 0/2/3 captured in MR06-safe-preflight-fixtures.json)",
+    "git diff --check -- src/storage_adapter.py src/storage/sqlite_manager.py src/storage/psql_manager.py src/storage/mysql_manager.py src/storage/mongodb_manager.py src/panel/config_routes.py src/panel/__init__.py src/panel/root.py front/common.js front/control_panel.html front/control_panel_mobile.html"
+  ],
+  "results": {
+    "final_joined": {
+      "passed": 116,
+      "failed": 0,
+      "skipped": 0,
+      "deselected": 0,
+      "warnings": 6,
+      "duration_seconds": 6.69,
+      "MR06_owned_passed": 52,
+      "MR06_real_compiler_cases": 3
+    },
+    "previous_joined": {
+      "passed": 112,
+      "failed": 0,
+      "skipped": 0,
+      "deselected": 0,
+      "warnings": 6,
+      "duration_seconds": 7.33
+    },
+    "previous_repair_selected": {
+      "passed": 45,
+      "failed": 0,
+      "skipped": 0,
+      "deselected_real_compiler": 3,
+      "duration_seconds": 4.42
+    },
+    "actual_cli_fixtures": {
+      "cases": 3,
+      "exit_codes": [
+        0,
+        2,
+        3
+      ],
+      "actual_candidate_compiler": true,
+      "database_bytes_unchanged": true,
+      "sidefiles_created": false,
+      "real_compiler_loaded_cases": 2,
+      "read_failure_case_skips_compiler": true
+    },
+    "sqlite": "actual temporary Windows SQLite; normal and WAL databases, latest committed WAL, in-flight commit invalidation, last-writer sidefile cleanup race, replacement/delete refusal, non-WAL transition refusal, mixed/unknown journal header refusal",
+    "postgresql": "driver mock only",
+    "mysql": "driver mock only",
+    "mongodb": "driver mock only",
+    "review": "Local Codex narrow review passed after both SQLite sidefile TOCTOU and mixed-header P1 repairs; no Claude used",
+    "earlier_fixture_attempt": {
+      "expected_exit": 0,
+      "actual_exit": 3,
+      "cause": "fixture setup retained its own non-WAL write connection; strict guard correctly refused. Explicit fixture connection.close fixed the setup; not a product failure."
+    }
+  },
+  "test_isolation": {
+    "credentials": "synthetic temporary config-only SQLite; sentinel credential table exists only in isolation tests to verify denied reads",
+    "remote_backend_variables": "cleared before project imports",
+    "external_business_urls": "closed loopback only",
+    "external_sockets": "blocked by test fixtures/wrapper",
+    "production_db": false,
+    "production_env": false,
+    "claude": false,
+    "actual_fixture_cli": "process environment selects fresh temporary SQLite only; no dotenv loader/adapter/web/app lifespan; no remote URI or network calls"
+  },
+  "mock_dependencies": [
+    "Compiler mocks only in report-boundary, policy-upgrade and fault classification cases; final real compiler cases separately passed",
+    "PostgreSQL/MySQL/MongoDB connections, permissions, metadata, cursors; no actual remote services"
+  ],
+  "unverified": [
+    "Actual isolated PostgreSQL/MySQL/MongoDB service integration and real database permission semantics",
+    "Actual runtime backend/scope of production instances, existing MongoDB uniqueness constraint and writable atomicity",
+    "Production all-entry freeze, accepted-write drain with commit evidence, fresh recheck, all writable instance policy confirmation and old-entry removal",
+    "Forced process or event-loop shutdown does not provide proof of drained commits"
+  ],
+  "blocked": [
+    "Non-Windows SQLite strict preflight is unsupported; all such reads fail safely with exit 3 before SQLite connect. This blocks Linux/POSIX SQLite online preflight until a separately verified platform guarantee exists."
+  ],
+  "known_issues": [
+    "A fresh Windows WAL read requires existing main/WAL/SHM files pinned without DELETE sharing. Missing sidefiles, locks, unproved journal header or permissions safely refuse; no sidefile repair.",
+    "MongoDB preflight requires provable read-only effective authenticated privileges, not merely a read role name or successful find.",
+    "Runtime backend switching and non-strict fallback can differ from environment selection; the runbook requires actual per-instance scope evidence.",
+    "Six existing Pydantic/Starlette deprecation warnings in joined tests."
+  ],
+  "dependency_gates": {
+    "MR00": "passed",
+    "MR02": "formally passed and explicitly synchronized by I",
+    "MR04": "local real compiler and temporary SQLite gate passed; formally accepted by I",
+    "actual_windows_sqlite": "passed",
+    "actual_candidate_compiler": "passed",
+    "remote_actual_services": "unverified",
+    "non_windows_sqlite": "blocked / safe exit 3"
+  },
+  "policy_digest": "4a4833e9690f652272c519aabc251710b2721c9f9873648bbd762338ed7d21e4",
+  "integration_notes": [
+    "No application/storage initialization, schema/index/WAL repair, Redis cache, credential loading or backend fallback.",
+    "Runtime/store and independent preflight share presence-sensitive canonical SHA256 config digest; candidate policy loaded from the same checkout.",
+    "Safe JSON report whitelists reason/field/channel and strips free diagnostic text, targets, backend locations and credentials.",
+    "Windows OPEN_EXISTING guards hold all files until after SQLite closes; strict non-WAL pin denies WRITE. Mixed journal versions 1/2, 2/1 and unknown versions refuse before connect."
+  ],
+  "schema_version": "unchanged",
+  "management_capabilities": "unchanged",
+  "panel_version": "unchanged",
+  "counterpart_action": "no_counterpart_action",
+  "execution_policy": "queue_only",
+  "next_gate": [
+    "I may explicitly integrate MR06 local owned files and fixtures; keep non-Windows SQLite and remote-service limitations visible in final acceptance.",
+    "No online cutover approval is implied by exit 0 or local tests. Do not bypass runbook freeze/drain/fresh/all-instance gates."
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "window": "S",
+  "base_sha": "170d989f545218920bc84794472a0f234490694f",
+  "contract_version": "routing-execution-1",
+  "status": "passed",
+  "validation_scope": "offline module and actual shared-helper integration; MR10 handler integration remains pending",
+  "python": "3.12.14",
+  "cwd": "C:/Users/lywx2/.codex/worktrees/dc58/gcli2api",
+  "branch": "codex/model-routing-stream",
+  "actual_test_commands": [
+    "G:/code/gemini30/gcli2api/.venv/Scripts/python.exe .mr_test_runner.tmp test_model_routing_transport.py test_model_routing_collection.py test_model_routing_fake_stream.py test_model_routing_anti_truncation.py test_model_routing_identity.py test_model_routing_safe_errors.py tests/test_sse_events.py tests/test_model_retirement.py tests/test_model_api_errors.py tests/test_model_api_transport_errors.py tests/test_model_api_error_matrix.py test_antigravity_stream_collection.py test_antigravity_stream_replay.py test_antigravity_timeouts.py test_antigravity_completion_policy.py test_antigravity_cycle_settlement.py test_antigravity_manual.py test_logical_request_stats.py",
+    "git diff --check"
+  ],
+  "results": {
+    "passed": 730,
+    "failed": 0,
+    "skipped": 0,
+    "warnings": 6,
+    "duration_seconds": 15.25,
+    "owned_new_tests": 118
+  },
+  "mock_dependencies": [
+    "synthetic credential managers/upstream attempts and ASGI transports in tests; shared contract/types and existing runtime helpers are actual local implementations"
+  ],
+  "safety_harness": "Temporary isolated CREDENTIALS_DIR and pytest --basetemp; cleared remote backend/proxy environment; closed-loopback endpoints; external DNS/socket connect denied; existing timeout test server uses loopback; logs disabled; no web lifespan",
+  "unverified": [
+    "MR10 integration into six production handlers remains for I",
+    "Actual Google/OAuth/model calls and production databases prohibited",
+    "Vertex/Management full regression and production validation are I MR11 scope"
+  ],
+  "known_issues": [
+    "Existing Pydantic and Starlette deprecation warnings"
+  ],
+  "next_gate": "I reviews the S-owned file diff and accepts MR07/MR08/MR09 before MR10/MR11 integration",
+  "contract_hashes": {
+    "src/model_routing/types.py": "6a3cce5053363a075112f13236542881d832b183a339e60826523041ff4fd93f",
+    "docs/model-routing/CONTRACTS.md": "71a1f1eda9b88f31e173c797e701402092a9dda43329f19b0d254bf24b68cc46"
+  },
+  "owned_source_test_sha256": {
+    "src/httpx_client.py": "401c76624f1b58997e289eeb27c29040bd3bb0d00092f23cd73ee52728123ba5",
+    "src/api/geminicli.py": "9873639f724e07673f2b0cbe22880150871912667ea5e74ea91fab9a47b486b0",
+    "src/api/antigravity.py": "dec77992d7056e85e3a147d8a1370770af9559b12d1570eabb98af4d713816cc",
+    "src/model_routing/stream_runtime.py": "3163473d9a574ccc79fb1619c8162695526484864a2ac6f7f8b6c0954f690281",
+    "src/api/utils.py": "326825fd2445146a8cdbde502999de60af87b7173ecaa2f2ab8cafb72b0ac7ed",
+    "src/converter/fake_stream.py": "d7fe45035c2e2a01eacce8df079b6bb9a27dd50e048345cf4b5888ba44916ef4",
+    "src/converter/anti_truncation.py": "743fbb7261a511d152f077a3a67f45570990a38236950af5d8af53b5f661cdec",
+    "src/model_routing/public_response.py": "68067dc192f882cce928349d6b2070a22ead10e54f2277a4b0526627f1499a7f",
+    "src/router/model_api_errors.py": "aea4dc6c24029a0d312b148c62dd62184577a9cccb0951e4fcf5b746b840bb26",
+    "src/router/stream_passthrough.py": "df20291734008faed2583b982335ecf966425421116da662ae04257e49d11f6d",
+    "test_model_routing_transport.py": "b9183f477017fb30289fb228f50c42432bde500921c412bdc1ceb4503d73d6bf",
+    "test_model_routing_collection.py": "7fb1a1c1f29c63e67a34ea75477322d2cc9a1782a5ebbdfc5db42acea3149ac9",
+    "test_model_routing_fake_stream.py": "a37e1012e12a054e0e6bc6e9763e92df2d489e80d613156f083c1289198c7545",
+    "test_model_routing_anti_truncation.py": "61df7d05213d191f2425667482e72214bcd0891ddeac80132c749aea12df16ff",
+    "test_model_routing_identity.py": "470a9671833cb2bcec0cfc4107a9df972e69102ce543dc96537d3a2b408311c6",
+    "test_model_routing_safe_errors.py": "00025dbcd52804a609a82a18dcb5ee4da9556c8d91fe731896efb41b6ac8fb12"
+  },
+  "task_id": "MR09",
+  "changed_files": [
+    "src/model_routing/public_response.py",
+    "src/router/model_api_errors.py",
+    "src/router/stream_passthrough.py",
+    "test_model_routing_identity.py",
+    "test_model_routing_safe_errors.py",
+    "docs/model-routing/deliveries/MR09.json"
+  ],
+  "interfaces": [
+    "rewrite_success_identity(payload, *, protocol, requested_model) -> dict",
+    "await adapt_public_response(response, *, route_context) -> Response"
+  ],
+  "identity_whitelist": [
+    "Gemini root/one existing response wrapper model/modelVersion; add modelVersion for valid native success/Hi objects",
+    "OpenAI top-level model in JSON and every data chunk",
+    "Anthropic top-level message.model and message_start.message.model; other nested model fields untouched"
+  ],
+  "integration_notes": [
+    "Apply final protocol identity once; adapters reuse central protection and renderer",
+    "Keep master streaming statistics ownership: build_streaming_response_or_error counts streams; do not additionally activate Request logical recording for those same streaming paths",
+    "Normal DONE drains existing tracked source to EOF before final public DONE; success outcome is retained",
+    "Already protected adapters execute inside existing boundary; preserve private Response markers/background/subclass behavior",
+    "Header disconnect closes actual prefetched sources once; disconnect is not counted as completed",
+    "Fixed renderer output retains private in-process event provenance; wire bytes and local-only Retry-After remain unchanged"
+  ],
+  "owned_all_files_for_I": [
+    "src/httpx_client.py",
+    "src/api/geminicli.py",
+    "src/api/antigravity.py",
+    "src/model_routing/stream_runtime.py",
+    "src/api/utils.py",
+    "src/converter/fake_stream.py",
+    "src/converter/anti_truncation.py",
+    "src/model_routing/public_response.py",
+    "src/router/model_api_errors.py",
+    "src/router/stream_passthrough.py",
+    "test_model_routing_transport.py",
+    "test_model_routing_collection.py",
+    "test_model_routing_fake_stream.py",
+    "test_model_routing_anti_truncation.py",
+    "test_model_routing_identity.py",
+    "test_model_routing_safe_errors.py",
+    "docs/model-routing/deliveries/MR07.json",
+    "docs/model-routing/deliveries/MR08.json",
+    "docs/model-routing/deliveries/MR09.json"
+  ],
+  "initial_new_test_assertion_corrections": "Four own new tests initially used an incorrect fixed message phrase or counted both Anthropic type:error and its error object. Corrected assertions compare exact existing renderer bytes/data event counts; all master fixtures remained unchanged."
+}

@@ -25,11 +25,13 @@ from log import log
 
 # 本地模块 - 工具和认证
 from src.utils import (
-    get_base_model_from_feature_model,
-    normalize_geminicli_model_alias,
-    is_anti_truncation_model,
-    is_fake_streaming_model,
     authenticate_bearer,
+)
+from src.model_routing import (
+    adapt_model_response,
+    normalization_model,
+    prepare_route_context,
+    rewrite_health_identity,
 )
 
 # 本地模块 - 转换器（假流式需要）
@@ -100,6 +102,7 @@ async def chat_completions(
         token: Bearer认证令牌
     """
     log.debug(f"[GEMINICLI-OPENAI] Request for model: {openai_request.model}")
+    requested_model = openai_request.model
 
     # 转换为字典
     normalized_dict = model_to_dict(openai_request)
@@ -107,45 +110,54 @@ async def chat_completions(
     # 健康检查
     if is_health_check_request(normalized_dict, format="openai"):
         response = create_health_check_response(format="openai")
+        response = rewrite_health_identity(
+            response, protocol="openai", requested_model=requested_model,
+        )
         return JSONResponse(content=response)
 
     # 处理模型名称和功能检测
-    use_fake_streaming = is_fake_streaming_model(openai_request.model)
-    use_anti_truncation = is_anti_truncation_model(openai_request.model)
-    public_model = get_base_model_from_feature_model(openai_request.model)
-    real_model = normalize_geminicli_model_alias(public_model)
-    if real_model != public_model:
-        log.info(f"[GEMINICLI-OPENAI] Code Assist 模型别名: {public_model} -> {real_model}")
+    route_context = await prepare_route_context(
+        "geminicli", "openai", requested_model, normalized_dict,
+    )
+    use_fake_streaming = route_context.resolution.features["fake_streaming"]
+    use_anti_truncation = route_context.resolution.features["anti_truncation"]
+    real_model = route_context.resolution.dispatch_model
     # 获取流式标志
     is_streaming = openai_request.stream
     if not is_streaming and request is not None:
-        request.state.model_api_model = real_model
+        request.state.model_api_model = route_context.resolution.dispatch_model
         request.state.model_api_mode = "geminicli"
         activate_logical_request_recording(request)
-
     # 对于抗截断模型的非流式请求，给出警告
     if use_anti_truncation and not is_streaming:
         log.warning("抗截断功能仅在流式传输时有效，非流式请求将忽略此设置")
 
     # 更新模型名为真实模型名
-    normalized_dict["model"] = real_model
+    normalized_dict["model"] = normalization_model(route_context)
 
     # 转换为 Gemini 格式 (使用 converter)
     from src.converter.openai2gemini import convert_openai_to_gemini_request
-    gemini_dict = await convert_openai_to_gemini_request(normalized_dict)
+    gemini_dict = await convert_openai_to_gemini_request(
+        normalized_dict, route_context=route_context,
+    )
 
     # convert_openai_to_gemini_request 不包含 model 字段，需要手动添加
-    gemini_dict["model"] = real_model
+    gemini_dict["model"] = normalization_model(route_context)
 
     # 规范化 Gemini 请求
     from src.converter.gemini_fix import normalize_gemini_request
-    gemini_dict = await normalize_gemini_request(gemini_dict, mode="geminicli")
+    gemini_dict = await normalize_gemini_request(
+        gemini_dict, mode="geminicli", route_context=route_context,
+    )
 
     # 准备API请求格式 - 提取model并将其他字段放入request中
     api_request = {
         "model": gemini_dict.pop("model"),
         "request": gemini_dict
     }
+    real_model = api_request["model"]
+    if not is_streaming and request is not None:
+        request.state.model_api_model = real_model
 
     # ========== 非流式请求 ==========
     if not is_streaming:
@@ -153,13 +165,14 @@ async def chat_completions(
         from src.api.geminicli import non_stream_request
         response = await non_stream_request(
             body=api_request,
+            route_context=route_context,
             **({"record_logical": False, "protected": True} if request is not None else {}),
         )
 
         # 检查响应状态码
         status_code = getattr(response, "status_code", 200)
         if status_code != 200:
-            return response
+            return await adapt_model_response(response, route_context=route_context)
 
         # 提取响应体
         if hasattr(response, "body"):
@@ -186,11 +199,14 @@ async def chat_completions(
         from src.converter.openai2gemini import convert_gemini_to_openai_response
         openai_response = convert_gemini_to_openai_response(
             gemini_response,
-            public_model,
+            requested_model,
             status_code
         )
 
-        return JSONResponse(content=openai_response, status_code=status_code)
+        return await adapt_model_response(
+            JSONResponse(content=openai_response, status_code=status_code),
+            route_context=route_context,
+        )
 
     # ========== 流式请求 ==========
 
@@ -200,6 +216,7 @@ async def chat_completions(
 
         response = await non_stream_request(
             body=api_request,
+            route_context=route_context,
             **({"record_logical": False, "protected": True} if request is not None else {}),
         )
 
@@ -235,7 +252,7 @@ async def chat_completions(
             log.debug(f"OpenAI extracted images count: {len(images)}")
 
             # 构建响应块
-            chunks = build_openai_fake_stream_chunks(content, reasoning_content, finish_reason, public_model, images)
+            chunks = build_openai_fake_stream_chunks(content, reasoning_content, finish_reason, requested_model, images)
             for idx, chunk in enumerate(chunks):
                 chunk_json = json.dumps(chunk)
                 log.debug(f"[FAKE_STREAM] Yielding chunk #{idx+1}: {chunk_json[:200]}")
@@ -259,9 +276,9 @@ async def chat_completions(
         max_attempts = await get_anti_truncation_max_attempts()
 
         # 首先对payload应用反截断指令
-        anti_truncation_payload = apply_anti_truncation(api_request)
+        anti_truncation_payload = apply_anti_truncation(api_request, route_context=route_context)
 
-        first_attempt_stream = stream_request(body=anti_truncation_payload, native=False, events=True)
+        first_attempt_stream = stream_request(body=anti_truncation_payload, native=False, events=True, route_context=route_context)
         try:
             first_chunk = await read_first_async_item(first_attempt_stream)
         except StopAsyncIteration:
@@ -280,7 +297,7 @@ async def chat_completions(
                 first_attempt_pending = False
                 stream_gen = prepend_async_item(first_chunk, first_attempt_stream)
             else:
-                stream_gen = stream_request(body=payload, native=False, events=True)
+                stream_gen = stream_request(body=payload, native=False, events=True, route_context=route_context)
 
             return StreamingResponse(stream_gen, media_type="text/event-stream")
 
@@ -291,6 +308,7 @@ async def chat_completions(
             max_attempts,
             enable_prefill_mode=(api_request["model"] != "gemini-3.8-flash"),
             defer_intermediate_finish=(api_request["model"] == "gemini-3.8-flash"),
+            route_context=route_context,
         )
 
         # 转换为 OpenAI 格式
@@ -321,7 +339,7 @@ async def chat_completions(
                     from src.converter.openai2gemini import convert_gemini_to_openai_stream
                     openai_chunk_str = convert_gemini_to_openai_stream(
                         chunk_str,
-                        public_model,
+                        requested_model,
                         response_id
                     )
 
@@ -342,7 +360,7 @@ async def chat_completions(
         import uuid
 
         # 调用 API 层的流式请求（不使用 native 模式）
-        stream_gen = stream_request(body=api_request, native=False, events=True)
+        stream_gen = stream_request(body=api_request, native=False, events=True, route_context=route_context)
         try:
             first_chunk = await read_first_async_item(stream_gen)
         except StopAsyncIteration:
@@ -381,7 +399,7 @@ async def chat_completions(
                         from src.converter.openai2gemini import convert_gemini_to_openai_stream
                         openai_chunk_str = convert_gemini_to_openai_stream(
                             chunk_str,
-                            public_model,
+                            requested_model,
                             response_id
                         )
 
@@ -397,12 +415,13 @@ async def chat_completions(
 
     # ========== 根据模式选择生成器 ==========
     if use_fake_streaming:
-        return await build_streaming_response_or_error(fake_stream_generator(), model_name=real_model, mode="geminicli", protected=True, protocol="openai")
+        response = await build_streaming_response_or_error(fake_stream_generator(), model_name=real_model, mode="geminicli", protected=True, protocol="openai")
     elif use_anti_truncation:
         log.info("启用流式抗截断功能")
-        return await build_streaming_response_or_error(anti_truncation_generator(), model_name=real_model, mode="geminicli", protected=True, protocol="openai")
+        response = await build_streaming_response_or_error(anti_truncation_generator(), model_name=real_model, mode="geminicli", protected=True, protocol="openai")
     else:
-        return await build_streaming_response_or_error(normal_stream_generator(), model_name=real_model, mode="geminicli", protected=True, protocol="openai")
+        response = await build_streaming_response_or_error(normal_stream_generator(), model_name=real_model, mode="geminicli", protected=True, protocol="openai")
+    return await adapt_model_response(response, route_context=route_context)
 
 
 # ==================== 测试代码 ====================

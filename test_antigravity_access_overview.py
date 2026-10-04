@@ -230,5 +230,6 @@ assert.ok(!createCredCard(info, legacy).innerHTML.includes('data-model-access-ba
     assert.equal(ag.currentPage,1); assert.equal(ag.currentModelAccessFilter,'unknown'); assert.equal(ag.currentModelAccessTier,'medium');
 })().catch(error => {console.error(error);process.exitCode=1;});
 '''
-    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    # Pass the extracted frontend through stdin, not Windows' bounded argv.
+    result = subprocess.run([node], input=script, capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr

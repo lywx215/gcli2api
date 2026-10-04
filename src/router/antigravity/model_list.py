@@ -12,6 +12,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 # 第三方库
+import asyncio
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
@@ -28,6 +29,9 @@ from src.api.antigravity import fetch_available_models
 from src.router.base_router import create_gemini_model_list, create_openai_model_list
 from src.models import model_to_dict
 from log import log
+from src.model_routing import prepare_catalog_context
+from src.model_routing.catalog import project_catalog
+from src.router.model_api_errors import ModelApiErrorException, ModelApiProtocol, render_error
 
 
 # ==================== 路由器初始化 ====================
@@ -45,7 +49,16 @@ async def get_antigravity_models_with_features():
         带有功能前缀的模型列表
     """
     # 从 API 获取基础模型列表
-    base_models_data = await fetch_available_models()
+    try:
+        # Includes credential acquisition and the complete fetch. Validation
+        # happens in the endpoint before this dynamic operation is permitted.
+        async with asyncio.timeout(30):
+            base_models_data = await fetch_available_models()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.warning("[ANTIGRAVITY MODEL LIST] Dynamic catalog unavailable")
+        return []
     
     if not base_models_data:
         log.warning("[ANTIGRAVITY MODEL LIST] 无法获取模型列表，返回空列表")
@@ -80,12 +93,18 @@ async def list_gemini_models(token: str = Depends(authenticate_flexible)):
     从 src.api.antigravity.fetch_available_models 动态获取模型列表
     并添加假流式和抗截断前缀
     """
+    try:
+        compiled, policy, features = await prepare_catalog_context("antigravity")
+    except ModelApiErrorException as exc:
+        return render_error(exc.error, ModelApiProtocol.GEMINI)
     models = await get_antigravity_models_with_features()
     log.info("[ANTIGRAVITY MODEL LIST] 返回 Gemini 格式")
-    return JSONResponse(content=create_gemini_model_list(
+    body = create_gemini_model_list(
         models,
         base_name_extractor=get_base_model_from_feature_model
-    ))
+    )
+    body["models"] = project_catalog("antigravity", ModelApiProtocol.GEMINI, body["models"], compiled, policy, features)
+    return JSONResponse(content=body)
 
 
 @router.get("/antigravity/v1/models")
@@ -96,10 +115,15 @@ async def list_openai_models(token: str = Depends(authenticate_flexible)):
     从 src.api.antigravity.fetch_available_models 动态获取模型列表
     并添加假流式和抗截断前缀
     """
+    try:
+        compiled, policy, features = await prepare_catalog_context("antigravity")
+    except ModelApiErrorException as exc:
+        return render_error(exc.error, ModelApiProtocol.OPENAI)
     models = await get_antigravity_models_with_features()
     log.info("[ANTIGRAVITY MODEL LIST] 返回 OpenAI 格式")
     model_list = create_openai_model_list(models, owned_by="google")
     return JSONResponse(content={
         "object": "list",
-        "data": [model_to_dict(model) for model in model_list.data]
+        "data": project_catalog("antigravity", ModelApiProtocol.OPENAI,
+                                [model_to_dict(model) for model in model_list.data], compiled, policy, features)
     })

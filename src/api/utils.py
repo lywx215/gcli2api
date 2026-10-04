@@ -380,6 +380,100 @@ async def parse_and_log_cooldown(
 
 # ==================== 流式响应收集 ====================
 
+async def _collect_protected_stream(stream_generator) -> Response:
+    """Use the existing parser/Completion with lossless candidate accumulation."""
+    from src.antigravity_completion import Completion
+    from src.diagnostics.semantic import collector_observer, collector_parsed, collected_response
+    from src.httpx_client import normalize_sse_events
+    from src.model_routing.stream_runtime import CandidateIdentityState, bad_stream
+    from src.router.model_api_errors import (
+        ModelApiErrorException, attach_model_api_error, error_from_exception, parse_model_response,
+    )
+    import httpx
+
+    class ResponseExit(Exception):
+        def __init__(self, response):
+            self.response = response
+
+    async def fragments():
+        async for item in stream_generator:
+            if isinstance(item, Response):
+                raise ResponseExit(item)
+            yield item
+
+    diagnostic = collector_observer()
+    completion = Completion()
+    identities = CandidateIdentityState()
+    merged = {}
+    candidates = {}
+    content_frames = {}
+    source = fragments()
+    events = normalize_sse_events(source)
+    try:
+        async for event in events:
+            raw = event[6:].strip()
+            if raw == b"[DONE]":
+                completion.finish()
+                break
+            payload = identities.normalize(parse_model_response(raw))
+            collector_parsed(diagnostic, payload)
+            completion.observe(payload)
+            obj = payload.get("response", payload)
+            for field, value in obj.items():
+                if field == "candidates":
+                    continue
+                if field == "usageMetadata" and isinstance(value, dict):
+                    merged.setdefault(field, {}).update(deepcopy(value))
+                else:
+                    merged[field] = deepcopy(value)
+            for candidate in obj.get("candidates", []):
+                target = candidates.setdefault(candidate["index"], {})
+                for field, value in candidate.items():
+                    if field == "groundingMetadata":
+                        # Source arrays and support indices are one snapshot.
+                        if isinstance(value, dict) and value:
+                            target[field] = deepcopy(value)
+                    elif field == "content":
+                        if value.get("parts"):
+                            content_frames[candidate["index"]] = content_frames.get(candidate["index"], 0) + 1
+                        content = target.setdefault("content", {})
+                        for key, item in value.items():
+                            if key == "parts":
+                                content.setdefault("parts", []).extend(deepcopy(item))
+                            else:
+                                content[key] = deepcopy(item)
+                    else:
+                        target[field] = deepcopy(value)
+        completion.finish()
+        for index, candidate in candidates.items():
+            if content_frames.get(index, 0) > 1 and candidate.get("groundingMetadata", {}).get("groundingSupports"):
+                # Delta part positions have no stable part identity field.
+                # Preserve snapshots, but do not claim their indices address a
+                # concatenated/re-numbered answer that cannot be proved here.
+                raise bad_stream()
+        if candidates:
+            merged["candidates"] = list(candidates.values())
+        collected_response(diagnostic)
+        return Response(content=json.dumps(merged, ensure_ascii=False).encode("utf-8"),
+                        media_type="application/json", status_code=200)
+    except ResponseExit as exc:
+        return exc.response
+    except Exception as exc:
+        collector_parsed(diagnostic, invalid=True)
+        error = (error_from_exception(exc) if isinstance(exc, (
+            ModelApiErrorException, httpx.TimeoutException, TimeoutError, UnicodeError,
+        )) else bad_stream().error)
+        return attach_model_api_error(build_error_response("Invalid upstream response", error.status), error)
+    finally:
+        for iterator in (events, source, stream_generator):
+            close = getattr(iterator, "aclose", None)
+            if close is not None:
+                try:
+                    await close()
+                except Exception:
+                    pass
+
+
 async def collect_streaming_response(stream_generator, *, protected: bool = False) -> Response:
     """
     将Gemini流式响应收集为一条完整的非流式响应
@@ -395,6 +489,8 @@ async def collect_streaming_response(stream_generator, *, protected: bool = Fals
         ...     # line format: "data: {...}" or Response object
         >>> response = await collect_streaming_response(stream_generator)
     """
+    if protected:
+        return await _collect_protected_stream(stream_generator)
     from src.diagnostics.semantic import collector_observer, collector_parsed, collected_response
     from src.router.model_api_errors import (
         ErrorKind, ErrorOrigin, ModelApiErrorException, attach_exception_error,

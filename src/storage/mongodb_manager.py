@@ -1554,6 +1554,21 @@ class MongoDBManager(AntigravityQuotaMixin):
 
         try:
             config_collection = self._db["config"]
+            if key == "model_routing":
+                # Concurrent first upserts need a pre-existing unique key
+                # constraint. Do not create an index or accept an ambiguous
+                # single-key write when the historical schema lacks it.
+                indexes = await config_collection.index_information()
+                unique_key = any(
+                    index.get("unique") is True
+                    and index.get("key") in ([('key', 1)], [('key', -1)])
+                    and not index.get("partialFilterExpression")
+                    and not index.get("sparse")
+                    and index.get("collation", {}).get("locale", "simple") == "simple"
+                    for index in indexes.values()
+                )
+                if not unique_key:
+                    return False
             await config_collection.update_one(
                 {"key": key},
                 {"$set": {"value": value, "updated_at": time.time()}},
@@ -1613,6 +1628,22 @@ class MongoDBManager(AntigravityQuotaMixin):
                 return {}
 
         return self._config_cache.copy()
+
+    async def get_config_fresh(self, key: str, default: Any = None) -> Any:
+        """Read the authoritative primary, bypassing Redis and memory caches."""
+        from pymongo.read_preferences import ReadPreference
+
+        self._ensure_initialized()
+        collection = self._db.get_collection("config", read_preference=ReadPreference.PRIMARY)
+        rows = await collection.find({"key": key}, {"_id": 0, "value": 1}).limit(2).to_list(length=2)
+        if not rows:
+            return default
+        if len(rows) != 1:
+            raise ValueError("Stored configuration key is ambiguous.")
+        row = rows[0]
+        if "value" not in row:
+            raise ValueError("Stored configuration value is missing.")
+        return row["value"]
 
     async def delete_config(self, key: str) -> bool:
         """删除配置"""

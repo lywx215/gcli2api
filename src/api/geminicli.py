@@ -27,6 +27,7 @@ from log import log
 
 from src.credential_manager import credential_manager
 from src.httpx_client import stream_post_async, post_async
+from src.model_routing.stream_runtime import dispatch_request_body
 from src.router.model_api_errors import (
     ErrorKind,
     ErrorOrigin,
@@ -272,6 +273,8 @@ async def stream_request(
     native: bool = False,
     headers: Optional[Dict[str, str]] = None,
     events: bool = False,
+    *,
+    route_context=None,
 ):
     """
     流式请求函数
@@ -284,6 +287,7 @@ async def stream_request(
     Yields:
         Response对象（错误时）或 bytes流/str流（成功时）
     """
+    body = dispatch_request_body(body, route_context)
     # 获取有效凭证
     model_name = body.get("model", "")
     breaker_response = _capacity_breaker_response(model_name)
@@ -387,6 +391,12 @@ async def stream_request(
                         if isinstance(chunk, Response):
                             status_code = chunk.status_code
                             last_error_response = chunk  # 记录最后一次错误
+
+                            if success_recorded:
+                                # A response following delivered data must not
+                                # restart the entire request with another token.
+                                yield chunk
+                                return
 
                             # 缓存错误解析结果,避免重复decode
                             error_body = None
@@ -912,8 +922,10 @@ async def non_stream_request(
     *,
     record_logical: bool = True,
     protected: bool = False,
+    route_context=None,
 ) -> Response:
     """Execute one client logical request after all internal retry attempts."""
+    body = dispatch_request_body(body, route_context)
     response = await _non_stream_request(body=body, headers=headers)
     if record_logical:
         from src.logical_request_stats import record_logical_request, response_has_valid_body

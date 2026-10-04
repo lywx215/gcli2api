@@ -755,7 +755,9 @@ def map_antigravity_gemini_model(model_name: str, thinking_level: Optional[str],
 
 async def normalize_gemini_request(
     request: Dict[str, Any],
-    mode: str = "geminicli"
+    mode: str = "geminicli",
+    *,
+    route_context: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     规范化 Gemini 请求
@@ -794,7 +796,11 @@ async def normalize_gemini_request(
     log.debug(f"[GEMINI_FIX] 原始请求 - 模型: {model}, mode: {mode}, generationConfig: {generation_config}")
 
     # 获取配置值
-    return_thoughts = await get_return_thoughts_to_frontend()
+    return_thoughts = (
+        route_context.feature_snapshot.return_thoughts
+        if route_context is not None and mode == "geminicli"
+        else await get_return_thoughts_to_frontend()
+    )
 
     # ========== 模式特定处理 ==========
     if mode == "geminicli":
@@ -1108,4 +1114,7 @@ async def normalize_gemini_request(
     ):
         result["generationConfig"] = generation_config
 
+    if route_context is not None and mode == "geminicli":
+        from src.model_routing import check_route_dispatch
+        check_route_dispatch(result, route_context)
     return result

@@ -467,10 +467,16 @@ async def test_global_directory_concurrency_never_exceeds_two(access_store, monk
     async def no_refresh(data): return False
     manager._should_refresh_token = no_refresh
     active, maximum = 0, 0
+    first_pair_started = asyncio.Event()
     async def directory(*args, **kwargs):
         nonlocal active, maximum
         active += 1
         maximum = max(maximum, active)
+        if active == 2:
+            first_pair_started.set()
+        # Require actual overlap without assuming SQLite preparation finishes
+        # within 10ms. A serial implementation fails at this bounded barrier.
+        await asyncio.wait_for(first_pair_started.wait(), timeout=5)
         await asyncio.sleep(.01)
         active -= 1
         return {"success": True, "models": dict.fromkeys(MODELS, {})}

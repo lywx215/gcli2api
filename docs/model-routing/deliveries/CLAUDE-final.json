@@ -1,0 +1,63 @@
+{
+  "shared_hook": "C:/Users/lywx2/.codex/review/hook.py",
+  "cli": "C:/Users/lywx2/.local/bin/claude.exe",
+  "configured_model": "claude-opus-5-5",
+  "authorization": "启用 Claude 审核：按上述范围审核本次最终实现",
+  "continue_authorization": "继续 Claude 审核",
+  "automatic_round_limit_per_group": 3,
+  "actual_rounds_total": 4,
+  "initial_group_rounds": 3,
+  "continued_group_rounds": 1,
+  "final_status": "approved",
+  "approved_at": "2026-10-01T19:42:43.291989+08:00",
+  "approved_plan_digest": "f3577b3fe1f54d80d196cf198ceeae288137c8cc87754ad6ce2649d65d17366e",
+  "approved_code_digest": "cddf4060b23178919c3edfc937255274433f6392b613117160da91bdf264c604",
+  "final_findings": [],
+  "final_error": null,
+  "source_files_frozen_verified": 48,
+  "source_changed_during_review": [],
+  "history": [
+    {
+      "time": "2026-10-01T19:04:17.133268+08:00",
+      "stage": "plan",
+      "digest": "f3577b3fe1f54d80d196cf198ceeae288137c8cc87754ad6ce2649d65d17366e",
+      "findings": [],
+      "error": null
+    },
+    {
+      "time": "2026-10-01T19:06:51.504404+08:00",
+      "stage": "code",
+      "digest": "1f2d3483edc14e3202b5b052eefc393f7b944a429cd4f9be031856bc8d1cfcef",
+      "findings": [
+        {
+          "file": "src/model_routing/compiler.py",
+          "issue": "Lines 227-229 call `_supported_policy` (lines 97-110) before looking at any rows. It needs the live AST fingerprints of 11 legacy source files to exactly match the hard-coded `PROVEN_SOURCE_DIGESTS`/`REVIEWED_CONTEXT_SOURCE_DIGESTS` in `src/model_routing/policy.py:40-64`. These files include `src/utils.py`, `src/models.py`, `gemini_fix.py`, `antigravity_fix.py`, `openai2gemini.py`, `anthropic2gemini.py` and `antigravity_models.py`. If any of them changes, `compile_channel` returns invalid even when the `model_routing` key is missing or the table is empty. Then `prepare_route_context` (`src/model_routing/__init__.py:35-38`) and `prepare_catalog_context` (`__init__.py:112-115`) return a local 503 for every CLI and Antigravity generation and model-list request. This breaks SPEC.md:28, which requires the missing-key/empty-table path to keep master behaviour. It also means any future Antigravity fix in these shared converters, which is still in maintenance scope, silently disables the whole model API until someone recomputes the hashes. UPGRADE.md does not document this failure mode. The existing test `test_model_routing_policy_upgrade.py:62-66` only checks that compilation is invalid; it does not check that legacy requests keep working. Fix: skip the source-digest gate when a channel has no enabled routes (go straight to the legacy chain), or apply it only to rows that need a protected-equality or target proof. Add a regression test that an empty table plus changed source digests still serves requests exactly like master."
+        },
+        {
+          "file": "src/model_routing/policy.py",
+          "issue": "`build_policy_snapshot()` (lines 91-114) calls `_source_digests()` (lines 67-83) on every call. That function synchronously reads, `ast.parse`s, `ast.dump`s and SHA-256-hashes 11 large source files (`gemini_fix.py`, `antigravity_fix.py`, `src/utils.py`, the converters, and so on). The snapshot is not cached. It is rebuilt for every model API request in `prepare_route_context` (`src/model_routing/__init__.py:28`), for every model-list request in `prepare_catalog_context` (`__init__.py:106`), and for every settings GET/PUT. The work runs on the asyncio event loop, so it adds blocking CPU latency to each request and stalls all other concurrent streams under load. Only `compiler._proof_reference_policy` is wrapped in `lru_cache`. Source files do not change while the process runs, so compute `_source_digests()` once per process (for example with `functools.lru_cache`) and reuse it. Also note that in `prepare_route_context`, line 28 calls `build_policy_snapshot()` outside the `RoutingConfigReadError` handling. A file read or parse failure there therefore skips the fixed local-503 path that `prepare_catalog_context` uses."
+        }
+      ],
+      "error": null
+    },
+    {
+      "time": "2026-10-01T19:22:00.420278+08:00",
+      "stage": "code",
+      "digest": "a7024c31f0d844eae901215271e68733a6229758f8c9f75b39e24699629d00b5",
+      "findings": [
+        {
+          "file": "front/model_routing.js",
+          "issue": "Lines 315-316: every non-400/401/403 response to the save request (PUT /config/model-routing), including 503, shows '保存失败，两个渠道的草稿均已保留', which says the save did not happen. But the backend can return 503 after the write has already been committed. In src/model_routing/store.py:182-191, save_routing_config calls _settled_write, then re-reads the table with _read_snapshot(policy_snapshot) outside the try block. If that re-read raises RoutingConfigReadError, src/model_routing/settings_routes.py:80-83 returns 503 MODEL_ROUTING_UNAVAILABLE even though the new table is already saved. This breaks plan risk item 8 ('503不误称未提交'): the user is told the save failed (and the page still marks the draft as unsaved) when the configuration is already live. Fix: treat a 503 from the save request as 'result unknown, reload to check', like the network-error branch at line 319."
+        }
+      ],
+      "error": null
+    },
+    {
+      "time": "2026-10-01T19:42:43.291989+08:00",
+      "stage": "code",
+      "digest": "cddf4060b23178919c3edfc937255274433f6392b613117160da91bdf264c604",
+      "findings": [],
+      "error": null
+    }
+  ]
+}

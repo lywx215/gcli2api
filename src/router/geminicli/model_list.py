@@ -26,6 +26,9 @@ from src.utils import (
 from src.router.base_router import create_gemini_model_list, create_openai_model_list
 from src.models import model_to_dict
 from log import log
+from src.model_routing import prepare_catalog_context
+from src.model_routing.catalog import project_catalog
+from src.router.model_api_errors import ModelApiErrorException, ModelApiProtocol, render_error
 
 
 # ==================== 路由器初始化 ====================
@@ -42,12 +45,18 @@ async def list_gemini_models(token: str = Depends(authenticate_flexible)):
 
     使用 create_gemini_model_list 工具函数创建标准格式
     """
+    try:
+        compiled, policy, features = await prepare_catalog_context("geminicli")
+    except ModelApiErrorException as exc:
+        return render_error(exc.error, ModelApiProtocol.GEMINI)
     models = get_available_models("gemini")
     log.info("[GEMINICLI MODEL LIST] 返回 Gemini 格式")
-    return JSONResponse(content=create_gemini_model_list(
+    body = create_gemini_model_list(
         models,
         base_name_extractor=get_base_model_from_feature_model
-    ))
+    )
+    body["models"] = project_catalog("geminicli", ModelApiProtocol.GEMINI, body["models"], compiled, policy, features)
+    return JSONResponse(content=body)
 
 
 @router.get("/v1/models")
@@ -57,10 +66,15 @@ async def list_openai_models(token: str = Depends(authenticate_flexible)):
 
     使用 create_openai_model_list 工具函数创建标准格式
     """
+    try:
+        compiled, policy, features = await prepare_catalog_context("geminicli")
+    except ModelApiErrorException as exc:
+        return render_error(exc.error, ModelApiProtocol.OPENAI)
     models = get_available_models("gemini")
     log.info("[GEMINICLI MODEL LIST] 返回 OpenAI 格式")
     model_list = create_openai_model_list(models, owned_by="google")
     return JSONResponse(content={
         "object": "list",
-        "data": [model_to_dict(model) for model in model_list.data]
+        "data": project_catalog("geminicli", ModelApiProtocol.OPENAI,
+                                [model_to_dict(model) for model in model_list.data], compiled, policy, features)
     })

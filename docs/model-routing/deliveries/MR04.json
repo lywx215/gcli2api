@@ -1,0 +1,135 @@
+{
+  "task_id": "MR04",
+  "window": "P",
+  "base_sha": "170d989f545218920bc84794472a0f234490694f",
+  "contract_version": "routing-execution-1",
+  "status": "passed_local",
+  "changed_files": [
+    "src/model_routing/store.py",
+    "src/model_routing/settings_routes.py",
+    "src/storage_adapter.py",
+    "src/storage/sqlite_manager.py",
+    "src/storage/psql_manager.py",
+    "src/storage/mysql_manager.py",
+    "src/storage/mongodb_manager.py",
+    "src/panel/config_routes.py",
+    "src/panel/__init__.py",
+    "test_model_routing_storage.py",
+    "test_model_routing_config_api.py",
+    "docs/model-routing/deliveries/MR04.json"
+  ],
+  "python": "3.12.14",
+  "cwd": "C:/Users/lywx2/.codex/worktrees/65fc/gcli2api",
+  "actual_test_commands": [
+    "G:/code/gemini30/gcli2api/.venv/Scripts/python.exe -c \"import socket,pytest; original=socket.socket.connect; socket.socket.connect=lambda self,address: original(self,address) if isinstance(address,tuple) and address[0] in ('127.0.0.1','::1') else (_ for _ in ()).throw(AssertionError('External network forbidden')); raise SystemExit(pytest.main(['-q','test_model_routing_storage.py','test_model_routing_config_api.py','test_model_routing_panel.py','test_model_routing_preflight.py','test_security_config.py','test_panel_embed.py','-k','not real_compiler','--basetemp=.pytest_cache/p-all-run4']))\"",
+    "G:/code/gemini30/gcli2api/.venv/Scripts/python.exe -c \"import socket,pytest; original=socket.socket.connect; socket.socket.connect=lambda self,address: original(self,address) if isinstance(address,tuple) and address[0] in ('127.0.0.1','::1') else (_ for _ in ()).throw(AssertionError('External network forbidden')); raise SystemExit(pytest.main(['-q','test_model_routing_storage.py','test_model_routing_config_api.py','test_model_routing_panel.py','test_model_routing_preflight.py','--basetemp=.pytest_cache/p-real-final']))\""
+  ],
+  "results": {
+    "joined_passed": 118,
+    "joined_failed": 0,
+    "joined_skipped": 0,
+    "joined_deselected_real_compiler": 13,
+    "warnings": 6,
+    "duration_seconds": 2.2,
+    "MR04_owned_selected_passed": 45,
+    "sqlite": "actual temporary config-only database, including child-process commit",
+    "postgresql": "driver mock only",
+    "mysql": "driver mock only",
+    "mongodb": "driver mock only",
+    "earlier_attempts": [
+      {
+        "passed": 22,
+        "errors": 2,
+        "cause": "pytest default temporary directory access denied; remedied with a unique workspace basetemp"
+      },
+      {
+        "passed": 24,
+        "deselected": 6
+      },
+      {
+        "passed": 60,
+        "deselected": 6
+      },
+      {
+        "passed": 110,
+        "deselected": 13
+      }
+    ],
+    "final": {
+      "passed": 112,
+      "failed": 0,
+      "skipped": 0,
+      "deselected": 0,
+      "warnings": 6,
+      "duration_seconds": 7.33,
+      "MR04_owned_passed": 56,
+      "MR04_real_compiler_cases": 11,
+      "storage_passed": 30,
+      "config_api_passed": 26
+    },
+    "real_compiler_sqlite_http": "Authenticated dedicated GET/PUT with the real compiler and temporary real SQLite, including committed storage value, fresh external corruption safe 503, and authenticated whole-table repair: passed"
+  },
+  "test_isolation": {
+    "credentials": "temporary directory, no application lifespan or initialize",
+    "remote_backend_variables": "cleared before project imports",
+    "external_business_urls": "closed loopback only",
+    "external_sockets": "guarded against non-loopback connections",
+    "production_db": false,
+    "claude": false
+  },
+  "mock_dependencies": [
+    "typed compiler mock explicitly scoped to P's storage and API control-flow tests",
+    "remote backend connections/cursors/index metadata"
+  ],
+  "unverified": [
+    "isolated real PostgreSQL/MySQL/MongoDB services unavailable",
+    "real multi-process remote backend writes not exercised",
+    "MySQL actual column metadata/real collation and non-strict SQL behavior not exercised"
+  ],
+  "known_issues": [
+    "Default MongoDB initialization has no config.key unique index; dedicated routing writes refuse safely unless an existing unconditional non-sparse single-field key unique index with simple collation is proven. No index or schema is created.",
+    "MySQL generic configuration reads/writes require accessible column charset/collation/length metadata to guard dedicated keys under actual database equality; read failure aborts before a batch is written.",
+    "Cancellation holds the in-process write lock until a shielded commit settles; forced process/loop shutdown and cross-process drain still require the external runbook gates.",
+    "Existing Pydantic and Starlette deprecation warnings"
+  ],
+  "integration_notes": [
+    "Runtime requires src.storage_adapter._storage_adapter to be initialized; missing initialization raises RoutingConfigReadError and yields safe 503. Test apps with no lifespan must explicitly inject or bootstrap isolated storage.",
+    "Standard persisted value is {'routes': [...]}. Missing key is exists=false and raw_table={'routes': []}; existing null is global-invalid.",
+    "SHA256 canonical JSON {'exists': bool, 'value': actual_or_null}, sort_keys, compact separators, ensure_ascii=false, allow_nan=false binds authority presence. Success compiled.config_digest is rebound to snapshot.digest; channel/policy agreement is checked.",
+    "Dedicated GET can diagnose attributable channel failures; global unreadable/invalid values produce safe 503. PUT does not read/compile the old invalid value before replacement.",
+    "Generic config rejects the entire batch for canonical or backend-equivalent protected key spellings before any write, and filters those keys from GET."
+  ],
+  "schema_version": "unchanged",
+  "management_capabilities": "unchanged",
+  "local_capabilities": [
+    "model.routing.aliases",
+    "model.identity.public"
+  ],
+  "counterpart_action": "no_counterpart_action",
+  "next_gate": [
+    "I may integrate MR04 into MR10; real compiler and temporary SQLite local gate passed",
+    "Isolated real PostgreSQL/MySQL/MongoDB acceptance remains unverified; do not mark all four backend actual-service gates passed"
+  ],
+  "execution_policy": "queue_only",
+  "dependency_gates": {
+    "MR00": "passed",
+    "MR02": "formally passed and explicitly synchronized by I",
+    "real_compiler": "passed",
+    "actual_sqlite": "passed",
+    "remote_backend_actual_services": "unverified"
+  },
+  "inherited_dependency_files": [
+    "src/model_routing/projection.py",
+    "src/model_routing/policy.py",
+    "src/model_routing/routing.py",
+    "src/model_routing/compiler.py",
+    "src/model_routing/catalog.py",
+    "src/model_routing/__init__.py",
+    "src/converter/gemini_fix.py",
+    "src/converter/antigravity_fix.py",
+    "src/converter/openai2gemini.py",
+    "src/converter/anthropic2gemini.py",
+    "src/converter/utils.py"
+  ],
+  "policy_digest": "4a4833e9690f652272c519aabc251710b2721c9f9873648bbd762338ed7d21e4"
+}

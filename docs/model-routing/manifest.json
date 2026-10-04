@@ -1,0 +1,378 @@
+{
+  "manifest_version": 1,
+  "contract_version": "routing-execution-1",
+  "contract_status": "frozen_MR00",
+  "task_package_only": false,
+  "observed_master": {
+    "branch": "master",
+    "remote": "origin",
+    "sha": "170d989f545218920bc84794472a0f234490694f",
+    "recorded_at_utc": "2026-10-01T06:47:36Z",
+    "check": "git ls-remote --exit-code origin refs/heads/master"
+  },
+  "source_workspace": {
+    "path": "G:/code/gemini30/gcli2api",
+    "branch": "dev0916",
+    "dirty": true,
+    "may_write_business_code": false
+  },
+  "execution": {
+    "mode": "queue_only",
+    "max_automatic_runs": 0,
+    "windows_created": true,
+    "worktrees_created": true,
+    "worker_model": "gpt-6.1-sol",
+    "worker_thinking": "ultra",
+    "active_run_authorization": "用户明确要求自动执行、监控进度并审查；授权当前人类启动的本次运行，不建立定时器。",
+    "final_claude_review_requested": true,
+    "claude_enabled": true,
+    "business_code_changed": true,
+    "real_credentials_allowed": false,
+    "production_db_allowed": false,
+    "live_model_calls_allowed": false,
+    "auto_commit": false,
+    "auto_push": false,
+    "auto_deploy": false,
+    "independent_worktree_required": true,
+    "claude_review_status": "approved_after_user_continued_four_actual_rounds"
+  },
+  "gates": {
+    "base_sha_locked": true,
+    "contract_frozen": true,
+    "limited_cli_maintenance_authorization": "current_task_only_user_authorized",
+    "baseline_tests_run": true,
+    "all_workers_same_base_and_contract": true,
+    "owned_deliveries_reviewed_and_integrated": true,
+    "six_handlers_and_catalogs_integrated": true,
+    "final_local_full_suite": {
+      "collected": 2130,
+      "passed": 2129,
+      "failed": 0,
+      "skipped": 1,
+      "warnings": 6,
+      "seconds": 112.38,
+      "exit_code": 0
+    },
+    "release_approved": false,
+    "claude_final": {
+      "status": "approved",
+      "actual_rounds_total": 4,
+      "initial_group_rounds": 3,
+      "continued_group_rounds": 1,
+      "final_findings": 0,
+      "evidence": "deliveries/CLAUDE-final.json"
+    }
+  },
+  "scope": {
+    "channels": [
+      "geminicli",
+      "antigravity"
+    ],
+    "excluded": [
+      "Vertex implementation",
+      "MGMT resumption",
+      "manager changes",
+      "manual credential/import semantics changes",
+      "schema changes",
+      "production data",
+      "deployment",
+      "live model calls"
+    ]
+  },
+  "master_facts": [
+    "AG Anthropic now normalizes input alias",
+    "AG native exemption has earlier redirect branches",
+    "AG catalog intersects dynamic IDs with static public list in static order",
+    "Existing events/protected/retirement/Completion/typed safety stack must be reused",
+    "Default fixed errors and local-only Retry-After preserved"
+  ],
+  "ownership": {
+    "I": [
+      "src/model_routing/__init__.py",
+      "src/model_routing/types.py",
+      "src/router/geminicli/openai.py",
+      "src/router/geminicli/gemini.py",
+      "src/router/geminicli/anthropic.py",
+      "src/router/geminicli/model_list.py",
+      "src/router/antigravity/openai.py",
+      "src/router/antigravity/gemini.py",
+      "src/router/antigravity/anthropic.py",
+      "src/router/antigravity/model_list.py",
+      "src/converter/gemini_fix.py",
+      "src/converter/antigravity_fix.py",
+      "src/utils.py",
+      "src/converter/openai2gemini.py",
+      "src/converter/anthropic2gemini.py",
+      "src/converter/utils.py",
+      "test_model_routing_contracts.py",
+      "test_model_routing_integration.py",
+      "test_model_routing_hi.py",
+      "test_model_routing_vertex_boundary.py",
+      "test_model_routing_acceptance.py"
+    ],
+    "R": [
+      "src/model_routing/projection.py",
+      "src/model_routing/policy.py",
+      "src/model_routing/routing.py",
+      "src/model_routing/compiler.py",
+      "src/model_routing/catalog.py",
+      "test_model_routing_projection.py",
+      "test_model_routing_resolver.py",
+      "test_model_routing_compiler.py",
+      "test_model_routing_policy_upgrade.py",
+      "test_model_routing_catalog.py"
+    ],
+    "P": [
+      "src/model_routing/store.py",
+      "src/model_routing/settings_routes.py",
+      "src/model_routing/readonly.py",
+      "src/model_routing/preflight.py",
+      "src/storage_adapter.py",
+      "src/storage/sqlite_manager.py",
+      "src/storage/psql_manager.py",
+      "src/storage/mysql_manager.py",
+      "src/storage/mongodb_manager.py",
+      "src/panel/config_routes.py",
+      "src/panel/__init__.py",
+      "src/panel/root.py",
+      "front/control_panel.html",
+      "front/control_panel_mobile.html",
+      "front/common.js",
+      "front/model_routing.html",
+      "front/model_routing.js",
+      "front/model_routing.css",
+      "test_model_routing_storage.py",
+      "test_model_routing_config_api.py",
+      "test_model_routing_panel.py",
+      "test_model_routing_preflight.py"
+    ],
+    "S": [
+      "src/model_routing/public_response.py",
+      "src/model_routing/stream_runtime.py",
+      "src/api/geminicli.py",
+      "src/api/antigravity.py",
+      "src/httpx_client.py",
+      "src/api/utils.py",
+      "src/converter/fake_stream.py",
+      "src/converter/anti_truncation.py",
+      "src/router/model_api_errors.py",
+      "src/router/stream_passthrough.py",
+      "test_antigravity_stream_collection.py",
+      "test_model_routing_transport.py",
+      "test_model_routing_collection.py",
+      "test_model_routing_fake_stream.py",
+      "test_model_routing_anti_truncation.py",
+      "test_model_routing_identity.py",
+      "test_model_routing_safe_errors.py"
+    ]
+  },
+  "conditional_ownership": {
+    "src/router/model_retirement.py": {
+      "owner": "S",
+      "default": "read_only",
+      "requires": "I confirms necessity; preserve per-attempt 16MiB contract"
+    }
+  },
+  "tasks": [
+    {
+      "id": "MR00",
+      "title": "统一master和合同门禁",
+      "window": "I",
+      "dependencies": [],
+      "status": "passed",
+      "source": "TASKS.md",
+      "mock_preparation_allowed": false,
+      "actual_completion_requires_real_dependencies": true,
+      "auto_start": false,
+      "evidence": "deliveries/MR00.json"
+    },
+    {
+      "id": "MR01",
+      "title": "六协议纯基线与resolver",
+      "window": "R",
+      "dependencies": [
+        "MR00"
+      ],
+      "status": "passed",
+      "source": "TASKS.md",
+      "mock_preparation_allowed": false,
+      "actual_completion_requires_real_dependencies": true,
+      "auto_start": false,
+      "evidence": "deliveries/MR01.json"
+    },
+    {
+      "id": "MR02",
+      "title": "准入和整表证明",
+      "window": "R",
+      "dependencies": [
+        "MR01"
+      ],
+      "status": "passed",
+      "source": "TASKS.md",
+      "mock_preparation_allowed": false,
+      "actual_completion_requires_real_dependencies": true,
+      "auto_start": false,
+      "evidence": "deliveries/MR02.json"
+    },
+    {
+      "id": "MR03",
+      "title": "目录纯投影",
+      "window": "R",
+      "dependencies": [
+        "MR02"
+      ],
+      "status": "passed",
+      "source": "TASKS.md",
+      "mock_preparation_allowed": false,
+      "actual_completion_requires_real_dependencies": true,
+      "auto_start": false,
+      "evidence": "deliveries/MR03.json"
+    },
+    {
+      "id": "MR04",
+      "title": "存储和专用接口",
+      "window": "P",
+      "dependencies": [
+        "MR00",
+        "MR02"
+      ],
+      "status": "passed_local",
+      "source": "TASKS.md",
+      "mock_preparation_allowed": true,
+      "actual_completion_requires_real_dependencies": true,
+      "auto_start": false,
+      "evidence": "deliveries/MR04.json"
+    },
+    {
+      "id": "MR05",
+      "title": "设置页",
+      "window": "P",
+      "dependencies": [
+        "MR04"
+      ],
+      "status": "passed_local",
+      "source": "TASKS.md",
+      "mock_preparation_allowed": false,
+      "actual_completion_requires_real_dependencies": true,
+      "auto_start": false,
+      "evidence": "deliveries/MR05.json"
+    },
+    {
+      "id": "MR06",
+      "title": "只读预检和runbook",
+      "window": "P",
+      "dependencies": [
+        "MR02",
+        "MR04"
+      ],
+      "status": "passed_local",
+      "source": "TASKS.md",
+      "mock_preparation_allowed": false,
+      "actual_completion_requires_real_dependencies": true,
+      "auto_start": false,
+      "evidence": "deliveries/MR06.json"
+    },
+    {
+      "id": "MR07",
+      "title": "SSE和运输增量",
+      "window": "S",
+      "dependencies": [
+        "MR00"
+      ],
+      "status": "passed",
+      "source": "TASKS.md",
+      "mock_preparation_allowed": false,
+      "actual_completion_requires_real_dependencies": true,
+      "auto_start": false,
+      "evidence": "deliveries/MR07.json"
+    },
+    {
+      "id": "MR08",
+      "title": "聚合及假流保真",
+      "window": "S",
+      "dependencies": [
+        "MR07"
+      ],
+      "status": "passed",
+      "source": "TASKS.md",
+      "mock_preparation_allowed": false,
+      "actual_completion_requires_real_dependencies": true,
+      "auto_start": false,
+      "evidence": "deliveries/MR08.json"
+    },
+    {
+      "id": "MR09",
+      "title": "身份及安全出口",
+      "window": "S",
+      "dependencies": [
+        "MR07",
+        "MR08"
+      ],
+      "status": "passed",
+      "source": "TASKS.md",
+      "mock_preparation_allowed": false,
+      "actual_completion_requires_real_dependencies": true,
+      "auto_start": false,
+      "evidence": "deliveries/MR09.json"
+    },
+    {
+      "id": "MR10",
+      "title": "六处理器及目录接线",
+      "window": "I",
+      "dependencies": [
+        "MR02",
+        "MR03",
+        "MR04",
+        "MR07",
+        "MR08",
+        "MR09"
+      ],
+      "status": "passed_local",
+      "source": "TASKS.md",
+      "mock_preparation_allowed": false,
+      "actual_completion_requires_real_dependencies": true,
+      "auto_start": false,
+      "evidence": "deliveries/MR10.json"
+    },
+    {
+      "id": "MR11",
+      "title": "联合验收",
+      "window": "I",
+      "dependencies": [
+        "MR05",
+        "MR06",
+        "MR10"
+      ],
+      "status": "passed_local",
+      "source": "TASKS.md",
+      "mock_preparation_allowed": false,
+      "actual_completion_requires_real_dependencies": true,
+      "auto_start": false,
+      "evidence": "deliveries/MR11.json"
+    },
+    {
+      "id": "MR12",
+      "title": "另行授权真实模型测试",
+      "window": "I",
+      "dependencies": [],
+      "status": "not_authorized_optional",
+      "source": "TASKS.md",
+      "mock_preparation_allowed": false,
+      "actual_completion_requires_real_dependencies": true,
+      "auto_start": false
+    }
+  ],
+  "integration_workspace": {
+    "path": "C:/Users/lywx2/.codex/worktrees/model-routing-integration/gcli2api",
+    "branch": "codex/model-routing-integration",
+    "base_sha": "170d989f545218920bc84794472a0f234490694f",
+    "committed": false
+  },
+  "limitations": [
+    "No actual Google/OAuth/model calls; MR12 not authorized",
+    "No actual PostgreSQL/MySQL/MongoDB service or production-scope verification",
+    "Non-Windows SQLite strict preflight blocked; safe exit 3",
+    "Unprovable cross-frame grounding supports and cross-turn signed/cited continuations safe 502",
+    "Root independent in-app browser runtime unavailable; P isolated Chrome UI evidence reviewed"
+  ]
+}

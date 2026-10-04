@@ -26,11 +26,95 @@ from src.router.model_api_errors import (
 from src.router.model_retirement import RetirementAction, new_attempt
 
 
+MAX_SSE_EVENT_BYTES = 32 * 1024 * 1024
+
+
+async def iter_sse_frames(chunks: AsyncIterable[bytes | str]):
+    """Frame bounded UTF-8 SSE, retaining controls for protocol adapters.
+
+    EOF may terminate a valid last event, as in the existing transport contract.
+    Incomplete UTF-8/JSON is still rejected by this framer/the normalizer.
+    The limit includes controls and unfinished lines, independently of retirement.
+    """
+    decoder = codecs.getincrementaldecoder("utf-8")("strict")
+    unfinished = []
+    unfinished_bytes = 0
+    lines = []
+    event_bytes = 0
+
+    def accept(fragment):
+        nonlocal unfinished, unfinished_bytes, lines, event_bytes
+        completed = []
+        pieces = fragment.split("\n")
+        for position, piece in enumerate(pieces):
+            unfinished.append(piece)
+            unfinished_bytes += len(piece.encode("utf-8"))
+            if event_bytes + unfinished_bytes + len(decoder.getstate()[0]) > MAX_SSE_EVENT_BYTES:
+                raise ModelApiErrorException(make_model_api_error(
+                    origin=ErrorOrigin.UPSTREAM, kind=ErrorKind.BAD_FORMAT
+                ))
+            if position == len(pieces) - 1:
+                continue
+            event_bytes += unfinished_bytes + 1
+            if event_bytes > MAX_SSE_EVENT_BYTES:
+                raise ModelApiErrorException(make_model_api_error(
+                    origin=ErrorOrigin.UPSTREAM, kind=ErrorKind.BAD_FORMAT
+                ))
+            line = "".join(unfinished)
+            unfinished = []
+            unfinished_bytes = 0
+            if line.endswith("\r"):
+                line = line[:-1]
+            if not line:
+                if lines:
+                    completed.append("\n".join(lines) + "\n\n")
+                lines = []
+                event_bytes = 0
+            else:
+                lines.append(line)
+        return completed
+
+    try:
+        async for chunk in chunks:
+            if not isinstance(chunk, (bytes, str)):
+                raise ModelApiErrorException(make_model_api_error(
+                    origin=ErrorOrigin.UPSTREAM, kind=ErrorKind.BAD_FORMAT
+                ))
+            # Bound transient decoding even when one HTTP chunk has many events.
+            for offset in range(0, len(chunk), 64 * 1024):
+                piece = chunk[offset:offset + 64 * 1024]
+                if isinstance(piece, str):
+                    # A str cannot complete a pending partial bytes codepoint.
+                    if decoder.getstate()[0]:
+                        raise UnicodeDecodeError("utf-8", decoder.getstate()[0], 0, 1, "mixed chunks")
+                    fragment = piece
+                else:
+                    fragment = decoder.decode(piece, final=False)
+                for frame in accept(fragment):
+                    yield frame
+        for frame in accept(decoder.decode(b"", final=True)):
+            yield frame
+        if unfinished_bytes:
+            last_line = "".join(unfinished)
+            lines.append(last_line[:-1] if last_line.endswith("\r") else last_line)
+        if lines:
+            yield "\n".join(lines) + "\n\n"
+    except UnicodeError as exc:
+        raise ModelApiErrorException(make_model_api_error(
+            origin=ErrorOrigin.UPSTREAM, kind=ErrorKind.BAD_FORMAT
+        )) from exc
+    finally:
+        close = getattr(chunks, "aclose", None)
+        if close is not None:
+            try:
+                await close()
+            except Exception:
+                pass  # Cleanup must not replace a typed transport outcome.
+
+
 async def normalize_sse_events(chunks: AsyncIterable[bytes | str]):
     """Normalize complete SSE events without guessing line-vs-event mode."""
 
-    decoder = codecs.getincrementaldecoder("utf-8")("strict")
-    text_buffer = ""
     fields: dict[str, list[str]] = {}
     event_name = ""
 
@@ -76,52 +160,26 @@ async def normalize_sse_events(chunks: AsyncIterable[bytes | str]):
         normalized = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
         return b"data: " + normalized.encode("utf-8") + b"\n\n"
 
-    async for chunk in chunks:
-        if isinstance(chunk, bytes):
-            text_buffer += decoder.decode(chunk, final=False)
-        elif isinstance(chunk, str):
-            text_buffer += chunk
-        else:
-            raise ModelApiErrorException(
-                make_model_api_error(
-                    origin=ErrorOrigin.UPSTREAM,
-                    kind=ErrorKind.BAD_FORMAT,
-                    status=502,
-                )
-            )
-        while "\n" in text_buffer:
-            line, text_buffer = text_buffer.split("\n", 1)
-            if line.endswith("\r"):
-                line = line[:-1]
-            if line == "":
-                event = dispatch()
-                if event is not None:
-                    yield event
-                continue
-            if line.startswith(":"):
-                continue
-            field, separator, value = line.partition(":")
-            if not separator or field not in {"data", "event", "id", "retry"}:
-                continue
-            if value.startswith(" "):
-                value = value[1:]
-            if field == "data":
-                fields.setdefault("data", []).append(value)
-            elif field == "event":
-                event_name = value
-    text_buffer += decoder.decode(b"", final=True)
-    if text_buffer:
-        if text_buffer.endswith("\r"):
-            text_buffer = text_buffer[:-1]
-        if text_buffer and not text_buffer.startswith(":"):
-            field, separator, value = text_buffer.partition(":")
-            if separator and field == "data":
+    frames = iter_sse_frames(chunks)
+    try:
+        async for frame in frames:
+            for line in frame.split("\n"):
+                if line.startswith(":"):
+                    continue
+                field, separator, value = line.partition(":")
+                if not separator or field not in {"data", "event", "id", "retry"}:
+                    continue
                 if value.startswith(" "):
                     value = value[1:]
-                fields.setdefault("data", []).append(value)
-    event = dispatch()
-    if event is not None:
-        yield event
+                if field == "data":
+                    fields.setdefault("data", []).append(value)
+                elif field == "event":
+                    event_name = value
+            event = dispatch()
+            if event is not None:
+                yield event
+    finally:
+        await frames.aclose()
 
 
 def _normalized_event_payload(event: bytes) -> dict[str, Any] | None:
@@ -313,8 +371,13 @@ async def stream_post_async(
             # 如果native=True，直接返回bytes流
             if events:
                 normalized_events = normalize_sse_events(r.aiter_bytes())
-                async for event in _retirement_checked_events(normalized_events):
-                    yield event
+                checked_events = _retirement_checked_events(normalized_events)
+                try:
+                    async for event in checked_events:
+                        yield event
+                finally:
+                    await checked_events.aclose()
+                    await normalized_events.aclose()
             elif native:
                 async for chunk in r.aiter_bytes():
                     yield chunk

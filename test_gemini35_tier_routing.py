@@ -198,7 +198,7 @@ async def test_anthropic_route_normalizes_gemini_35_flash_alias(
 ):
     captured = {}
 
-    async def fake_non_stream_request(body, headers=None):
+    async def fake_non_stream_request(body, headers=None, *, route_context=None):
         captured["model"] = body["model"]
         return Response(
             content=json.dumps({"error": {"message": "test"}}),

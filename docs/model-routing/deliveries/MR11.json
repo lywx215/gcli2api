@@ -1,0 +1,218 @@
+{
+  "window": "I",
+  "base_sha": "170d989f545218920bc84794472a0f234490694f",
+  "contract_version": "routing-execution-1",
+  "status": "passed_local",
+  "cwd": "C:/Users/lywx2/.codex/worktrees/model-routing-integration/gcli2api",
+  "branch": "codex/model-routing-integration",
+  "python": "3.12.14",
+  "interpreter": "G:/code/gemini30/gcli2api/.venv/Scripts/python.exe",
+  "real_credentials": false,
+  "production_db": false,
+  "external_model_calls": 0,
+  "committed": false,
+  "task_id": "MR11",
+  "recorded_at_utc": "2026-10-01T11:43:57Z",
+  "actual_test_invocations": [
+    "python -c <full_suite_harness_code> -ra",
+    "python -c <full_suite_harness_code> test_antigravity_timeouts.py test_diagnostics_revision.py test_diagnostics_service.py test_gemini35_tier_routing.py test_model_routing_integration.py test_model_routing_anti_truncation.py",
+    "git diff --check",
+    "python -c <full_suite_harness_code> test_model_routing_policy_upgrade.py test_model_routing_integration.py test_model_routing_acceptance.py test_model_routing_storage.py test_model_routing_config_api.py test_model_routing_contracts.py",
+    "python -c <full_suite_harness_code> -ra (after Claude repair)",
+    "python -c <full_suite_harness_code> test_model_routing_config_api.py",
+    "python -c <full_suite_harness_code> -ra (after third Claude finding UI503 repair)"
+  ],
+  "full_suite_harness_code": "import os,sys,tempfile,socket\nfor key in list(os.environ):\n    if any(t in key.upper() for t in ('MYSQL','MONGO','POSTGRES','DATABASE','REDIS','PROXY')): os.environ.pop(key,None)\nfor key in ('CODE_ASSIST_ENDPOINT','ANTIGRAVITY_API_URL','RESOURCE_MANAGER_API_URL','SERVICE_USAGE_API_URL','GOOGLEAPIS_PROXY_URL','OAUTH_PROXY_URL','KEEPALIVE_URL'): os.environ[key]='http://127.0.0.1:9'\nos.environ['PYTHON_DOTENV_DISABLED']='1'\nos.environ['GCLI_SERVER_NAME']=''\nos.environ['ENABLE_LOG']='0'\nos.environ['SMART_429_PROTECTION_ENABLED']='0'\nos.environ['PYTHONDONTWRITEBYTECODE']='1'\nsys.dont_write_bytecode=True\nconnect,connect_ex,addr=socket.socket.connect,socket.socket.connect_ex,socket.getaddrinfo\ndef allowed(address):\n    if isinstance(address,tuple) and address[0] not in ('127.0.0.1','::1','localhost'): raise AssertionError('External network forbidden')\ndef gc(self,address):\n    allowed(address)\n    return connect(self,address)\ndef ge(self,address):\n    allowed(address)\n    return connect_ex(self,address)\ndef ga(host,*a,**k):\n    if host not in ('127.0.0.1','::1','localhost',None): raise AssertionError('External DNS forbidden')\n    return addr(host,*a,**k)\nsocket.socket.connect,socket.socket.connect_ex,socket.getaddrinfo=gc,ge,ga\nwith tempfile.TemporaryDirectory(prefix='mr-root-core-') as isolated:\n    os.environ['CREDENTIALS_DIR']=os.path.join(isolated,'credentials')\n    os.makedirs(os.environ['CREDENTIALS_DIR'])\n    import asyncio\n    from src.storage_adapter import get_storage_adapter\n    asyncio.run(get_storage_adapter())\n    import pytest\n    raise SystemExit(pytest.main(['-q','--basetemp',os.path.join(isolated,'pytest'),*sys.argv[1:]]))",
+  "results": {
+    "first_full": {
+      "collected": 2082,
+      "passed": 2067,
+      "failed": 14,
+      "skipped": 1,
+      "warnings": 6,
+      "seconds": 121.57
+    },
+    "repair_selected": {
+      "passed": 177,
+      "failed": 0,
+      "warnings": 5,
+      "seconds": 68.89
+    },
+    "final_full": {
+      "collected": 2130,
+      "passed": 2129,
+      "failed": 0,
+      "skipped": 1,
+      "warnings": 6,
+      "seconds": 112.38,
+      "exit_code": 0
+    },
+    "skip": "POSIX fork unavailable on Windows; spawn/restart exercised over real HTTP",
+    "diff_check": "passed; Git only LF/CRLF notices",
+    "sensitive_pattern_scan": "No matches in current new routing module/page/tests/docs; initial glob invocation error corrected and repeated",
+    "pre_claude_full": {
+      "collected": 2095,
+      "passed": 2094,
+      "failed": 0,
+      "skipped": 1,
+      "warnings": 6,
+      "seconds": 122.37
+    },
+    "claude_repair_selected": {
+      "passed": 188,
+      "failed": 0,
+      "warnings": 6,
+      "seconds": 4.48
+    },
+    "post_first_claude_full": {
+      "collected": 2129,
+      "passed": 2128,
+      "failed": 0,
+      "skipped": 1,
+      "warnings": 6,
+      "seconds": 114.32
+    },
+    "committed_then_503_api_selected": {
+      "passed": 27,
+      "failed": 0,
+      "warnings": 6,
+      "seconds": 0.65,
+      "real_temporary_sqlite": true,
+      "production_db": false
+    },
+    "put503_ui_selected": {
+      "passed": 27,
+      "failed": 0,
+      "warnings": 6,
+      "seconds": 0.65
+    },
+    "put503_browser": {
+      "exit_code": 0,
+      "seconds": 9.012,
+      "external_page_requests": 0,
+      "own_hidden_mock_service_stopped": true
+    }
+  },
+  "ui": {
+    "P_actual_isolated_chrome": "Repeated isolated official Chrome desktop/mobile; PUT503/500/502/504 uncertainty, both drafts, commit-before-error/reload authority verified; zero external page requests; own hidden mock service stopped",
+    "root_screenshot_visual_check": "Original desktop/mobile JPEGs and both new PUT503 uncertainty/reload mobile JPEGs actually viewed; text and layout fit",
+    "root_independent_interaction": "unverified: in-app trusted Node startup failed twice",
+    "screenshots": [
+      "C:/Users/lywx2/.codex/visualizations/2026/10/01/01a0f64a-6d33-73e2-a69a-e98226abf627/model-routing-desktop.jpg",
+      "C:/Users/lywx2/.codex/visualizations/2026/10/01/01a0f64a-6d33-73e2-a69a-e98226abf627/model-routing-mobile.jpg",
+      "C:/Users/lywx2/.codex/visualizations/2026/10/01/01a0f64a-6d33-73e2-a69a-e98226abf627/put503-fix/model-routing-put503-uncertain.jpg",
+      "C:/Users/lywx2/.codex/visualizations/2026/10/01/01a0f64a-6d33-73e2-a69a-e98226abf627/put503-fix/model-routing-put503-reloaded.jpg"
+    ],
+    "frozen_put503_files_sha256": {
+      "front/model_routing.js": "a7fc7eade5bb78fc06355fa65fef8fe5bfa18285108e644615e0d8d29a6baec7",
+      "test_model_routing_panel.py": "c832eaf843527cbc49aee875d46d0d67dbe6f6a5c9406d65e0c1d8e749bf39cc"
+    }
+  },
+  "local_codex_review": {
+    "confirmed_findings": 2,
+    "resolved": 2,
+    "scope": "Three CLI local400 statistics and Claude anti extra-turn regression; real regression tests passed",
+    "claude": false,
+    "final_503_read_only_cross_check": {
+      "findings": [],
+      "tests_executed": false,
+      "notes": "Independent read-only check confirms SQL committed-table assertion and authoritative GET reload; no source changes"
+    }
+  },
+  "claude": {
+    "authorized": true,
+    "authorization": "启用 Claude 审核：按上述范围审核本次最终实现",
+    "scope": "CLI/Antigravity routing/settings/name leakage/SSE/grounding/compatibility; excludes Vertex",
+    "status": "approved",
+    "automatic_round_limit": 3,
+    "completed_rounds_before_final": 3,
+    "confirmed_findings": 3,
+    "resolved_findings": 3,
+    "repairs": [
+      "Only genuinely empty/no-issue channels avoid unused source-proof gate; disabled targets still admitted",
+      "Installed-source AST cached per process; source read/parse failures return fixed local503; process restart requirement documented",
+      "PUT503 may follow an already committed write; all PUT5xx use uncertainty message and preserve both drafts, reload confirms current stored table"
+    ],
+    "continue_authorization": "继续 Claude 审核",
+    "continue_additional_round_limit": 3,
+    "additional_completed_rounds": 1,
+    "actual_rounds_total": 4,
+    "shared_hook": "C:/Users/lywx2/.codex/review/hook.py",
+    "configured_model": "claude-opus-5-5",
+    "approved_at": "2026-10-01T19:42:43.291989+08:00",
+    "approved_plan_digest": "f3577b3fe1f54d80d196cf198ceeae288137c8cc87754ad6ce2649d65d17366e",
+    "approved_code_digest": "cddf4060b23178919c3edfc937255274433f6392b613117160da91bdf264c604",
+    "final_findings": [],
+    "final_error": null,
+    "evidence": "CLAUDE-final.json"
+  },
+  "schema_version": "unchanged",
+  "management_capabilities": "unchanged",
+  "local_capabilities": [
+    "model.routing.aliases",
+    "model.identity.public"
+  ],
+  "panel_version": "unchanged",
+  "counterpart_action": "no_counterpart_action",
+  "execution_policy": "queue_only",
+  "unverified": [
+    "No actual Google/OAuth/model calls; MR12 not authorized",
+    "No actual PostgreSQL/MySQL/MongoDB service or production-scope verification",
+    "Non-Windows SQLite strict preflight blocked; safe exit 3",
+    "Unprovable cross-frame grounding supports and cross-turn signed/cited continuations safe 502",
+    "Root independent in-app browser runtime unavailable; P isolated Chrome UI evidence reviewed"
+  ],
+  "release_approved": false,
+  "next_gate": "Local implementation and actual Claude review complete. Production cutover and live model tests need separate authorization.",
+  "source_hashes_snapshot_note": "48 business source files verified unchanged across actual final Claude review. Later changes only append administrative evidence/status reports; no business source/test edits after approval. Worker receipts remain historical pre-integration snapshots.",
+  "source_hashes": {
+    "src/model_routing/stream_runtime.py": "3163473d9a574ccc79fb1619c8162695526484864a2ac6f7f8b6c0954f690281",
+    "src/router/geminicli/openai.py": "96f4dbb6f8725f1be65afc078201276eeb2ef060c22ccc48d80ff30e955c1f0d",
+    "front/control_panel.html": "ba14de5bd13203acb30b614fc0ef36c3d13322df78e811dc8c6eac22e707688c",
+    "src/router/geminicli/model_list.py": "c7845c7fbe9840ed0367b61397228f008da05a7d33c9546d2edf28bfdde27ba4",
+    "src/model_routing/settings_routes.py": "3fc4e2f3e7269657c834b4df7a17a1cdd47fa48c0210089623f4c313d588cefd",
+    "src/model_routing/routing.py": "d3975ae2e538f51afcd4a0457467d02eacf1fe36082a368c68dd3b37016fbe58",
+    "src/model_routing/types.py": "6a3cce5053363a075112f13236542881d832b183a339e60826523041ff4fd93f",
+    "src/model_routing/readonly.py": "9cd54415f7f16db1e45c8f8237d940870b8215383bcc6e67f9ed9ab0feacde02",
+    "src/router/model_api_errors.py": "f57f81ddc354b117d86a51974f97592fd1ba378c070d153d2dff0fb3d8ba4d7f",
+    "src/model_routing/catalog.py": "0149f189a814047714c46683bfef127fd11fcebe11c9d8e0c5cc1f9632d196bc",
+    "src/api/antigravity.py": "c8e94f069653c2b51e2b75e85253ae49d24f397e0e31f484c96e441407b74525",
+    "src/model_routing/compiler.py": "75e80dfef57017944fb4bf3fb4c0ee13bf49e363f45ee74d0d5b1b5bd4dc16db",
+    "src/router/stream_passthrough.py": "1d0c2749d577c16900faea39f29a0b367570aedfda9b794c4631f05ef5dbf4b1",
+    "src/panel/__init__.py": "e26df675e26ec506223c7d4182c591772f5521d6b41dcda6073e0f13c23a9837",
+    "front/model_routing.css": "198fe198019d117d68ad621759417fee8d2a63030b718c32db5ec1efc5ec796a",
+    "src/converter/anthropic2gemini.py": "2a2d3f65f6baa2e452878b118eac015c415c6baa4276fcd6530936d53a5eba66",
+    "src/panel/config_routes.py": "959aa2319c8ef38718bdb632301ae238fb4877c7a9db0cad9949b234ea7f5060",
+    "src/model_routing/public_response.py": "6fc572f2581b129752d43a9cbcb8a36821deefa7731267ad93729f4f9698cc8a",
+    "src/router/antigravity/anthropic.py": "eb1402e4ed7d29128fa2c6f71f5da6a27720c70fe4a4b1dae2c66480ec640f2e",
+    "front/model_routing.js": "a7fc7eade5bb78fc06355fa65fef8fe5bfa18285108e644615e0d8d29a6baec7",
+    "src/model_routing/store.py": "fa7396469e2a25ebb5aa24aa3676c5ae0c86a7c57761849dcb103548ff721b3a",
+    "src/model_routing/projection.py": "9b0cdde58ced6920c64a29a79286f74f0dd3ed06bdba676bfd216bc086a67318",
+    "front/model_routing.html": "b6929b8c2de4ac3c17c02c3ef180de4bfc77ed6297cb2151766a6ac0265a7b22",
+    "src/storage_adapter.py": "41cdf5e66a25a43479af052ffde4bdd852243f15e1b5712ea2401d0d720ca680",
+    "src/model_routing/__init__.py": "cbb11e7d8f2bc9b152fbd9ffdfaf1bcbb268b57c296924580cb329d50c6013d1",
+    "src/api/geminicli.py": "68ad904eabe7007f748ebe7500645da7f42a8e2be4b5ff548ee57b4b40512965",
+    "src/router/geminicli/gemini.py": "9f06ed6b04e1324c3355a38bb467b84ebaab971df3fbbbdaee4d40d53e772f32",
+    "src/converter/fake_stream.py": "6b03924e9e78ed2e3c400562b09b81017488eaf4b8a763d79446bb29293f75eb",
+    "src/storage/mongodb_manager.py": "f0216070628b7353f054e830f133e5b84e41585b97aa314ae2b20ff9e7ebf487",
+    "src/router/antigravity/gemini.py": "0c1c622bcd7c7a29682d56c162819d1da12b0bf0747fe5635dee5168d0ba6668",
+    "src/storage/sqlite_manager.py": "3704d487ceb101a6301209d8effc300e11149f56ec35f474540027163096cc9a",
+    "src/storage/psql_manager.py": "38bafc64774267400db3777f630183139f8c68e24d2deb427f1ead53eea583ad",
+    "src/converter/utils.py": "f10cd3710d6cd7d825cac436458bc9baa89466385e69afe751e7de7e42822189",
+    "src/panel/root.py": "6228795b321c8c5cc86c9eeab76594494cf06c8073f56651cb7211726b62ac2b",
+    "src/model_routing/preflight.py": "2fdcd8aec38e9918aecc67e620be1d7b1b7d614b9e4dc8e553508ad7b6ab5eed",
+    "src/converter/antigravity_fix.py": "d13df1c86eb36e10463fe44842ea72f932d9fdcde68be32ab91d5198daa1fc5f",
+    "src/storage/mysql_manager.py": "8ef5a55119c8b2895d8153d4a238287d040ccd28929179e57d9c010806331850",
+    "front/control_panel_mobile.html": "768dc4d62727ee711477dc44dd23c42b0be6e15304f59dbcdce03efe5b5822fd",
+    "src/api/utils.py": "b28307ef5c3fced1f5ff39190c082eca32b1a465184ccbaab0d59e7b966b941b",
+    "src/router/antigravity/model_list.py": "8fc7e22d74ab7b42e26819c6f91cae2eb4404e0ce8c3ed437d0348b14f07d669",
+    "src/converter/gemini_fix.py": "ea0751b353500ce3aff070aa6326bf44d3c5bcedb8e58b9d170b567a149779da",
+    "front/common.js": "2f378426d412101fc2ad702f516b59ed118738dbed58a8afd3c917001467dbb8",
+    "src/converter/anti_truncation.py": "f8df628dc0fd57dc6d9ebe58d4566002872c23e34f50e8b47e8c5b4adebb5aed",
+    "src/converter/openai2gemini.py": "190fb2a86a3a0ff4b046468a208fe6170e89ada87335b67d6c8781e365e99200",
+    "src/router/geminicli/anthropic.py": "90ae4e0db7fddb222571d8edbe92077ea3448fc51d41f73157e9b7715126db5f",
+    "src/model_routing/policy.py": "6ce83202b34249d84114a1ca04477b0015d7fabfcaea720dfe194bfd7f828f8c",
+    "src/httpx_client.py": "95ec2c3bfe1435e3b9644f6bb63b83ea60b859dbeb690a0b9763caec773bf7df",
+    "src/router/antigravity/openai.py": "202aa642d62e6c604417f09e27ccb02a80d64d257564f88de3807dbd4ec126e9"
+  }
+}

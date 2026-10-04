@@ -183,8 +183,9 @@ async def test_real_routes_timeout_before_first_content(short_limits, monkeypatc
     from src.models import GeminiRequest, OpenAIChatCompletionRequest, ClaudeRequest
     from src.converter import antigravity_fix, openai2gemini, anthropic2gemini
     module = {'gemini':gemini, 'openai':openai, 'anthropic':anthropic}[protocol]
-    monkeypatch.setattr(module, 'is_fake_streaming_model', lambda _: kind == 'fake')
-    monkeypatch.setattr(module, 'is_anti_truncation_model', lambda _: kind == 'continuation')
+    # Mode selection is now captured once by the real routing snapshot. Use
+    # the existing public prefixes rather than patching obsolete local helpers.
+    model = {'fake': '假流式/', 'continuation': '抗截断/'}.get(kind, '') + 'gemini-3.7-flash'
     monkeypatch.setattr(module, 'get_anti_truncation_max_attempts', AsyncMock(return_value=2))
     async def normalized(body, **kwargs):
         return dict(body)
@@ -200,12 +201,12 @@ async def test_real_routes_timeout_before_first_content(short_limits, monkeypatc
     monkeypatch.setattr(antigravity, 'non_stream_request', nonstream)
     if protocol == 'gemini':
         request = GeminiRequest(contents=[{'role':'user','parts':[{'text':'synthetic prompt'}]}])
-        response = await module.stream_generate_content(request, model='gemini-3.7-flash')
+        response = await module.stream_generate_content(request, model=model)
     elif protocol == 'openai':
-        request = OpenAIChatCompletionRequest(model='gemini-3.7-flash', messages=[{'role':'user','content':'synthetic prompt'}], stream=True)
+        request = OpenAIChatCompletionRequest(model=model, messages=[{'role':'user','content':'synthetic prompt'}], stream=True)
         response = await module.chat_completions(request)
     else:
-        request = ClaudeRequest(model='gemini-3.7-flash', messages=[{'role':'user','content':'synthetic prompt'}], max_tokens=50, stream=True)
+        request = ClaudeRequest(model=model, messages=[{'role':'user','content':'synthetic prompt'}], max_tokens=50, stream=True)
         response = await module.messages(request)
     assert response.status_code == 504
     short_limits[1].assert_awaited_once_with('gemini-3.7-flash-medium', 'antigravity', False)

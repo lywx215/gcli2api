@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import random
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, parse_qs
@@ -1734,11 +1735,51 @@ class MySQLManager(AntigravityQuotaMixin):
 
     # ============ 配置管理（内存缓存）============
 
+    async def config_key_matches(self, key: str, reserved_key: str) -> bool:
+        """Compare keys using this database column's actual collation."""
+        self._ensure_initialized()
+        if key == reserved_key:
+            return True
+        async with self._pool.acquire() as conn:
+            await conn.rollback()
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        "SELECT CHARACTER_SET_NAME, COLLATION_NAME, CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS "
+                        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s",
+                        ("gcli_config", "key"),
+                    )
+                    metadata = await cur.fetchone()
+                    if not metadata or len(metadata) != 3 or not all(isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_]+", value) for value in metadata[:2]):
+                        raise RuntimeError("Configuration key comparison is unavailable.")
+                    charset, collation, maximum_length = metadata
+                    if not isinstance(maximum_length, int) or isinstance(maximum_length, bool) or maximum_length <= 0:
+                        raise RuntimeError("Configuration key comparison is unavailable.")
+                    if len(key) > maximum_length:
+                        # Non-strict MySQL can truncate a key before applying
+                        # its collation. Refuse that ambiguity before a write.
+                        return True
+                    # Identifiers come exclusively from validated database
+                    # metadata; both compared values remain bound parameters.
+                    await cur.execute(
+                        f"SELECT CAST(%s AS CHAR CHARACTER SET {charset}) COLLATE {collation} "
+                        f"= CAST(%s AS CHAR CHARACTER SET {charset}) COLLATE {collation}",
+                        (key, reserved_key),
+                    )
+                    row = await cur.fetchone()
+                    if row is None or row[0] not in (0, 1):
+                        raise RuntimeError("Configuration key comparison is unavailable.")
+                    return bool(row[0])
+            finally:
+                await conn.rollback()
+
     async def set_config(self, key: str, value: Any) -> bool:
         """设置配置（写入数据库 + 更新内存缓存）"""
         self._ensure_initialized()
 
         try:
+            if key != "model_routing" and await self.config_key_matches(key, "model_routing"):
+                return False
             async with self._pool.acquire() as conn:
                 async with conn.cursor() as cur:
                     await cur.execute("""
@@ -1773,6 +1814,24 @@ class MySQLManager(AntigravityQuotaMixin):
         """获取所有配置（从内存缓存）"""
         self._ensure_initialized()
         return self._config_cache.copy()
+
+    async def get_config_fresh(self, key: str, default: Any = None) -> Any:
+        """Read one scoped key in a new transaction; do not refresh caches."""
+        self._ensure_initialized()
+        async with self._pool.acquire() as conn:
+            # The shared pool uses autocommit=False. End any prior read view,
+            # and always end this SELECT's transaction before returning it.
+            await conn.rollback()
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        "SELECT value FROM gcli_config WHERE server_name = %s AND `key` = %s",
+                        (self._server_name, key),
+                    )
+                    row = await cur.fetchone()
+            finally:
+                await conn.rollback()
+        return default if row is None else json.loads(row[0])
 
     async def delete_config(self, key: str) -> bool:
         """删除配置"""
