@@ -218,6 +218,8 @@ function createCredsManager(type) {
         currentPreviewFilter: 'all',
         currentTierFilter: 'all',
         currentRemarkFilter: '__all__',
+        currentModelAccessFilter: 'all',
+        currentModelAccessTier: 'any',
         statsData: {
             total: 0,
             normal: 0,
@@ -263,6 +265,50 @@ function createCredsManager(type) {
             return suffix.charAt(0).toLowerCase() + suffix.slice(1);
         },
 
+        getStatusUrl(offset, limit) {
+            const params = new URLSearchParams({offset, limit,
+                status_filter: this.currentStatusFilter || 'all',
+                error_code_filter: this.currentErrorCodeFilter || 'all',
+                cooldown_filter: this.currentCooldownFilter || 'all',
+                preview_filter: this.currentPreviewFilter || 'all',
+                tier_filter: this.currentTierFilter || 'all',
+                remark_filter: this.currentRemarkFilter || '__all__'});
+            if (this.type === 'antigravity') {
+                params.set('model_access_filter', this.currentModelAccessFilter || 'all');
+                params.set('model_access_tier', this.currentModelAccessTier || 'any');
+            }
+            return `${this.getEndpoint('status')}?${params}&${this.getModeParam()}`;
+        },
+
+        async selectAllMatching() {
+            const button = document.getElementById(this.getElementId('SelectAllMatchingBtn'));
+            if (button) button.disabled = true;
+            const selected = new Set();
+            // Capture filters once so changing a dropdown cannot mix two searches.
+            const url = this.getStatusUrl(0, 1000);
+            try {
+                let offset = 0;
+                do {
+                    const pageUrl = new URL(url, window.location.href);
+                    pageUrl.searchParams.set('offset', offset);
+                    const response = await fetch(pageUrl.href, {headers: getAuthHeaders()});
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.detail || '读取筛选结果失败');
+                    data.items.forEach(item => selected.add(item.filename));
+                    offset += data.items.length;
+                    if (!data.has_more) break;
+                    if (!data.items.length) throw new Error('列表已变化，请刷新后重新选择');
+                } while (true);
+                this.selectedFiles = selected;
+                this.updateBatchControls();
+                showStatus(`已选择全部筛选结果，共 ${selected.size} 个凭证`, 'success');
+            } catch (error) {
+                showStatus(`选择失败: ${error.message}`, 'error');
+            } finally {
+                if (button) button.disabled = false;
+            }
+        },
+
         // 刷新凭证列表
         async refresh() {
             const loading = document.getElementById(this.getElementId('CredsLoading'));
@@ -273,13 +319,8 @@ function createCredsManager(type) {
                 list.innerHTML = '';
 
                 const offset = (this.currentPage - 1) * this.pageSize;
-                const errorCodeFilter = this.currentErrorCodeFilter || 'all';
-                const cooldownFilter = this.currentCooldownFilter || 'all';
-                const previewFilter = this.currentPreviewFilter || 'all';
-                const tierFilter = this.currentTierFilter || 'all';
-                const remarkFilter = this.currentRemarkFilter || '__all__';
                 const response = await fetch(
-                    `${this.getEndpoint('status')}?offset=${offset}&limit=${this.pageSize}&status_filter=${this.currentStatusFilter}&error_code_filter=${errorCodeFilter}&cooldown_filter=${cooldownFilter}&preview_filter=${previewFilter}&tier_filter=${tierFilter}&remark_filter=${encodeURIComponent(remarkFilter)}&${this.getModeParam()}`,
+                    this.getStatusUrl(offset, this.pageSize),
                     { headers: getAuthHeaders() }
                 );
 
@@ -305,6 +346,7 @@ function createCredsManager(type) {
                             remark: item.remark || '',
                             user_email: item.user_email,
                             model_cooldowns: item.model_cooldowns || {},
+                            model_access_state: item.model_access_state || {},
                             preview: item.preview,
                             tier: item.tier || (this.type === 'antigravity' ? 'pro' : 'unknown'),
                             tier_raw_id: item.tier_raw_id,
@@ -323,6 +365,10 @@ function createCredsManager(type) {
                     });
 
                     this.totalCount = data.total;
+                    if (this.type === 'antigravity') {
+                        const overview = document.getElementById('antigravityModelAccessOverview');
+                        if (overview) overview.textContent = modelAccessOverviewText(data.model_access_summary);
+                    }
                     // 使用后端返回的全局统计数据
                     if (data.stats) {
                         this.statsData = data.stats;
@@ -458,6 +504,10 @@ function createCredsManager(type) {
             this.currentCooldownFilter = cooldownFilterEl ? cooldownFilterEl.value : 'all';
             this.currentPreviewFilter = previewFilterEl ? previewFilterEl.value : 'all';
             this.currentTierFilter = tierFilterEl ? tierFilterEl.value : 'all';
+            if (this.type === 'antigravity') {
+                this.currentModelAccessFilter = document.getElementById('antigravityModelAccessFilter')?.value || 'all';
+                this.currentModelAccessTier = document.getElementById('antigravityModelAccessTier')?.value || 'any';
+            }
             const remarkValue = remarkFilterEl ? remarkFilterEl.value.trim() : '';
             this.currentRemarkFilter = remarkValue ? remarkValue : '__all__';
             this.currentPage = 1;
@@ -1112,6 +1162,7 @@ function createCredCard(credInfo, manager) {
             </div>
             <div class="cred-status">${statusBadges}</div>
         </div>
+        ${managerType === 'antigravity' ? modelAccessBadges(credInfo.model_access_state) : ''}
         <div class="cred-actions">${actionButtons}</div>
         <div class="cred-details" id="details-${pathId}">
             <div class="cred-content" data-filename="${filename}" data-loaded="false">点击"查看内容"按钮加载文件详情...</div>
@@ -2354,8 +2405,9 @@ async function batchRefreshCooldownCredentials(manager, label) {
         const results = data.results || [];
 
         const lines = results.map(r => {
+            const access = manager.type === 'antigravity' ? '\n' + modelAccessResultText(r) : '';
             if (!r.success) {
-                return `❌ ${r.filename}: ${r.error || '检测失败'}${manualResultSummary(r) ? '\n' + manualResultSummary(r) : ''}`;
+                return `❌ ${r.filename}: ${r.error || '检测失败'}${access}${manualResultSummary(r) ? '\n' + manualResultSummary(r) : ''}`;
             }
             const cleared = (r.cleared && r.cleared.length) ? ` ✅解除: ${r.cleared.join(', ')}` : '';
             const added = (r.added_cooldown && r.added_cooldown.length) ? ` 🧊补冷: ${r.added_cooldown.join(', ')}` : '';
@@ -2364,14 +2416,15 @@ async function batchRefreshCooldownCredentials(manager, label) {
             const anyChange = !!(cleared || added);
             const tag = anyChange ? '🔄' : '✅';
             const trail = (cleared || added || kept || unknown) ? '' : ' 无需调整';
-            return `${tag} ${r.filename}:${cleared}${added}${kept}${unknown}${trail}${manualResultSummary(r) ? '\n' + manualResultSummary(r) : ''}`;
+            return `${tag} ${r.filename}:${cleared}${added}${kept}${unknown}${trail}${access}${manualResultSummary(r) ? '\n' + manualResultSummary(r) : ''}`;
         });
 
         await manager.refresh();
 
         const addedTotal = data.added_total || 0;
         const affectedAdded = data.affected_creds_added || 0;
-        const summary = `批量额度检测 + 双向冷却同步完成\n\n成功: ${successCount} 个\n失败: ${failureCount} 个\n总计: ${data.total_count || selectedFiles.length} 个\n✅解除冷却: ${clearedTotal} 个（${affected} 凭证）\n🧊补加冷却: ${addedTotal} 个（${affectedAdded} 凭证）\n\n详细结果:\n${lines.join('\n')}`;
+        const accessSummary = manager.type === 'antigravity' ? '\n\n' + modelAccessBatchText(results) : '';
+        const summary = `批量额度检测 + 双向冷却同步完成\n\n查询成功: ${successCount} 个\n查询失败: ${failureCount} 个\n总计: ${data.total_count || selectedFiles.length} 个\n✅解除冷却: ${clearedTotal} 个（${affected} 凭证）\n🧊补加冷却: ${addedTotal} 个（${affectedAdded} 凭证）${accessSummary}\n\n详细结果:\n${lines.join('\n')}`;
 
         const tone = failureCount === 0 ? 'success' : (successCount === 0 ? 'error' : 'info');
         showStatus(`额度检测完成：解除 ${clearedTotal} 个 / 补冷 ${addedTotal} 个（${selectedFiles.length} 凭证）`, tone);
@@ -2460,6 +2513,56 @@ function modelAccessSummary(data) {
                 最近检查：${timeLabel(entry.last_attempt_at || entry.checked_at)}<br>下次复查：${timeLabel(entry.next_check_at)}
                 ${entry.blocked_until ? `<br>暂停期限：${timeLabel(entry.blocked_until)}（到期仍需目录确认）` : ''}</div>`;
         }).join('')}</div>`;
+}
+
+function modelAccessStatus(entries, tier, now = Date.now() / 1000) {
+    const entry = (entries || {})[`claude-opus-5-5-${tier}`] || {};
+    const checked = entry.checked_at;
+    if (entry.state === 'supported' && Number.isFinite(checked) && checked <= now && now < checked + 43200) return 'supported';
+    return entry.state === 'unavailable' ? 'unavailable' : 'unknown';
+}
+
+function modelAccessBadges(entries) {
+    const labels = {supported: '目录支持', unavailable: '暂不可用', unknown: '待确认'};
+    const colors = {supported: '#167535', unavailable: '#a15c00', unknown: '#666'};
+    return `<div data-model-access-badges style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;font-size:12px;">
+        <strong>Opus 5.5</strong>${['low', 'medium', 'high'].map(tier => {
+            const status = modelAccessStatus(entries, tier);
+            return `<span style="padding:2px 6px;border:1px solid ${colors[status]};border-radius:4px;color:${colors[status]};" title="目录支持有效期 12 小时；权限与额度分别判断。查看额度可复查详情。">${tier[0].toUpperCase() + tier.slice(1)} · ${labels[status]}</span>`;
+        }).join('')}</div>`;
+}
+
+function modelAccessOverviewText(summary) {
+    if (!summary?.counts) return '当前服务未提供权限总览，请确认已部署最新版本。';
+    const labels = {any: '至少一档', all_tiers: '三档全部', low: 'Low', medium: 'Medium', high: 'High'};
+    return `Opus 5.5 权限总览（当前其他筛选条件下共 ${summary.total} 个凭证，覆盖全部分页）\n` +
+        Object.entries(labels).map(([tier, label]) => {
+            const count = summary.counts[tier] || {};
+            return `${label}：目录支持 ${count.supported || 0} / 暂不可用 ${count.unavailable || 0} / 待确认 ${count.unknown || 0}`;
+        }).join('\n') + '\n支持记录过期归为待确认；暂不可用需有效目录确认后恢复。权限不代表剩余额度或生成已验证。';
+}
+
+function modelAccessResultText(result) {
+    const labels = {supported: '目录支持', unavailable: '暂不可用', unknown: '待确认'};
+    const values = ['low', 'medium', 'high'].map(tier =>
+        `${tier[0].toUpperCase() + tier.slice(1)}: ${labels[modelAccessStatus(result.model_access_state, tier)]}`);
+    return `Opus 5.5 · ${values.join(' / ')}${result.success ? '' : '（查询失败，以上为已有证据）'}`;
+}
+
+function modelAccessBatchText(results) {
+    const counts = Object.fromEntries(['any', 'all_tiers', 'low', 'medium', 'high'].map(tier => [tier,
+        {supported: 0, unavailable: 0, unknown: 0}]));
+    results.forEach(result => {
+        const states = ['low', 'medium', 'high'].map(tier => {
+            const state = modelAccessStatus(result.model_access_state, tier);
+            counts[tier][state]++;
+            return state;
+        });
+        counts.any[states.includes('supported') ? 'supported' : states.every(s => s === 'unavailable') ? 'unavailable' : 'unknown']++;
+        counts.all_tiers[states.every(s => s === 'supported') ? 'supported' : states.includes('unavailable') ? 'unavailable' : 'unknown']++;
+    });
+    return modelAccessOverviewText({total: results.length, counts})
+        .replace('当前其他筛选条件下', '本次批量结果').replace('覆盖全部分页', '查询失败保留已有证据');
 }
 
 async function _toggleQuotaDetails(pathId, mode) {

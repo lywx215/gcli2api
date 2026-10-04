@@ -514,7 +514,8 @@ async def upload_credentials_common(
 
 async def get_creds_status_common(
     offset: int, limit: int, status_filter: str, mode: str = "geminicli",
-    error_code_filter: str = None, cooldown_filter: str = None, preview_filter: str = None, tier_filter: str = None, remark_filter: str = None
+    error_code_filter: str = None, cooldown_filter: str = None, preview_filter: str = None, tier_filter: str = None, remark_filter: str = None,
+    model_access_filter: str = "all", model_access_tier: str = "any"
 ) -> JSONResponse:
     """获取凭证文件状态的通用函数"""
     mode = validate_mode(mode)
@@ -535,15 +536,22 @@ async def get_creds_status_common(
         raise HTTPException(status_code=400, detail=f"tier_filter 只能是 {allowed_text}")
     if remark_filter is not None and len(remark_filter) > 64:
         raise HTTPException(status_code=400, detail="remark_filter 不能超过 64 个字符")
+    if model_access_filter not in ("all", "supported", "unavailable", "unknown"):
+        raise HTTPException(status_code=400, detail="无效的 Opus 权限筛选")
+    if model_access_tier not in ("any", "all_tiers", "low", "medium", "high"):
+        raise HTTPException(status_code=400, detail="无效的 Opus 权限档位")
+    if mode != "antigravity" and (model_access_filter != "all" or model_access_tier != "any"):
+        raise HTTPException(status_code=400, detail="Opus 权限筛选仅支持 Antigravity")
 
     storage_adapter = await get_storage_adapter()
     backend_info = await storage_adapter.get_backend_info()
     backend_type = backend_info.get("backend_type", "unknown")
 
-    # 使用高性能的分页摘要查询
+    # Antigravity counts and permission filters cover all matching summaries.
+    # Keep the legacy Gemini CLI pagination path unchanged.
     result = await storage_adapter._backend.get_credentials_summary(
-        offset=offset,
-        limit=limit,
+        offset=0 if mode == "antigravity" else offset,
+        limit=None if mode == "antigravity" else limit,
         status_filter=status_filter,
         mode=mode,
         error_code_filter=error_code_filter if error_code_filter and error_code_filter != "all" else None,
@@ -553,6 +561,12 @@ async def get_creds_status_common(
         remark_filter=remark_filter if remark_filter is not None and remark_filter != "__all__" else None,
         include_error_classifications=True,
     )
+    if mode == "antigravity":
+        from src.antigravity_model_access import filter_summaries
+        reader = getattr(storage_adapter._backend, "model_access_list_public", None)
+        states = await reader() if callable(reader) else {}
+        result = filter_summaries(result, states, offset=offset, limit=limit,
+                                  status=model_access_filter, tier=model_access_tier)
 
     creds_list = []
     for summary in result["items"]:
@@ -582,6 +596,7 @@ async def get_creds_status_common(
             cred_info["preview"] = summary.get("preview", True)
         else:
             cred_info["enable_credit"] = summary.get("enable_credit", False)
+            cred_info["model_access_state"] = summary.get("model_access_state", {})
 
         creds_list.append(cred_info)
 
@@ -592,6 +607,7 @@ async def get_creds_status_common(
         "limit": limit,
         "has_more": (offset + limit) < result["total"],
         "stats": result.get("stats", {"total": 0, "normal": 0, "disabled": 0}),
+        **({"model_access_summary": result["model_access_summary"]} if mode == "antigravity" else {}),
     })
 
 
@@ -1134,7 +1150,9 @@ async def get_creds_status(
     preview_filter: str = "all",
     tier_filter: str = "all",
     remark_filter: str = "__all__",
-    mode: str = "geminicli"
+    mode: str = "geminicli",
+    model_access_filter: str = "all",
+    model_access_tier: str = "any"
 ):
     """
     获取凭证文件的状态（轻量级摘要，不包含完整凭证数据，支持分页和状态筛选）
@@ -1147,6 +1165,8 @@ async def get_creds_status(
         cooldown_filter: 冷却状态筛选（all=全部, in_cooldown=冷却中, no_cooldown=未冷却）
         preview_filter: Preview筛选（all=全部, preview=支持preview, no_preview=不支持preview，仅geminicli模式有效）
         tier_filter: tier筛选（all=全部, free/pro/ultra）
+        model_access_filter: Opus权限筛选（all/supported/unavailable/unknown，仅Antigravity）
+        model_access_tier: 权限档位（any/all_tiers/low/medium/high），先筛选再分页
         mode: 凭证模式（geminicli 或 antigravity）
 
     Returns:
@@ -1160,7 +1180,9 @@ async def get_creds_status(
             cooldown_filter=cooldown_filter,
             preview_filter=preview_filter,
             tier_filter=tier_filter,
-            remark_filter=remark_filter
+            remark_filter=remark_filter,
+            model_access_filter=model_access_filter,
+            model_access_tier=model_access_tier
         )
     except HTTPException:
         raise

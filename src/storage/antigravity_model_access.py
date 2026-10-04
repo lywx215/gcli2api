@@ -69,6 +69,48 @@ class AntigravityModelAccessMixin:
         rows = await self._quota_rows(filename)
         return public(row_state(rows[0])) if rows else {}
 
+    async def model_access_list_public(self):
+        """One cached read including disabled accounts; no per-row queries or writes.
+
+        Credential contents are used only internally to validate the identity fence.
+        The returned projection contains no tokens, identity, revision or leases.
+        """
+        if not self.model_access_storage_ready:
+            return {}
+        columns = ("filename", "credential_data", "quota_credential_generation", "model_access_state")
+        engine = self.QUOTA_ENGINE
+        if engine == "mongo":
+            collection = self._db[self._get_collection_name("antigravity")]
+            rows = await collection.find({}, {key: 1 for key in columns}).to_list(length=None)
+        else:
+            table = self._get_table_name("antigravity")
+            query = f"SELECT {', '.join(columns)} FROM {table}"
+            if engine == "sqlite":
+                import aiosqlite
+                async with aiosqlite.connect(self._db_path, timeout=30) as conn:
+                    conn.row_factory = aiosqlite.Row
+                    async with conn.execute(query) as cursor:
+                        rows = await cursor.fetchall()
+            elif engine == "postgres":
+                async with self._pool.acquire() as conn:
+                    rows = await conn.fetch(query)
+            elif engine == "mysql":
+                import aiomysql
+                async with self._pool.acquire() as conn:
+                    async with conn.cursor(aiomysql.DictCursor) as cursor:
+                        await cursor.execute(query + " WHERE server_name = %s", (self._server_name,))
+                        rows = await cursor.fetchall()
+            else:
+                return {}
+        result = {}
+        for raw in rows:
+            row = dict(raw)
+            try:
+                result[row["filename"]] = public(row_state(row))
+            except (ValueError, TypeError):
+                result[row["filename"]] = public({})
+        return result
+
     async def model_access_claim(self, filename, *, force=False, now=None):
         if not self.model_access_storage_ready:
             return None

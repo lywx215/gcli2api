@@ -71,3 +71,39 @@ def public(state):
         return {model: {"state": "unknown", "reason": "invalid_state"} for model in MODELS}
     return {model: {k: v for k, v in state["models"].get(model, {"state": "unknown"}).items()
                     if k != "revision"} for model in MODELS}
+
+
+def display_status(entries, tier="any", now=None):
+    """Classify cached evidence, never infer denial from an expired positive."""
+    now = time.time() if now is None else now
+    statuses = []
+    for model in MODELS:
+        entry = entries.get(model, {})
+        if eligible({"models": {model: entry}}, model, now):
+            statuses.append("supported")
+        else:
+            statuses.append("unavailable" if entry.get("state") == "unavailable" else "unknown")
+    if tier in ("low", "medium", "high"):
+        return statuses[("low", "medium", "high").index(tier)]
+    if tier == "all_tiers":
+        return "supported" if all(s == "supported" for s in statuses) else (
+            "unavailable" if "unavailable" in statuses else "unknown")
+    return "supported" if "supported" in statuses else (
+        "unavailable" if all(s == "unavailable" for s in statuses) else "unknown")
+
+
+def filter_summaries(result, states, *, offset, limit, status="all", tier="any", now=None):
+    """Apply permissions after existing filters and before pagination."""
+    now = time.time() if now is None else now
+    counts = {key: {s: 0 for s in ("supported", "unavailable", "unknown")}
+              for key in ("any", "all_tiers", "low", "medium", "high")}
+    selected = []
+    for item in result["items"]:
+        entries = states.get(item["filename"], {})
+        for key in counts:
+            counts[key][display_status(entries, key, now)] += 1
+        if status == "all" or display_status(entries, tier, now) == status:
+            selected.append({**item, "model_access_state": entries})
+    return {**result, "items": selected[offset:offset + limit], "total": len(selected),
+            "model_access_summary": {"total": len(result["items"]), "counts": counts,
+                                     "checked_at": now}}

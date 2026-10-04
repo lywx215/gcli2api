@@ -2128,9 +2128,10 @@
                         <div class="checkbox-container">
                             <input type="checkbox" id="selectAllAntigravityCheckbox" class="select-all-checkbox"
                                 onchange="toggleSelectAllAntigravity()">
-                            <label for="selectAllAntigravityCheckbox">全选</label>
+                            <label for="selectAllAntigravityCheckbox">全选本页</label>
                         </div>
                         <span class="selected-count" id="antigravitySelectedCount">已选择 0 项</span>
+                        <button class="batch-btn" id="antigravitySelectAllMatchingBtn" onclick="AppState.antigravityCreds.selectAllMatching()">选择全部筛选结果</button>
                         <button class="batch-btn batch-enable" id="antigravityBatchEnableBtn"
                             onclick="batchAntigravityAction('enable')" disabled>批量启用</button>
                         <button class="batch-btn batch-disable" id="antigravityBatchDisableBtn"
@@ -2148,7 +2149,7 @@
                         <button class="batch-btn" id="antigravityBatchTestBtn"
                             onclick="batchTestSelectedAntigravityCredentials()" disabled>批量消息测试</button>
                         <button class="batch-btn" id="antigravityBatchRefreshCooldownBtn"
-                            onclick="batchRefreshCooldownSelectedAntigravityCredentials()" disabled>批量额度检测/双向同步冷却</button>
+                            onclick="batchRefreshCooldownSelectedAntigravityCredentials()" disabled>批量额度/权限检测（同步冷却）</button>
                         <button class="batch-btn" id="antigravityBatchDownloadBtn"
                             onclick="downloadSelectedAntigravityCredentials()" disabled>下载选中凭证</button>
                         <button class="batch-btn batch-email" id="antigravityBatchCopyEmailsBtn"
@@ -2216,6 +2217,25 @@
                         <option value="1000">1000</option>
                     </select>
                 </div>
+
+                <div class="filter-container">
+                    <label for="antigravityModelAccessTier">Opus 5.5 档位：</label>
+                    <select id="antigravityModelAccessTier" class="filter-select" onchange="applyAntigravityStatusFilter()">
+                        <option value="any">至少一档</option>
+                        <option value="all_tiers">三档全部</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                    </select>
+                    <label for="antigravityModelAccessFilter">权限：</label>
+                    <select id="antigravityModelAccessFilter" class="filter-select" onchange="applyAntigravityStatusFilter()">
+                        <option value="all">全部状态</option>
+                        <option value="supported">目录支持</option>
+                        <option value="unavailable">暂不可用</option>
+                        <option value="unknown">待确认 / 已过期</option>
+                    </select>
+                </div>
+                <div id="antigravityModelAccessOverview" style="white-space:pre-line;overflow-wrap:anywhere;padding:12px;margin-bottom:12px;background:#eef6ff;border-radius:6px;font-size:13px;">加载已保存的权限状态；选择全部筛选结果后可批量额度/权限检测。</div>
 
                 <div id="antigravityCredsListSection">
                     <div class="loading" id="antigravityCredsLoading">正在加载凭证文件...</div>
