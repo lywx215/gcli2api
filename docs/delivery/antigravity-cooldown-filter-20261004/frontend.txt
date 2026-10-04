@@ -1,0 +1,21 @@
+✔ capabilities disable unsupported filters and stats do not fabricate ready (34.624958ms)
+✔ named group badges show independent state and unknown group detail (1.614542ms)
+✔ timer scopes same filenames, preserves unknown block and coalesces failed refresh (62.444083ms)
+✔ all matching selection carries the exact group filter over pages (1.312917ms)
+✔ empty quota model response renders group restriction and release control (10.290417ms)
+✔ both real templates expose only group filters with safe initial capability state (2.855541ms)
+✔ hidden Antigravity tab never polls cached status (3.434125ms)
+✔ failed quota lookup retains returned unknown and timed group protection (25.089167ms)
+✔ explicit group release refreshes cached list without another quota request (1.71925ms)
+✔ successful expiry refresh clears expired timer so subsequent ticks do not poll (0.907417ms)
+✔ empty filtered page refreshes once when global next expiry arrives (0.594833ms)
+✔ invalid quota groups remain explicitly restricted on cards and timer ticks (0.444917ms)
+✔ cross-page selection synchronizes visible checkboxes using actual template IDs (1.81825ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 254.606042

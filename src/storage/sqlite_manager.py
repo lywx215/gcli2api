@@ -40,10 +40,15 @@ from src.subscription_tiers import (
 
 
 from src.storage.antigravity_quota import AntigravityQuotaMixin
+from src.antigravity_quota import (
+    GROUP_FILTERS, count_quota_summary, empty_quota_stats, finite_quota_deadline,
+    matches_quota_filter, observe_quota_expiry, quota_summary,
+)
 
 
 class SQLiteManager(AntigravityQuotaMixin):
     QUOTA_ENGINE = 'sqlite'
+    SUPPORTS_QUOTA_GROUP_FILTER = True
     """SQLite 数据库管理器"""
 
     # 状态字段常量
@@ -1672,6 +1677,8 @@ class SQLiteManager(AntigravityQuotaMixin):
         active_cooldowns, invalid_count = active_model_cooldowns(
             row[6] or "{}", current_time
         )
+        if mode == "antigravity":
+            active_cooldowns = {key: until for key, until in active_cooldowns.items() if finite_quota_deadline(until)}
         summary: Dict[str, Any] = {
             "filename": row[0],
             "disabled": bool(row[1]),
@@ -1714,6 +1721,7 @@ class SQLiteManager(AntigravityQuotaMixin):
             )
         else:
             summary["enable_credit"] = bool(row[8]) if row[8] is not None else False
+            summary.update(quota_summary(row[6], row[15], current_time))
         return summary, invalid_count
 
     async def _get_credentials_summary_bounded(
@@ -1764,12 +1772,22 @@ class SQLiteManager(AntigravityQuotaMixin):
                         else:
                             global_stats["normal"] += count
 
+                if mode == "antigravity":
+                    global_stats.update(empty_quota_stats())
+                cooldown_columns = "model_cooldowns, quota_group_states, disabled, permanent_disabled" if mode == "antigravity" else "model_cooldowns"
+                cooldown_where = "" if mode == "antigravity" else (
+                    "WHERE COALESCE(disabled, 0) = 0 AND COALESCE(permanent_disabled, 0) = 0"
+                )
                 async with db.execute(
-                    f"SELECT model_cooldowns FROM {table_name} "
-                    "WHERE COALESCE(disabled, 0) = 0 "
-                    "AND COALESCE(permanent_disabled, 0) = 0"
+                    f"SELECT {cooldown_columns} FROM {table_name} {cooldown_where}"
                 ) as cooldown_cursor:
-                    async for (model_cooldowns,) in cooldown_cursor:
+                    async for cooldown_row in cooldown_cursor:
+                        model_cooldowns = cooldown_row[0]
+                        if mode == "antigravity":
+                            group_summary = quota_summary(model_cooldowns, cooldown_row[1], current_time)
+                            observe_quota_expiry(global_stats, group_summary)
+                            if cooldown_row[2] or cooldown_row[3]:
+                                continue
                         active, invalid = active_model_cooldowns(
                             model_cooldowns, current_time
                         )
@@ -1777,6 +1795,8 @@ class SQLiteManager(AntigravityQuotaMixin):
                         global_stats[
                             "in_cooldown" if active else "no_cooldown"
                         ] += 1
+                        if mode == "antigravity":
+                            count_quota_summary(global_stats, group_summary)
 
                 if has_value_filters or status_filter not in {None, "all"}:
                     async with db.execute(
@@ -1804,7 +1824,7 @@ class SQLiteManager(AntigravityQuotaMixin):
                     page_query = f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, tier, enable_credit,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark, quota_group_states
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order, rowid
@@ -1822,6 +1842,8 @@ class SQLiteManager(AntigravityQuotaMixin):
                         row, mode, current_time
                     )
                     invalid_cooldown_count += invalid
+                    if mode == "antigravity":
+                        observe_quota_expiry(global_stats, summary)
                     summaries.append(summary)
 
                 async def load_error_messages(
@@ -1860,6 +1882,7 @@ class SQLiteManager(AntigravityQuotaMixin):
             "offset": offset,
             "limit": limit,
             "stats": global_stats,
+            **({"quota_group_filter_supported": True} if mode == "antigravity" else {}),
         }
 
     async def get_credentials_summary(
@@ -1876,6 +1899,10 @@ class SQLiteManager(AntigravityQuotaMixin):
         include_error_classifications: bool = False,
     ) -> Dict[str, Any]:
         """Return credential summaries, using bounded SQLite reads when safe."""
+        if cooldown_filter in GROUP_FILTERS and mode != "antigravity":
+            raise ValueError("Antigravity quota group filters require antigravity mode")
+        if mode == "antigravity" and cooldown_filter not in {None, "", "all", "in_cooldown", "no_cooldown", "pro_no_cooldown", "flash_no_cooldown", *GROUP_FILTERS}:
+            raise ValueError("invalid cooldown filter")
         self._ensure_initialized()
         if self._supports_bounded_summary_path(
             offset=offset,
@@ -1948,6 +1975,10 @@ class SQLiteManager(AntigravityQuotaMixin):
         Returns:
             包含 items（凭证列表）、total（总数）、offset、limit 的字典
         """
+        if cooldown_filter in GROUP_FILTERS and mode != "antigravity":
+            raise ValueError("Antigravity quota group filters require antigravity mode")
+        if mode == "antigravity" and cooldown_filter not in {None, "", "all", "in_cooldown", "no_cooldown", "pro_no_cooldown", "flash_no_cooldown", *GROUP_FILTERS}:
+            raise ValueError("invalid cooldown filter")
         self._ensure_initialized()
 
         try:
@@ -2011,7 +2042,7 @@ class SQLiteManager(AntigravityQuotaMixin):
                     all_query = f"""
                         SELECT filename, disabled, error_codes, last_success,
                                user_email, rotation_order, model_cooldowns, tier, enable_credit,
-                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
+                               success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark, quota_group_states
                         FROM {table_name}
                         {where_clause}
                         ORDER BY rotation_order, rowid
@@ -2022,22 +2053,34 @@ class SQLiteManager(AntigravityQuotaMixin):
 
                     current_time = time.time()
                     all_summaries = []
-                    count_cooldowns_from_rows = status_filter not in {
+                    if mode == "antigravity":
+                        global_stats.update(empty_quota_stats())
+                    count_cooldowns_from_rows = mode != "antigravity" and status_filter not in {
                         "enabled", "disabled", "permanent_disabled"
                     }
                     if not count_cooldowns_from_rows:
+                        cooldown_columns = "model_cooldowns, quota_group_states, disabled, permanent_disabled" if mode == "antigravity" else "model_cooldowns"
+                        cooldown_where = "" if mode == "antigravity" else (
+                            "WHERE COALESCE(disabled, 0) = 0 AND COALESCE(permanent_disabled, 0) = 0"
+                        )
                         async with db.execute(
-                            f"SELECT model_cooldowns FROM {table_name} "
-                            "WHERE COALESCE(disabled, 0) = 0 "
-                            "AND COALESCE(permanent_disabled, 0) = 0"
+                            f"SELECT {cooldown_columns} FROM {table_name} {cooldown_where}"
                         ) as cooldown_stats_cursor:
-                            for (model_cooldowns,) in await cooldown_stats_cursor.fetchall():
+                            for cooldown_row in await cooldown_stats_cursor.fetchall():
+                                model_cooldowns = cooldown_row[0]
+                                if mode == "antigravity":
+                                    group_summary = quota_summary(model_cooldowns, cooldown_row[1], current_time)
+                                    observe_quota_expiry(global_stats, group_summary)
+                                    if cooldown_row[2] or cooldown_row[3]:
+                                        continue
                                 active, invalid = active_model_cooldowns(
                                     model_cooldowns, current_time
                                 )
                                 invalid_cooldown_count += invalid
                                 cooldown_key = "in_cooldown" if active else "no_cooldown"
                                 global_stats[cooldown_key] += 1
+                                if mode == "antigravity":
+                                    count_quota_summary(global_stats, group_summary)
 
                     for row in all_rows:
                         filename = row[0]
@@ -2049,12 +2092,19 @@ class SQLiteManager(AntigravityQuotaMixin):
                         active_cooldowns, invalid = active_model_cooldowns(
                             model_cooldowns_json, current_time
                         )
+                        if mode == "antigravity":
+                            active_cooldowns = {key: until for key, until in active_cooldowns.items() if finite_quota_deadline(until)}
                         invalid_cooldown_count += invalid
                         if count_cooldowns_from_rows and is_normal:
                             cooldown_key = (
                                 "in_cooldown" if active_cooldowns else "no_cooldown"
                             )
                             global_stats[cooldown_key] += 1
+                        group_summary = quota_summary(row[6], row[15], current_time) if mode == "antigravity" else None
+                        if group_summary is not None:
+                            observe_quota_expiry(global_stats, group_summary)
+                        if group_summary is not None and count_cooldowns_from_rows and is_normal:
+                            count_quota_summary(global_stats, group_summary)
 
                         error_codes = safe_json_list(error_codes_json)
                         if is_http_403_classification_filter(error_code_filter):
@@ -2101,6 +2151,7 @@ class SQLiteManager(AntigravityQuotaMixin):
 
                         if mode != "geminicli":
                             summary["enable_credit"] = bool(row[8]) if row[8] is not None else False
+                            summary.update(group_summary)
 
                         if mode == "geminicli":
                             summary["preview"] = bool(row[7]) if row[7] is not None else True
@@ -2118,7 +2169,10 @@ class SQLiteManager(AntigravityQuotaMixin):
                                 continue
 
                         # 应用冷却筛选
-                        if cooldown_filter == "in_cooldown":
+                        if cooldown_filter in GROUP_FILTERS:
+                            if matches_quota_filter(summary, cooldown_filter):
+                                all_summaries.append(summary)
+                        elif cooldown_filter == "in_cooldown":
                             # 只保留有冷却的凭证
                             if active_cooldowns:
                                 all_summaries.append(summary)
@@ -2178,6 +2232,7 @@ class SQLiteManager(AntigravityQuotaMixin):
                         "offset": offset,
                         "limit": limit,
                         "stats": global_stats,
+                        **({"quota_group_filter_supported": True} if mode == "antigravity" else {}),
                     }
 
         except Exception as e:

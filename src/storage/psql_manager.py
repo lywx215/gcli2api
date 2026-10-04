@@ -24,6 +24,7 @@ from src.error_classification import (
 from src.storage._stats_common import (
     MODEL_FAMILY_RULES,
     _today_beijing_str,
+    active_model_cooldowns,
     clear_antigravity_cooldown_family,
     cooldowns_affect_antigravity_family,
     get_antigravity_cooldown_until,
@@ -39,10 +40,20 @@ from src.subscription_tiers import (
 )
 
 
+from src.antigravity_quota import (
+    GROUP_FILTERS,
+    count_quota_summary,
+    empty_quota_stats,
+    finite_quota_deadline,
+    matches_quota_filter,
+    observe_quota_expiry,
+    quota_summary,
+)
 from src.storage.antigravity_quota import AntigravityQuotaMixin
 
 
 class PSQLManager(AntigravityQuotaMixin):
+    SUPPORTS_QUOTA_GROUP_FILTER = True
     QUOTA_ENGINE = 'postgres'
     """PostgreSQL 数据库管理器"""
 
@@ -920,6 +931,13 @@ class PSQLManager(AntigravityQuotaMixin):
         include_error_classifications: bool = False,
     ) -> Dict[str, Any]:
         """获取凭证的摘要信息，支持分页和状态筛选"""
+        if cooldown_filter in GROUP_FILTERS and mode != "antigravity":
+            raise ValueError("Antigravity quota group filters require antigravity mode")
+        if mode == "antigravity" and cooldown_filter not in (
+            None, "", "all", "in_cooldown", "no_cooldown",
+            "pro_no_cooldown", "flash_no_cooldown", *GROUP_FILTERS,
+        ):
+            raise ValueError("Unsupported Antigravity cooldown filter")
         self._ensure_initialized()
 
         try:
@@ -938,6 +956,7 @@ class PSQLManager(AntigravityQuotaMixin):
                     "permanent_disabled": 0,
                     "in_cooldown": 0,
                     "no_cooldown": 0,
+                    **(empty_quota_stats() if mode == "antigravity" else {}),
                 }
                 for r in stats_rows:
                     global_stats["total"] += r["cnt"]
@@ -975,7 +994,7 @@ class PSQLManager(AntigravityQuotaMixin):
                 else:
                     all_rows = await conn.fetch(f"""
                         SELECT filename, disabled, error_codes, last_success,
-                               user_email, rotation_order, model_cooldowns, tier, enable_credit,
+                               user_email, rotation_order, model_cooldowns, quota_group_states, tier, enable_credit,
                                success_count, failure_count, permanent_disabled, cycle_stats, last_cycle_stats, remark
                         FROM {table_name}
                         {where_clause}
@@ -988,9 +1007,14 @@ class PSQLManager(AntigravityQuotaMixin):
                 }
                 if not count_cooldowns_from_rows:
                     cooldown_rows = await conn.fetch(
-                        f"SELECT model_cooldowns FROM {table_name} "
-                        "WHERE COALESCE(disabled, FALSE) = FALSE "
-                        "AND COALESCE(permanent_disabled, FALSE) = FALSE"
+                        f"SELECT model_cooldowns{', quota_group_states' if mode == 'antigravity' else ''} FROM {table_name} "
+                        + (
+                            "WHERE COALESCE(disabled, 0) = 0 "
+                            "AND COALESCE(permanent_disabled, 0) = 0"
+                            if mode == "antigravity" else
+                            "WHERE COALESCE(disabled, FALSE) = FALSE "
+                            "AND COALESCE(permanent_disabled, FALSE) = FALSE"
+                        )
                     )
                     for cooldown_row in cooldown_rows:
                         cooldown_key = (
@@ -1001,9 +1025,19 @@ class PSQLManager(AntigravityQuotaMixin):
                             else "no_cooldown"
                         )
                         global_stats[cooldown_key] += 1
+                        if mode == "antigravity":
+                            count_quota_summary(global_stats, quota_summary(
+                                cooldown_row["model_cooldowns"],
+                                cooldown_row["quota_group_states"], current_time,
+                            ))
                 for row in all_rows:
                     error_codes_json = row["error_codes"] or "[]"
-                    model_cooldowns_raw = row["model_cooldowns"] or "{}"
+                    model_cooldowns_raw = row["model_cooldowns"]
+                    row_quota = quota_summary(
+                        model_cooldowns_raw, row["quota_group_states"], current_time,
+                    ) if mode == "antigravity" else None
+                    if row_quota is not None:
+                        observe_quota_expiry(global_stats, row_quota)
                     is_normal = not bool(row["disabled"]) and not bool(
                         row["permanent_disabled"]
                     )
@@ -1014,8 +1048,17 @@ class PSQLManager(AntigravityQuotaMixin):
                             else "no_cooldown"
                         )
                         global_stats[cooldown_key] += 1
-                    model_cooldowns = json.loads(model_cooldowns_raw)
-                    active_cooldowns = {k: v for k, v in model_cooldowns.items() if v > current_time}
+                        if row_quota is not None:
+                            count_quota_summary(global_stats, row_quota)
+                    if mode == "antigravity":
+                        active_cooldowns, _ = active_model_cooldowns(model_cooldowns_raw, current_time)
+                        active_cooldowns = {
+                            key: deadline for key, deadline in active_cooldowns.items()
+                            if finite_quota_deadline(deadline)
+                        }
+                    else:
+                        model_cooldowns = json.loads(model_cooldowns_raw or "{}")
+                        active_cooldowns = {k: v for k, v in model_cooldowns.items() if v > current_time}
                     error_codes = safe_json_list(error_codes_json)
                     if is_http_403_classification_filter(error_code_filter):
                         if not has_error_code(error_codes, 403):
@@ -1049,6 +1092,9 @@ class PSQLManager(AntigravityQuotaMixin):
                         "remark": row_remark,
                     }
 
+                    if row_quota is not None:
+                        summary.update(row_quota)
+
                     if mode == "geminicli":
                         summary["preview"] = bool(row["preview"]) if row["preview"] is not None else True
                         summary["health_status"] = row["health_status"] or "healthy"
@@ -1072,7 +1118,10 @@ class PSQLManager(AntigravityQuotaMixin):
                         if summary["tier"] != tier_filter:
                             continue
 
-                    if cooldown_filter == "in_cooldown":
+                    if mode == "antigravity" and cooldown_filter in GROUP_FILTERS:
+                        if matches_quota_filter(summary, cooldown_filter):
+                            all_summaries.append(summary)
+                    elif cooldown_filter == "in_cooldown":
                         if active_cooldowns:
                             all_summaries.append(summary)
                     elif cooldown_filter == "no_cooldown":
@@ -1129,6 +1178,7 @@ class PSQLManager(AntigravityQuotaMixin):
                     "offset": offset,
                     "limit": limit,
                     "stats": global_stats,
+                    **({"quota_group_filter_supported": True} if mode == "antigravity" else {}),
                 }
 
         except Exception as e:
@@ -1138,7 +1188,7 @@ class PSQLManager(AntigravityQuotaMixin):
                 "total": 0,
                 "offset": offset,
                 "limit": limit,
-                "stats": {"total": 0, "normal": 0, "disabled": 0, "permanent_disabled": 0, "in_cooldown": 0, "no_cooldown": 0},
+                "stats": {"total": 0, "normal": 0, "disabled": 0, "permanent_disabled": 0, "in_cooldown": 0, "no_cooldown": 0, **(empty_quota_stats() if mode == "antigravity" else {})},
             }
 
     async def get_duplicate_credentials_by_email(self, mode: str = "geminicli") -> Dict[str, Any]:

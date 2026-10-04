@@ -53,6 +53,42 @@ Content-Type: application/json
 
 单凭证额度页、批量刷新、节点 `sync_cooldown` 均走同一归组事务。缺失 quotaInfo/remainingFraction、非法值为未知；只有显式合法零值是零额度。耗尽证据优先于部分正值。由于直接模型路由的全集无法可靠确定，现有同步入口不凭部分正值提前解除整组计时冷却，等待到期或显式管理操作。内部同步方法只有在调用方提供可信全集且覆盖有效具体冷却键时才允许提前解除。
 
+## 凭证列表的共享组筛选
+
+Antigravity 桌面和移动面板以“额度组状态”筛选 Gemini、Claude / GPT-OSS。未来计时冷却和 `blocked_unknown` 均算额度受限；`manual_override` 不解除仍有效的计时冷却。损坏额度状态与最终准入一致，整凭证受限并显示异常，不写入或修复原始数据。历史 Opus 4.6 冷却仍影响 Claude / GPT-OSS 组；其他未知模型保留独立组。
+
+`GET /creds/status?mode=antigravity` 沿用面板认证及现有分页参数，新增筛选值：
+
+| `cooldown_filter` | 含义 |
+| --- | --- |
+| `all` | 全部 |
+| `any_restricted` | 任一组额度受限，包含独立组 |
+| `gemini_restricted` / `gemini_unrestricted` | Gemini 组额度受限 / 未受限 |
+| `claude_gpt_restricted` / `claude_gpt_unrestricted` | Claude / GPT-OSS 组额度受限 / 未受限 |
+| `all_unrestricted` | 全部组额度未受限，包含独立组 |
+
+“额度未受限”不代表凭证已启用、Opus 具有权限或容量退避结束。可与权限、启用状态、Tier、错误码、备注一起筛选；所有条件在分页前执行。旧 `in_cooldown`、`no_cooldown`、`pro_no_cooldown`、`flash_no_cooldown` 保留原有定时冷却行为，Antigravity 页面不再发送；旧 Pro、Flash 都检查 Gemini 共享冷却，不能把 Flash 改为 Claude 的别名。新值用于 Gemini CLI 或非法值返回 400。
+
+列表成功读取共享组状态时，响应增加面板 capability `panel_capabilities: ["antigravity.cooldown.group_filter"]`，与 Management capability 分开。单条摘要增加：
+
+```json
+{
+  "quota_groups": {
+    "gemini-shared": {"cooldownUntil": 0, "blockedUnknown": false, "restricted": false},
+    "claude-gpt-shared": {"cooldownUntil": 0, "blockedUnknown": true, "restricted": true}
+  },
+  "quota_state_invalid": false
+}
+```
+
+同组期限取最长有效值，过期或无期限为 0；未知恢复时间不伪造未来期限。新增全局 `stats.quota_restricted`、`quota_unrestricted`、`quota_blocked_unknown`、`quota_state_invalid` 仅统计启用且非永久禁用凭证，后两项与受限数重叠，不能相加作为凭证总数。MySQL 沿用现有 `disabled` 表示，不新增永久禁用列；MongoDB 存在永久禁用字段时排除新统计。原有定时冷却计数与 Pro/Flash 历史调用统计不改写。
+
+可选 `stats.quota_next_expiry` 是下一次可能影响统计或筛选的共享组到期时间，没有已知到期项时为 0。即使筛选结果为空，也能在到期后合并刷新缓存列表；失败重试间隔至少 15 秒，隐藏面板暂停自动查询。此刷新只读已保存状态，不查 Google、不刷新 Token、不发送生成、不解除异常拦截。
+
+后端没有该能力时，旧列表仍可读取，新筛选返回 501；页面禁用新筛选，组统计显示“暂不可用”，不把缺少字段当作未受限。SQLite 的有界/旧查询、PostgreSQL、MySQL、MongoDB 均直接批量读取现有策略字段，不进行逐凭证额度查询或生成代次写入。额度详情没有模型卡片时仍展示保护；人工解除后刷新缓存列表，计时限制继续生效。
+
+本次列表修复无迁移，Management schema 1.4、动作枚举和 manager 所需动作不变，`no_counterpart_action`。撤销本次修复回到已有额度保护版本时，原始限制和数据保留。验证记录见 [2026-10-04 交付](delivery/antigravity-cooldown-filter-20261004/README.md)。
+
 ## 权威准入与并发
 
 候选筛选采用只读查询，发送实际请求前再次短事务准入，预取不代表准入。最终准入拒绝旧候选时排除并重新选择，候选耗尽才返回不可用。额度/目录查询属于控制面，可使用仍启用但被组拦截的凭证；目录查询不更新异常状态。面板模型测试必须准入，受阻时返回 503 且不发送生成请求。

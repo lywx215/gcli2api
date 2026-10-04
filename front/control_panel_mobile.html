@@ -1748,13 +1748,15 @@
                         <span class="stat-label">禁用</span>
                     </div>
                     <div class="stat-item" style="border-left: 4px solid #17a2b8;">
-                        <span class="stat-number" id="antigravityStatNoCooldown">0</span>
-                        <span class="stat-label">未CD</span>
+                        <span class="stat-number" id="antigravityStatNoCooldown">暂不可用</span>
+                        <span class="stat-label" title="已启用且非永久禁用凭证；仅表示额度限制，权限独立判断">全部组额度未受限</span>
                     </div>
                     <div class="stat-item" style="border-left: 4px solid #fd7e14;">
-                        <span class="stat-number" id="antigravityStatInCooldown">0</span>
-                        <span class="stat-label">CD中</span>
+                        <span class="stat-number" id="antigravityStatInCooldown">暂不可用</span>
+                        <span class="stat-label" title="已启用且非永久禁用凭证；包含计时冷却与恢复时间未知拦截">任一组额度受限</span>
                     </div>
+                    <div class="stat-item"><span class="stat-number" id="antigravityStatBlockedUnknown">暂不可用</span><span class="stat-label">恢复时间未知（与受限重叠）</span></div>
+                    <div class="stat-item"><span class="stat-number" id="antigravityStatQuotaInvalid">暂不可用</span><span class="stat-label">额度状态异常（与受限重叠）</span></div>
                 </div>
 
                 <div style="display: flex; gap: 8px; margin: 15px 0; flex-wrap: wrap;">
@@ -1796,7 +1798,7 @@
                         <button class="btn btn-small" id="antigravityBatchTestBtn"
                             onclick="batchTestSelectedAntigravityCredentials()" disabled>批量消息测试</button>
                         <button class="btn btn-small" id="antigravityBatchRefreshCooldownBtn"
-                            onclick="batchRefreshCooldownSelectedAntigravityCredentials()" disabled>额度检测/双向同步</button>
+                            onclick="batchRefreshCooldownSelectedAntigravityCredentials()" disabled>额度/权限检测（共享组同步）</button>
                         <button class="btn btn-small" id="antigravityBatchDownloadBtn"
                             onclick="downloadSelectedAntigravityCredentials()" disabled>下载选中凭证</button>
                         <button class="btn btn-small" id="antigravityBatchCopyEmailsBtn"
@@ -1835,14 +1837,16 @@
                     </div>
 
                     <div class="form-group" style="margin-bottom: 8px;">
-                        <label for="antigravityCooldownFilter">冷却状态：</label>
+                        <label for="antigravityCooldownFilter">额度组状态：</label>
                         <select id="antigravityCooldownFilter" onchange="applyAntigravityStatusFilter()">
-                            <option value="all">全部</option>
-                            <option value="in_cooldown">CD中</option>
-                            <option value="pro_no_cooldown">Pro系列未冷却</option>
-                            <option value="flash_no_cooldown">Flash系列未冷却</option>
-                            <option value="no_cooldown">未CD</option>
-                        </select>
+                        <option value="all">全部</option>
+                        <option value="any_restricted" disabled>任一组额度受限</option>
+                        <option value="gemini_restricted" disabled>Gemini 额度受限</option>
+                        <option value="claude_gpt_restricted" disabled>Claude / GPT-OSS 额度受限</option>
+                        <option value="gemini_unrestricted" disabled>Gemini 额度未受限</option>
+                        <option value="claude_gpt_unrestricted" disabled>Claude / GPT-OSS 额度未受限</option>
+                        <option value="all_unrestricted" disabled>全部组额度未受限</option>
+                    </select>
                     </div>
 
                     <div class="form-group" style="margin-bottom: 8px;">
