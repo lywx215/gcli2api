@@ -194,7 +194,7 @@ class CredentialManager:
         await self._storage_adapter.store_credential(credential_name, credential_data)
         log.info(f"Credential added/updated: {credential_name}")
 
-    async def add_antigravity_credential(self, credential_name: str, credential_data: Dict[str, Any]):
+    async def add_antigravity_credential(self, credential_name: str, credential_data: Dict[str, Any], *, initial_state=None):
         """
         新增或更新一个Antigravity凭证
         存储层会自动处理轮换顺序
@@ -202,8 +202,8 @@ class CredentialManager:
         try:
             await self._ensure_initialized()
             async with import_write_slot():
-                stored = await self._storage_adapter.store_credential(
-                    credential_name, credential_data, mode="antigravity"
+                stored = await self._storage_adapter.import_antigravity_credential(
+                    credential_name, credential_data, initial_state=initial_state
                 )
         except Exception:
             raise CredentialStorageError() from None

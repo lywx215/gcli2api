@@ -26,10 +26,12 @@ class ModelAccessService:
                 try:
                     data = await backend.quota_current_credential(filename, snapshot["generation"])
                     if data is None:
+                        await backend.model_access_observe(filename, snapshot, reason="directory_query_failed")
                         return False
                     if await manager._should_refresh_token(data):
                         data = await manager._refresh_token(data, filename, mode="antigravity")
                         if not data:
+                            await backend.model_access_observe(filename, snapshot, reason="directory_query_failed")
                             return False
                         snapshot["version"] = data["_quota_credential_version"]
                     from src.api.antigravity import fetch_quota_info

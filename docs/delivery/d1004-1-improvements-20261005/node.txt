@@ -1,0 +1,52 @@
+Command: node --test test_antigravity_cooldown_ui.cjs test_antigravity_quota_layout.cjs test_panel_state.cjs Exit code: 0 Per-file test counts: cooldown 13; quota layout 16; panel state 14.
+✔ capabilities disable unsupported filters and stats do not fabricate ready (3.3404ms)
+✔ named group badges show independent state and unknown group detail (0.9078ms)
+✔ timer scopes same filenames, preserves unknown block and coalesces failed refresh (3.3801ms)
+✔ all matching selection carries the exact group filter over pages (1.4904ms)
+✔ empty quota model response renders group restriction and release control (2.3659ms)
+✔ both real templates expose only group filters with safe initial capability state (1.1461ms)
+✔ hidden Antigravity tab never polls cached status (1.897ms)
+✔ failed quota lookup retains returned unknown and timed group protection (13.1488ms)
+✔ explicit group release refreshes cached list without another quota request (1.5573ms)
+✔ successful expiry refresh clears expired timer so subsequent ticks do not poll (1.3695ms)
+✔ empty filtered page refreshes once when global next expiry arrives (1.0882ms)
+✔ invalid quota groups remain explicitly restricted on cards and timer ticks (0.7248ms)
+✔ cross-page selection synchronizes visible checkboxes using actual template IDs (3.0834ms)
+✔ successful quota cards precede folded diagnostic evidence; details attach no requests (3.9368ms)
+✔ adding successful diagnostics cannot move or change the card region (2.2394ms)
+✔ empty and fully hidden model maps never synthesize quota cards (1.5026ms)
+✔ unknown quotas and rolling 168h recovery remain honest (0.7708ms)
+✔ partial writes and invalid quota state warn before cards while unknown groups remain in details (0.8039ms)
+✔ failed lookup leads with failure and retains saved protections and permission evidence (13.3439ms)
+✔ scroll only when first card heading is outside viewport (3.8415ms)
+✔ queued scrolling is cancelled on collapse, tab switch, or detached results (4.5294ms)
+✔ collapse while loading prevents stale rendering and scrolling (0.7006ms)
+✔ reopening resolves newer response first without old response overwriting or scrolling (0.8392ms)
+✔ tab switch during loading prevents automatic scroll (0.7283ms)
+✔ reduced motion respects user preference for automatic scroll (0.8014ms)
+✔ model order remains public then available then compatible with display-name ordering (1.5202ms)
+✔ network failure retains saved permissions and protections with escaped diagnostic details (1.3831ms)
+✔ independent unknown group restriction is visible even when only raw group state is returned (0.7151ms)
+✔ release marks compact badge pending refresh and never claims remaining timer is unrestricted (4.7211ms)
+✔ production timer-only quota snapshots preserve unknown/timer/release and override (17.5001ms)
+✔ invalid/conflicting evidence stays restricted, sparse is unknown and never releasable (1.7304ms)
+✔ actual manual HTTP failure falls back by independent blocks; new/empty/partial blocks win (2.0546ms)
+✔ A-B-A changes cancel old selection; old response cannot commit (5.7571ms)
+✔ page navigation keeps all-selection alive; manual change cancels; uncheck only this page (1.9971ms)
+✔ second selection page capability withdrawal cancels entire task and loads ordinary list once (2.2804ms)
+✔ 501 locks all used advanced capabilities, only one recovery; 200 cannot bypass lock (2.3742ms)
+✔ double 501 and mixed 200 withdrawal/501 never cause a third request; ordinary 200 missing cap is recoverable (6.3044ms)
+✔ 401 and 500 do not downgrade or expand selection (3.1118ms)
+✔ logout stops both intervals/socket, old callbacks and old request finally cannot affect relogin (2.4385ms)
+✔ expired refresh promise and tab animation cannot restart tasks after logout; same-tab login restores once (6.5449ms)
+✔ version display preserves server version and rejects stale responses (2.5619ms)
+✔ rapid A-B-A and logout during fade restore visible content and matching button once (2.0132ms)
+✔ group-only 501 with default family parameters preserves family capability (4.7428ms)
+ℹ tests 43
+ℹ suites 0
+ℹ pass 43
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 400.6803

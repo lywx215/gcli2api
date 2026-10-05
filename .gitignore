@@ -108,6 +108,11 @@ zeaburcli/
 sshcli/
 deploy/
 tests/
+!/tests/
+/tests/*
+!/tests/fixtures/
+/tests/fixtures/*
+!/tests/fixtures/frontend_quota.py
 
 参考项目/
 streamchat/

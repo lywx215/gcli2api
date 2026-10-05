@@ -131,9 +131,9 @@ async def test_list_without_support_keeps_unknown_not_denied(monkeypatch):
     async def info(): return {}
     async def adapter(): return SimpleNamespace(_backend=SimpleNamespace(get_credentials_summary=summary), get_backend_info=info)
     monkeypatch.setattr(creds, "get_storage_adapter", adapter)
-    with pytest.raises(HTTPException) as error:
-        await creds.get_creds_status_common(0, 25, "all", "antigravity", model_access_filter="unknown")
-    assert error.value.status_code == 501
+    unsupported = await creds.get_creds_status_common(0, 25, "all", "antigravity", model_access_filter="unknown")
+    assert unsupported.status_code == 501
+    assert json.loads(unsupported.body)["error_code"] == "capability_unavailable"
     response = await creds.get_creds_status_common(0, 25, "all", "antigravity")
     data = json.loads(response.body)
     assert data["total"] == 1 and data["model_access_summary"]["counts"]["any"]["unknown"] == 1
@@ -206,7 +206,7 @@ ag.currentModelAccessFamily = 'claude-opus-4-6';
 ag.currentRemarkFilter = 'group & 1';
 ag.currentCooldownFilter = 'gemini_restricted';
 assert.equal(new URL(ag.getStatusUrl(0,25), window.location.href).searchParams.get('cooldown_filter'), 'all');
-ag.updateCooldownCapability(['antigravity.cooldown.group_filter']);
+ag.updateCooldownCapability(['antigravity.model_access.family_filter','antigravity.cooldown.group_filter']);
 let url = new URL(ag.getStatusUrl(25, 25), window.location.href);
 assert.equal(url.searchParams.get('model_access_filter'), 'supported');
 assert.equal(url.searchParams.get('model_access_family'), 'claude-opus-4-6');
@@ -225,7 +225,7 @@ assert.ok(!createCredCard(info, legacy).innerHTML.includes('data-model-access-ba
         offsets.push(offset);
         assert.equal(u.searchParams.get('model_access_family'), 'claude-opus-4-6');
         assert.equal(u.searchParams.get('cooldown_filter'), 'gemini_restricted');
-        return {ok:true, json:async () => ({items:Array.from({length:offset === 0 ? 1000 : 5}, (_,i) => ({filename:`synthetic-${offset+i}.json`})), has_more:offset===0})};
+        return {ok:true, json:async () => ({items:Array.from({length:offset === 0 ? 1000 : 5}, (_,i) => ({filename:`synthetic-${offset+i}.json`})), has_more:offset===0,panel_capabilities:['antigravity.model_access.family_filter','antigravity.cooldown.group_filter']})};
     };
     await ag.selectAllMatching();
     assert.deepEqual(offsets, [0,1000]);
@@ -236,7 +236,7 @@ assert.ok(!createCredCard(info, legacy).innerHTML.includes('data-model-access-ba
     await ag.selectAllMatching();
     assert.deepEqual([...ag.selectedFiles],selected);
     global.fetch = async () => ({ok:true, json:async () => ({items:[{filename:'fresh.json',error_codes:[],model_access_families:mixed}], total:1,
-        panel_capabilities:['antigravity.model_access.family_filter'],model_access_summary:{total:5,family_counts:{'claude-opus-4-6':{supported:1,unavailable:2,unknown:2}}},stats:{total:5}})});
+        panel_capabilities:['antigravity.model_access.family_filter','antigravity.cooldown.group_filter'],model_access_summary:{total:5,family_counts:{'claude-opus-4-6':{supported:1,unavailable:2,unknown:2}}},stats:{total:5}})});
     ag.renderList = ag.updatePagination = ag.updateStatsDisplay = () => {};
     await ag.refresh();
     assert.deepEqual(ag.data['fresh.json'].model_access_families, mixed);

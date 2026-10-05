@@ -20,7 +20,7 @@ function harness() {
         insertAdjacentHTML:(_, html)=>{content.innerHTML=html+content.innerHTML;}};
     const details = {isConnected:true,style:{display:'none'},querySelector:()=>content};
     const panel = {classList:{contains:()=>active}};
-    const c = {URL,Date,Promise,Set,Map,console,
+    const c = {URL,Date,Promise,Set,Map,console,AppState:{antigravityCreds:{data:{}}},
         document:{hidden:false,getElementById:id=>id === 'antigravity-manageTab' ? panel : details,documentElement:{clientHeight:800,clientWidth:1200}},
         window:{innerHeight:800,innerWidth:1200,requestAnimationFrame:callback=>frames.push(callback)},
         requestAnimationFrame:callback=>frames.push(callback),setTimeout:callback=>frames.push(callback),

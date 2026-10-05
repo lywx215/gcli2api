@@ -557,9 +557,11 @@ async def get_creds_status_common(
     family_reader = getattr(storage_adapter._backend, "model_access_list_family_public", None)
     supports_family_filter = getattr(storage_adapter._backend, "model_access_storage_ready", False) is True and callable(family_reader)
     if mode == "antigravity" and (model_access_filter != "all" or model_access_family != "claude-opus-5-5") and not supports_family_filter:
-        raise HTTPException(status_code=501, detail="当前存储后端不支持 Opus 版本权限筛选")
+        return JSONResponse(status_code=501, content={"detail": "当前存储后端不支持 Opus 版本权限筛选",
+            "error_code": "capability_unavailable", "capability": "antigravity.model_access.family_filter"})
     if cooldown_filter in GROUP_FILTERS and not supports_group_filter:
-        raise HTTPException(status_code=501, detail="当前存储后端不支持共享额度筛选")
+        return JSONResponse(status_code=501, content={"detail": "当前存储后端不支持共享额度筛选",
+            "error_code": "capability_unavailable", "capability": "antigravity.cooldown.group_filter"})
 
     # Antigravity counts and permission filters cover all matching summaries.
     # Keep the legacy Gemini CLI pagination path unchanged.
@@ -577,7 +579,8 @@ async def get_creds_status_common(
     )
     supports_group_filter = supports_group_filter and result.get("quota_group_filter_supported") is True
     if cooldown_filter in GROUP_FILTERS and not supports_group_filter:
-        raise HTTPException(status_code=501, detail="当前存储后端未能提供共享额度状态")
+        return JSONResponse(status_code=501, content={"detail": "当前存储后端未能提供共享额度状态",
+            "error_code": "capability_unavailable", "capability": "antigravity.cooldown.group_filter"})
     if mode == "antigravity":
         from src.antigravity_model_access import filter_summaries
         reader = getattr(storage_adapter._backend, "model_access_list_public", None)
@@ -3249,21 +3252,12 @@ async def _add_credential_by_refresh_token(
     warnings = []
     if mode == "antigravity":
         try:
-            await credential_manager.add_antigravity_credential(filename, credential_data)
+            await credential_manager.add_antigravity_credential(
+                filename, credential_data,
+                initial_state={"tier": subscription_tier} if subscription_tier else None)
         except CredentialStorageError as exc:
             return {"success": False, "filename": filename,
                     "error_code": exc.code, "error": str(exc)}
-        if subscription_tier:
-            try:
-                async with import_write_slot():
-                    updated = await credential_manager.update_credential_state(
-                        filename, {"tier": subscription_tier}, mode="antigravity"
-                    )
-            except Exception:
-                updated = False
-            if not updated:
-                warnings.append({"code": "credential_metadata_update_failed",
-                                 "message": "凭证已存储，附加信息更新失败"})
     else:
         storage_adapter = await get_storage_adapter()
         existed = await storage_adapter.get_credential(filename, mode="geminicli") is not None

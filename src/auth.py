@@ -1035,6 +1035,15 @@ async def save_credentials(
 
     # 通过存储适配器保存
     storage_adapter = await get_storage_adapter()
+    if mode == "antigravity":
+        success = await storage_adapter.import_antigravity_credential(
+            filename, creds_data, initial_state={
+                "error_codes": [], "disabled": False, "last_success": time.time(),
+                "user_email": None, "tier": subscription_tier or default_tier_for_mode(mode),
+            })
+        if not success:
+            raise Exception(f"保存凭证失败: {filename}")
+        return filename
     credential_existed = (
         await storage_adapter.get_credential(filename, mode=mode) is not None
     )

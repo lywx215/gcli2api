@@ -29,6 +29,10 @@ class StorageBackend(Protocol):
         """存储凭证数据"""
         ...
 
+    async def import_antigravity_credential(self, filename, credential_data, *, initial_state=None) -> bool:
+        """Import an account with atomic access-evidence invalidation."""
+        ...
+
     async def get_credential(self, filename: str, mode: str = "geminicli") -> Optional[Dict[str, Any]]:
         """获取凭证数据"""
         ...
@@ -241,6 +245,11 @@ class StorageAdapter:
                 # remains mandatory before admission; do not claim upload failed.
                 log.warning(f"[ANTIGRAVITY] identity initialization pending: {type(exc).__name__}")
         return result
+
+    async def import_antigravity_credential(self, filename, credential_data, *, initial_state=None) -> bool:
+        self._ensure_initialized()
+        return await self._backend.import_antigravity_credential(
+            filename, credential_data, initial_state=initial_state)
 
     async def get_credential(self, filename: str, mode: str = "geminicli") -> Optional[Dict[str, Any]]:
         """获取凭证数据"""

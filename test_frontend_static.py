@@ -227,11 +227,12 @@ def test_classified_403_filters_are_wired_for_both_panels():
 
 
 def test_panel_header_uses_display_version_without_adding_a_prefix():
-    common_js = (Path(__file__).parent / "front" / "common.js").read_text(
-        encoding="utf-8"
-    )
-
-    assert "const displayVersion = data.display_version || `v${data.version}`;" in common_js
-    assert "versionText.textContent = displayVersion;" in common_js
-    assert "来源: ${data.source_ref || '未知'}" in common_js
-    assert "提交时间: ${data.commit_date || data.date}" in common_js
+    # Execute the production function: do not couple this check to a source spelling.
+    import shutil
+    import subprocess
+    import pytest
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js unavailable")
+    subprocess.run([node, "--test", "--test-name-pattern=version display", "test_panel_state.cjs"],
+                   cwd=Path(__file__).parent, check=True, capture_output=True, text=True, encoding="utf-8")

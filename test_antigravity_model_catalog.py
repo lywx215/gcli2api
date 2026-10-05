@@ -40,7 +40,11 @@ class _FakeCredentialManager:
             self.supported = set(models).intersection(ROUTES)
     async def model_access_union(self): return self.supported
     async def get_valid_credential(self, mode="geminicli", model_name=None):
-        return "fixture.json", {"access_token": "fixture-access-token"}
+        # Production selectors carry the persisted identity before runtime metadata.
+        snapshot = await self.model_access_snapshot("fixture.json")
+        return "fixture.json", {"access_token": "fixture-access-token",
+            "_quota_generation": snapshot["generation"],
+            "_quota_credential_version": snapshot["version"], "enable_credit": False}
 
 
 class _FakeResponse:

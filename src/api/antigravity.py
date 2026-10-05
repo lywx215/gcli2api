@@ -1201,21 +1201,38 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
     backend = manager._storage_adapter._backend
     ready = getattr(backend, "model_access_storage_ready", False)
     other_ids = []
-    cred_result = await manager.get_valid_credential(mode="antigravity")
+    snapshot = None
+    cred_result = None
+    # Selection metadata refers to persisted content, before runtime-only fields
+    # such as enable_credit are attached. Never hash the decorated dictionary.
+    for _ in range(2 if ready else 1):
+        candidate = await manager.get_valid_credential(mode="antigravity")
+        if not candidate:
+            break
+        filename, data = candidate
+        if not ready:
+            cred_result = candidate
+            break
+        snapshot = await backend.model_access_snapshot(filename)
+        if (snapshot and data.get("_quota_generation")
+                and data.get("_quota_credential_version")
+                and snapshot.get("generation") == data["_quota_generation"]
+                and snapshot.get("version") == data["_quota_credential_version"]):
+            cred_result = candidate
+            break
+        snapshot = None
     if cred_result:
         filename, data = cred_result
-        snapshot = await backend.model_access_snapshot(filename) if ready else None
-        from src.storage.antigravity_quota import credential_version
-        if snapshot and (snapshot.get("version") != credential_version(data)
-                or data.get("_quota_credential_generation") not in (None, snapshot.get("generation"))):
-            snapshot = None
         result = await fetch_quota_info(data.get("access_token") or data.get("token"))
         if result.get("success"):
             other_ids = [name for name in result["models"] if not access_model(name)]
-            if snapshot:
-                await backend.model_access_observe(filename, snapshot, result["models"])
-        elif snapshot:
-            await backend.model_access_observe(filename, snapshot, reason="directory_query_failed")
+        if snapshot:
+            try:
+                await backend.model_access_observe(filename, snapshot,
+                    result["models"] if result.get("success") else None,
+                    reason=None if result.get("success") else "directory_query_failed")
+            except Exception:
+                log.warning("[ANTIGRAVITY] catalog access observation unavailable")
     opus_ids = await backend.model_access_union() if ready else set()
     current_timestamp = int(datetime.now(timezone.utc).timestamp())
     return [model_to_dict(Model(id=model_id, object="model", created=current_timestamp, owned_by="google"))

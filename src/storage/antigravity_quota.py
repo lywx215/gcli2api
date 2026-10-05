@@ -46,7 +46,10 @@ from src.storage.antigravity_model_access import AntigravityModelAccessMixin, ro
 from src.antigravity_model_access import access_model, check_due as access_check_due, eligible as access_eligible
 
 
-class AntigravityQuotaMixin(AntigravityModelAccessMixin):
+from src.storage.antigravity_import import AntigravityImportMixin
+
+
+class AntigravityQuotaMixin(AntigravityModelAccessMixin, AntigravityImportMixin):
     async def _quota_rows(self, filename=None):
         """Read-only selection/control snapshot; final admission is separate."""
         filename = os.path.basename(filename) if filename else None

@@ -151,8 +151,8 @@ async def test_antigravity_refresh_import_persists_detected_tier(
     async def fake_detect(**kwargs):
         return "shared-project", tier
 
-    async def fake_add(filename, data):
-        calls["added"].append((filename, dict(data)))
+    async def fake_add(filename, data, *, initial_state=None):
+        calls["added"].append((filename, dict(data), dict(initial_state or {})))
 
     async def fake_update(filename, state, mode="geminicli"):
         calls["updated"].append((filename, dict(state), mode))
@@ -182,7 +182,10 @@ async def test_antigravity_refresh_import_persists_detected_tier(
     assert result["filename"].startswith("refresh-")
     assert "shared-project" not in result["filename"]
     assert "synthetic-refresh" not in result["filename"]
-    assert calls["updated"] == [(result["filename"], {"tier": tier}, "antigravity")]
+    assert len(calls["added"]) == 1
+    assert calls["added"][0][0] == result["filename"]
+    assert calls["added"][0][2] == {"tier": tier}
+    assert calls["updated"] == []
 
 
 def test_refresh_import_auto_filenames_are_unique_and_custom_names_stay_compatible():

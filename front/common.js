@@ -8,6 +8,10 @@
 const AppState = {
     // 认证相关
     authToken: '',
+    sessionEpoch: 0,
+    sessionReady: false,
+    tabLoadVersion: 0,
+    loadedSessionTab: null,
     authInProgress: false,
     currentProjectId: '',
 
@@ -228,6 +232,11 @@ function createCredsManager(type) {
         currentModelAccessFilter: 'all',
         currentModelAccessFamily: 'claude-opus-5-5',
         modelAccessFamilyCapability: false,
+        filterRevision: 0,
+        selectionTask: 0,
+        refreshTask: 0,
+        failedCapabilities: new Set(),
+        advertisedCapabilities: [],
         statsData: {
             total: 0,
             normal: 0,
@@ -290,47 +299,126 @@ function createCredsManager(type) {
             return `${this.getEndpoint('status')}?${params}&${this.getModeParam()}`;
         },
 
-        updateModelAccessCapability(capabilities) {
-            if (this.type !== 'antigravity') return;
-            this.modelAccessFamilyCapability = Array.isArray(capabilities) && capabilities.includes('antigravity.model_access.family_filter');
-            for (const id of ['antigravityModelAccessFamily', 'antigravityModelAccessFilter']) {
-                const element = document.getElementById(id);
-                if (element) element.disabled = !this.modelAccessFamilyCapability;
+        sessionEpoch() {
+            return typeof AppState === 'undefined' ? 0 : (AppState.sessionEpoch || 0);
+        },
+
+        filterSignature() {
+            return JSON.stringify([this.currentStatusFilter, this.currentErrorCodeFilter,
+                this.currentCooldownFilter, this.currentPreviewFilter, this.currentTierFilter,
+                this.currentRemarkFilter, this.currentModelAccessFamily, this.currentModelAccessFilter]);
+        },
+
+        cancelSelection() {
+            this.selectionTask++;
+            const button = document.getElementById(this.getElementId('SelectAllMatchingBtn'));
+            if (button) button.disabled = false;
+        },
+
+        invalidateFilters() {
+            this.filterRevision++;
+            this.currentPage = 1;
+            this.cancelSelection();
+            this.selectedFiles.clear();
+            this.updateBatchControls();
+        },
+
+        applyCapabilities(capabilities) {
+            if (this.type !== 'antigravity') return false;
+            const familyCap = 'antigravity.model_access.family_filter';
+            const groupCap = 'antigravity.cooldown.group_filter';
+            this.advertisedCapabilities = Array.isArray(capabilities) ? capabilities : [];
+            const family = this.advertisedCapabilities.includes(familyCap) && !this.failedCapabilities.has(familyCap);
+            const groups = this.advertisedCapabilities.includes(groupCap) && !this.failedCapabilities.has(groupCap);
+            const before = this.filterSignature();
+            const revoked = (this.modelAccessFamilyCapability && !family) || (this.cooldownGroupCapability && !groups);
+            this.modelAccessFamilyCapability = family;
+            this.cooldownGroupCapability = groups;
+            if (!family) {
+                this.currentModelAccessFamily = 'claude-opus-5-5';
+                this.currentModelAccessFilter = 'all';
             }
-            if (!this.modelAccessFamilyCapability) this.currentModelAccessFilter = 'all';
+            if (!groups) this.currentCooldownFilter = 'all';
+            for (const [id, value] of [['antigravityModelAccessFamily', this.currentModelAccessFamily],
+                ['antigravityModelAccessFilter', this.currentModelAccessFilter]]) {
+                const element = document.getElementById(id);
+                if (element) { element.disabled = !family; element.value = value; }
+            }
+            const filter = document.getElementById(this.getElementId('CooldownFilter'));
+            if (filter) {
+                Array.from(filter.options || []).forEach(option => { option.disabled = option.value !== 'all' && !groups; });
+                filter.title = groups ? '' : '当前服务暂不支持额度组筛选';
+                filter.value = this.currentCooldownFilter;
+            }
+            const changed = revoked || before !== this.filterSignature();
+            if (changed) this.invalidateFilters();
+            return changed;
+        },
+
+        updateModelAccessCapability(capabilities) { return this.applyCapabilities(capabilities); },
+
+        downgradeCapabilities(response, data, requestUrl) {
+            if (this.type !== 'antigravity' || response.status !== 501) return false;
+            const family = 'antigravity.model_access.family_filter', group = 'antigravity.cooldown.group_filter';
+            const params = new URL(requestUrl, window.location.href).searchParams;
+            const used = [];
+            if ((params.has('model_access_family') && params.get('model_access_family') !== 'claude-opus-5-5') ||
+                (params.has('model_access_filter') && params.get('model_access_filter') !== 'all')) used.push(family);
+            if (params.get('cooldown_filter') && params.get('cooldown_filter') !== 'all') used.push(group);
+            if ([family, group].includes(data.capability)) used.push(data.capability);
+            if (!used.length) return false;
+            used.forEach(cap => this.failedCapabilities.add(cap));
+            if (!this.applyCapabilities(this.advertisedCapabilities)) this.invalidateFilters();
+            return true;
         },
 
         async selectAllMatching() {
+            const epoch = this.sessionEpoch(), revision = this.filterRevision;
+            const task = ++this.selectionTask;
+            const current = () => epoch === this.sessionEpoch() && revision === this.filterRevision && task === this.selectionTask;
             const button = document.getElementById(this.getElementId('SelectAllMatchingBtn'));
             if (button) button.disabled = true;
             const selected = new Set();
-            // Capture filters once so changing a dropdown cannot mix two searches.
             const url = this.getStatusUrl(0, 1000);
             try {
                 let offset = 0;
                 do {
+                    if (!current()) return;
                     const pageUrl = new URL(url, window.location.href);
                     pageUrl.searchParams.set('offset', offset);
                     const response = await fetch(pageUrl.href, {headers: getAuthHeaders()});
                     const data = await response.json();
+                    if (!current()) return;
+                    const downgrade = this.downgradeCapabilities(response, data, pageUrl.href);
+                    const changed = response.ok && this.applyCapabilities(data.panel_capabilities);
+                    if (downgrade || changed) {
+                        // Never turn a filtered all-selection into an unfiltered selection.
+                        await this.refresh({recoveryRemaining: 0});
+                        return;
+                    }
                     if (!response.ok) throw new Error(data.detail || '读取筛选结果失败');
                     data.items.forEach(item => selected.add(item.filename));
                     offset += data.items.length;
                     if (!data.has_more) break;
                     if (!data.items.length) throw new Error('列表已变化，请刷新后重新选择');
                 } while (true);
+                if (!current()) return;
                 this.selectedFiles = selected;
                 this.updateBatchControls();
                 showStatus(`已选择全部筛选结果，共 ${selected.size} 个凭证`, 'success');
             } catch (error) {
-                showStatus(`选择失败: ${error.message}`, 'error');
+                if (current()) showStatus(`选择失败: ${error.message}`, 'error');
             } finally {
-                if (button) button.disabled = false;
+                if (current() && button) button.disabled = false;
             }
         },
 
         // 刷新凭证列表
-        async refresh() {
+        async refresh({recoveryRemaining = 1} = {}) {
+            const epoch = this.sessionEpoch(), revision = this.filterRevision;
+            const task = ++this.refreshTask;
+            const current = () => epoch === this.sessionEpoch() && revision === this.filterRevision && task === this.refreshTask;
+            const requestUrl = this.getStatusUrl((this.currentPage - 1) * this.pageSize, this.pageSize);
             const loading = document.getElementById(this.getElementId('CredsLoading'));
             const list = document.getElementById(this.getElementId('CredsList'));
 
@@ -338,17 +426,22 @@ function createCredsManager(type) {
                 loading.style.display = 'block';
                 list.innerHTML = '';
 
-                const offset = (this.currentPage - 1) * this.pageSize;
                 const response = await fetch(
-                    this.getStatusUrl(offset, this.pageSize),
+                    requestUrl,
                     { headers: getAuthHeaders() }
                 );
 
                 const data = await response.json();
 
+                if (!current()) return false;
+                const downgrade = this.downgradeCapabilities(response, data, requestUrl);
+                const changed = response.ok && this.applyCapabilities(data.panel_capabilities);
+                if (downgrade || changed) {
+                    if (recoveryRemaining > 0) return await this.refresh({recoveryRemaining: 0});
+                    showStatus('筛选能力已变化，请重新刷新列表。', 'info');
+                    return false;
+                }
                 if (response.ok) {
-                    this.updateCooldownCapability(data.panel_capabilities);
-                    this.updateModelAccessCapability(data.panel_capabilities);
                     this.data = {};
                     data.items.forEach(item => {
                         if (typeof item.user_email === 'string' && item.user_email.trim()) {
@@ -369,6 +462,7 @@ function createCredsManager(type) {
                             user_email: item.user_email,
                             model_cooldowns: item.model_cooldowns || {},
                             quota_groups: item.quota_groups,
+                            quota_group_states: item.quota_group_states,
                             quota_state_invalid: item.quota_state_invalid === true,
                             model_access_state: item.model_access_state || {},
                             model_access_families: this.modelAccessFamilyCapability ? item.model_access_families : undefined,
@@ -416,23 +510,13 @@ function createCredsManager(type) {
                     showStatus(`加载失败: ${data.detail || data.error || '未知错误'}`, 'error');
                 }
             } catch (error) {
-                showStatus(`网络错误: ${error.message}`, 'error');
+                if (current()) showStatus(`网络错误: ${error.message}`, 'error');
             } finally {
-                loading.style.display = 'none';
+                if (epoch === this.sessionEpoch() && task === this.refreshTask) loading.style.display = 'none';
             }
         },
 
-        updateCooldownCapability(capabilities) {
-            if (this.type !== 'antigravity') return;
-            this.cooldownGroupCapability = Array.isArray(capabilities) && capabilities.includes('antigravity.cooldown.group_filter');
-            const filter = document.getElementById(this.getElementId('CooldownFilter'));
-            if (filter) {
-                Array.from(filter.options).forEach(option => { option.disabled = option.value !== 'all' && !this.cooldownGroupCapability; });
-                filter.title = this.cooldownGroupCapability ? '' : '当前服务暂不支持额度组筛选';
-                if (!this.cooldownGroupCapability) filter.value = 'all';
-            }
-            if (!this.cooldownGroupCapability) this.currentCooldownFilter = 'all';
-        },
+        updateCooldownCapability(capabilities) { return this.applyCapabilities(capabilities); },
 
         // 计算统计数据（仅用于兼容旧版本后端）
         calculateStats() {
@@ -538,6 +622,7 @@ function createCredsManager(type) {
 
         // 应用状态筛选
         applyStatusFilter() {
+            const before = this.filterSignature();
             this.currentStatusFilter = document.getElementById(this.getElementId('StatusFilter')).value;
             const errorCodeFilterEl = document.getElementById(this.getElementId('ErrorCodeFilter'));
             const cooldownFilterEl = document.getElementById(this.getElementId('CooldownFilter'));
@@ -554,6 +639,7 @@ function createCredsManager(type) {
             }
             const remarkValue = remarkFilterEl ? remarkFilterEl.value.trim() : '';
             this.currentRemarkFilter = remarkValue ? remarkValue : '__all__';
+            if (this.type === 'antigravity' && before !== this.filterSignature()) this.invalidateFilters();
             this.currentPage = 1;
             this.refresh();
         },
@@ -561,7 +647,8 @@ function createCredsManager(type) {
         // 更新批量控件
         updateBatchControls() {
             const selectedCount = this.selectedFiles.size;
-            document.getElementById(this.getElementId('SelectedCount')).textContent = `已选择 ${selectedCount} 项`;
+            const countElement = document.getElementById(this.getElementId('SelectedCount'));
+            if (countElement) countElement.textContent = `已选择 ${selectedCount} 项`;
 
             const batchBtnNames = ['Enable', 'Disable', 'PermanentDisable', 'Delete', 'Verify', 'Test', 'Preview', 'RefreshCooldown', 'Download', 'CopyEmails'];
             if (this.type === 'antigravity') {
@@ -669,6 +756,7 @@ function createCredsManager(type) {
 
         // 凭证操作
         async action(filename, action) {
+            const epoch = this.sessionEpoch();
             try {
                 const response = await fetch(`${this.getEndpoint('action')}?${this.getModeParam()}`, {
                     method: 'POST',
@@ -677,6 +765,7 @@ function createCredsManager(type) {
                 });
 
                 const data = await response.json();
+                if (epoch !== this.sessionEpoch()) return;
 
                 if (response.ok) {
                     showStatus(data.message || `操作成功: ${action}`, 'success');
@@ -685,12 +774,14 @@ function createCredsManager(type) {
                     showStatus(`操作失败: ${data.detail || data.error || '未知错误'}`, 'error');
                 }
             } catch (error) {
+                if (epoch !== this.sessionEpoch()) return;
                 showStatus(`网络错误: ${error.message}`, 'error');
             }
         },
 
         // 批量操作
         async batchAction(action) {
+            const epoch = this.sessionEpoch();
             const selectedFiles = Array.from(this.selectedFiles);
 
             if (selectedFiles.length === 0) {
@@ -723,6 +814,7 @@ function createCredsManager(type) {
                 });
 
                 const data = await response.json();
+                if (epoch !== this.sessionEpoch()) return;
 
                 if (response.ok) {
                     const successCount = data.success_count || data.succeeded;
@@ -734,6 +826,7 @@ function createCredsManager(type) {
                     showStatus(`批量操作失败: ${data.detail || data.error || '未知错误'}`, 'error');
                 }
             } catch (error) {
+                if (epoch !== this.sessionEpoch()) return;
                 showStatus(`批量操作网络错误: ${error.message}`, 'error');
             }
         }
@@ -1353,7 +1446,38 @@ async function toggleCredDetailsCommon(pathId, manager) {
 // =====================================================================
 // 登录相关函数
 // =====================================================================
+function stopPanelSession() {
+    AppState.sessionEpoch++;
+    AppState.sessionReady = false;
+    AppState.tabLoadVersion++;
+    resetPanelTabTransition();
+    AppState.loadedSessionTab = null;
+    stopCooldownTimer();
+    stopStatsAutoRefresh();
+    disconnectWebSocket(true);
+    for (const manager of [AppState.creds, AppState.antigravityCreds]) {
+        manager.cancelSelection();
+        manager.refreshTask++;
+        manager.filterRevision++;
+        manager.selectedFiles.clear();
+        manager.cooldownRefreshPending = false;
+        manager.cooldownRefreshAfter = 0;
+        manager.data = {};
+        manager.updateBatchControls();
+    }
+}
+
+function beginPanelSession(token) {
+    stopPanelSession();
+    AppState.authToken = token;
+    AppState.sessionReady = true;
+    AppState.antigravityCreds.failedCapabilities.clear();
+    AppState.antigravityCreds.applyCapabilities([]);
+    startCooldownTimer();
+}
+
 async function login() {
+    const epoch = AppState.sessionEpoch;
     const password = document.getElementById('loginPassword').value;
 
     if (!password) {
@@ -1370,8 +1494,11 @@ async function login() {
 
         const data = await response.json();
 
+        if (epoch !== AppState.sessionEpoch) return;
         if (response.ok) {
-            AppState.authToken = data.token;
+            if (epoch !== AppState.sessionEpoch) return;
+            beginPanelSession(data.token);
+            const activeEpoch = AppState.sessionEpoch;
             writeStoredAuthToken(AppState.authToken);
             document.getElementById('loginSection').classList.add('hidden');
             document.getElementById('mainSection').classList.remove('hidden');
@@ -1379,6 +1506,7 @@ async function login() {
             await fetchAndDisplayVersion();
             // 显示面板后初始化滑块
             requestAnimationFrame(() => {
+                if (activeEpoch !== AppState.sessionEpoch || !AppState.sessionReady) return;
                 initTabSlider();
                 activateRequestedPanelTab();
             });
@@ -1386,11 +1514,12 @@ async function login() {
             showStatus(`登录失败: ${data.detail || data.error || '未知错误'}`, 'error');
         }
     } catch (error) {
-        showStatus(`网络错误: ${error.message}`, 'error');
+        if (epoch === AppState.sessionEpoch) showStatus(`网络错误: ${error.message}`, 'error');
     }
 }
 
 async function autoLogin() {
+    const epoch = AppState.sessionEpoch;
     const savedToken = readStoredAuthToken();
     if (!savedToken) return false;
 
@@ -1404,12 +1533,16 @@ async function autoLogin() {
             }
         });
 
+        if (epoch !== AppState.sessionEpoch) return false;
         if (response.ok) {
+            beginPanelSession(savedToken);
+            const activeEpoch = AppState.sessionEpoch;
             document.getElementById('loginSection').classList.add('hidden');
             document.getElementById('mainSection').classList.remove('hidden');
             showStatus('自动登录成功', 'success');
             // 显示面板后初始化滑块
             requestAnimationFrame(() => {
+                if (activeEpoch !== AppState.sessionEpoch || !AppState.sessionReady) return;
                 initTabSlider();
                 activateRequestedPanelTab();
             });
@@ -1426,6 +1559,7 @@ async function autoLogin() {
 }
 
 function logout() {
+    stopPanelSession();
     clearStoredAuthToken();
     AppState.authToken = '';
     document.getElementById('loginSection').classList.remove('hidden');
@@ -1495,7 +1629,25 @@ window.addEventListener('hashchange', () => {
     if (AppState.authToken) switchTab(safeTab, null);
 });
 
+// A superseded animation must leave its currently active content visible.
+function resetPanelTabTransition() {
+    document.querySelectorAll('.tab-content').forEach(content => {
+        content.style.transition = '';
+        content.style.opacity = '';
+        content.style.transform = '';
+    });
+    const active = document.querySelector('.tab-content.active');
+    document.querySelectorAll('.tab').forEach(tab => {
+        if (active && tab.dataset.tab + 'Tab' === active.id) tab.classList.add('active');
+        else tab.classList.remove('active');
+    });
+}
+
 function switchTab(tabName, eventOrTarget = null) {
+    const epoch = AppState.sessionEpoch;
+    const transition = ++AppState.tabLoadVersion;
+    resetPanelTabTransition();
+    const currentTransition = () => epoch === AppState.sessionEpoch && transition === AppState.tabLoadVersion && AppState.sessionReady;
     const safeTabName = PANEL_TAB_HASHES.has(tabName) && document.getElementById(tabName + 'Tab')
         ? tabName
         : PANEL_DEFAULT_TAB;
@@ -1514,6 +1666,8 @@ function switchTab(tabName, eventOrTarget = null) {
 
     // 如果点击的是当前标签页，不做任何操作
     if (currentContent === targetContent) {
+        if (targetTab) updateTabSlider(targetTab, false);
+        if (AppState.sessionReady && AppState.loadedSessionTab !== `${epoch}:${safeTabName}`) triggerTabDataLoad(safeTabName);
         notifyParentConsoleReady(safeTabName);
         return;
     }
@@ -1536,6 +1690,7 @@ function switchTab(tabName, eventOrTarget = null) {
         currentContent.style.transform = 'translateX(-12px)';
 
         setTimeout(() => {
+            if (!currentTransition()) return;
             currentContent.classList.remove('active');
             currentContent.style.transition = '';
             currentContent.style.opacity = '';
@@ -1553,7 +1708,9 @@ function switchTab(tabName, eventOrTarget = null) {
 
                 // 使用双重 requestAnimationFrame 确保浏览器完成重绘
                 requestAnimationFrame(() => {
+                    if (!currentTransition()) return;
                     requestAnimationFrame(() => {
+                        if (!currentTransition()) return;
                         // 启用过渡并应用最终状态
                         targetContent.style.transition = 'opacity 0.25s ease-out, transform 0.25s ease-out';
                         targetContent.style.opacity = '1';
@@ -1561,6 +1718,7 @@ function switchTab(tabName, eventOrTarget = null) {
 
                         // 清理内联样式并执行数据加载
                         setTimeout(() => {
+                            if (!currentTransition()) return;
                             targetContent.style.transition = '';
                             targetContent.style.opacity = '';
                             targetContent.style.transform = '';
@@ -1586,6 +1744,9 @@ function switchTab(tabName, eventOrTarget = null) {
 
 // 标签页数据加载（从动画中分离出来）
 function triggerTabDataLoad(tabName) {
+    if (!AppState.sessionReady || !AppState.authToken) return;
+    AppState.loadedSessionTab = `${AppState.sessionEpoch}:${tabName}`;
+    if (tabName !== 'logs') disconnectWebSocket(true);
     if (tabName === 'manage') {
         AppState.creds.refresh();
         if (typeof refreshTodayStats === 'function') refreshTodayStats('geminicli');
@@ -2024,6 +2185,7 @@ function applyAntigravityStatusFilter() { AppState.antigravityCreds.applyStatusF
 function changeAntigravityPage(direction) { AppState.antigravityCreds.changePage(direction); }
 function changeAntigravityPageSize() { AppState.antigravityCreds.changePageSize(); }
 function toggleAntigravityFileSelection(filename) {
+    AppState.antigravityCreds.cancelSelection();
     if (AppState.antigravityCreds.selectedFiles.has(filename)) {
         AppState.antigravityCreds.selectedFiles.delete(filename);
     } else {
@@ -2032,13 +2194,14 @@ function toggleAntigravityFileSelection(filename) {
     AppState.antigravityCreds.updateBatchControls();
 }
 function toggleSelectAllAntigravity() {
+    AppState.antigravityCreds.cancelSelection();
     const checkbox = document.getElementById('selectAllAntigravityCheckbox');
     const checkboxes = document.querySelectorAll('.antigravityFile-checkbox');
 
     if (checkbox.checked) {
         checkboxes.forEach(cb => AppState.antigravityCreds.selectedFiles.add(cb.getAttribute('data-filename')));
     } else {
-        AppState.antigravityCreds.selectedFiles.clear();
+        checkboxes.forEach(cb => AppState.antigravityCreds.selectedFiles.delete(cb.getAttribute('data-filename')));
     }
     checkboxes.forEach(cb => cb.checked = checkbox.checked);
     AppState.antigravityCreds.updateBatchControls();
@@ -2631,12 +2794,59 @@ function modelAccessBatchText(summary) {
         .replace('当前其他筛选条件下', '本次批量结果').replace('覆盖全部分页', '查询失败保留已有证据');
 }
 
+// Both status-list projections and manual quota responses are authoritative blocks.
+// Never fill holes inside a response block with evidence from an older request.
+function antigravityQuotaEvidence(data, cached = {}) {
+    const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key) && value[key] !== undefined;
+    const result = {...data};
+    const quotaKeys = ['quota_groups', 'quota_group_states', 'quota_state_invalid'];
+    if (!quotaKeys.some(key => own(data, key)) && quotaKeys.some(key => own(cached, key))) {
+        quotaKeys.forEach(key => { if (own(cached, key)) result[key] = cached[key]; });
+        result.quotaEvidenceSource = 'cache';
+    }
+    if (!own(data, 'model_access_families') && own(cached, 'model_access_families')) {
+        result.model_access_families = cached.model_access_families;
+        result.accessEvidenceSource = 'cache';
+    }
+    return result;
+}
+
 function antigravityQuotaGroupState(data, group) {
-    const projected = data.quota_groups?.[group];
-    if (projected) return projected;
-    // Old responses can establish an unknown block, but absence is not release evidence.
-    return data.quota_group_states?.[group]?.state === 'blocked_unknown'
-        ? {blockedUnknown: true, restricted: true} : null;
+    const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+    const own = (value, key) => object(value) && Object.prototype.hasOwnProperty.call(value, key) && value[key] !== undefined;
+    const projected = object(data.quota_groups) ? data.quota_groups[group] : undefined;
+    const raw = object(data.quota_group_states) ? data.quota_group_states[group] : undefined;
+    const rawComplete = object(data.quota_group_states);
+    const rawValid = raw === undefined || (object(raw) && ['blocked_unknown', 'manual_override'].includes(raw.state));
+    const until = object(projected) && typeof projected.cooldownUntil === 'number' &&
+        Number.isFinite(projected.cooldownUntil) && projected.cooldownUntil >= 0 ? projected.cooldownUntil : null;
+    const fullProjection = object(projected) && typeof projected.blockedUnknown === 'boolean' &&
+        typeof projected.restricted === 'boolean' && until !== null;
+    const blocked = raw?.state === 'blocked_unknown' || projected?.blockedUnknown === true;
+    const override = raw?.state === 'manual_override';
+    const conflict = (override && projected?.blockedUnknown === true) ||
+        (raw?.state === 'blocked_unknown' && fullProjection && !projected.blockedUnknown) ||
+        (fullProjection && !projected.restricted && (blocked || until > Date.now() / 1000));
+    const malformed = (own(data, 'quota_groups') && !object(data.quota_groups)) ||
+        (own(data, 'quota_group_states') && !rawComplete) || !rawValid ||
+        (projected !== undefined && (!object(projected) || (own(projected, 'cooldownUntil') && until === null)));
+    const invalid = data.quota_state_invalid === true || conflict || malformed;
+    const known = invalid || blocked || (until !== null && until > Date.now() / 1000) ||
+        fullProjection || (rawComplete && rawValid && (until !== null ||
+            (object(data.quota_groups) && Object.keys(data.quota_groups).length === 0)));
+    return {known, blockedUnknown: blocked, cooldownUntil: until, manualOverride: override,
+        invalid, conflict, restricted: invalid || blocked || until > Date.now() / 1000 || projected?.restricted === true
+            ? true : known ? false : null, source: data.quotaEvidenceSource || 'response'};
+}
+
+function antigravityQuotaStateText(group, state) {
+    const label = quotaGroupLabel(group);
+    const parts = [];
+    if (state.invalid) parts.push(state.conflict ? '额度受限（状态证据冲突，请刷新）' : '额度受限（状态异常）');
+    if (state.blockedUnknown) parts.push('额度受限（恢复时间未知）');
+    if (state.cooldownUntil > Date.now() / 1000) parts.push('计时冷却 · ' + formatCooldownTime(Math.ceil(state.cooldownUntil - Date.now() / 1000)));
+    if (!parts.length) parts.push(state.restricted === true ? '额度受限，等待状态更新' : state.known ? '额度未受限' : '状态暂不可用');
+    return `${label}：${parts.join('；')}`;
 }
 
 function antigravityQuotaStatuses(data) {
@@ -2648,9 +2858,9 @@ function antigravityQuotaStatuses(data) {
     });
     const groups = ['gemini-shared', 'claude-gpt-shared'].map(group => {
         const state = antigravityQuotaGroupState(data, group);
-        const tone = data.quota_state_invalid ? 'is-error' : !state ? 'is-muted'
+        const tone = state.invalid ? 'is-error' : !state.known ? 'is-muted'
             : state.blockedUnknown || state.restricted || state.cooldownUntil > Date.now() / 1000 ? 'is-warning' : '';
-        return `<span class="ag-quota-badge ${tone}" data-quota-compact-group="${group}">${escapeHtml(quotaGroupText(group, state, Date.now() / 1000, data.quota_state_invalid))}</span>`;
+        return `<span class="ag-quota-badge ${tone}" data-quota-compact-group="${group}">${escapeHtml(antigravityQuotaStateText(group, state))}</span>`;
     });
     return `<div class="ag-quota-statuses">${access.concat(groups).join('')}</div>`;
 }
@@ -2660,6 +2870,7 @@ function antigravityQuotaWarnings(data, success) {
     if (!success) messages.push('查询失败，以下为已保存证据，保护限制未解除。');
     else if (manualUpdateIncomplete(data)) messages.push('额度已加载，部分状态未更新。');
     if (data.quota_state_invalid) messages.push('额度状态异常：额度受限，禁止派发。');
+    if (data.quotaEvidenceSource === 'cache' || data.accessEvidenceSource === 'cache') messages.push('显示列表中已保存的证据，尚未重新确认。');
     const otherGroups = [...new Set([...Object.keys(data.quota_groups || {}), ...Object.keys(data.quota_group_states || {})])].filter(group => {
         const state = antigravityQuotaGroupState(data, group);
         return !['gemini-shared', 'claude-gpt-shared'].includes(group) &&
@@ -2676,10 +2887,10 @@ function antigravityQuotaExtra(data, success, errorHTML = '') {
         const state = antigravityQuotaGroupState(data, group);
         const until = Number(state?.cooldownUntil || 0);
         const time = until > Date.now() / 1000 ? `<div>计时冷却至 ${new Date(until * 1000).toLocaleString()}</div>` : '';
-        const override = data.quota_group_states?.[group]?.state === 'manual_override'
+        const override = state.manualOverride && !state.invalid
             ? '<div>管理员已解除异常拦截；保留计时冷却。</div>' : '';
-        return `<div class="ag-quota-section"><span data-quota-label="${escapeHtmlAttribute(group)}">${escapeHtml(quotaGroupText(group, state, Date.now() / 1000, data.quota_state_invalid && !state?.blockedUnknown))}</span>${time}${override}
-            ${success && state?.blockedUnknown ? `<button type="button" data-release-quota="${escapeHtmlAttribute(group)}">解除该组异常拦截（保留计时冷却）</button>` : ''}</div>`;
+        return `<div class="ag-quota-section"><span data-quota-label="${escapeHtmlAttribute(group)}">${escapeHtml(antigravityQuotaStateText(group, state))}</span>${time}${override}
+            ${success && state.blockedUnknown && !state.invalid && state.source === 'response' ? `<button type="button" data-release-quota="${escapeHtmlAttribute(group)}">解除该组异常拦截（保留计时冷却）</button>` : ''}</div>`;
     }).join('');
     const missingOpus = success && data.models && typeof data.models === 'object' && !Array.isArray(data.models) &&
         !Object.keys(data.models).some(name => /^claude-opus-5-5-(low|medium|high)$/.test(name));
@@ -2696,8 +2907,10 @@ function antigravityQuotaExtra(data, success, errorHTML = '') {
 }
 
 function scrollAntigravityQuotaIntoView(quotaDetails, contentDiv, requestId) {
+    const epoch = typeof AppState === 'undefined' ? 0 : (AppState.sessionEpoch || 0);
     const schedule = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : callback => callback();
     schedule(() => {
+        if (epoch !== (typeof AppState === 'undefined' ? 0 : (AppState.sessionEpoch || 0))) return;
         const panel = document.getElementById('antigravity-manageTab');
         if (quotaDetails._quotaRequestId !== requestId || quotaDetails.style.display !== 'block' ||
             quotaDetails.isConnected === false || contentDiv.isConnected === false || document.hidden || (panel && !panel.classList?.contains('active'))) return;
@@ -2713,6 +2926,8 @@ function scrollAntigravityQuotaIntoView(quotaDetails, contentDiv, requestId) {
 }
 
 async function _toggleQuotaDetails(pathId, mode) {
+    const epoch = typeof AppState === 'undefined' ? 0 : (AppState.sessionEpoch || 0);
+    const sessionCurrent = () => epoch === (typeof AppState === 'undefined' ? 0 : (AppState.sessionEpoch || 0));
     const quotaDetails = document.getElementById('quota-' + pathId);
     if (!quotaDetails) return;
     const requestId = mode === 'antigravity'
@@ -2740,7 +2955,11 @@ async function _toggleQuotaDetails(pathId, mode) {
                     method: 'GET',
                     headers: getAuthHeaders()
                 });
-                const data = await response.json();
+                let data = await response.json();
+                if (mode === 'antigravity' && !(response.ok && data.success)) {
+                    data = antigravityQuotaEvidence(data, AppState.antigravityCreds.data?.[filename] || {});
+                }
+                if (!sessionCurrent()) return;
                 if (mode === 'antigravity' && (quotaDetails._quotaRequestId !== requestId ||
                     quotaDetails.style.display !== 'block' || quotaDetails.isConnected === false)) return;
 
@@ -2890,6 +3109,7 @@ async function _toggleQuotaDetails(pathId, mode) {
                                         method: 'POST', headers: {...getAuthHeaders(), 'Content-Type': 'application/json'},
                                         body: JSON.stringify({filename, action: 'release_quota_group', group})
                                     });
+                                    if (!sessionCurrent()) return;
                                     if (!released.ok) throw new Error('解除失败');
                                     button.parentElement.querySelector('[data-quota-label]').textContent = '管理员已解除异常拦截；计时冷却仍有效';
                                     contentDiv.querySelectorAll('[data-quota-compact-group]').forEach(badge => {
@@ -2900,6 +3120,7 @@ async function _toggleQuotaDetails(pathId, mode) {
                                     button.remove();
                                     await AppState.antigravityCreds.refresh();
                                 } catch (error) {
+                                    if (!sessionCurrent()) return;
                                     showStatus('解除异常额度拦截失败', 'error');
                                     button.disabled = false;
                                 }
@@ -2982,10 +3203,11 @@ async function _toggleQuotaDetails(pathId, mode) {
                     showStatus(`❌ 获取额度信息失败`, 'error');
                 }
             } catch (error) {
+                if (!sessionCurrent()) return;
                 if (mode === 'antigravity' && (quotaDetails._quotaRequestId !== requestId ||
                     quotaDetails.style.display !== 'block' || quotaDetails.isConnected === false)) return;
                 if (mode === 'antigravity') {
-                    const saved = AppState.antigravityCreds.data?.[filename] || {};
+                    const saved = antigravityQuotaEvidence({}, AppState.antigravityCreds.data?.[filename] || {});
                     const message = String(error.message || '网络错误');
                     contentDiv.innerHTML = `<div class="ag-quota-view"><h4 class="ag-quota-heading">获取额度信息失败</h4>
                         <div class="ag-quota-warning" role="alert">网络错误：${escapeHtml(message.slice(0, 240))}${message.length > 240 ? '…' : ''}</div>
@@ -3540,7 +3762,9 @@ async function deduplicateAntigravityByEmail() {
 // WebSocket日志相关
 // =====================================================================
 function connectWebSocket() {
-    if (AppState.logWebSocket && AppState.logWebSocket.readyState === WebSocket.OPEN) {
+    if (!AppState.sessionReady || !AppState.authToken) return;
+    const epoch = AppState.sessionEpoch;
+    if (AppState.logWebSocket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(AppState.logWebSocket.readyState)) {
         showStatus('WebSocket已经连接', 'info');
         return;
     }
@@ -3555,16 +3779,20 @@ function connectWebSocket() {
         document.getElementById('connectionStatusText').textContent = '连接中...';
         document.getElementById('logConnectionStatus').className = 'status info';
 
-        AppState.logWebSocket = new WebSocket(wsUrlWithAuth);
+        const socket = new WebSocket(wsUrlWithAuth);
+        AppState.logWebSocket = socket;
+        const current = () => epoch === AppState.sessionEpoch && AppState.sessionReady && AppState.logWebSocket === socket;
 
-        AppState.logWebSocket.onopen = () => {
+        socket.onopen = () => {
+            if (!current()) return;
             document.getElementById('connectionStatusText').textContent = '已连接';
             document.getElementById('logConnectionStatus').className = 'status success';
             showStatus('日志流连接成功', 'success');
             clearLogsDisplay();
         };
 
-        AppState.logWebSocket.onmessage = (event) => {
+        socket.onmessage = (event) => {
+            if (!current()) return;
             const logLine = event.data;
             if (logLine.trim()) {
                 AppState.allLogs.push(logLine);
@@ -3579,13 +3807,15 @@ function connectWebSocket() {
             }
         };
 
-        AppState.logWebSocket.onclose = () => {
+        socket.onclose = () => {
+            if (!current()) return;
             document.getElementById('connectionStatusText').textContent = '连接断开';
             document.getElementById('logConnectionStatus').className = 'status error';
             showStatus('日志流连接断开', 'info');
         };
 
-        AppState.logWebSocket.onerror = (error) => {
+        socket.onerror = (error) => {
+            if (!current()) return;
             document.getElementById('connectionStatusText').textContent = '连接错误';
             document.getElementById('logConnectionStatus').className = 'status error';
             showStatus('日志流连接错误: ' + error, 'error');
@@ -3597,13 +3827,15 @@ function connectWebSocket() {
     }
 }
 
-function disconnectWebSocket() {
+function disconnectWebSocket(quiet = false) {
     if (AppState.logWebSocket) {
-        AppState.logWebSocket.close();
+        const socket = AppState.logWebSocket;
         AppState.logWebSocket = null;
+        socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null;
+        socket.close();
         document.getElementById('connectionStatusText').textContent = '未连接';
         document.getElementById('logConnectionStatus').className = 'status info';
-        showStatus('日志流连接已断开', 'info');
+        if (!quiet) showStatus('日志流连接已断开', 'info');
     }
 }
 
@@ -4205,12 +4437,14 @@ async function resetAllUsageStats() {
 // 冷却倒计时自动更新
 // =====================================================================
 function startCooldownTimer() {
+    const epoch = AppState.sessionEpoch;
+    if (!AppState.sessionReady || !AppState.authToken) return;
     if (AppState.cooldownTimerInterval) {
         clearInterval(AppState.cooldownTimerInterval);
     }
 
     AppState.cooldownTimerInterval = setInterval(() => {
-        updateCooldownDisplays();
+        if (epoch === AppState.sessionEpoch && AppState.sessionReady) updateCooldownDisplays();
     }, 1000);
 }
 
@@ -4245,7 +4479,10 @@ function updateCooldownDisplays() {
     });
     const ag = AppState.antigravityCreds;
     const panel = document.getElementById('antigravity-manageTab');
-    const visible = !document.hidden && (!panel || panel.classList.contains('active'));
+    const epoch = AppState.sessionEpoch || 0;
+    const main = document.getElementById('mainSection');
+    const visible = (AppState.sessionEpoch === undefined || (AppState.sessionReady && AppState.authToken)) &&
+        !document.hidden && !main?.classList?.contains('hidden') && (!panel || panel.classList.contains('active'));
     const nextExpiry = ag.statsData?.quota_next_expiry || 0;
     const expired = visible && ag.cooldownGroupCapability && ((nextExpiry > 0 && nextExpiry <= now) ||
         Object.values(ag.data).some(info => Object.values(info.quota_groups || {}).some(state =>
@@ -4254,7 +4491,10 @@ function updateCooldownDisplays() {
         ag.cooldownRefreshPending = true;
         ag.cooldownRefreshAfter = now + 15;
         // Only cached status is read here; never query Google quota from the timer.
-        Promise.resolve().then(() => ag.refresh()).catch(() => {}).finally(() => {
+        Promise.resolve().then(() => {
+            if (epoch === (AppState.sessionEpoch || 0) && (AppState.sessionEpoch === undefined || AppState.sessionReady)) return ag.refresh();
+        }).catch(() => {}).finally(() => {
+            if (epoch !== (AppState.sessionEpoch || 0)) return;
             ag.cooldownRefreshPending = false;
             ag.cooldownRefreshAfter = Date.now() / 1000 + 15;
         });
@@ -4267,9 +4507,11 @@ function updateCooldownDisplays() {
 
 // 获取并显示当前运行分支的版本信息
 async function fetchAndDisplayVersion() {
+    const epoch = AppState.sessionEpoch;
     try {
         const response = await fetch('./version/info', {cache: 'no-store'});
         const data = await response.json();
+        if (epoch !== AppState.sessionEpoch) return;
 
         const versionText = document.getElementById('versionText');
 
@@ -4283,6 +4525,7 @@ async function fetchAndDisplayVersion() {
             versionText.title = data.error || '无法获取版本信息';
         }
     } catch (error) {
+        if (epoch !== AppState.sessionEpoch) return;
         console.error('获取版本信息失败:', error);
         const versionText = document.getElementById('versionText');
         if (versionText) {
@@ -4304,8 +4547,6 @@ window.onload = async function () {
         // 登录成功后获取版本信息
         await fetchAndDisplayVersion();
     }
-
-    startCooldownTimer();
 
     const antigravityAuthBtn = document.getElementById('getAntigravityAuthBtn');
     if (antigravityAuthBtn) {
@@ -4554,6 +4795,8 @@ function _renderModelStatsRows(byFamily, tbodyEl, isHotBg) {
 }
 
 async function refreshTodayStats(mode) {
+    const epoch = AppState.sessionEpoch;
+    if (!AppState.sessionReady || !AppState.authToken) return;
     const suffix = mode === 'antigravity' ? 'Ag' : 'Gcli';
     const dateEl = document.getElementById('todayStatsDate' + suffix);
     const totalEl = document.getElementById('todayStatsTotal' + suffix);
@@ -4569,6 +4812,7 @@ async function refreshTodayStats(mode) {
         const url = `./creds/stats-today-by-model?mode=${encodeURIComponent(mode)}`;
         const resp = await fetch(url, { headers: getAuthHeaders() });
         const data = await resp.json();
+        if (epoch !== AppState.sessionEpoch || !AppState.sessionReady) return;
         if (!resp.ok) throw new Error(data.detail || data.error || resp.statusText);
 
         const totals = data.totals || { success: 0, failure: 0, total: 0, rpm: 0 };
@@ -4591,6 +4835,7 @@ async function refreshTodayStats(mode) {
             totalEl.title = data.note;
         }
     } catch (err) {
+        if (epoch !== AppState.sessionEpoch || !AppState.sessionReady) return;
         console.error('refreshTodayStats failed:', err);
         if (totalEl) totalEl.textContent = '-';
         if (successEl) successEl.textContent = '-';
@@ -4607,8 +4852,10 @@ async function refreshTodayStats(mode) {
 let _statsAutoRefreshTimer = null;
 function startStatsAutoRefresh(mode) {
     stopStatsAutoRefresh();
+    if (!AppState.sessionReady || !AppState.authToken) return;
+    const epoch = AppState.sessionEpoch;
     _statsAutoRefreshTimer = setInterval(() => {
-        if (typeof refreshTodayStats === 'function') {
+        if (epoch === AppState.sessionEpoch && AppState.sessionReady && !document.hidden && typeof refreshTodayStats === 'function') {
             refreshTodayStats(mode);
         }
     }, 30000);

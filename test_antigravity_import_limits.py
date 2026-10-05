@@ -30,7 +30,7 @@ def manager(monkeypatch):
     value = CredentialManager()
     value._initialized = True
     value._storage_adapter = AsyncMock()
-    value._storage_adapter.store_credential.return_value = True
+    value._storage_adapter.import_antigravity_credential.return_value = True
     monkeypatch.setattr(creds, 'credential_manager', value)
     return value
 
@@ -56,7 +56,7 @@ async def test_limits_reject_whole_batch_before_writes(manager, monkeypatch, pol
     with pytest.raises(HTTPException) as exc:
         await creds.upload_credentials_common(uploads, mode='antigravity')
     assert exc.value.status_code == 413
-    manager._storage_adapter.store_credential.assert_not_awaited()
+    manager._storage_adapter.import_antigravity_credential.assert_not_awaited()
     assert all(item.file.closed for item in uploads)
 
 
@@ -71,7 +71,7 @@ async def test_exact_limits_and_per_file_errors(manager, monkeypatch):
     assert body['total_count'] == 7
     codes = [item.get('error_code') for item in body['results']]
     assert codes == [None,'duplicate_filename','invalid_json','invalid_encoding','invalid_json','unsupported_entry',None]
-    assert [call.args[0] for call in manager._storage_adapter.store_credential.await_args_list] == ['a.json','b.json']
+    assert [call.args[0] for call in manager._storage_adapter.import_antigravity_credential.await_args_list] == ['a.json','b.json']
 
 
 async def test_actual_bytes_checked_even_when_zip_metadata_underreports(manager, monkeypatch):
@@ -83,7 +83,7 @@ async def test_actual_bytes_checked_even_when_zip_metadata_underreports(manager,
     with pytest.raises(HTTPException) as exc:
         await creds.upload_credentials_common([upload('test.zip',data)], mode='antigravity')
     assert exc.value.status_code == 413
-    manager._storage_adapter.store_credential.assert_not_awaited()
+    manager._storage_adapter.import_antigravity_credential.assert_not_awaited()
 
 
 @pytest.mark.parametrize('with_length', [False, True])
@@ -133,7 +133,7 @@ async def test_write_limit_is_shared_by_parallel_imports_and_tokens(manager):
             return True
         finally:
             active -= 1
-    manager._storage_adapter.store_credential.side_effect = store
+    manager._storage_adapter.import_antigravity_credential.side_effect = store
     tasks = [creds.upload_credentials_common([upload(f'{i}.json', b'{}')],mode='antigravity') for i in range(4)]
     tasks += [manager.add_antigravity_credential('token.json',{})]
     await asyncio.gather(*tasks)
@@ -157,20 +157,20 @@ async def test_request_gate_and_cancelled_waiter_release_files(manager, monkeypa
     with pytest.raises(asyncio.CancelledError):
         await pending
     assert files[0].file.closed
-    manager._storage_adapter.store_credential.assert_not_awaited()
+    manager._storage_adapter.import_antigravity_credential.assert_not_awaited()
     release.set()
     await task
     response = await creds.upload_credentials_common([upload('next.json',b'{}')],mode='antigravity')
     assert response.status_code == 200
 
-async def test_token_endpoints_report_safe_failures_and_metadata_warning(manager, monkeypatch):
+async def test_token_endpoints_report_safe_failures_and_atomic_metadata(manager, monkeypatch):
     monkeypatch.setattr(creds, '_exchange_refresh_token_to_credential', AsyncMock(return_value={'access_token':'synthetic'}))
     monkeypatch.setattr(creds, 'fetch_project_id_and_tier', AsyncMock(return_value=('project','pro')))
     monkeypatch.setattr(creds, 'get_antigravity_api_url', AsyncMock(return_value='https://example.test'))
     app = FastAPI()
     app.include_router(creds.router)
     app.dependency_overrides[creds.verify_panel_token] = lambda: 'synthetic'
-    manager._storage_adapter.store_credential.side_effect = [False, True, False, True]
+    manager._storage_adapter.import_antigravity_credential.side_effect = [False, True, False, True]
     manager._storage_adapter.update_credential_state.return_value = False
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
         response = await client.post('/creds/upload-by-refresh-token',json={'mode':'antigravity','refresh_token':'synthetic-private-token'})
@@ -181,10 +181,11 @@ async def test_token_endpoints_report_safe_failures_and_metadata_warning(manager
         assert response.json()['success_count'] == 1
         assert response.json()['failure_count'] == 1
         assert 'synthetic-private' not in response.text
-        assert response.json()['results'][0]['warnings'][0]['code'] == 'credential_metadata_update_failed'
+        assert response.json()['results'][0]['warnings'] == []
         response = await client.post('/creds/upload-by-refresh-token',json={'mode':'antigravity','refresh_token':'synthetic-private-token'})
         assert response.status_code == 200
-        assert response.json()['warnings'][0]['code'] == 'credential_metadata_update_failed'
+        assert response.json()['warnings'] == []
+        manager._storage_adapter.update_credential_state.assert_not_awaited()
 
 
 async def test_cancel_validation_waits_for_worker_and_never_writes(manager, monkeypatch):
@@ -209,7 +210,7 @@ async def test_cancel_validation_waits_for_worker_and_never_writes(manager, monk
     with pytest.raises(asyncio.CancelledError):
         await task
     assert output[0].data.closed and files[0].file.closed
-    manager._storage_adapter.store_credential.assert_not_awaited()
+    manager._storage_adapter.import_antigravity_credential.assert_not_awaited()
 
 
 async def test_forged_directory_count_is_checked_before_allocation(manager, monkeypatch):
@@ -221,7 +222,7 @@ async def test_forged_directory_count_is_checked_before_allocation(manager, monk
     with pytest.raises(HTTPException) as exc:
         await creds.upload_credentials_common([upload('test.zip',data)],mode='antigravity')
     assert exc.value.status_code == 413
-    manager._storage_adapter.store_credential.assert_not_awaited()
+    manager._storage_adapter.import_antigravity_credential.assert_not_awaited()
 
 async def test_corrupt_deflate_is_an_item_error(manager):
     import struct
@@ -232,7 +233,7 @@ async def test_corrupt_deflate_is_an_item_error(manager):
     body = json.loads(response.body)
     assert body['uploaded_count'] == 1 and body['failed_count'] == 1
     assert body['results'][0]['error_code'] == 'unreadable_zip_entry'
-    assert manager._storage_adapter.store_credential.await_args.args[0] == 'good.json'
+    assert manager._storage_adapter.import_antigravity_credential.await_args.args[0] == 'good.json'
 
 async def test_oversized_chunked_upload_does_not_poison_next_http_request(monkeypatch, unused_tcp_port):
     from hypercorn.asyncio import serve

@@ -7,7 +7,7 @@ const source = fs.readFileSync('front/common.js', 'utf8');
 function section(start, end) { return source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))); }
 function context() {
     const elements = new Map();
-    const c = {URL, URLSearchParams, Set, Map, Date, Promise, console,
+    const c = {URL, URLSearchParams, Set, Map, Date, Promise, console, AppState:{antigravityCreds:{data:{}}},
         document: {getElementById: id => elements.get(id), querySelectorAll: () => []},
         window: {location: {href:'https://example.invalid/'}, innerHeight:800, innerWidth:1200},
         requestAnimationFrame: () => {},
@@ -76,7 +76,7 @@ test('all matching selection carries the exact group filter over pages', async (
     manager.cooldownGroupCapability=true; manager.currentCooldownFilter='claude_gpt_unrestricted';
     manager.updateBatchControls=()=>{};
     const urls=[];
-    c.fetch=async url => {urls.push(new URL(url));return {ok:true,json:async()=>({items:[{filename:'file'+urls.length}],has_more:urls.length===1})};};
+    c.fetch=async url => {urls.push(new URL(url));return {ok:true,json:async()=>({panel_capabilities:['antigravity.cooldown.group_filter'],items:[{filename:'file'+urls.length}],has_more:urls.length===1})};};
     await manager.selectAllMatching();
     assert.equal(manager.selectedFiles.size,2);
     assert.ok(urls.every(url=>url.searchParams.get('cooldown_filter')==='claude_gpt_unrestricted'));
@@ -202,7 +202,7 @@ test('cross-page selection synchronizes visible checkboxes using actual template
             assert.equal(selector,'.'+manager.getElementId('file-checkbox'));
             return boxes;
         };
-        c.fetch=async()=>({ok:true,json:async()=>({items:[{filename:'first.json'},{filename:'second.json'},{filename:'off-page.json'}],has_more:false})});
+        c.fetch=async()=>({ok:true,json:async()=>({panel_capabilities:['antigravity.cooldown.group_filter'],items:[{filename:'first.json'},{filename:'second.json'},{filename:'off-page.json'}],has_more:false})});
         await manager.selectAllMatching();
         assert.equal(elements.get('antigravitySelectedCount').textContent,'已选择 3 项');
         assert.ok(boxes.every(box=>box.checked));assert.equal(header.checked,true);assert.equal(header.indeterminate,false);

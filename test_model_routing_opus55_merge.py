@@ -143,24 +143,46 @@ def test_family_policy_refuses_previous_single_version_sources(path, old_hash):
     assert any(issue.reason == "AMBIGUOUS_COMPATIBILITY" for issue in result.issues)
 
 
-def test_source_proof_uses_explicit_empty_ast_fields_on_both_dump_apis(monkeypatch):
+@pytest.mark.parametrize("modern", [False, True])
+def test_source_proof_uses_explicit_empty_ast_fields_on_both_dump_apis(monkeypatch, modern):
     import ast
+    import inspect
     from src.model_routing import policy as policy_module
-
-    policy_module._source_digests.cache_clear()
-    expected = policy_module._source_digests()
-    modern_dump = ast.dump
-
-    def legacy_dump(node, **kwargs):
-        if "show_empty" in kwargs:
-            raise TypeError("Synthetic pre-3.13 dump API")
-        return modern_dump(node, show_empty=True, **kwargs)
-
+    original = ast.dump
+    supports_empty = "show_empty" in inspect.signature(original).parameters
+    def legacy_dump(node, annotate_fields=True, include_attributes=False, *, indent=None):
+        kwargs = dict(annotate_fields=annotate_fields, include_attributes=include_attributes, indent=indent)
+        if supports_empty:
+            kwargs["show_empty"] = True
+        return original(node, **kwargs)
+    calls = []
+    def modern_dump(node, *, include_attributes=False, show_empty=False):
+        calls.append(show_empty)
+        assert show_empty is True
+        return legacy_dump(node, include_attributes=include_attributes)
     try:
-        monkeypatch.setattr(ast, "dump", legacy_dump)
+        monkeypatch.setattr(ast, "dump", modern_dump if modern else legacy_dump)
         policy_module._source_digests.cache_clear()
+        expected = {**policy_module.PROVEN_SOURCE_DIGESTS, **policy_module.REVIEWED_CONTEXT_SOURCE_DIGESTS}
         assert policy_module._source_digests() == expected
+        if modern:
+            assert len(calls) == len(expected)
         result, _ = compile_rows([row("public-alpha", "claude-opus-4-6-thinking")])
         assert result.valid, result.issues
+    finally:
+        policy_module._source_digests.cache_clear()
+
+
+def test_source_proof_hashes_explicit_empty_fields(monkeypatch):
+    import ast
+    import hashlib
+    from src.model_routing import policy as policy_module
+    tree = ast.Module(body=[ast.Expr(value=ast.List(elts=[], ctx=ast.Load()))], type_ignores=[])
+    monkeypatch.setattr(ast, "parse", lambda *a, **k: tree)
+    monkeypatch.setattr(policy_module, "_SOURCE_SELECTORS", {"src/utils.py": None})
+    expected = "Module(body=[Expr(value=List(elts=[], ctx=Load()))], type_ignores=[])"
+    try:
+        policy_module._source_digests.cache_clear()
+        assert policy_module._source_digests() == {"src/utils.py": hashlib.sha256(expected.encode()).hexdigest()}
     finally:
         policy_module._source_digests.cache_clear()

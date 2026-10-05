@@ -72,9 +72,9 @@ async def test_unsupported_or_failed_backend_does_not_advertise_capability(monke
     monkeypatch.setattr(creds,'get_storage_adapter',adapter)
     data = json.loads((await creds.get_creds_status_common(0,25,'all','antigravity')).body)
     assert 'antigravity.cooldown.group_filter' not in data.get('panel_capabilities',[])
-    with pytest.raises(HTTPException) as exc:
-        await creds.get_creds_status_common(0,25,'all','antigravity',cooldown_filter='any_restricted')
-    assert exc.value.status_code == 501
+    response = await creds.get_creds_status_common(0,25,'all','antigravity',cooldown_filter='any_restricted')
+    assert response.status_code == 501
+    assert json.loads(response.body)['capability'] == 'antigravity.cooldown.group_filter'
 
 
 async def test_hundreds_combined_filter_before_pagination_and_read_only(store,monkeypatch):

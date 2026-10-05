@@ -67,9 +67,9 @@ async def test_family_filter_is_applied_before_pagination_and_counts_are_global(
 async def test_missing_family_capability_fails_explicit_filter_without_fabrication(monkeypatch, ready, reader):
     await install_backend(monkeypatch, ready=ready, reader=reader)
     for kwargs in [{'model_access_family': F46}, {'model_access_filter': 'supported'}, {'model_access_filter': 'unknown'}]:
-        with pytest.raises(HTTPException) as error:
-            await creds.get_creds_status_common(0, 25, 'all', 'antigravity', **kwargs)
-        assert error.value.status_code == 501
+        response = await creds.get_creds_status_common(0, 25, 'all', 'antigravity', **kwargs)
+        assert response.status_code == 501
+        assert json.loads(response.body)['capability'] == CAP
     data = json.loads((await creds.get_creds_status_common(0, 25, 'all', 'antigravity')).body)
     assert CAP not in data['panel_capabilities']
     assert all('model_access_families' not in row for row in data['items'])
@@ -123,9 +123,7 @@ async def test_directory_results_cannot_cross_credential_replacement(tmp_path, m
     replacement = original if same_contents else {'access_token': 'synthetic-new', 'project_id': 'synthetic-new'}
     await store.store_credential(name, original, 'antigravity')
     async def replace():
-        if same_contents:
-            await store.delete_credential(name, 'antigravity')
-        await store.store_credential(name, replacement, 'antigravity')
+        await store.import_antigravity_credential(name, replacement)
     async def adapter():
         return SimpleNamespace(_backend=store, get_credential=store.get_credential)
     monkeypatch.setattr(creds, 'get_storage_adapter', adapter)
@@ -156,7 +154,7 @@ async def test_directory_results_cannot_cross_credential_replacement(tmp_path, m
             monkeypatch.setattr(api.credential_manager, '_get_or_create', manager)
             monkeypatch.setattr(api, 'fetch_quota_info', directory)
             assert not any(item['id'] == OPUS_46 for item in await api.fetch_available_models())
-        assert calls == ['synthetic-old']
+        assert calls == (['synthetic-old'] if entrypoint == 'legacy_quota' else [])
         assert (await store.model_access_family_public(name))[F46]['state'] == 'unknown'
         assert await store.quota_admit(name, OPUS_46) is None
     finally:

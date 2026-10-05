@@ -93,6 +93,7 @@ const content = {innerHTML: '', getAttribute: () => 'synthetic.json',
         this.innerHTML = html + this.innerHTML;
     }};
 const details = {isConnected: true, style: {display: 'none'}, querySelector: () => content};
+global.AppState = {antigravityCreds:{data:{}}};
 global.document = {getElementById: id => id === 'antigravity-manageTab' ? {classList: {contains: () => true}} : details};
 global.window = {innerHeight: 800, innerWidth: 1200};
 global.requestAnimationFrame = () => {};
