@@ -1,37 +1,12 @@
-# d1004-1 改善实施方案（实施范围，2026-10-05）
-## 目标、范围与默认决策
-基线提交为 867d38e40619cd0da4cc0351def253c70f1b5cda。用户选择全部已确认问题，包含最新六项及此前确认仍未修复的问题；任何实际筛选变化清空已选项。分三个批次实施和验证。用户已明确要求实施本方案；此前只读方案第四轮实际Claude返回 findings=[]。实现分支 codex/d1004-1-improvements，保留主目录及旧审核证据。
-仅 Antigravity 与必要共享兼容代码；不恢复 Gemini CLI 专属维护或已取消 MGMT 待办。不部署、不访问真实凭证/生产数据库/Volume、不调用真实模型，不新增 DDL/schema 迁移，不手改 panel-version.txt。Management schema 1.4 和既有管理 capability 不变，manager 无配套动作。
-两条尚属策略选择的观察不修改：low 成功与 high 404 的权限证据优先级；另一个家族 directory_query_failed 的 900 秒重查与十二小时目录周期。修复不取消 4.6 的已恢复能力，不扩大到模型路由重构。用户已明确暂时豁免当前续审的三轮上限。
-## 批次一：真实额度证据、缓存展示、测试和文档
-1. 前端新增统一归一化额度组视图 {known, blockedUnknown, cooldownUntil, manualOverride, invalid, restricted: true/false/null, source: response/cache}。同时读取 /creds/quota 的稀疏 quota_groups（真实 public_state 只给 cooldownUntil）及 quota_group_states；不能优先选择 timer-only 投影而丢失原始 blocked_unknown。有效倒计时和未知释放时间并存，独立 warning、紧凑展示、详情、解封按钮都用同一 helper。
-2. 原始 blocked_unknown 或有效未来 timer 足以证明受限。损坏/类型无效/矛盾数据保持受限且保留有效计时证据；raw manual_override 与投影 blockedUnknown=true 矛盾时不得猜测已解除，标示需重新查询并禁用普通解封。正常 manual_override 只解除未知阻断，仍保留 timer。只有完整有效投影明确无阻断/不受限，或完整有效 raw 快照加有效 timer 投影证明无有效限制，才能标为不受限；稀疏零计时且缺 raw 必须未知，不能展示为可用。
-3. 解封按钮仅当前成功响应、当前证据明确 blocked_unknown 且 invalid=false 时启用；缓存、查询失败、损坏或矛盾证据均不能授权解封。模拟 POST 解封应只解除未知阻断、保留 timer，并刷新列表一次；无 Google 调用。
-4. 家族权限证据与额度证据分别按块判定新旧来源。当前有效家族数据（含显式空对象）权威，不用旧家族填补。当前额度所有字段缺失时才整体回退缓存，标识已保存信息；部分字段存在时只解释当前已知部分，缺少部分保持未知，禁止新旧字段混拼；当前完整空状态覆盖旧限制，当前无效/冲突不能由好缓存掩盖。HTTP 失败与网络失败都保留缓存展示，同时保持当前 HTTP/error/phase/state_update 结果；缓存仅显示，不写库，不额外请求上游。
-5. 测试 fixture 由生产 public_state、quota_summary 及实际 manual.quota(sync=True)+mock 上游生成 JSON，再送入 Node VM 渲染；不用手工富投影替代真实格式。覆盖两共享组独立/同时未知、未知与 timer 同时存在、manual_override/矛盾/损坏、字段缺失/完整为空、403 缺额度但有缓存、当前家族覆盖旧家族、按钮和解封后 timer 保留。
-6. 版本测试运行真实 fetchAndDisplayVersion，检查版本显示优先级、无 v 前缀、no-store 和失败展示；静态测试只断言结构，删除过期源码前缀要求。旧 dump stub 必须真的不支持 show_empty；生产兼容 fallback 仅当原 dump 支持才传 show_empty=True，现代 spy 断言参数，固定小 AST 覆盖空字段。
-7. Python 3.12/3.13 完整受保护源码 digest map 必须一致且符合相同可信白名单；拒绝旧 hash 与语义漂移，不能只扩大白名单让测试变绿。无 3.13 环境时记录验证缺口，不声称通过。文档同步 4.6 恢复及共享额度边界，旧退役验收注明已被替代，缓存承诺与实际行为一致。
-## 批次二：导入隔离、目录证据与失败退避
-1. 新增私有后端协议/adapter 方法 import_antigravity_credential(filename, credential_data, *, initial_state=None)，四存储后端实现真实原子 upsert；CredentialManager.add_antigravity_credential 新增仅关键字 initial_state 并传递，保留 import_write_slot、既有成功/失败返回和 CredentialStorageError。JSON/ZIP、单条及批量 refresh-token 导入都走此入口，OAuth save_credentials 的 antigravity 分支也走同一入口。通用 store_credential、存储迁移/数据搬运原样；正常刷新走 quota_refresh_credential，人工项目保存走 manual_save_project，不通过 token 内容猜测操作来源。
-2. 每次导入（插入、覆盖、token-only、重复导入）在同一次 upsert 写 credential_data、新 UUID quota_credential_generation、空 model_access_state，使旧请求和旧权限失效。SQL 原生 upsert 或事务处理竞争插入；MySQL 保持 server_name+filename 隔离；Mongo 单文档 $set/$setOnInsert，重复键竞争时重试覆盖所需的三个字段。_quota_atomic 对缺失行返回 None，不能把它当新建实现。禁止先存凭证再补 generation。
-3. 新行保留现有默认状态；initial_state 只允许现有 OAuth 初始化字段 disabled、error_codes、last_success、user_email、tier，由可信调用端构造，禁止写 quota/generation/access。仅数据库真正插入分支应用，不靠调用前 get 判断是否存在；覆盖只更新上述三个导入字段，其余 disabled/permanent_disabled/error_codes/last_success/user_email/tier/remarks、raw quota/timer、周期及累计统计原值保留。禁止解析或重编码既有损坏 quota JSON；不可因 metadata 损坏拒绝替换内容，也不可清空损坏证据。
-4. OAuth save_credentials 将原默认状态作为 initial_state 传入，并跳过整个 Antigravity 后置 update_credential_state；保留 Gemini CLI 原行为。refresh-token 共用 _add_credential_by_refresh_token 将探测 tier 通过 initial_state 传递（未探测到则不传 tier），移除 creds.py:3256-3266 的 Antigravity 后置 tier 写入。自定义同名覆盖不能改变已有 tier，单条/批量一致；无探测新行使用现有默认 tier。删除该后置写入专属附加信息失败警告，但 warnings 响应结构保留；subscription_tier 仍表达本次探测结果，交付文档说明覆盖时不会同步改已有存储 tier。
-5. 导入能力依据成功初始化结果或只读 schema/字段探测，不能仅依据 model_access_storage_ready（它可能因临时失败为 false 但仍有旧证据）。已存在 generation 字段必须轮换；access 字段存在必须清空；部分 schema 只写已确认存在的字段。两者均确认不存在时允许兼容旧存储导入且不得获得 Opus 准入；无法确认能力或无法原子执行时在提交凭证前失败，不回退通用存储、不做 DDL。
-6. 目录读写：storage ready 时比较选择器的 _quota_generation 和 _quota_credential_version 与读取的 model-access snapshot，禁止重新 hash 含运行期 enable_credit 等字段的 credential_data，禁止取不存在的 generation 键。失配只允许重选一次；仍失配走既有无有效凭证返回，不拿旧 token 查询并归属给新快照，不扩大通用重试预算。响应写入仍由 model_access_observe 校验 generation/version/revision。
-7. storage not ready 时保留当前凭证及非 Opus 目录读取，不强制要求权限 snapshot，不写权限证据、不进行 Opus 合成/目录并集、不伪造 Opus 能力。权限保存失败也不能丢弃成功的非 Opus 目录结果。
-8. ensure_fresh_token 返回 None 时必须用原 claim snapshot 调用 model_access_observe(models=None, reason=directory_query_failed)，沿用失败分支 900 秒 next_check、revision 和 lease 语义并保留证据/pause。quota_current_credential 返回 None 也仅原快照 CAS，删除/换代/新 lease 导致拒绝则跳过，不重新读取新身份结算；不得加无条件 finally 结算，保留现有取消、超时和请求预算。
-9. 验证四后端插入/覆盖/重复/token-only/并发/删除重建/Mongo 重复键/SQL 部分列组合/ready=false但完整列/损坏 metadata/失败回滚；JSON/ZIP、新建及自定义同名 refresh-token（单/批量）、OAuth 同秒同名覆盖保持 disabled/tier、竞争初始化、普通刷新保留 generation、迁移不变、supported/paused 清除；目录成功/删模型/失败/过期 CAS、unsupported 非 Opus 仍读取、失败 120 秒不重查及 900 秒到期。
-## 批次三：筛选与能力协商、选择任务和认证生命周期
-1. 管理器增加 filterRevision、selectionTaskId；任一实际筛选变化（含能力撤回/降级的重置）取消未完成跨页全选、清空 selectedFiles、更新计数/当前复选框。每页响应和最终提交前校验 sessionEpoch+revision+taskId，A→B→A 不能复活旧任务。手动选择取消后台全选并保留新的手选；页码/每页数量变化不作为筛选变化，不取消后台全选，完成时同步当前页。取消当前页全选只删除该页 filename，保留其他页；普通请求失败保留既有选择，但不得恢复因筛选变化已清空的选择。
-2. creds.py 三个501分支（family 不支持、group 静态不支持、group 查询结果不支持）返回 JSONResponse 保留 HTTP501与原 detail 字符串，增量字段 error_code=capability_unavailable、capability 使用既有 antigravity.model_access.family_filter / antigravity.cooldown.group_filter；不用 HTTPException 自动仅 detail 的载体。
-3. 第一次501对请求捕获的全部实际使用高级筛选能力，以及错误明确指出的能力，一次加入本会话 failedCapabilities；不要只降级报错的第一项而耗尽重试。相关 family/filter 重置为 claude-opus-5-5/all，quota group 重置 all；保留其他普通 status/error/tier/remark 条件和仍支持的独立筛选。旧后端501无机器字段也按本次请求实际使用能力降级。提示具体限制。
-4. 用统一能力应用入口原子处理两个 capability，计算 effective=advertised && !failedCapabilities.has(capability)。updateModelAccessCapability/updateCooldownCapability 均经过该入口、只更新模型/DOM，不能绕过掩码。200撤回家族能力时必须同时重置 currentModelAccessFamily 及 DOM 为 5.5、currentModelAccessFilter 及 DOM 为 all；撤回 group 则 currentCooldownFilter/DOM 为 all。一次存在实际能力撤回或筛选重置时递增 revision 一次、取消全选、清空选择、回第一页；两个能力同时变更只失效一次，相同缺能力响应重复出现不重复失效/刷新。
-5. 普通200能力缺失只撤回当前能力，不永久加入 failedCapabilities；随后200重宣告可启用默认控件但不能复活旧选择或任务。已501锁定能力即使后续200重宣告也仍禁用，直到新认证会话/页面重载。保持现有协议，不新增 backend_type 顶层字段；后端配置/部署切换需重新加载或登录再探测。
-6. refresh() 和 selectAllMatching() 的每页200都先校验会话/请求/revision，再统一应用能力。能力处理改变请求范围或分页时丢弃原条件响应，不渲染旧数据/成功提示、不提交全选结果。全选遇501或能力撤回即结束该任务，绝不继续按扩大条件自动选择；只允许刷新普通第一页列表。初次默认条件请求未受能力撤回影响且分页不变可接受响应。
-7. 每次 refresh 包括200撤回和501合计最多一次额外列表请求，默认新条件第一页；两种高级筛选同时失败也应一次退回可用列表，第二次失败停止并提示，不能循环。400/401/5xx不当成能力降级。过时的501/200/catch/finally不能改新筛选、新按钮、新选择、loading/pending或提示；取消全选触发的列表恢复也只有一次，不与其他降级路径重复调度。
-8. 共享 sessionEpoch 驱动认证任务 start/stop。logout 递增 epoch，停止1秒 cooldownTimerInterval和30秒 _statsAutoRefreshTimer，复用 disconnectWebSocket 静默关闭旧日志 socket，取消旧选择/刷新，清 auth 隐藏主界面。cooldown 启动从无条件 onload 移至认证成功；login/autoLogin 成功确定最终 active tab 后恰好一次恢复该 tab 任务/加载，登录仍同 tab 不能依赖 switchTab 的早退。cooldown 检查 auth、主界面、相关 tab、document visibility，并保留15秒失败间隔。
-9. 请求和 socket 的 result/error/finally 绑定 epoch/task/socket identity；旧 finally 不得清新 pending，旧 close 不得覆盖新 socket 状态；迟到 login 不能重新打开 logout 界面，CONNECTING 不能重复 socket。switchTab 的180/260ms延迟与RAF/triggerTabDataLoad 也检查 epoch，旧动画不能重启认证任务。只修共享生命周期，不重写 Gemini CLI OAuth 重试。
-10. 测试跨页取消/A-B-A/手动选择/翻页与pageSize/请求失败/只取消当前页、batch filename；200撤回非默认4.6并同步DOM/第二页全选撤回/两个能力一次失效/初始默认无能力不重复/普通200撤回再恢复/501后200重宣告仍锁/旧会话响应；三个真实501载体/两能力同时失败/legacy501/总计一次补请求/401和5xx；logout 后timer/统计/HTTP/socket/延迟动画无动作，同tab重新登录只恢复一份任务和socket。
-## 交付与验收
-依次完成批次一、二、三，各批先运行针对性 Python/Node 测试，再全量隔离 pytest 和原有+新增 Node 测试。当前基线2747 passed/2 failed/1 Windows skip，目标相关失败归零且原回归通过。虚拟DB、Node VM、loopback 的结果与真实数据库/浏览器/上游验证分开，不能替代真实外部集成证据；无3.13证据明确记缺口。
-实际实施后补充交付记录，列出私有导入接口、501增量响应、兼容边界、Management不变、no_counterpart_action及真实验证证据；再由共享Hook对实际代码审核。前期只读方案审核未写 approved_plan，不表示实际代码已通过；实施结束需重新实际审核代码。本方案及以上默认决策为完整实施范围。
+# 本次任务：Unicode 流式解析与取消后清理融合
+
+用户要求在现有本地 master 上融合两项旧草稿修复，不提交、不推送，并请实际 Claude 审核。基线 d9b65ba。仅移植两项确认缺失的行为，保留当前路由、Opus、额度与防截断改善。
+
+1. SSE 行边界只按 LF 分割；序列化时转义 U+0085、U+2028、U+2029，候选身份层输出使用 JSON ASCII 转义，防止后续旧消费者 splitlines 破坏字符串。保持解码后的正文、签名、工具参数语义。
+2. 公共身份响应与共享流式响应的异步资源关闭使用 AnyIO shield；Antigravity 同时关闭源和 GenerationBudget，保持一次关闭和取消不记录逻辑结果。
+3. 增加真实生产函数链路的 UTF-8 单字节/整块解析测试，以及响应头取消作用域下源与预算恰好关闭一次的测试，涵盖预保护和未预保护路径。
+4. 隔离运行针对性与完整 pytest；随后共享 Hook 调用实际 Claude 审查未提交文件。审核发现修复后复测复审。记录实际结果与快照，正式 Hook 批准状态不手工修改。
+
+边界：Antigravity 与必要共享基础设施；不恢复 Gemini CLI 专属维护或取消的 MGMT，不修改管理 schema/capability，不涉及生产数据、面板版本、部署、Git 提交或远程推送。manager 无配套动作。
+
+实际 Claude 第1轮指出下游重序列化与公共输出重新引入 Unicode 分隔符。已核实并补齐：Antigravity 预算、Completion 与逻辑统计的 SSE 解析统一使用 LF；公共身份流式输出也转义三种分隔符。Antigravity 数据事件检测同步 LF。增加真实 Gemini unwrap→预算 observe→公共输出测试，扩展 Completion 终止分离与不保护流式统计测试，并验证三种公共协议的正文/签名/工具参数无损。无 CLI 专属修改。复测后进行第2轮实际代码审核。

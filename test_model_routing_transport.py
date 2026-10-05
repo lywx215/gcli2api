@@ -153,3 +153,91 @@ async def test_ag_feature_snapshot_does_not_reread_runtime_toggle(monkeypatch, s
         assert response.status_code == 200 and calls[0]['route_context'] is captured and calls[0]['events'] is True
     else:
         assert response.status_code == 503 and calls == []
+
+
+@pytest.mark.parametrize('separators', ['\u0085', '\u2028', '\u2029', '\u0085\u2028\u2029'])
+@pytest.mark.parametrize('chunk_size', [1, 65536])
+async def test_unicode_separators_survive_actual_retirement_and_completion(monkeypatch, separators, chunk_size):
+    from src.antigravity_completion import Completion, separate_terminal, finalize_terminal_usage
+    from src.antigravity_limits import meaningful_frame
+    from src.logical_request_stats import stream_item_has_body, stream_item_is_error
+    from src.router import stream_passthrough
+    from src.router.stream_passthrough import _protected_item_state
+
+    payload = {'candidates': [{'index': 7, 'content': {'parts': [
+        {'text': '你好' + separators + '中文', 'thoughtSignature': 'synthetic' + separators}]},
+        'finishReason': 'STOP'}]}
+    raw = ('data: ' + json.dumps(payload, ensure_ascii=False) + '\n\n').encode('utf-8')
+    assert _protected_item_state(raw) == (True, False)
+    assert httpx_client._normalized_event_payload(raw) == payload
+    raw_completion = Completion()
+    raw_completion.event(raw)
+    raw_completion.finish()
+    early, late = separate_terminal(raw)
+    frames = finalize_terminal_usage([early, late], {'totalTokenCount': 1})
+    assert meaningful_frame(early) and stream_item_has_body(early)
+    assert not stream_item_is_error(early)
+    assert stream_item_is_error(('data: ' + json.dumps({'error': {'message': separators}},
+                                                               ensure_ascii=False) + '\n\n').encode())
+    outcomes = []
+    async def record(*args):
+        outcomes.append(args)
+    monkeypatch.setattr(stream_passthrough, 'record_logical_request', record)
+    response = await stream_passthrough.build_streaming_response_or_error(
+        chunks(*frames), model_name='synthetic-target', mode='antigravity', protected=False)
+    assert [event async for event in response.body_iterator] == frames
+    assert outcomes == [('synthetic-target', 'antigravity', True)]
+    source = chunks(*(raw[i:i + chunk_size] for i in range(0, len(raw), chunk_size)))
+    result = [event async for event in httpx_client._retirement_checked_events(
+        httpx_client.normalize_sse_events(source))]
+    assert len(result) == 1
+    assert json.loads(result[0][6:]) == payload
+    rewritten = CandidateIdentityState().event(result[0])
+    completion = Completion()
+    completion.event(rewritten)
+    completion.finish()
+    assert json.loads(rewritten[6:]) == payload
+
+
+@pytest.mark.parametrize('separator', ['\u0085', '\u2028', '\u2029', '\u0085\u2028\u2029'])
+async def test_gemini_unwrap_preserves_unicode_progress_and_public_output(monkeypatch, separator):
+    from dataclasses import replace
+    from src.antigravity_limits import GenerationBudget
+    from src.api import antigravity as api
+    from src.converter import antigravity_fix
+    from src.models import GeminiRequest
+    from src.router.antigravity import gemini
+    from src.router import stream_passthrough
+
+    captured = context()
+    captured = replace(captured, resolution=replace(captured.resolution, features={
+        'fake_streaming': False, 'anti_truncation': False, 'normalization_model': 'synthetic-target'}))
+    monkeypatch.setattr(gemini, 'prepare_route_context', AsyncMock(return_value=captured))
+    async def normalize(body, **kwargs):
+        return dict(body)
+    monkeypatch.setattr(antigravity_fix, 'normalize_antigravity_request', normalize)
+    payload = {'candidates': [{'index': 7, 'content': {'parts': [{
+        'text': '正文' + separator, 'thoughtSignature': 'synthetic' + separator}]}, 'finishReason': 'STOP'}]}
+    async def upstream(**kwargs):
+        yield ('data: ' + json.dumps({'response': payload}, ensure_ascii=True) + '\n\n').encode()
+        yield b'data: [DONE]\n\n'
+    monkeypatch.setattr(api, 'stream_request', upstream)
+    outcomes, progress = [], []
+    async def record(*args):
+        outcomes.append(args)
+    monkeypatch.setattr(stream_passthrough, 'record_logical_request', record)
+    original_observe = GenerationBudget.observe
+    def observe(self, item):
+        original_observe(self, item)
+        if b'candidates' in item:
+            progress.append(self.progress is not None)
+    monkeypatch.setattr(GenerationBudget, 'observe', observe)
+    response = await gemini.stream_generate_content(
+        GeminiRequest(contents=[{'role': 'user', 'parts': [{'text': 'synthetic prompt'}]}]),
+        model=captured.requested_model)
+    body = b''.join([event async for event in response.body_iterator])
+    decoded = [json.loads(line[6:]) for line in body.decode().split('\n') if line.startswith('data: {')]
+    assert decoded[0]['candidates'] == payload['candidates']
+    assert progress == [True]
+    assert outcomes == [('synthetic-target', 'antigravity', True)]
+    assert not any(char.encode() in body for char in '\u0085\u2028\u2029')

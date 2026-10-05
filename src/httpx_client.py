@@ -157,7 +157,8 @@ async def normalize_sse_events(chunks: AsyncIterable[bytes | str]):
                 origin=ErrorOrigin.UPSTREAM, kind=ErrorKind.BAD_FORMAT
             )
             raise ModelApiErrorException(error)
-        normalized = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+        # Legacy consumers use splitlines(); keep legal JSON separators in strings.
+        normalized = json.dumps(parsed, ensure_ascii=False, separators=(",", ":")).translate({0x85: "\\u0085", 0x2028: "\\u2028", 0x2029: "\\u2029"})
         return b"data: " + normalized.encode("utf-8") + b"\n\n"
 
     frames = iter_sse_frames(chunks)
@@ -184,7 +185,7 @@ async def normalize_sse_events(chunks: AsyncIterable[bytes | str]):
 
 def _normalized_event_payload(event: bytes) -> dict[str, Any] | None:
     text = event.decode("utf-8") if isinstance(event, bytes) else str(event)
-    data = [line[5:].strip() for line in text.splitlines() if line.startswith("data:")]
+    data = [line[5:].strip() for line in text.split("\n") if line.startswith("data:")]
     if not data or data[-1] == "[DONE]":
         return None
     payload = json.loads("\n".join(data))
@@ -194,7 +195,7 @@ def _normalized_event_payload(event: bytes) -> dict[str, Any] | None:
 def _encode_normalized_event(payload: Any) -> bytes:
     return (
         b"data: "
-        + json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":")).translate({0x85: "\\u0085", 0x2028: "\\u2028", 0x2029: "\\u2029"}).encode("utf-8")
         + b"\n\n"
     )
 

@@ -1,0 +1,40 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.14, pytest-9.1.1, pluggy-1.6.0
+rootdir: G:\code\gemini30\gcli2api-master-integration
+configfile: pyproject.toml
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 300 items / 9 deselected / 291 selected
+
+test_model_routing_identity.py ...................................       [ 12%]
+test_model_routing_transport.py ......................................   [ 25%]
+test_model_routing_anti_truncation.py ................                   [ 30%]
+test_model_routing_opus55_merge.py ..................................... [ 43%]
+.....................................                                    [ 56%]
+test_antigravity_timeouts.py ...........................                 [ 65%]
+test_antigravity_opus_retirement.py .................................... [ 77%]
+.....................................                                    [ 90%]
+tests\test_model_retirement.py ............................              [100%]
+
+============================== warnings summary ===============================
+src\models.py:60
+  G:\code\gemini30\gcli2api-master-integration\src\models.py:60: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class OpenAIChatCompletionRequest(BaseModel):
+
+src\models.py:125
+  G:\code\gemini30\gcli2api-master-integration\src\models.py:125: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class GeminiPart(BaseModel):
+
+src\models.py:173
+  G:\code\gemini30\gcli2api-master-integration\src\models.py:173: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class GeminiRequest(BaseModel):
+
+src\models.py:236
+  G:\code\gemini30\gcli2api-master-integration\src\models.py:236: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class ClaudeRequest(BaseModel):
+
+src\models.py:272
+  G:\code\gemini30\gcli2api-master-integration\src\models.py:272: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class ClaudeStreamEvent(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================ 291 passed, 9 deselected, 5 warnings in 4.21s ================

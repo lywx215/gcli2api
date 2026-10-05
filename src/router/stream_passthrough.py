@@ -2,6 +2,8 @@ import asyncio
 import json
 from typing import Any, AsyncIterator, Optional
 
+import anyio
+
 from fastapi import Response
 from fastapi.responses import StreamingResponse
 
@@ -46,7 +48,7 @@ def _protected_item_state(item):
         return False, not 200 <= item.status_code < 300
     text = item.decode("utf-8") if isinstance(item, bytes) else str(item)
     saw_data = False
-    for line in text.splitlines():
+    for line in text.split("\n"):
         if not line.startswith("data:") or line[5:].strip() == "[DONE]":
             continue
         payload = json.loads(line[5:].strip())
@@ -122,7 +124,8 @@ async def build_streaming_response_or_error(
         target = source if source_started else iterator
         close = getattr(target, "aclose", None)
         if close is not None:
-            await close()
+            with anyio.CancelScope(shield=True):
+                await close()
 
     async def count_once(success):
         nonlocal outcome_recorded
@@ -150,7 +153,7 @@ async def build_streaming_response_or_error(
                     text = item.decode("utf-8", errors="replace") if isinstance(item, bytes) else item
                     saw_data_event = saw_data_event or any(
                         line.startswith("data:") and line[5:].strip() != "[DONE]"
-                        for line in text.splitlines()
+                        for line in text.split("\n")
                     )
                 yield item
             completed = True
@@ -211,12 +214,13 @@ async def _antigravity_response(iterator, media_type, model_name, protocol, non_
         if closed:
             return
         closed = True
-        try:
-            closer = getattr(iterator, "aclose", None)
-            if closer:
-                await closer()
-        finally:
-            await budget.close()
+        with anyio.CancelScope(shield=True):
+            try:
+                closer = getattr(iterator, "aclose", None)
+                if closer:
+                    await closer()
+            finally:
+                await budget.close()
 
     try:
         first = await budget.run(read_first_async_item(iterator))

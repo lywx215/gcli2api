@@ -53,7 +53,7 @@ def meaningful_frame(item):
     if not isinstance(item, (bytes, str)):
         return False
     text = item.decode('utf-8', errors='replace') if isinstance(item, bytes) else item
-    for line in text.splitlines():
+    for line in text.split("\n"):
         line = line.strip()
         if line.startswith('data:'):
             line = line[5:].strip()

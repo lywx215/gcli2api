@@ -2,6 +2,8 @@
 from copy import deepcopy
 import json
 
+import anyio
+
 from fastapi import Response
 from fastapi.responses import StreamingResponse
 
@@ -98,7 +100,7 @@ async def _identity_events(iterator, *, protocol, requested_model, close_source)
                 raise bad_stream()
             payload = rewrite_success_identity(parse_model_response(raw), protocol=protocol, requested_model=requested_model)
             saw_payload = True
-            encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).translate({0x85: "\\u0085", 0x2028: "\\u2028", 0x2029: "\\u2029"})
             yield ("\n".join([*controls, "data: " + encoded]) + "\n\n").encode("utf-8")
         if not saw_payload:
             raise bad_stream()
@@ -144,7 +146,8 @@ async def adapt_public_response(response, *, route_context) -> Response:
             if close is not None and id(source) not in closed_sources:
                 closed_sources.add(id(source))
                 try:
-                    await close()
+                    with anyio.CancelScope(shield=True):
+                        await close()
                 except Exception:
                     pass
         def adapter(iterator):
@@ -190,7 +193,8 @@ async def adapt_public_response(response, *, route_context) -> Response:
                     cleanup = getattr(self, "_model_api_stream_resource_close", None)
                     if cleanup is not None:
                         try:
-                            await cleanup()
+                            with anyio.CancelScope(shield=True):
+                                await cleanup()
                         except Exception:
                             pass
         response.__class__ = IdentityClosingResponse

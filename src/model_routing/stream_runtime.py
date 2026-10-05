@@ -80,5 +80,5 @@ class CandidateIdentityState:
             return raw
         from src.router.model_api_errors import parse_model_response
         payload = self.normalize(parse_model_response("\n".join(data)))
-        encoded = "data: " + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+        encoded = "data: " + json.dumps(payload, ensure_ascii=True, separators=(",", ":")) + "\n\n"
         return encoded.encode("utf-8") if isinstance(raw, bytes) else encoded

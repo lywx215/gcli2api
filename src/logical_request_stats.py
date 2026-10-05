@@ -60,7 +60,7 @@ def stream_item_has_body(item: Any) -> bool:
     if not text or text == "[DONE]" or text == "data: [DONE]" or text.startswith(":"):
         return False
 
-    data_lines = [line[5:].strip() for line in text.splitlines() if line.startswith("data:")]
+    data_lines = [line[5:].strip() for line in text.split("\n") if line.startswith("data:")]
     payload_text = data_lines[-1] if data_lines else text
     if text.startswith("event:") and not data_lines:
         # Event names alone (e.g. ping/message_start) carry no response body.
@@ -85,7 +85,7 @@ def stream_item_is_error(item: Any) -> bool:
     if not isinstance(item, (str, bytes)):
         return False
     text = item.decode("utf-8", errors="replace") if isinstance(item, bytes) else item
-    data_lines = [line[5:].strip() for line in text.splitlines() if line.startswith("data:")]
+    data_lines = [line[5:].strip() for line in text.split("\n") if line.startswith("data:")]
     if not data_lines:
         return False
     try:

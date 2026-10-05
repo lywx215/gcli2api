@@ -1,0 +1,39 @@
+{
+  "model": "claude-opus-5-5",
+  "reviewer": "Actual Claude CLI via shared user-level hook.ask_claude",
+  "stage": "code",
+  "base_head": "d9b65ba4d5f6e133f7323d51affe2ccda3b047b8",
+  "started_at": "2026-10-05T10:05:12.931663+00:00",
+  "files": [
+    ".codex/review-plan.md",
+    "AGENTS.md",
+    "docs/MAINTENANCE_SCOPE.md",
+    "docs/delivery/stream-unicode-cancellation-20261005/README.md",
+    "docs/model-routing/ACCEPTANCE.md",
+    "docs/model-routing/CONTRACTS.md",
+    "docs/model-routing/SPEC.md",
+    "docs/model-routing/UPGRADE.md",
+    "src/httpx_client.py",
+    "src/model_routing/public_response.py",
+    "src/model_routing/stream_runtime.py",
+    "src/router/stream_passthrough.py",
+    "test_model_routing_identity.py",
+    "test_model_routing_transport.py"
+  ],
+  "snapshot_before": "df7290e57e64bf72960b6e1b8885fd9769df4719ecea32576663e51b8cce4bb4",
+  "formal_hook_approval_state_updated": false,
+  "findings": [
+    {
+      "file": "src/antigravity_limits.py",
+      "issue": "The Unicode separator fix only covers the transport normalizer (src/httpx_client.py:161,198) and the candidate identity layer (src/model_routing/stream_runtime.py:83). Later Antigravity stages decode the JSON again and re-encode it with ensure_ascii=False and no translate(), which puts raw U+0085/U+2028/U+2029 back into the frames. These stages are src/router/antigravity/gemini.py:356,428 (unwrapping `response`), src/antigravity_completion.py:162 (the `early` frame from separate_terminal, used at src/api/antigravity.py:720) and :185, and src/converter/anti_truncation.py:395,772,802. Those frames then go through _antigravity_response in src/router/stream_passthrough.py: budget.observe(first/item) at :246 and :271, and meaningful_frame at :260 on the unprotected path. Both reach meaningful_frame (src/antigravity_limits.py:56), which uses text.splitlines(). That splits the JSON string at U+2028, json.loads fails, and the frame is not counted as progress. As a result, the idle/progress deadline is not reset. A long Antigravity Gemini stream whose text contains U+2028 can then get a false TIMEOUT. On the unprotected path, has_body stays False and a successful stream is counted as a failure. The same splitlines problem exists in src/logical_request_stats.py:63,88 and src/antigravity_completion.py:107,137,180. Plan item 1 is about protecting downstream splitlines consumers, but the shared Antigravity budget consumer is still affected. The new tests run the chain only up to Completion, not through these re-serializers into budget.observe. Fix: make meaningful_frame (and the other in-process SSE parsers) split on '\\n' only, or apply the same separator escaping at each re-serialization point. Then add a regression test that runs a U+2028 text frame through the gemini unwrap and _antigravity_response and checks it counts as progress and body."
+    },
+    {
+      "file": "src/model_routing/public_response.py",
+      "issue": "Line 103: the public identity layer re-encodes every successful SSE payload with json.dumps(..., ensure_ascii=False) and no U+0085/U+2028/U+2029 escaping. So client-facing Antigravity output contains the raw separators again, even though src/httpx_client.py and the candidate identity layer escaped them. This undoes the stated goal of plan item 1 (keeping legal JSON strings safe from later splitlines-based consumers) at the last stage. Use the same escaping here as in _encode_normalized_event (or ensure_ascii=True), so the separators stay escaped in public output while the decoded text and signatures are unchanged."
+    }
+  ],
+  "status": "completed",
+  "snapshot_after": "df7290e57e64bf72960b6e1b8885fd9769df4719ecea32576663e51b8cce4bb4",
+  "snapshot_unchanged": true,
+  "elapsed_seconds": 108.7
+}

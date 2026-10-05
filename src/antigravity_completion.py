@@ -104,7 +104,7 @@ class Completion:
                 raise bad_format() from None
         if not isinstance(raw, str):
             raise bad_format()
-        lines = [line[5:].lstrip(" ") for line in raw.splitlines() if line.startswith("data:")]
+        lines = [line[5:].lstrip(" ") for line in raw.split("\n") if line.startswith("data:")]
         if not lines:
             return False
         data = "\n".join(lines).strip()
@@ -134,7 +134,7 @@ def separate_terminal(raw):
     then keep the HTTP connection open. Holding that answer would stall clients.
     """
     text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-    lines = [line[5:].lstrip(" ") for line in text.splitlines() if line.startswith("data:")]
+    lines = [line[5:].lstrip(" ") for line in text.split("\n") if line.startswith("data:")]
     if not lines or "\n".join(lines).strip() == "[DONE]":
         return None, raw
     payload = json.loads("\n".join(lines))
@@ -177,7 +177,7 @@ def finalize_terminal_usage(frames, usage):
     for i in range(len(result) - 1, -1, -1):
         raw = result[i]
         text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-        data = "\n".join(line[5:].lstrip(" ") for line in text.splitlines() if line.startswith("data:"))
+        data = "\n".join(line[5:].lstrip(" ") for line in text.split("\n") if line.startswith("data:"))
         if not data or data.strip() == "[DONE]":
             continue
         payload = json.loads(data)

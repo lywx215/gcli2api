@@ -263,3 +263,69 @@ async def test_preprotected_custom_iterator_close_is_idempotent():
     response = await adapt_public_response(response, route_context=ctx('openai'))
     _ = [x async for x in response.body_iterator]
     assert source.closes == 1
+
+
+@pytest.mark.parametrize('already_protected', [False, True])
+async def test_header_cancel_scope_shields_required_resource_cleanup(monkeypatch, already_protected):
+    import anyio
+    from src.antigravity_limits import GenerationBudget
+    from src.router import stream_passthrough
+
+    outcomes, budget_closes = [], []
+    async def record(*args):
+        outcomes.append(args)
+    monkeypatch.setattr(stream_passthrough, 'record_logical_request', record)
+    original_close = GenerationBudget.close
+    async def close_budget(self):
+        await anyio.sleep(0)
+        await original_close(self)
+        budget_closes.append(True)
+    monkeypatch.setattr(GenerationBudget, 'close', close_budget)
+
+    class Source:
+        closes = 0
+        def __aiter__(self):
+            return self
+        async def __anext__(self):
+            return b'data: {"candidates":[{"content":{"parts":[{"text":"body"}]},"finishReason":"STOP"}]}\n\n'
+        async def aclose(self):
+            await anyio.sleep(0)
+            self.closes += 1
+    source = Source()
+    response = await stream_passthrough.build_streaming_response_or_error(
+        source, model_name='synthetic-target', mode='antigravity', protected=True, protocol='gemini')
+    if already_protected:
+        response = await protect_streaming_response(response, 'gemini')
+    response = await adapt_public_response(response, route_context=ctx())
+    with anyio.CancelScope() as cancel_scope:
+        async def send(message):
+            cancel_scope.cancel()
+            await anyio.sleep(0)
+        async def receive():
+            return {'type': 'http.disconnect'}
+        await response({'type': 'http', 'asgi': {'spec_version': '2.4'}, 'method': 'POST',
+                        'path': '/', 'headers': []}, receive, send)
+    assert source.closes == 1
+    assert budget_closes == [True]
+    assert outcomes == []
+
+
+@pytest.mark.parametrize('protocol', ['gemini', 'openai', 'claude'])
+async def test_public_unicode_separators_stay_escaped_without_changing_payload(protocol):
+    separators = '\u0085\u2028\u2029'
+    if protocol == 'gemini':
+        payload = {'candidates': [{'content': {'parts': [
+            {'text': '正文' + separators, 'thoughtSignature': 'synthetic' + separators}]}}]}
+    elif protocol == 'openai':
+        payload = {'choices': [{'delta': {'content': '正文' + separators,
+                   'tool_calls': [{'function': {'arguments': separators}}]}}]}
+    else:
+        payload = {'type': 'content_block_delta', 'delta': {
+            'type': 'text_delta', 'text': '正文' + separators}, 'signature': 'synthetic' + separators}
+    async def source():
+        yield ('data: ' + json.dumps(payload, ensure_ascii=False) + '\n\n').encode()
+    response = await adapt_public_response(StreamingResponse(source()), route_context=ctx(protocol))
+    body = b''.join([event async for event in response.body_iterator])
+    assert not any(char.encode() in body for char in separators)
+    assert json.loads(body[6:]) == rewrite_success_identity(
+        payload, protocol=protocol, requested_model=ctx(protocol).requested_model)

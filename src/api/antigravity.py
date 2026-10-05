@@ -102,7 +102,7 @@ def _has_sse_data_event(chunk: Any) -> bool:
     text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
     return any(
         line.startswith("data:") and line[5:].strip() != "[DONE]"
-        for line in text.splitlines()
+        for line in text.split("\n")
     )
 
 
