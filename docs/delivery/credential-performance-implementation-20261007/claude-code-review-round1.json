@@ -1,0 +1,74 @@
+{
+  "stage": "code",
+  "model": "claude-opus-5-5",
+  "runner": "C:/Users/lywx2/.codex/review/hook.py",
+  "findings": [
+    {
+      "file": "src/storage/antigravity_panel.py",
+      "issue": "Lines 499-526 and 566-572: after the page read, the code compares a global per-instance epoch (`epoch != self._panel_epoch`), and the final `fresh=True` attempt raises PanelListChanged just like the cached attempts. Any indexed write to any credential bumps the epoch, including the frequent cooldown/error writes from quota_record_result and set_model_cooldown. So under live business traffic, all three attempts (cache, rebuild, fresh full scan) can fail, and the list returns 503 credential_list_changed (creds.py:546). The plan says that after one rebuild the request makes one uncached fresh read and returns it, and that page checks only cover the current page. The fresh attempt should not fail on unrelated epoch changes; it should check only the deletion and identity of displayed rows, or return the fresh result without the global epoch check."
+    },
+    {
+      "file": "src/antigravity_batch_runtime.py",
+      "issue": "Lines 153-158: once the request-wide budget is used up, every later window is still submitted with `deadline <= now`, so `submit()` (line 57-58) gives each unstarted item phase=`worker_queue`. The plan requires these items to be reported as error_code=quota_timeout/phase=request_budget/started=false, and no code path emits `request_budget`. Also, `submit()` is still called for windows that should not be admitted; the plan says unadmitted windows keep only the filename list and create no jobs."
+    },
+    {
+      "file": "src/antigravity_batch_runtime.py",
+      "issue": "Lines 162-174 and 66-89: when the window deadline expires, started jobs get one `asyncio.sleep(0)` and are then force-cancelled through `batch_pool.cancel()`. That reports phase = registry pending phase or the hard-coded \"preparation\". quota()'s own deadline handlers fire at the same instant but need several loop turns to return their result, so started items timing out in oauth/http_queue/google are often reported as phase=preparation. The plan requires started items to return started=true with their real phase. Use the `work_progress` phase of the running job, or wait for the job's own deadline result, instead of hard-coding \"preparation\"."
+    },
+    {
+      "file": "src/antigravity_directory_runtime.py",
+      "issue": "Lines 116-121 and 145-147: `begin_close()` cancels `ticket.task` for active HTTP calls, but the caller's `asyncio.wait` then returns the cancelled task, and `ticket.task.result()` raises CancelledError into a caller that was not itself cancelled. `_fetch_quota_info` only catches Exception (api/antigravity.py:1330), so the CancelledError propagates through quota()/ModelAccessService.check/fetch_available_models. As a result, single-item panel quota requests and catalog requests abort during shutdown instead of returning quota_shutdown, and fetch_available_models loses its \"return confirmed results\" path. Convert a cancelled operation into QuotaWorkError(\"quota_shutdown\" if self.closed else \"quota_cancelled\", \"google\") when the caller was not cancelled."
+    },
+    {
+      "file": "web.py",
+      "issue": "Lines 105-110: begin_directory_shutdown() runs only in the lifespan shutdown phase. Hypercorn reaches that phase after it stops accepting connections and waits for in-flight requests to drain. Until then, long panel batch/legacy requests, broker queues and registry work keep running without cancellation, and the shutdown deadline starts after the drain. The plan requires one absolute deadline starting from the close signal (stop admission, cancel queues/HTTP), with the total wait bounded by min(30, S-5). That is not met; the test `test_shutdown_budget_starts_at_signal_not_drain` only calls begin_directory_shutdown directly. Hook a shutdown trigger or signal into hypercorn's `serve(..., shutdown_trigger=...)` so that begin_directory_shutdown runs when the signal arrives."
+    },
+    {
+      "file": "src/antigravity_directory_runtime.py",
+      "issue": "Lines 268-298: the plan requires recording the count of pending (unconfirmed) settlements, without identities, immediately when shutdown starts. begin_directory_shutdown logs only the unknown S and records nothing about `len(atomic_registry.tasks)`. The count is logged only after drain() and web.py:133, so if the process is force-killed during the grace wait, no pending count is ever recorded."
+    },
+    {
+      "file": "src/storage/antigravity_panel.py",
+      "issue": "Lines 227-271: Antigravity `record_success` is rerouted from each backend's original implementation to `_panel_record_success` → `_quota_atomic`. (1) The original methods caught and logged all exceptions; the new path propagates DB/CAS errors (e.g. RuntimeError quota_state_contention after 32 Mongo CAS retries) to callers such as creds.py:2818, which awaits it directly in the panel test flow. (2) On Mongo, the atomic `$inc` of success_count/call_count becomes a read-modify-write CAS whose expected fields include the counters, so concurrent successes on one credential contend and can drop increments once retries run out. Keep the original backend write for counters and invalidate based on its returned or old error state, or at least wrap the call to preserve the original swallow-and-log behaviour."
+    }
+  ],
+  "source_sha256": {
+    "src/storage/antigravity_panel.py": "74ae1551b146f625c9bbc7539c416ee41abc8aa2b487a90181d1e96a9afe4444",
+    "src/storage/antigravity_import.py": "2e03ac1433d58eea3bd9f777c10515281909ca7c8fd5cf043deea085ed37872f",
+    "src/storage/antigravity_model_access.py": "88a2669991bc79ed2b2d561d3f86189f624eab76a20460c6638ff128e0210d38",
+    "src/storage/antigravity_quota.py": "89293a4ae042f50f451609220dd128d1c17337437ab909fe99ee7e318bc16fac",
+    "src/panel/creds.py": "9c97cf1a42ace732e1b59ea3956987f2a3492ebe624853052ecbfaf0ef87c392",
+    "src/panel/antigravity_manual.py": "e9e88a11f1b1ea60a1c5739230cd78c2dd9349b042b5de4783053c102cf2cd1b",
+    "src/antigravity_panel_budget.py": "6eec33b2cb79f11819aadb21bf48f7c7b99de31920e018be71c88cdf87ffa855",
+    "src/antigravity_panel_metrics.py": "a612b606913285bda768df4827ed9d9ef704b445b1c2b64c7a7a4674366701ae",
+    "src/antigravity_directory_runtime.py": "b6ab3cb820583fcac1db55525c80d393ca6de8a2db1b71daaa83cafe110cbdd0",
+    "src/antigravity_batch_runtime.py": "cc0d53f293ac7ad625db347878a7f6a2148b5e7248e79b45df8551bf50a4cd96",
+    "src/antigravity_access_runtime.py": "3f8cd9306989b443374997ce8dbf97b09d913c733872dfd4a9872a23304e777b",
+    "src/api/antigravity.py": "a637cbfb89ea94619ed687fc5831f5d90a294e7b9012f390d6e94996faf9eb1c",
+    "src/credential_manager.py": "e253a1c784b8ffb8e89b40d65a5cb11b09b260a346bd5a53ba3840b5128fd9bd",
+    "web.py": "e4a0638efd3999f6e293bc6da86fb96498938f571d8943654d97eeeb512f1739",
+    "front/common.js": "0ba241a7b0cb874ec8e5616369a3bccf026d6c9c34d0a68dd5ca1eef06605591",
+    "front/control_panel.html": "bb3e15c9e1a3b80239bf38f654cb545cca075b59772211cdc8acf8c49c778487",
+    "front/control_panel_mobile.html": "0ed2886592fcb5796971ccb6bead22e184e0fbcec4446b4fa1d58ad838206be3",
+    "test_antigravity_panel_api.py": "93f96ae9fe0df480c9e194b74cf1c2498a1e3a91778b819b53747b3b7e83c519",
+    "test_antigravity_panel_index.py": "288482ee5aa288c626443ce6de2d67341f40f81412e7ee9158dd96da4e779e77",
+    "test_antigravity_panel_index_backends.py": "b5db6b87b025a1f5d3fd297663cbaa3fbe842cc6a46378179f6f705d719167aa",
+    "test_antigravity_panel_metrics.py": "02ee3a4f712ab49a85c5043f8f18cb2ebb0532e4a4789b0af4a953c17d2b0655",
+    "test_antigravity_panel_runtime.py": "c5be9d357c3ee7a326cf870604daab3093c9b4d5494afa96b7a939353ca0637f",
+    "test_panel_performance.cjs": "712ae914446d4cd8a7de317579f258f8e14a4c13c7cbd0a26bfa56fad7870c7e",
+    "tests/fixtures/frontend_quota.py": "206f08066d66b74526819c1593110befa6bb3edf6be97dccde84a41bbcdfd42b",
+    "docs/delivery/credential-performance-implementation-20261007/benchmark-panel-index.jsonl": "0588c4f8577ae0b9a68a5af68ed710165906fbb0dbfed9f305b49906fc77da65",
+    "docs/delivery/credential-performance-implementation-20261007/benchmark_panel_index.py": "1d3486fd997760fc5df2b210fb3c44ea11eceb13580cc5c70c21b63f2fae773c",
+    "docs/delivery/credential-performance-implementation-20261007/README.md": "15cbbd79594978de75dfc69f1d7ebbc6b653e6aee1da744df92a628b25b3c09c",
+    "src/storage/sqlite_manager.py": "728bc050c4d1d865c219590731eff9019acb3aecfc83db7518e59f23ee5c9288",
+    "src/storage/psql_manager.py": "937eb4b4e69283dee60c9aadaf9a42fdf7ecbe1da14079591c608404f3e60f61",
+    "src/storage/mysql_manager.py": "75ee301f745afba54c19698eccd6cc2be243e955d8dde655e2e3fe00874f9b64",
+    "src/storage/mongodb_manager.py": "f9ff326b7269b690be23fd5f2549b8bf97bc7029f84afece0e3974e8368b0a7a",
+    "test_panel_state.cjs": "218ed49f35f8bd7b0e763e207430cff61fd37c4adf85a7f650850e4ccc27f09d",
+    "test_antigravity_group_filter_panel.py": "a5ab15b5c5620a6e233f54f127e8a680039532f7b01a193b676d9a1bacedb5ee",
+    "test_antigravity_model_access.py": "1f30f52174d127d00cb2bb3198c5d8e12d93f6856f9785e4b6916d4591cedcbd",
+    "test_opus_family_panel.py": "d0fcfbd9d02a0f27f052b6854df3201c15963aa3a759f74920d7d525afd4e7ee",
+    "test_antigravity_access_overview.py": "5a038086476f5afbec7413423415d336e416c0525472d500dbc5915f32d25c5b",
+    "docs/ANTIGRAVITY_MODEL_ACCESS.md": "092bba5810cdac2390861f09c242e6bba5c6e3fe2f65b4959342a2c0ebf94b7c"
+  }
+}

@@ -517,10 +517,20 @@ class CredentialManager:
             return True
 
     async def _refresh_token(
-        self, credential_data: Dict[str, Any], filename: str, mode: str = "geminicli"
+        self, credential_data: Dict[str, Any], filename: str, mode: str = "geminicli",
+        *, deadline=None, atomic=None
     ) -> Optional[Dict[str, Any]]:
         """刷新token并更新存储"""
+        if mode == "antigravity" and deadline is None:
+            from src.antigravity_directory_runtime import work_deadline, atomic_registry
+            deadline = work_deadline.get()
+            if deadline is not None and atomic is None:
+                atomic = atomic_registry.run
         await self._ensure_initialized()
+        async def fenced(operation):
+            if mode == "antigravity" and atomic is not None:
+                return await atomic(operation, deadline=deadline, phase="credential_cas")
+            return await operation()
         try:
             # 创建Credentials对象
             creds = Credentials.from_dict(credential_data)
@@ -530,18 +540,30 @@ class CredentialManager:
                 log.error(f"没有refresh_token，无法刷新: {_credential_label(filename, mode)} (mode={mode})")
                 # 自动禁用没有refresh_token的凭证
                 try:
-                    disabled_ok = (await self.quota_disable(filename, credential_data.get("_quota_generation"), credential_data.get("_quota_credential_version")) if mode == "antigravity" else await self.update_credential_state(filename, {"disabled": True}, mode=mode))
+                    disabled_ok = (await fenced(lambda: self.quota_disable(filename, credential_data.get("_quota_generation"), credential_data.get("_quota_credential_version"))) if mode == "antigravity" else await self.update_credential_state(filename, {"disabled": True}, mode=mode))
                     if disabled_ok:
                         log.warning(f"凭证已自动禁用（缺少refresh_token）: {_credential_label(filename, mode)}")
                     else:
                         log.info("缺少refresh_token的旧凭证未执行禁用：身份或内容已变化")
                 except Exception as e:
+                    if mode == "antigravity" and deadline is not None:
+                        from src.antigravity_directory_runtime import QuotaWorkError
+                        if isinstance(e, QuotaWorkError):
+                            raise
                     log.error(f"禁用凭证失败 {_credential_label(filename, mode)}: {type(e).__name__ if mode == "antigravity" else str(e)}")
                 return None
 
             # 刷新token
             log.debug(f"正在刷新token: {_credential_label(filename, mode)} (mode={mode})")
-            await creds.refresh()
+            if mode == "antigravity" and deadline is not None:
+                from src.antigravity_directory_runtime import remaining, QuotaWorkError
+                try:
+                    async with asyncio.timeout(min(15.0, remaining(deadline, "oauth"))):
+                        await creds.refresh()
+                except TimeoutError:
+                    raise QuotaWorkError("quota_timeout", "oauth") from None
+            else:
+                await creds.refresh()
 
             # 更新凭证数据
             if creds.access_token:
@@ -554,10 +576,10 @@ class CredentialManager:
 
             # 保存到存储
             if mode == "antigravity":
-                saved = await self._storage_adapter._backend.quota_refresh_credential(
+                saved = await fenced(lambda: self._storage_adapter._backend.quota_refresh_credential(
                     filename, credential_data.get("_quota_generation"), credential_data,
                     expected_version=credential_data.get("_quota_credential_version"),
-                )
+                ))
                 if not saved:
                     # A concurrent refresh may already have won the CAS. Reuse
                     # the authoritative fresh token without writing the old data.
@@ -576,6 +598,10 @@ class CredentialManager:
             return credential_data
 
         except Exception as e:
+            if mode == "antigravity" and deadline is not None:
+                from src.antigravity_directory_runtime import QuotaWorkError
+                if isinstance(e, QuotaWorkError):
+                    raise
             error_msg = str(e)
             log.error(f"Token刷新失败 {_credential_label(filename, mode)} (mode={mode}): {type(e).__name__ if mode == "antigravity" else error_msg}")
 
@@ -596,12 +622,16 @@ class CredentialManager:
                 # 禁用失效凭证
                 try:
                     # 直接禁用该凭证（随机选择机制会自动跳过它）
-                    disabled_ok = (await self.quota_disable(filename, credential_data.get("_quota_generation"), credential_data.get("_quota_credential_version")) if mode == "antigravity" else await self.update_credential_state(filename, {"disabled": True}, mode=mode))
+                    disabled_ok = (await fenced(lambda: self.quota_disable(filename, credential_data.get("_quota_generation"), credential_data.get("_quota_credential_version"))) if mode == "antigravity" else await self.update_credential_state(filename, {"disabled": True}, mode=mode))
                     if disabled_ok:
                         log.warning(f"永久失效凭证已禁用: {_credential_label(filename, mode)}")
                     else:
                         log.warning("永久失效凭证禁用失败，将由上层逻辑继续处理")
                 except Exception as e2:
+                    if mode == "antigravity" and deadline is not None:
+                        from src.antigravity_directory_runtime import QuotaWorkError
+                        if isinstance(e2, QuotaWorkError):
+                            raise
                     log.error(f"禁用永久失效凭证时出错 {_credential_label(filename, mode)}: {type(e2).__name__ if mode == "antigravity" else str(e2)}")
             else:
                 # 网络错误或其他临时性错误，不封禁凭证

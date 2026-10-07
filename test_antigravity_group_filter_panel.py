@@ -86,14 +86,14 @@ async def test_hundreds_combined_filter_before_pagination_and_read_only(store,mo
             conn.execute('INSERT INTO antigravity_credentials (filename,credential_data,rotation_order,tier,remark,error_codes,model_cooldowns,quota_group_states,model_access_state) VALUES (?,?,?,?,?,?,?,?,?)',
               (f'item-{i:04d}.json','{}',i,'pro','blue','[403]',json.dumps({G:NOW+100} if i%2==0 else {}),'{}',json.dumps(access)))
         before = conn.execute('SELECT * FROM antigravity_credentials').fetchall()
-    async def access_reader():
-        return {f'item-{i:04d}.json':{m:{'state':'supported' if i%3==0 else 'unavailable','checked_at':NOW} for m in MODELS} for i in range(603)}
-    monkeypatch.setattr(store,'model_access_list_public',access_reader)
-    async def family_reader():
-        return {f'item-{i:04d}.json': {'claude-opus-5-5': {
-            'state': 'supported' if i%3==0 else 'unavailable', 'checked_at': NOW},
-            'claude-opus-4-6': {'state': 'unknown'}} for i in range(603)}
-    monkeypatch.setattr(store,'model_access_list_family_public',family_reader)
+    # Persist production identity-fenced observations before asserting the list
+    # performs no writes; do not bypass the indexed permission reader with mocks.
+    for i in range(603):
+        name = f'item-{i:04d}.json'
+        snapshot = await store.manual_snapshot(name)
+        await store.model_access_observe(name, snapshot, MODELS if i % 3 == 0 else [], now=NOW)
+    with sqlite3.connect(store._db_path) as conn:
+        before = conn.execute('SELECT * FROM antigravity_credentials').fetchall()
     forbidden = AsyncMock(side_effect=AssertionError('list performed network or write'))
     for name in ('quota_sync','quota_snapshot','quota_admit','_quota_atomic','update_credential_state','record_request_result'):
         monkeypatch.setattr(store,name,forbidden,raising=False)

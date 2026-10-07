@@ -1196,58 +1196,86 @@ async def non_stream_request(
 # ==================== 模型和配额查询 ====================
 
 async def fetch_available_models() -> List[Dict[str, Any]]:
-    """Opus advertisement is the enabled credential pool's confirmed union."""
-    manager = await credential_manager._get_or_create()
-    backend = manager._storage_adapter._backend
-    ready = getattr(backend, "model_access_storage_ready", False)
-    other_ids = []
-    snapshot = None
-    cred_result = None
-    # Selection metadata refers to persisted content, before runtime-only fields
-    # such as enable_credit are attached. Never hash the decorated dictionary.
-    for _ in range(2 if ready else 1):
-        candidate = await manager.get_valid_credential(mode="antigravity")
-        if not candidate:
-            break
-        filename, data = candidate
-        if not ready:
-            cred_result = candidate
-            break
-        snapshot = await backend.model_access_snapshot(filename)
-        if (snapshot and data.get("_quota_generation")
-                and data.get("_quota_credential_version")
-                and snapshot.get("generation") == data["_quota_generation"]
-                and snapshot.get("version") == data["_quota_credential_version"]):
-            cred_result = candidate
-            break
-        snapshot = None
-    if cred_result:
-        filename, data = cred_result
-        result = await fetch_quota_info(data.get("access_token") or data.get("token"))
-        if result.get("success"):
-            other_ids = [name for name in result["models"] if not access_model(name)]
-        if snapshot:
-            try:
-                await backend.model_access_observe(filename, snapshot,
-                    result["models"] if result.get("success") else None,
-                    reason=None if result.get("success") else "directory_query_failed")
-            except Exception:
-                log.warning("[ANTIGRAVITY] catalog access observation unavailable")
-    opus_ids = await backend.model_access_union() if ready else set()
+    """Publish confirmed Opus evidence with one bounded business operation."""
+    from src.antigravity_directory_runtime import atomic_registry, work_deadline, work_class, QuotaWorkError
+    inherited = work_deadline.get()
+    deadline = min(inherited, time.monotonic() + 30) if inherited is not None else time.monotonic() + 30
+    deadline_token, class_token = work_deadline.set(deadline), work_class.set("business")
+    other_ids, opus_ids = [], set()
+    try:
+        async with asyncio.timeout_at(deadline):
+            manager = await credential_manager._get_or_create()
+            backend = manager._storage_adapter._backend
+            ready = getattr(backend, "model_access_storage_ready", False)
+            snapshot, cred_result = None, None
+            # Preserve the selector's persisted identity, before decorated runtime
+            # fields; a stale selection may be replaced at most once.
+            for _ in range(2 if ready else 1):
+                candidate = await manager.get_valid_credential(mode="antigravity")
+                if not candidate:
+                    break
+                filename, data = candidate
+                if not ready:
+                    cred_result = candidate
+                    break
+                snapshot = await backend.model_access_snapshot(filename)
+                if (snapshot and data.get("_quota_generation") and data.get("_quota_credential_version")
+                        and snapshot.get("generation") == data["_quota_generation"]
+                        and snapshot.get("version") == data["_quota_credential_version"]):
+                    cred_result = candidate
+                    break
+                snapshot = None
+            if cred_result:
+                filename, data = cred_result
+                result = await fetch_quota_info(data.get("access_token") or data.get("token"))
+                if result.get("success"):
+                    other_ids = [name for name in result["models"] if not access_model(name)]
+                if snapshot and not result.get("error_code"):
+                    try:
+                        await atomic_registry.run(lambda: backend.model_access_observe(filename, snapshot,
+                            result["models"] if result.get("success") else None,
+                            reason=None if result.get("success") else "directory_query_failed"),
+                            deadline=deadline, phase="model_access")
+                    except Exception:
+                        log.warning("[ANTIGRAVITY] catalog access observation unavailable")
+            opus_ids = await backend.model_access_union() if ready else set()
+    except (TimeoutError, QuotaWorkError):
+        # A state-write timeout cannot erase non-Opus models already fetched.
+        log.warning("[ANTIGRAVITY] catalog deadline reached; returning confirmed results")
+    finally:
+        work_deadline.reset(deadline_token)
+        work_class.reset(class_token)
     current_timestamp = int(datetime.now(timezone.utc).timestamp())
     return [model_to_dict(Model(id=model_id, object="model", created=current_timestamp, owned_by="google"))
             for model_id in select_public_model_ids([*other_ids, *opus_ids])]
 
 
-async def fetch_quota_info(access_token: str, *, origin="legacy", timeout=30.0, slot_held=False) -> Dict[str, Any]:
-    from src.antigravity_access_runtime import model_access_service
-    if slot_held:
-        return await _fetch_quota_info(access_token, origin=origin, timeout=timeout)
-    async with model_access_service._slots:
-        return await _fetch_quota_info(access_token, origin=origin, timeout=timeout)
+async def fetch_quota_info(access_token: str, *, origin="legacy", timeout=30.0,
+                           scheduling_class=None, deadline=None) -> Dict[str, Any]:
+    from src.antigravity_directory_runtime import work_deadline, work_progress
+    deadline = deadline if deadline is not None else work_deadline.get()
+    if deadline is None:
+        deadline = time.monotonic() + 30.0
+    progress = work_progress.get()
+    progress_token = None
+    if progress is None:
+        progress = {"phase": "preparation"}
+        progress_token = work_progress.set(progress)
+    try:
+        async with asyncio.timeout_at(deadline):
+            return await _fetch_quota_info(access_token, origin=origin, timeout=timeout,
+                                          scheduling_class=scheduling_class, deadline=deadline)
+    except TimeoutError:
+        return {"success": False, "status_code": 504, "upstream_status": None,
+                "response_source": "local", "error_code": "quota_timeout",
+                "error": "Quota query could not complete.", "phase": progress["phase"], "started": True}
+    finally:
+        if progress_token is not None:
+            work_progress.reset(progress_token)
 
 
-async def _fetch_quota_info(access_token: str, *, origin="legacy", timeout=30.0) -> Dict[str, Any]:
+async def _fetch_quota_info(access_token: str, *, origin="legacy", timeout=30.0,
+                            scheduling_class=None, deadline=None) -> Dict[str, Any]:
     """Read quota only; preserve missing values and the observation clock."""
     from datetime import timedelta
     from src.antigravity_quota import fraction, rolling_week, timestamp
@@ -1255,10 +1283,16 @@ async def _fetch_quota_info(access_token: str, *, origin="legacy", timeout=30.0)
     metadata = {"upstream_status": None, "response_source": "transport"} if origin == "manual" else {}
     try:
         antigravity_url = await get_antigravity_api_url()
-        sent_at = time.time()
-        response = await post_async(
-            url=f"{antigravity_url}/v1internal:fetchAvailableModels", json={}, headers=headers, timeout=timeout
-        )
+        sent_at = None
+        from src.antigravity_directory_runtime import directory_broker
+        async def send(http_timeout):
+            nonlocal sent_at
+            sent_at = time.time()
+            return await post_async(url=f"{antigravity_url}/v1internal:fetchAvailableModels",
+                                    json={}, headers=headers, timeout=http_timeout)
+        response = await directory_broker.run(
+            send,
+            kind=scheduling_class, deadline=deadline, timeout=min(30.0, timeout))
         observation = {"sentAt": sent_at, "receivedAt": time.time(), "serverDate": response.headers.get("date")}
         if origin == "manual":
             metadata.update(upstream_status=response.status_code, response_source="google")
@@ -1294,6 +1328,12 @@ async def _fetch_quota_info(access_token: str, *, origin="legacy", timeout=30.0)
             }
         return {"success": True, "models": result, "observation": observation, **metadata}
     except Exception as exc:
+        from src.antigravity_directory_runtime import QuotaWorkError
+        if isinstance(exc, QuotaWorkError):
+            return {"success": False, "error": "Quota query could not complete.",
+                    **metadata, "error_code": exc.code, "phase": exc.phase,
+                    "started": exc.started, "response_source": "local",
+                    "status_code": 504 if exc.code == "quota_timeout" else 503}
         log.warning(f"[ANTIGRAVITY QUOTA] query failed: {type(exc).__name__}")
         return {"success": False, "error": ("Invalid upstream response." if metadata.get("upstream_status") is not None
                 else "Service temporarily unavailable.") if origin == "manual" else "quota_query_failed", **metadata}

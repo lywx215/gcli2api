@@ -98,48 +98,57 @@ async def lifespan(app: FastAPI):
 
     cleanup_task = asyncio.create_task(_cleanup_minute_stats_loop())
     from src.antigravity_access_runtime import model_access_service
+    from src.antigravity_directory_runtime import start_directory_runtime
+    start_directory_runtime()
     await model_access_service.start()
 
     yield
 
-    # 清理资源
+    # One absolute grace budget starts at the close signal, not after workers
+    # or other services have already consumed an unbounded amount of time.
+    from src.antigravity_directory_runtime import begin_directory_shutdown, wait_directory_shutdown
+    deadline = begin_directory_shutdown()
     log.info("开始关闭 GCLI2API 主服务")
-
-    await model_access_service.close()
-
-    # 停止分钟统计清理任务
-    try:
-        cleanup_task.cancel()
-    except Exception:
-        pass
-
-    # 停止保活服务
-    try:
-        await keepalive_service.stop()
-    except Exception as e:
-        log.error(f"关闭保活服务时出错: {e}")
-
-    # 首先关闭所有异步任务
-    try:
-        from src.smart_429 import smart_429_service
-        await smart_429_service.close()
-    except Exception as e:
-        log.error(f"Error closing SMART 429 service: {e}")
-
-    try:
-        await shutdown_all_tasks(timeout=10.0)
-        log.info("所有异步任务已关闭")
-    except Exception as e:
-        log.error(f"关闭异步任务时出错: {e}")
-
-    # 关闭凭证管理器和存储后端；SQLite 会在 close 中最终刷写统计缓冲。
-    try:
+    cleanup_task.cancel()
+    from src.smart_429 import smart_429_service
+    stops = [
+        asyncio.create_task(model_access_service.close(deadline=deadline)),
+        asyncio.create_task(keepalive_service.stop()),
+        asyncio.create_task(smart_429_service.close()),
+        asyncio.create_task(shutdown_all_tasks(timeout=max(0, deadline - asyncio.get_running_loop().time()))),
+        asyncio.create_task(wait_directory_shutdown(deadline)),
+    ]
+    done, pending = await asyncio.wait(stops, timeout=max(0, deadline - asyncio.get_running_loop().time()))
+    for task in done:
+        if not task.cancelled() and task.exception() is not None:
+            log.warning("Service shutdown did not complete cleanly")
+    def observe_stop(task):
+        if not task.cancelled():
+            task.exception()
+    app.state.antigravity_shutdown_tasks = stops
+    for task in pending:
+        task.add_done_callback(observe_stop)
+        task.cancel()
+    from src.antigravity_directory_runtime import atomic_registry
+    if atomic_registry.tasks:
+        log.warning(f"[ANTIGRAVITY] shutdown settlement unknown: {len(atomic_registry.tasks)}; close is not rollback")
+    # Issue connection close even when the grace is exhausted, but do not await
+    # it without a bound. Closing a driver never proves a pending CAS rolled back.
+    async def close_connections():
         await credential_manager.close()
         from src.storage_adapter import close_storage_adapter
         await close_storage_adapter()
-        log.info("凭证管理器已关闭")
-    except Exception as e:
-        log.error(f"关闭凭证管理器时出错: {e}")
+    closing = asyncio.create_task(close_connections())
+    def observe_close(task):
+        if not task.cancelled():
+            task.exception()
+    closing.add_done_callback(observe_close)
+    app.state.antigravity_connection_close = closing
+    await asyncio.sleep(0)
+    if not closing.done():
+        await asyncio.wait([closing], timeout=max(0, deadline - asyncio.get_running_loop().time()))
+    if not closing.done():
+        log.warning("Connection close and outstanding atomic operations remain unconfirmed at shutdown deadline")
 
     log.info("GCLI2API 主服务已停止")
 
@@ -224,9 +233,8 @@ async def keepalive() -> Response:
 
 def main():
     """主启动函数"""
-    from hypercorn.asyncio import serve
+    from src.antigravity_server_lifecycle import serve_with_directory_shutdown, run_directory_workers, run_directory_main
     from hypercorn.config import Config
-    from hypercorn.run import run
 
     workers = int(os.environ.get("WORKERS", 1))
 
@@ -248,10 +256,10 @@ def main():
         config.errorlog = "-"
         config.loglevel = "INFO"
 
-        await serve(app, config)
+        await serve_with_directory_shutdown(app, config)
 
     if workers == 1:
-        asyncio.run(_run())
+        run_directory_main(_run())
     else:
         # 多 worker 模式下 hypercorn run 自行管理进程，先同步获取配置
         port = int(os.environ.get("PORT", 7861))
@@ -272,7 +280,7 @@ def main():
         config.workers = workers
         config.application_path = "web:app"
 
-        run(config)
+        run_directory_workers(config)
 
 
 if __name__ == "__main__":

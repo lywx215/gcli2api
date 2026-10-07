@@ -703,6 +703,7 @@ class PSQLManager(AntigravityQuotaMixin):
             if not set_clauses:
                 return True
 
+            panel_updates = self.panel_effective_updates(set_clauses, values) if mode == 'antigravity' else {}
             set_clauses.append(f"updated_at = EXTRACT(EPOCH FROM NOW())")
             values.append(filename)
 
@@ -713,7 +714,16 @@ class PSQLManager(AntigravityQuotaMixin):
             """
 
             async with self._pool.acquire() as conn:
-                result = await conn.execute(sql, *values)
+                panel_before = None
+                if panel_updates:
+                    async with conn.transaction():
+                        found = await conn.fetchrow(f"SELECT {', '.join(panel_updates)} FROM {table_name} WHERE filename = $1 FOR UPDATE", filename)
+                        panel_before = dict(found) if found is not None else None
+                        result = await conn.execute(sql, *values)
+                    if panel_before is not None:
+                        self.panel_index_committed(panel_before, panel_updates)
+                else:
+                    result = await conn.execute(sql, *values)
                 updated_count = int(result.split()[-1])
 
             return updated_count > 0

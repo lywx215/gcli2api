@@ -1,0 +1,12 @@
+{"accounts": 2000, "path": "legacy", "seconds": 0.4839, "selects": 5, "index_scan_rows": 0, "page_rows": 0, "retained_cache_rows": 0, "estimated_cache_bytes": 0, "returned": 25}
+{"accounts": 2000, "path": "new_cold", "seconds": 0.2015, "selects": 2, "index_scan_rows": 2000, "page_rows": 25, "retained_cache_rows": 2000, "estimated_cache_bytes": 4556073, "returned": 25}
+{"accounts": 2000, "path": "new_repeat", "seconds": 0.0199, "selects": 1, "index_scan_rows": 0, "page_rows": 25, "retained_cache_rows": 2000, "estimated_cache_bytes": 4556073, "returned": 25}
+{"accounts": 2000, "path": "memory_probe_no_request_deadline", "traced_current_bytes": 4551421, "traced_peak_bytes": 4689681, "shared_constant_ids_bound": 40, "index_scan_rows": 2000, "page_rows": 25}
+{"accounts": 10000, "path": "legacy", "seconds": 0.9851, "selects": 5, "index_scan_rows": 0, "page_rows": 0, "retained_cache_rows": 0, "estimated_cache_bytes": 0, "returned": 25}
+{"accounts": 10000, "path": "new_cold", "seconds": 1.6538, "selects": 2, "index_scan_rows": 10000, "page_rows": 25, "retained_cache_rows": 10000, "estimated_cache_bytes": 22780073, "returned": 25}
+{"accounts": 10000, "path": "new_repeat", "seconds": 0.0886, "selects": 1, "index_scan_rows": 0, "page_rows": 25, "retained_cache_rows": 10000, "estimated_cache_bytes": 22780073, "returned": 25}
+{"accounts": 10000, "path": "memory_probe_no_request_deadline", "traced_current_bytes": 183280, "traced_peak_bytes": 22627314, "shared_constant_ids_bound": 40, "index_scan_rows": 10000, "page_rows": 25}
+{"accounts": 50000, "path": "legacy", "seconds": 13.12, "selects": 5, "index_scan_rows": 0, "page_rows": 0, "retained_cache_rows": 0, "estimated_cache_bytes": 0, "returned": 25}
+{"accounts": 50000, "path": "new_cold", "seconds": 11.4837, "selects": 2, "index_scan_rows": 50000, "page_rows": 25, "retained_cache_rows": 0, "estimated_cache_bytes": 0, "returned": 25}
+{"accounts": 50000, "path": "new_repeat", "seconds": 11.6196, "selects": 2, "index_scan_rows": 50000, "page_rows": 25, "retained_cache_rows": 0, "estimated_cache_bytes": 0, "returned": 25}
+{"accounts": 50000, "path": "memory_probe_no_request_deadline", "traced_current_bytes": 182784, "traced_peak_bytes": 33235366, "shared_constant_ids_bound": 40, "index_scan_rows": 50000, "page_rows": 25}

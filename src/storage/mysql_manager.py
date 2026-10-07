@@ -1220,21 +1220,37 @@ class MySQLManager(AntigravityQuotaMixin):
             if not set_clauses:
                 return True
 
+            panel_updates = self.panel_effective_updates(set_clauses, values) if mode == 'antigravity' else {}
             set_clauses.append("updated_at = %s")
             values.append(time.time())
             values.extend([self._server_name, filename])
 
             async with self._pool.acquire() as conn:
-                async with conn.cursor() as cur:
-                    sql = f"""
-                        UPDATE {table_name}
-                        SET {', '.join(set_clauses)}
-                        WHERE server_name = %s AND filename = %s
-                    """
-                    await cur.execute(sql, values)
-                    updated_count = cur.rowcount
+                panel_before = None
+                try:
+                    if panel_updates:
+                        await conn.begin()
+                    async with conn.cursor() as cur:
+                        if panel_updates:
+                            await cur.execute(f"SELECT {', '.join(panel_updates)} FROM {table_name} WHERE server_name = %s AND filename = %s FOR UPDATE", (self._server_name, filename))
+                            found = await cur.fetchone()
+                            panel_before = dict(zip(panel_updates, found)) if found is not None else None
+                        sql = f"""
+                            UPDATE {table_name}
+                            SET {', '.join(set_clauses)}
+                            WHERE server_name = %s AND filename = %s
+                        """
+                        await cur.execute(sql, values)
+                        updated_count = cur.rowcount
 
-                await conn.commit()
+                    await conn.commit()
+
+                except BaseException:
+                    if panel_updates:
+                        await conn.rollback()
+                    raise
+                if updated_count > 0 and panel_before is not None:
+                    self.panel_index_committed(panel_before, panel_updates)
 
                 # Redis: 同步 disabled/tier/preview/cooldown 变更
                 if updated_count > 0 and self._redis_enabled:

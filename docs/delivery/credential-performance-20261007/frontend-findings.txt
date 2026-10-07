@@ -1,0 +1,19 @@
+Source HEAD: f1ddd67; front/common.js includes the pre-existing uncommitted cross-page deselection fix.
+No repository files changed; only this temporary evidence directory was written.
+The reproduction reads front/common.js and runs selected functions in Node VM.
+All fetch calls and UI DOM objects are synthetic; no network/credentials/production data used.
+
+Batch quota duplicate clicks:
+front/common.js:2610-2675 contains no pending/busy flag or disable/enable writes.
+front/common.js:661 enables/disables batch buttons solely by selectedCount === 0.
+front/control_panel.html:2280-2281 and front/control_panel_mobile.html:1927-1928 directly call the batch handler.
+Two accepted confirmations while the first call remains pending produce two concurrent POSTs with identical filenames.
+Batch handler / its single final response approach originated e9988eff, 2026-05-18.
+Batch message test has the same pattern, front/common.js:2543-2599, d06cd81b, 2026-05-18.
+
+No ongoing progress UI:
+front/common.js:2625 displays only the start toast, then awaits the full POST JSON (2628-2633), then the entire list refresh (2662), then emits final toast/modal (2670-2671).
+showStatus automatically fades after 3000ms and clears after another 300ms (front/common.js:1012-1017), from 411f8677, 2025-12-20.
+There is no processed-count, elapsed-time, persistent busy indicator, or request-timeout UI in this batch path.
+Thus a slow batch becomes visually idle after about 3.3 seconds and remains clickable. This is an existing UX weakness amplified by slower operations; actual user duplicate clicks were not observed.
+These mechanisms are absent from recent commits 170d989/0ff4b2f/10d9313/0c589f4/d9b65ba; recent changes did not remove a progress protocol.

@@ -1,0 +1,8 @@
+2026-10-07，用户确认截图来自 p08。
+zeabur-ops 只读对比：p08/gcli2api，绑定 GitHub d1004-1。
+GitHub HEAD = d9b65ba4d5f6e133f7323d51affe2ccda3b047b8。
+Zeabur RUNNING 部署 SHA = d9b65ba4d5f6e133f7323d51affe2ccda3b047b8。
+本地 master HEAD = f1ddd675bdcd7d8a1a2e2534a0618ca3dbb9adba，包含未推送提交，另有原先3个未提交取消选择修复文件。
+只读排查返回 RUNNING，健康检查未配置；所取输出未出现 timeout/WARN/ERROR 或存储后端名称。
+该有限日志样本不能证明接口速度正常，未获取接口阶段耗时、数据库类型、账户总量、CPU或连接池等待。
+未访问生产凭证或模型/额度API；未部署、重启、提交或推送。

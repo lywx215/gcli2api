@@ -4,6 +4,13 @@ Legacy and management callers opt out by default in creds.py. No credentials or
 raw upstream errors may leave this module in responses or diagnostic messages.
 """
 import asyncio
+import time
+from contextlib import nullcontext
+from src.antigravity_panel_metrics import trace_phase
+from src.antigravity_panel_budget import panel_work_budget, PanelBudgetConfigError
+from src.antigravity_directory_runtime import (
+    atomic_registry, work_deadline, work_class, work_progress, mark_phase, remaining, QuotaWorkError, SettlementPending,
+)
 from src.antigravity_model_access import access_model
 from src.storage.antigravity_model_access import row_state as access_row_state
 
@@ -50,18 +57,48 @@ def local_result(exc, events, phase="preparation"):
             "state_update": {}}
 
 
-async def prepare(filename, events):
+async def _bounded(operation, deadline, phase, limit=None):
+    mark_phase(phase)
+    seconds = remaining(deadline, phase)
+    seconds = min(seconds, limit) if seconds is not None and limit is not None else (limit if seconds is None else seconds)
+    try:
+        with trace_phase("quota_oauth") if phase == "oauth" else nullcontext():
+            async with asyncio.timeout(seconds):
+                return await operation()
+    except TimeoutError:
+        if phase == "http_queue" and work_progress.get() is not None:
+            phase = work_progress.get().get("phase", phase)
+        raise QuotaWorkError("quota_timeout", phase) from None
+
+
+async def _atomic(operation, deadline, phase):
+    mark_phase(phase)
+    if deadline is None:
+        return await operation()
+    with trace_phase("quota_cas"):
+        return await atomic_registry.run(operation, deadline=deadline, phase=phase)
+
+
+def quota_error(filename, code, phase, *, started=False, pending=False):
+    return {"filename": filename, "success": False, "status_code": 504 if code == "quota_timeout" else 503,
+            "upstream_status": None, "response_source": "local", "error_code": code,
+            "phase": phase, "started": started, "error": "Quota query could not complete.",
+            "state_update": {phase: {"status": "pending", "reason": "settlement_unconfirmed"}} if pending else {},
+            "cleared": [], "added": []}
+
+
+async def prepare(filename, events, *, deadline=None):
     from . import creds as p
     if not filename.endswith(".json"):
         raise HTTPException(400)
-    storage = await p.get_storage_adapter()
-    snapshot = await storage._backend.manual_snapshot(filename)
+    storage = await _bounded(p.get_storage_adapter, deadline, "preparation")
+    snapshot = await _bounded(lambda: storage._backend.manual_snapshot(filename), deadline, "preparation")
     if not snapshot or not snapshot["credential_data"]:
         raise HTTPException(404)
     data = snapshot["credential_data"]
     with manual_google_phase("oauth", events):
         credentials = p.Credentials.from_dict(data)
-        refreshed = await credentials.refresh_if_needed()
+        refreshed = await _bounded(credentials.refresh_if_needed, deadline, "oauth", 15 if deadline is not None else None)
     if refreshed:
         # Preserve imported metadata so concurrent refreshes retain the same
         # stable identity. Keep the legacy token alias in sync as well.
@@ -69,12 +106,13 @@ async def prepare(filename, events):
         if "token" in data:
             data["token"] = data["access_token"]
         if snapshot.get("generation"):
-            saved = await storage._backend.quota_refresh_credential(
-                filename, snapshot["generation"], data, expected_version=snapshot["version"])
+            saved = await _atomic(lambda: storage._backend.quota_refresh_credential(
+                filename, snapshot["generation"], data, expected_version=snapshot["version"]), deadline, "credential_cas")
             if saved:
                 snapshot["version"] = credential_version(data)
             else:
-                current = await storage._backend.manual_current_credential(filename, snapshot["generation"])
+                current = await _bounded(lambda: storage._backend.manual_current_credential(
+                    filename, snapshot["generation"]), deadline, "preparation")
                 with manual_google_phase("oauth", events):
                     if (not current or not same_refresh_identity(snapshot["credential_data"], current["credential_data"])
                             or p.Credentials.from_dict(current["credential_data"]).is_expired()):
@@ -85,10 +123,10 @@ async def prepare(filename, events):
         # for this request; never persist it without an identity fence.
     if not (data.get("access_token") or data.get("token")):
         raise HTTPException(400)
-    access_snapshot = await storage._backend.model_access_snapshot(filename)
-    snapshot["access"] = (access_snapshot["access"] if access_snapshot and
-        access_snapshot["generation"] == snapshot["generation"] and access_snapshot["version"] == snapshot["version"]
-        else access_row_state(snapshot["raw"]))
+    # The access/policy baseline belongs to the original snapshot. Only the
+    # credential version advances after a successful refresh CAS.
+    if "access" not in snapshot:
+        snapshot["access"] = access_row_state(snapshot["raw"])
     return storage, snapshot, data
 
 
@@ -204,53 +242,96 @@ async def test(filename, model=None):
     return JSONResponse(status_code=status, content=result)
 
 
-async def quota(filename, *, sync=False):
+async def quota(filename, *, sync=False, scheduling_class="interactive", deadline=None,
+                _on_started=None, _on_result=None, _progress=None):
     from . import creds as p
-    events = []
+    events, snapshot, result, started = [], None, None, False
     try:
-        storage, snapshot, data = await prepare(filename, events)
-        result = await p.fetch_quota_info(data.get("access_token") or data.get("token"), origin="manual")
+        seconds = panel_work_budget()
+    except PanelBudgetConfigError:
+        return quota_error(filename, "quota_budget_configuration", "config")
+    deadline = min(deadline, time.monotonic() + seconds) if deadline is not None else time.monotonic() + seconds
+    if deadline <= time.monotonic():
+        return quota_error(filename, "quota_timeout", "worker_queue")
+    deadline_token = work_deadline.set(deadline)
+    class_token = work_class.set(scheduling_class)
+    progress_token = work_progress.set(_progress if _progress is not None else {"phase": "preparation"})
+    try:
+        mark_phase("preparation")
+        started = True
+        if _on_started is not None:
+            _on_started()
+        storage, snapshot, data = await prepare(filename, events, deadline=deadline)
+        result = await _bounded(lambda: p.fetch_quota_info(
+            data.get("access_token") or data.get("token"), origin="manual"), deadline, "http_queue")
+        if result.get("error_code"):
+            result.update(filename=filename, started=True, phases=events)
+            result.setdefault("state_update", {})
+            return result
+        result.update(filename=filename, phase="quota", phases=events, started=True)
+        result["status_code"] = result.get("upstream_status") or 502
+        if _on_result is not None:
+            _on_result(result)
+        if getattr(storage._backend, "model_access_storage_ready", False):
+            try:
+                projection = await _atomic(lambda: storage._backend.model_access_observe_with_projection(
+                    filename, snapshot, result.get("models") if result.get("success") else None,
+                    reason=None if result.get("success") else "directory_query_failed"), deadline, "model_access")
+                result["model_access_state"] = projection["public"]
+                result["model_access_families"] = projection["families"]
+                result["model_access_update"] = {"status": "applied" if projection["applied"] else "skipped"}
+            except QuotaWorkError:
+                raise
+            except Exception:
+                result["model_access_update"] = failed_update()
+        if not sync:
+            result["_manual_snapshot"] = snapshot
+            return result
+        result["state_update"] = {}
+        if result.get("success"):
+            try:
+                fallback = await _bounded(p.get_quota_fallback_cooldown_minutes, deadline, "quota_sync")
+                applied = await _atomic(lambda: storage._backend.manual_sync_quota(
+                    filename, result.get("models", {}), result.get("observation", {}), snapshot,
+                    fallback_seconds=60 * fallback), deadline, "quota_sync")
+                if applied is None:
+                    result["state_update"] = {"quota": {"status": "skipped", "reason": "credential_changed"}}
+                else:
+                    result.update(applied)
+            except QuotaWorkError:
+                raise
+            except Exception:
+                result["state_update"] = {"quota": failed_update()}
+        if result.get("model_access_update"):
+            result.setdefault("state_update", {})["model_access"] = result["model_access_update"]
+        result.setdefault("cleared", [])
+        result.setdefault("added", [])
+        return result
+    except QuotaWorkError as exc:
+        pending = isinstance(exc, SettlementPending)
+        if result is not None and result.get("upstream_status") is not None:
+            result.update(error_code=exc.code, phase=exc.phase, started=started)
+            update = {"status": "pending" if pending else "skipped",
+                      "reason": "settlement_unconfirmed" if pending else exc.code}
+            result.setdefault("state_update", {})[exc.phase] = update
+            if exc.phase == "model_access":
+                result["model_access_update"] = update
+            result.setdefault("cleared", [])
+            result.setdefault("added", [])
+            return result
+        return {**quota_error(filename, exc.code, exc.phase, started=started,
+                              pending=pending), "phases": events}
     except Exception as exc:
-        result = {**local_result(exc, events), "filename": filename}
-        try:
-            storage = await p.get_storage_adapter()
-            result["model_access_state"] = await storage._backend.model_access_public(filename)
-            result["model_access_families"] = await storage._backend.model_access_family_public(filename)
-        except Exception:
-            pass
-        return result
-    result.update(filename=filename, phase="quota", phases=events)
-    result["status_code"] = result.get("upstream_status") or 502
-    if getattr(storage._backend, "model_access_storage_ready", False):
-        try:
-            access_applied = await storage._backend.model_access_observe(filename, snapshot,
-                result.get("models") if result.get("success") else None,
-                reason=None if result.get("success") else "directory_query_failed")
-            result["model_access_state"] = await storage._backend.model_access_public(filename)
-            result["model_access_families"] = await storage._backend.model_access_family_public(filename)
-            result["model_access_update"] = {"status": "applied" if access_applied else "skipped"}
-        except Exception:
-            result["model_access_update"] = failed_update()
-    if not sync:
-        result["_manual_snapshot"] = snapshot
-        return result
-    result["state_update"] = {}
-    if result.get("success"):
-        try:
-            applied = await storage._backend.manual_sync_quota(
-                filename, result.get("models", {}), result.get("observation", {}), snapshot,
-                fallback_seconds=60 * await p.get_quota_fallback_cooldown_minutes())
-            if applied is None:
-                result["state_update"] = {"quota": failed_update("credential_changed")}
-            else:
-                result.update(applied)
-        except Exception:
-            result["state_update"] = {"quota": failed_update()}
-    if result.get("model_access_update"):
-        result.setdefault("state_update", {})["model_access"] = result["model_access_update"]
-    result.setdefault("cleared", [])
-    result.setdefault("added", [])
-    return result
+        return {**local_result(exc, events), "filename": filename, "started": True}
+    finally:
+        work_deadline.reset(deadline_token)
+        work_class.reset(class_token)
+        work_progress.reset(progress_token)
+
+
+async def batch_quota(filenames, request=None):
+    from src.antigravity_batch_runtime import batch_quota as execute
+    return await execute(filenames, request=request)
 
 
 async def project(filename):

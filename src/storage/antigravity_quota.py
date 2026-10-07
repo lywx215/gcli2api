@@ -49,7 +49,10 @@ from src.antigravity_model_access import access_model, check_due as access_check
 from src.storage.antigravity_import import AntigravityImportMixin
 
 
-class AntigravityQuotaMixin(AntigravityModelAccessMixin, AntigravityImportMixin):
+from src.storage.antigravity_panel import AntigravityPanelMixin
+
+
+class AntigravityQuotaMixin(AntigravityPanelMixin, AntigravityModelAccessMixin, AntigravityImportMixin):
     async def _quota_rows(self, filename=None):
         """Read-only selection/control snapshot; final admission is separate."""
         filename = os.path.basename(filename) if filename else None
@@ -97,15 +100,16 @@ class AntigravityQuotaMixin(AntigravityModelAccessMixin, AntigravityImportMixin)
         except InvalidQuotaState:
             return {"quota_state_invalid": True}
 
-    async def _quota_atomic(self, filename, operation, *, validate=True, cas_fields=None):
+    async def _quota_atomic(self, filename, operation, *, validate=True, cas_fields=None, ensure_generation=True):
         """operation is synchronous; locks are never held across upstream I/O."""
         filename = os.path.basename(filename)
         fields = ("model_access_state", "quota_group_states", "quota_credential_generation", "model_cooldowns", "cycle_stats", "last_cycle_stats",
-                  "success_count", "failure_count", "call_count", "last_success", "error_codes", "error_messages", "credential_data", "disabled", "user_email", "tier")
+                  "success_count", "failure_count", "call_count", "last_success", "error_codes", "error_messages", "credential_data", "disabled", "user_email", "tier", "updated_at")
 
         def apply(raw):
             row = _decode(raw) if validate else dict(raw)
-            row["quota_credential_generation"] = row.get("quota_credential_generation") or uuid.uuid4().hex
+            if ensure_generation:
+                row["quota_credential_generation"] = row.get("quota_credential_generation") or uuid.uuid4().hex
             result = operation(row)
             def changed(key):
                 previous = raw.get(key)
@@ -194,6 +198,7 @@ class AntigravityQuotaMixin(AntigravityModelAccessMixin, AntigravityImportMixin)
         raise RuntimeError("unsupported_quota_storage")
 
     async def _quota_cache_changed(self, filename, raw, updates):
+        self.panel_index_committed(raw, updates)
         if not getattr(self, "_redis_enabled", False) or not {"quota_group_states", "model_cooldowns"}.intersection(updates):
             return
         try:
@@ -389,7 +394,7 @@ class AntigravityQuotaMixin(AntigravityModelAccessMixin, AntigravityImportMixin)
             if not rows:
                 return None
         raw = copy.deepcopy(rows[0])
-        return {"raw": raw, "credential_data": _object(raw.get("credential_data")),
+        return {"raw": raw, "access": access_row_state(raw), "credential_data": _object(raw.get("credential_data")),
                 "generation": raw.get("quota_credential_generation") if reliable else None,
                 "version": credential_version(raw.get("credential_data"))}
 

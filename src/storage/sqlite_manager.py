@@ -1283,12 +1283,19 @@ class SQLiteManager(AntigravityQuotaMixin):
                 log.info(f"[DB] 没有需要更新的状态字段")
                 return True
 
+            panel_updates = self.panel_effective_updates(set_clauses, values) if mode == 'antigravity' else {}
             set_clauses.append("updated_at = unixepoch()")
             values.append(filename)
 
             log.debug(f"[DB] SQL参数: set_clauses={set_clauses}, values={values}")
 
             async with aiosqlite.connect(self._db_path) as db:
+                panel_before = None
+                if panel_updates:
+                    await db.execute("BEGIN IMMEDIATE")
+                    async with db.execute(f"SELECT {', '.join(panel_updates)} FROM {table_name} WHERE filename = ?", (filename,)) as previous:
+                        found = await previous.fetchone()
+                        panel_before = dict(zip(panel_updates, found)) if found is not None else None
                 # 精确匹配更新
                 sql_exact = f"""
                     UPDATE {table_name}
@@ -1305,6 +1312,8 @@ class SQLiteManager(AntigravityQuotaMixin):
                 # 提交前检查
                 log.debug(f"[DB] 准备commit，总更新行数={updated_count}")
                 await db.commit()
+                if updated_count > 0 and panel_before is not None:
+                    self.panel_index_committed(panel_before, panel_updates)
                 log.debug(f"[DB] commit完成")
 
                 success = updated_count > 0

@@ -1,0 +1,19 @@
+{
+  "results": [
+    {
+      "case": "prior_outer_5",
+      "n": 20,
+      "fake_io_s": 0.1,
+      "elapsed_s": 0.436,
+      "peak_io": 5
+    },
+    {
+      "case": "current_shared_2",
+      "n": 20,
+      "fake_io_s": 0.1,
+      "elapsed_s": 1.079,
+      "peak_io": 2
+    }
+  ],
+  "elapsed_ratio": 2.475
+}

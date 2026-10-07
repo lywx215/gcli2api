@@ -95,17 +95,18 @@ async def test_batch_family_counts_use_success_and_preserved_failure_evidence(mo
         # An old payload must not manufacture family support from native entries.
         'legacy.json': {'success': False, 'model_access_state': {'claude-opus-5-5-high': supported()}},
     }
-    async def quota(filename, *, sync):
+    async def quota(filename, *, sync, **kwargs):
         assert sync is True
         return {'filename': filename, **results[filename]}
     monkeypatch.setattr(antigravity_manual, 'quota', quota)
     response = await creds.batch_refresh_cooldown(CredFileBatchTestRequest(filenames=list(results)), mode='antigravity', _token='synthetic')
     data = json.loads(response.body)
     assert data['success_count'] == 1 and data['failure_count'] == 2
-    assert data['model_access_summary']['total'] == 3
+    assert data['model_access_summary']['total'] == 2
+    # Missing family evidence is excluded; the legacy result still counts as a file failure.
     assert data['model_access_summary']['family_counts'] == {
-        F55: {'supported': 1, 'unavailable': 0, 'unknown': 2},
-        F46: {'supported': 1, 'unavailable': 1, 'unknown': 1},
+        F55: {'supported': 1, 'unavailable': 0, 'unknown': 1},
+        F46: {'supported': 1, 'unavailable': 1, 'unknown': 0},
     }
 
 

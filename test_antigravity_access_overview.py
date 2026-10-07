@@ -176,7 +176,7 @@ const elements = new Map();
 global.document = {getElementById(id) {
     if (!elements.has(id)) elements.set(id, {style: {}, innerHTML: '', value: 'all', textContent: '', options: [{value:'all'}, {value:'gemini_restricted'}]});
     return elements.get(id);
-}, querySelectorAll: () => [], createElement: () => ({innerHTML: '', querySelectorAll: () => []})};
+}, querySelectorAll: () => [], createElement: () => ({dataset: {}, innerHTML: '', querySelectorAll: () => []})};
 global.window = {location: {href: 'http://localhost/control_panel'}};
 global.getAuthHeaders = () => ({});
 global.escapeHtml = global.escapeHtmlAttribute = String;

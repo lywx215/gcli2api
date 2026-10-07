@@ -1032,11 +1032,18 @@ class MongoDBManager(AntigravityQuotaMixin):
 
             valid_updates["updated_at"] = time.time()
 
-            # 精确匹配更新
-            result = await collection.update_one(
-                {"filename": filename}, {"$set": valid_updates}
-            )
-            updated_count = result.modified_count + result.matched_count
+            panel_updates = self.panel_effective_updates([f"{key} = ?" for key in valid_updates], list(valid_updates.values())) if mode == 'antigravity' else {}
+            if panel_updates:
+                from pymongo import ReturnDocument
+                panel_before = await collection.find_one_and_update(
+                    {"filename": filename}, {"$set": valid_updates},
+                    projection={key: 1 for key in panel_updates}, return_document=ReturnDocument.BEFORE)
+                updated_count = int(panel_before is not None)
+                if panel_before is not None:
+                    self.panel_index_committed(panel_before, panel_updates)
+            else:
+                result = await collection.update_one({"filename": filename}, {"$set": valid_updates})
+                updated_count = result.modified_count + result.matched_count
 
             # 如果 disabled 发生变化，同步 Redis 池成员关系
             if self._redis_enabled and "disabled" in valid_updates:
@@ -1942,18 +1949,24 @@ class MongoDBManager(AntigravityQuotaMixin):
             collection = self._db[collection_name]
             now = time.time()
 
-            await collection.update_one(
-                {"filename": filename},
-                {
-                    "$inc": {"success_count": 1, "call_count": 1},
-                    "$set": {
-                        "last_success": now,
-                        "error_codes": [],
-                        "error_messages": {},
-                        "updated_at": now,
-                    }
-                }
-            )
+            updates = {
+                "$inc": {"success_count": 1, "call_count": 1},
+                "$set": {"last_success": now, "error_codes": [],
+                         "error_messages": {}, "updated_at": now},
+            }
+            if mode == "antigravity":
+                # Preserve Mongo's atomic counters under contention. Returning the
+                # pre-image gives exact error-change notification without a read/CAS loop.
+                from pymongo import ReturnDocument
+                previous = await collection.find_one_and_update(
+                    {"filename": filename}, updates,
+                    projection={"error_codes": 1, "error_messages": 1},
+                    return_document=ReturnDocument.BEFORE,
+                )
+                if previous is not None:
+                    self.panel_index_committed(previous, {"error_codes": [], "error_messages": {}})
+            else:
+                await collection.update_one({"filename": filename}, updates)
 
             # 条件删除模型冷却：只有该键存在时才写入
             if model_name and mode != "antigravity":
@@ -1967,7 +1980,10 @@ class MongoDBManager(AntigravityQuotaMixin):
                     await self._redis.delete(self._rk_cd(mode, filename, escaped))
 
         except Exception as e:
-            log.error(f"Error recording success for {filename}: {e}")
+            if mode == "antigravity":
+                log.error(f"Antigravity success accounting failed (mongo, {type(e).__name__})")
+            else:
+                log.error(f"Error recording success for {filename}: {e}")
 
     async def record_failure(
         self,

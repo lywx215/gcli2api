@@ -235,6 +235,13 @@ function createCredsManager(type) {
         filterRevision: 0,
         selectionTask: 0,
         refreshTask: 0,
+        refreshFreshness: 0,
+        refreshFlight: null,
+        displayedListScope: null,
+        credentialDetailGenerations: new Map(),
+        quotaBatchTask: 0,
+        quotaBatch: null,
+        quotaBatchFollowupTimer: null,
         failedCapabilities: new Set(),
         advertisedCapabilities: [],
         statsData: {
@@ -413,22 +420,78 @@ function createCredsManager(type) {
             }
         },
 
-        // 刷新凭证列表
-        async refresh({recoveryRemaining = 1} = {}) {
+        listScopeSignature() {
+            return JSON.stringify([this.sessionEpoch(), this.filterSignature(), this.currentPage, this.pageSize]);
+        },
+
+        invalidateCredentialDetails(filenames = null) {
+            if (this.type !== 'antigravity') return;
+            const list = document.getElementById(this.getElementId('CredsList'));
+            const cards = Array.from(list?.children || []);
+            const names = new Set(filenames === null
+                ? [...Object.keys(this.data), ...cards.map(card => card.dataset?.filename).filter(Boolean)]
+                : filenames);
+            for (const filename of names) {
+                this.credentialDetailGenerations.set(filename, (this.credentialDetailGenerations.get(filename) || 0) + 1);
+                delete this.data[filename];
+                delete this.filteredData[filename];
+            }
+            // Detach immediately, including when the ensuing status GET fails. Old
+            // quota/content callbacks hold these objects and must not revive them.
+            for (const card of cards) if (names.has(card.dataset?.filename)) card.remove();
+        },
+
+        // Antigravity list requests share only the same query and read generation.
+        // Mutation completions must never join a read started before the write.
+        refresh(options = {}) {
+            if (this.type !== 'antigravity') return this.fetchStatus(options);
+            if (options.afterMutation) this.refreshFreshness++;
+            if (Object.prototype.hasOwnProperty.call(options, 'replacedFilenames')) {
+                this.invalidateCredentialDetails(options.replacedFilenames);
+            }
+            const scope = this.listScopeSignature();
+            if (this.displayedListScope !== scope) {
+                const list = document.getElementById(this.getElementId('CredsList'));
+                if (list) list.innerHTML = '';
+                this.data = {};
+                this.filteredData = {};
+                this.displayedListScope = null;
+                const pagination = document.getElementById(this.getElementId('PaginationContainer'));
+                if (pagination) pagination.style.display = 'none';
+                this.updateBatchControls();
+            }
             const epoch = this.sessionEpoch(), revision = this.filterRevision;
-            const task = ++this.refreshTask;
-            const current = () => epoch === this.sessionEpoch() && revision === this.filterRevision && task === this.refreshTask;
             const requestUrl = this.getStatusUrl((this.currentPage - 1) * this.pageSize, this.pageSize);
+            const key = JSON.stringify([epoch, revision, this.refreshFreshness, requestUrl]);
+            if (this.refreshFlight?.key === key) return this.refreshFlight.promise;
+            this.refreshFlight?.controller.abort();
+            const flight = {key, scope, epoch, revision, requestUrl, task: ++this.refreshTask,
+                controller: new AbortController(), silent: options.silent === true};
+            this.refreshFlight = flight;
+            flight.promise = this.fetchStatus({...options, flight}).finally(() => {
+                if (this.refreshFlight === flight) this.refreshFlight = null;
+            });
+            return flight.promise;
+        },
+
+        // 刷新凭证列表；CLI keeps its existing request behavior.
+        async fetchStatus({recoveryRemaining = 1, silent = false, flight = null} = {}) {
+            const epoch = flight ? flight.epoch : this.sessionEpoch();
+            const revision = flight ? flight.revision : this.filterRevision;
+            const task = flight ? flight.task : ++this.refreshTask;
+            const current = () => epoch === this.sessionEpoch() && revision === this.filterRevision && task === this.refreshTask &&
+                (!flight || (this.refreshFlight === flight && !flight.controller.signal.aborted && flight.scope === this.listScopeSignature()));
+            const requestUrl = flight ? flight.requestUrl : this.getStatusUrl((this.currentPage - 1) * this.pageSize, this.pageSize);
             const loading = document.getElementById(this.getElementId('CredsLoading'));
             const list = document.getElementById(this.getElementId('CredsList'));
 
             try {
-                loading.style.display = 'block';
-                list.innerHTML = '';
+                if (!silent) loading.style.display = 'block';
+                if (this.type !== 'antigravity') list.innerHTML = '';
 
                 const response = await fetch(
                     requestUrl,
-                    { headers: getAuthHeaders() }
+                    { headers: getAuthHeaders(), ...(flight ? {signal: flight.controller.signal} : {}) }
                 );
 
                 const data = await response.json();
@@ -437,8 +500,13 @@ function createCredsManager(type) {
                 const downgrade = this.downgradeCapabilities(response, data, requestUrl);
                 const changed = response.ok && this.applyCapabilities(data.panel_capabilities);
                 if (downgrade || changed) {
-                    if (recoveryRemaining > 0) return await this.refresh({recoveryRemaining: 0});
-                    showStatus('筛选能力已变化，请重新刷新列表。', 'info');
+                    if (recoveryRemaining > 0) {
+                        // Release this slot before recovery; otherwise an unchanged URL
+                        // could join its own promise and never settle.
+                        if (this.refreshFlight === flight) this.refreshFlight = null;
+                        return await this.refresh({recoveryRemaining: 0, silent});
+                    }
+                    if (!silent) showStatus('筛选能力已变化，请重新刷新列表。', 'info');
                     return false;
                 }
                 if (response.ok) {
@@ -504,13 +572,13 @@ function createCredsManager(type) {
                     if (this.currentStatusFilter !== 'all') {
                         msg += ` (筛选: ${this.currentStatusFilter === 'enabled' ? '仅启用' : (this.currentStatusFilter === 'permanent_disabled' ? '永久禁用' : '仅禁用')})`;
                     }
-                    showStatus(msg, 'success');
+                    if (!silent) showStatus(msg, 'success');
                     return true;
                 } else {
-                    showStatus(`加载失败: ${data.detail || data.error || '未知错误'}`, 'error');
+                    if (!silent) showStatus(`加载失败: ${data.detail || data.error || '未知错误'}`, 'error');
                 }
             } catch (error) {
-                if (current()) showStatus(`网络错误: ${error.message}`, 'error');
+                if (current() && error.name !== 'AbortError' && !silent) showStatus(`网络错误: ${error.message}`, 'error');
             } finally {
                 if (epoch === this.sessionEpoch() && task === this.refreshTask) loading.style.display = 'none';
             }
@@ -565,8 +633,12 @@ function createCredsManager(type) {
 
         // 渲染凭证列表
         renderList() {
+            if (this.type === 'antigravity') this.displayedListScope = this.listScopeSignature();
             const list = document.getElementById(this.getElementId('CredsList'));
-            list.innerHTML = '';
+            const previous = this.type === 'antigravity'
+                ? new Map(Array.from(list.children || []).filter(card => card.dataset?.filename)
+                    .map(card => [card.dataset.filename, card])) : null;
+            if (!previous) list.innerHTML = '';
 
             const entries = Object.entries(this.filteredData);
 
@@ -577,9 +649,34 @@ function createCredsManager(type) {
                 return;
             }
 
+            if (previous) {
+                for (const child of Array.from(list.children || [])) {
+                    if (!child.dataset?.filename) child.remove();
+                }
+            }
             entries.forEach(([, credInfo]) => {
-                list.appendChild(createCredCard(credInfo, this));
+                const fresh = createCredCard(credInfo, this);
+                const generation = this.credentialDetailGenerations.get(credInfo.filename) || 0;
+                fresh._credentialDetailGeneration = generation;
+                const candidate = previous?.get(credInfo.filename);
+                const existing = candidate && (candidate._credentialDetailGeneration || 0) === generation ? candidate : null;
+                if (existing) {
+                    existing.className = fresh.className;
+                    for (const selector of ['.cred-header', '[data-model-access-badges]', '.cred-actions']) {
+                        const oldPart = existing.querySelector(selector), newPart = fresh.querySelector(selector);
+                        if (oldPart && newPart) oldPart.replaceWith(newPart);
+                    }
+                    // Keep an open/in-flight detail visible, but make its next opening
+                    // fetch again. A pre-refresh response cannot restore loaded=true.
+                    existing.querySelectorAll('.cred-details .cred-content').forEach(content => {
+                        content._cacheRevision = (content._cacheRevision || 0) + 1;
+                        content.setAttribute('data-loaded', 'false');
+                    });
+                    previous.delete(credInfo.filename);
+                }
+                list.appendChild(existing || fresh);
             });
+            if (previous) for (const removed of previous.values()) removed.remove();
 
             document.getElementById(this.getElementId('PaginationContainer')).style.display =
                 this.getTotalPages() > 1 ? 'flex' : 'none';
@@ -658,7 +755,8 @@ function createCredsManager(type) {
             const batchBtns = batchBtnNames.map(action =>
                 document.getElementById(this.getElementId(`Batch${action}Btn`))
             );
-            batchBtns.forEach(btn => btn && (btn.disabled = selectedCount === 0));
+            batchBtns.forEach(btn => btn && (btn.disabled = selectedCount === 0 ||
+                (this.type === 'antigravity' && btn.id === 'antigravityBatchRefreshCooldownBtn' && this.quotaBatch?.busy === true)));
 
             const selectAllCheckbox = document.getElementById(this.type === 'antigravity'
                 ? 'selectAllAntigravityCheckbox' : this.getElementId('SelectAllCheckbox'));
@@ -769,7 +867,7 @@ function createCredsManager(type) {
 
                 if (response.ok) {
                     showStatus(data.message || `操作成功: ${action}`, 'success');
-                    await this.refresh();
+                    await this.refresh(this.type === 'antigravity' ? {afterMutation: true} : {});
                 } else {
                     showStatus(`操作失败: ${data.detail || data.error || '未知错误'}`, 'error');
                 }
@@ -821,7 +919,7 @@ function createCredsManager(type) {
                     showStatus(`批量操作完成：成功处理 ${successCount}/${selectedFiles.length} 个文件`, 'success');
                     this.selectedFiles.clear();
                     this.updateBatchControls();
-                    await this.refresh();
+                    await this.refresh(this.type === 'antigravity' ? {afterMutation: true} : {});
                 } else {
                     showStatus(`批量操作失败: ${data.detail || data.error || '未知错误'}`, 'error');
                 }
@@ -836,6 +934,26 @@ function createCredsManager(type) {
 // =====================================================================
 // 文件上传管理器工厂
 // =====================================================================
+// Successful local imports can replace a credential without changing its name.
+// Use server-returned names (including ZIP entries), never the archive's filename.
+function refreshAntigravityAfterImport(data, epoch) {
+    const manager = AppState.antigravityCreds;
+    if (epoch !== manager.sessionEpoch()) return;
+    const names = Array.isArray(data.results)
+        ? data.results.filter(item => item && (item.status === 'success' || item.success === true))
+            .map(item => item.filename).filter(name => typeof name === 'string' && name.length > 0)
+        : [];
+    const direct = data.filename || data.file_path;
+    if (typeof direct === 'string' && direct.length > 0) names.push(direct.split(/[\\/]/).pop());
+    const unique = Array.from(new Set(names));
+    const count = data.uploaded_count ?? data.success_count;
+    if (count === 0 && !unique.length) return;
+    // Legacy import responses may omit per-file results. Rebuild visible details
+    // conservatively instead of retaining a potentially replaced credential.
+    const replacedFilenames = unique.length && (count === undefined || unique.length >= count) ? unique : null;
+    Promise.resolve(manager.refresh({afterMutation: true, silent: true, replacedFilenames})).catch(() => {});
+}
+
 function createUploadManager(type) {
     const modeParam = type === 'antigravity' ? 'mode=antigravity' : 'mode=geminicli';
     const endpoint = `./creds/upload?${modeParam}`;
@@ -919,6 +1037,7 @@ function createUploadManager(type) {
         },
 
         async upload() {
+            const epoch = AppState.sessionEpoch || 0;
             if (this.selectedFiles.length === 0) {
                 showStatus('请选择要上传的文件', 'error');
                 return;
@@ -950,9 +1069,11 @@ function createUploadManager(type) {
                 };
 
                 xhr.onload = () => {
+                    if (type === 'antigravity' && epoch !== AppState.sessionEpoch) return;
                     if (xhr.status === 200) {
                         try {
                             const data = JSON.parse(xhr.responseText);
+                            if (type === 'antigravity') refreshAntigravityAfterImport(data, epoch);
                             showStatus(`成功上传 ${data.uploaded_count} 个${type === 'antigravity' ? 'Antigravity' : ''}文件`, 'success');
                             this.clearFiles();
                             progressSection.classList.add('hidden');
@@ -1143,6 +1264,7 @@ function createCredCard(credInfo, manager) {
     const div = document.createElement('div');
     const { status, filename } = credInfo;
     const managerType = manager.type;
+    if (managerType === 'antigravity') div.dataset.filename = filename;
 
     // 卡片样式
     div.className = (status.disabled || status.permanent_disabled) ? 'cred-card disabled' : 'cred-card';
@@ -1389,7 +1511,7 @@ async function updateCredRemark(manager, filename) {
         const data = await response.json();
         if (response.ok) {
             showStatus(cleanRemark ? `备注已保存: ${cleanRemark}` : '备注已清除', 'success');
-            await manager.refresh();
+            await manager.refresh(manager.type === 'antigravity' ? {afterMutation: true} : {});
         } else {
             showStatus(`备注保存失败: ${data.detail || data.error || '未知错误'}`, 'error');
         }
@@ -1413,12 +1535,17 @@ async function toggleCredDetailsCommon(pathId, manager) {
     const details = document.getElementById('details-' + pathId);
     if (!details) return;
 
+    const epoch = manager.sessionEpoch();
+    const requestId = manager.type === 'antigravity' ? (details._detailRequestId = (details._detailRequestId || 0) + 1) : 0;
+    const current = () => manager.type !== 'antigravity' || (epoch === manager.sessionEpoch() &&
+        details.isConnected !== false && details._detailRequestId === requestId && details.classList.contains('show'));
     const isShowing = details.classList.toggle('show');
 
     if (isShowing) {
         const contentDiv = details.querySelector('.cred-content');
         const filename = contentDiv.getAttribute('data-filename');
         const loaded = contentDiv.getAttribute('data-loaded');
+        const cacheRevision = contentDiv._cacheRevision || 0;
 
         if (loaded === 'false' && filename) {
             contentDiv.textContent = '正在加载文件内容...';
@@ -1430,13 +1557,15 @@ async function toggleCredDetailsCommon(pathId, manager) {
                 const response = await fetch(endpoint, { headers: getAuthHeaders() });
 
                 const data = await response.json();
+                if (!current()) return;
                 if (response.ok && data.content) {
                     contentDiv.textContent = JSON.stringify(data.content, null, 2);
-                    contentDiv.setAttribute('data-loaded', 'true');
+                    contentDiv.setAttribute('data-loaded', (contentDiv._cacheRevision || 0) === cacheRevision ? 'true' : 'false');
                 } else {
                     contentDiv.textContent = '无法加载文件内容: ' + (data.error || data.detail || '未知错误');
                 }
             } catch (error) {
+                if (!current()) return;
                 contentDiv.textContent = '加载文件内容失败: ' + error.message;
             }
         }
@@ -1458,6 +1587,21 @@ function stopPanelSession() {
     for (const manager of [AppState.creds, AppState.antigravityCreds]) {
         manager.cancelSelection();
         manager.refreshTask++;
+        manager.refreshFlight?.controller.abort();
+        manager.refreshFlight = null;
+        manager.displayedListScope = null;
+        manager.credentialDetailGenerations.clear();
+        manager.refreshFreshness++;
+        if (manager.type === 'antigravity') {
+            manager.quotaBatchTask++;
+            if (manager.quotaBatchFollowupTimer !== null) clearTimeout(manager.quotaBatchFollowupTimer);
+            manager.quotaBatchFollowupTimer = null;
+            manager.quotaBatch = null;
+            const progress = document.getElementById('antigravityBatchQuotaProgress');
+            if (progress) progress.hidden = true;
+            const list = document.getElementById('antigravityCredsList');
+            if (list) list.innerHTML = '';
+        }
         manager.filterRevision++;
         manager.selectedFiles.clear();
         manager.cooldownRefreshPending = false;
@@ -1923,6 +2067,7 @@ async function startAntigravityAuth() {
 }
 
 async function getAntigravityCredentials() {
+    const epoch = AppState.sessionEpoch;
     if (!AppState.antigravityAuthInProgress) {
         showStatus('请先获取 Antigravity 认证链接并完成授权', 'error');
         return;
@@ -1942,8 +2087,10 @@ async function getAntigravityCredentials() {
         });
 
         const data = await response.json();
+        if (epoch !== AppState.sessionEpoch) return;
 
         if (response.ok) {
+            refreshAntigravityAfterImport(data, epoch);
             document.getElementById('antigravityCredsContent').textContent = JSON.stringify(data.credentials, null, 2);
             document.getElementById('antigravityCredsSection').classList.remove('hidden');
             AppState.antigravityAuthInProgress = false;
@@ -2072,6 +2219,7 @@ async function processCallbackUrl() {
 }
 
 async function processAntigravityCallbackUrl() {
+    const epoch = AppState.sessionEpoch;
     const callbackUrl = document.getElementById('antigravityCallbackUrlInput').value.trim();
 
     if (!callbackUrl) {
@@ -2099,8 +2247,10 @@ async function processAntigravityCallbackUrl() {
         });
 
         const result = await response.json();
+        if (epoch !== AppState.sessionEpoch) return;
 
         if (result.credentials) {
+            refreshAntigravityAfterImport(result, epoch);
             showStatus(result.message || '从回调URL获取 Antigravity 凭证成功！', 'success');
             document.getElementById('antigravityCredsContent').textContent = JSON.stringify(result.credentials, null, 2);
             document.getElementById('antigravityCredsSection').classList.remove('hidden');
@@ -2201,7 +2351,8 @@ function toggleSelectAllAntigravity() {
     if (checkbox.checked) {
         checkboxes.forEach(cb => AppState.antigravityCreds.selectedFiles.add(cb.getAttribute('data-filename')));
     } else {
-        checkboxes.forEach(cb => AppState.antigravityCreds.selectedFiles.delete(cb.getAttribute('data-filename')));
+        // Restore cancellation of the entire selection, including other pages.
+        AppState.antigravityCreds.selectedFiles.clear();
     }
     checkboxes.forEach(cb => cb.checked = checkbox.checked);
     AppState.antigravityCreds.updateBatchControls();
@@ -2394,7 +2545,7 @@ async function verifyAntigravityProjectId(filename) {
             // 弹出成功提示
             showMessageModal('检验成功', `✅ Antigravity检验成功！\n\n文件: ${filename}\nProject ID: ${data.project_id}${tierLine}${creditLine}\n\n${data.message}\n${manualResultSummary(data)}`, manualUpdateIncomplete(data) ? 'info' : 'success');
 
-            await AppState.antigravityCreds.refresh();
+            await AppState.antigravityCreds.refresh({afterMutation: true});
         } else {
             // 失败时显示红色错误消息
             const errorMsg = `${data.message || data.error || '检验失败'}\n${manualResultSummary(data)}`;
@@ -2501,7 +2652,7 @@ async function testAntigravityCredential(filename) {
             const tone = !data.success ? 'error' : manualUpdateIncomplete(data) ? 'info' : 'success';
             showStatus(data.success ? 'Google 测试成功，请查看状态更新结果' : '测试未通过，请查看 Google 与校验结果', tone);
             showMessageModal('人工测试结果', `${data.message || data.error || ''}\n${manualResultSummary(data)}`, tone);
-            await AppState.antigravityCreds.refresh();
+            await AppState.antigravityCreds.refresh({afterMutation: true});
             return;
         }
         if (response.status === 200) {
@@ -2509,7 +2660,7 @@ async function testAntigravityCredential(filename) {
             const successMsg = `✅ 测试成功！\n文件: ${filename}\n状态: ${data.message || 'Antigravity凭证可用'} (${data.status_code || 200})`;
             showStatus('✅ 测试成功！', 'success');
             showMessageModal('测试成功', successMsg, 'success');
-            await AppState.antigravityCreds.refresh();
+            await AppState.antigravityCreds.refresh({afterMutation: true});
         }
         else {
             // 其他错误 - 显示完整错误信息
@@ -2577,7 +2728,7 @@ async function batchTestCredentials(manager, label) {
             return `${prefix} ${result.filename}: ${status}${message ? ' - ' + message : ''}${manualResultSummary(result) ? '\n' + manualResultSummary(result) : ''}`;
         });
 
-        await manager.refresh();
+        await manager.refresh(manager.type === 'antigravity' ? {afterMutation: true} : {});
 
         const summary = `批量消息测试完成\n\n成功: ${successCount} 个\n失败: ${failureCount} 个\n总计: ${data.total_count || selectedFiles.length} 个\n\n详细结果:\n${resultMessages.join('\n')}`;
 
@@ -2606,7 +2757,194 @@ function batchTestSelectedAntigravityCredentials() {
     return batchTestCredentials(AppState.antigravityCreds, 'Antigravity');
 }
 
+// Only Antigravity quota batches use this coordinator. Selection and filters stay
+// independent; the frozen filenames are the authority for the entire operation.
+function antigravityBatchPending(result) {
+    return result.writeback_pending === true || result.model_access_update?.status === 'pending' ||
+        Object.values(result.state_update || {}).some(item => item?.status === 'pending');
+}
+
+function antigravityBatchCounts(batch) {
+    const counts = {success: 0, failure: 0, unknown: 0, unexecuted: 0, queued: 0, running: 0, pending: 0, incomplete: 0};
+    for (const item of batch.items.values()) {
+        counts[item.outcome]++;
+        if (item.result && antigravityBatchPending(item.result)) counts.pending++;
+        if (item.result && manualUpdateIncomplete(item.result)) counts.incomplete++;
+    }
+    return counts;
+}
+
+function renderAntigravityQuotaBatch(batch) {
+    const region = document.getElementById('antigravityBatchQuotaProgress');
+    const text = document.getElementById('antigravityBatchQuotaProgressText');
+    const bar = document.getElementById('antigravityBatchQuotaProgressBar');
+    const cancel = document.getElementById('antigravityBatchQuotaCancelBtn');
+    if (!region || !text) return;
+    region.hidden = false;
+    const counts = antigravityBatchCounts(batch);
+    const settled = batch.filenames.length - counts.queued - counts.running;
+    const stage = batch.busy
+        ? (batch.cancelRequested ? '已停止后续批次，正在等待当前批次完成' : `正在处理第 ${batch.batchNumber} 批（每批最多 10 项）`)
+        : (batch.stopReason || '检测完成');
+    text.textContent = `${stage}\n已确认结果 ${settled}/${batch.filenames.length}：成功 ${counts.success}，失败 ${counts.failure}，结果未知 ${counts.unknown}，未执行 ${counts.unexecuted}。` +
+        (counts.running ? ` 当前批 ${counts.running} 项等待结果。` : '') +
+        (counts.pending ? ` ${counts.pending} 项仍有状态写入等待结算。` : '');
+    if (bar) { bar.max = batch.filenames.length; bar.value = settled; }
+    if (cancel) {
+        cancel.hidden = !batch.busy;
+        cancel.disabled = batch.cancelRequested;
+        cancel.textContent = batch.cancelRequested ? '等待当前批次结算' : '停止后续批次';
+    }
+}
+
+function cancelAntigravityQuotaBatch() {
+    const manager = AppState.antigravityCreds;
+    const batch = manager.quotaBatch;
+    if (!batch?.busy || batch.epoch !== manager.sessionEpoch()) return;
+    batch.cancelRequested = true;
+    // Do not abort a POST: it may already have updated credential state.
+    renderAntigravityQuotaBatch(batch);
+}
+
+function antigravityQuotaBatchSummary(batch) {
+    const counts = antigravityBatchCounts(batch);
+    let cleared = 0, added = 0, affectedCleared = 0, affectedAdded = 0;
+    const familyCounts = {};
+    const labels = {success: '成功', failure: '失败', unknown: '结果未知', unexecuted: '未执行'};
+    const lines = [];
+    for (const [filename, item] of batch.items) {
+        const result = item.result;
+        if (result) {
+            const released = Array.isArray(result.cleared) ? result.cleared.length : 0;
+            const restricted = Array.isArray(result.added_cooldown) ? result.added_cooldown.length :
+                (Array.isArray(result.added) ? result.added.length : 0);
+            cleared += released; added += restricted;
+            affectedCleared += Number(released > 0); affectedAdded += Number(restricted > 0);
+            for (const family of ['claude-opus-5-5', 'claude-opus-4-6']) {
+                const entry = result.model_access_families?.[family];
+                if (!entry || !['supported', 'unavailable', 'unknown'].includes(entry.state)) continue;
+                const familyCount = familyCounts[family] ||= {supported: 0, unavailable: 0, unknown: 0, total: 0};
+                familyCount[modelAccessStatus(result.model_access_families, family)]++;
+                familyCount.total++;
+            }
+        }
+        const detail = result ? manualResultSummary(result) : '';
+        const reason = item.reason || result?.error || result?.message || '';
+        lines.push(`${labels[item.outcome] || item.outcome} ${filename}${reason ? ': ' + reason : ''}${detail ? '\n' + detail : ''}`);
+    }
+    const access = Object.entries(familyCounts).map(([family, count]) =>
+        `Opus ${family === 'claude-opus-5-5' ? '5.5' : '4.6'}（${count.total} 项有效权限记录）：目录支持 ${count.supported} / 暂不可用 ${count.unavailable} / 待确认 ${count.unknown}`);
+    return `${batch.stopReason || '批量额度/权限检测完成'}\n\n共 ${batch.filenames.length} 项：成功 ${counts.success}，失败 ${counts.failure}，结果未知 ${counts.unknown}，未执行 ${counts.unexecuted}。\n` +
+        `等待写入结算：${counts.pending} 项；状态回写未完成：${counts.incomplete} 项（与上述结果重叠）。\n` +
+        `解除限制 ${cleared} 个（${affectedCleared} 凭证），补加限制 ${added} 个（${affectedAdded} 凭证）。\n` +
+        (access.length ? '\n' + access.join('\n') + '\n' : '') +
+        (counts.unknown ? '\n结果未知的请求可能已更新状态，未自动重试。\n' : '') +
+        (counts.pending ? '\n30 秒后仅补刷一次已保存的列表状态，不重新检测额度。\n' : '') +
+        '\n详细结果：\n' + lines.join('\n');
+}
+
+async function runAntigravityQuotaBatch(manager) {
+    if (manager.quotaBatch?.busy) return;
+    const filenames = Array.from(new Set(manager.selectedFiles));
+    if (!filenames.length) {
+        showStatus('请先选择要检测额度的 Antigravity 凭证', 'error');
+        return;
+    }
+    const epoch = manager.sessionEpoch();
+    if (!confirm(`将检测 ${filenames.length} 个 Antigravity 凭证的额度/权限，每批最多 10 项顺序执行。按共享额度组同步限制；未知或不完整结果不作为恢复依据。可停止后续批次，已经发送的当前批次会继续结算。\n\n继续吗？`)) return;
+    if (epoch !== manager.sessionEpoch() || manager.quotaBatch?.busy) return;
+    if (manager.quotaBatchFollowupTimer !== null) clearTimeout(manager.quotaBatchFollowupTimer);
+    manager.quotaBatchFollowupTimer = null;
+    const batch = {epoch, task: ++manager.quotaBatchTask, filenames, busy: true,
+        cancelRequested: false, batchNumber: 0, stopReason: '',
+        items: new Map(filenames.map(filename => [filename, {outcome: 'queued'}]))};
+    const current = () => epoch === manager.sessionEpoch() && manager.quotaBatchTask === batch.task && manager.quotaBatch === batch;
+    manager.quotaBatch = batch;
+    manager.updateBatchControls();
+    renderAntigravityQuotaBatch(batch);
+    try {
+        for (let offset = 0; offset < filenames.length; offset += 10) {
+            if (!current() || batch.cancelRequested || batch.stopReason) break;
+            const group = filenames.slice(offset, offset + 10);
+            batch.batchNumber++;
+            group.forEach(filename => batch.items.set(filename, {outcome: 'running'}));
+            renderAntigravityQuotaBatch(batch);
+            let response, data;
+            try {
+                response = await fetch(`${manager.getEndpoint('batchRefreshCooldown')}?${manager.getModeParam()}`, {
+                    method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({filenames: group})
+                });
+                data = await response.json();
+            } catch (_) {
+                if (!current()) return;
+                group.forEach(filename => batch.items.set(filename, {outcome: 'unknown', reason: '未收到完整响应，可能已经更新状态'}));
+                batch.stopReason = '连接或响应异常，已停止后续批次';
+                break;
+            }
+            if (!current()) return;
+            if (!response.ok || !data || !Array.isArray(data.results)) {
+                const notStarted = data?.started === false;
+                group.forEach(filename => batch.items.set(filename, {outcome: notStarted ? 'unexecuted' : 'unknown',
+                    reason: notStarted ? '服务端确认本批未开始' : '未收到完整逐项结果，可能已经更新状态'}));
+                batch.stopReason = data?.error_code === 'quota_budget_configuration'
+                    ? '额度预算配置异常，已停止后续批次' : '本批未能取得完整结果，已停止后续批次';
+                break;
+            }
+            const expected = new Set(group), grouped = new Map();
+            let malformed = false;
+            for (const result of data.results) {
+                if (!result || typeof result !== 'object' || !expected.has(result.filename)) { malformed = true; continue; }
+                const matches = grouped.get(result.filename) || [];
+                matches.push(result); grouped.set(result.filename, matches);
+            }
+            let queueFull = 0, configuration = false;
+            for (const filename of group) {
+                const matches = grouped.get(filename) || [];
+                const result = matches[0];
+                if (matches.length !== 1 || (result.started !== false && typeof result.success !== 'boolean')) {
+                    batch.items.set(filename, {outcome: 'unknown', reason: '逐项结果缺失、重复或格式不完整'});
+                    malformed = true;
+                    continue;
+                }
+                const outcome = result.started === false ? 'unexecuted' : (result.success ? 'success' : 'failure');
+                batch.items.set(filename, {outcome, result});
+                if (result.error_code === 'quota_queue_full') queueFull++;
+                if (result.error_code === 'quota_budget_configuration') configuration = true;
+            }
+            if (configuration) batch.stopReason = '额度预算配置异常，已停止后续批次';
+            else if (queueFull * 2 >= group.length) batch.stopReason = '服务端队列繁忙，已停止后续批次';
+            else if (malformed) batch.stopReason = '逐项结果不完整，已停止后续批次';
+            renderAntigravityQuotaBatch(batch);
+        }
+    } finally {
+        if (current()) {
+            for (const [filename, item] of batch.items) {
+                if (item.outcome === 'queued') batch.items.set(filename, {outcome: 'unexecuted', reason: '后续批次未发送'});
+                else if (item.outcome === 'running') batch.items.set(filename, {outcome: 'unknown', reason: '未能确认当前请求结果'});
+            }
+            if (batch.cancelRequested && !batch.stopReason) batch.stopReason = '已停止后续批次，当前批次已结算';
+            batch.busy = false;
+            manager.updateBatchControls();
+            renderAntigravityQuotaBatch(batch);
+            const counts = antigravityBatchCounts(batch);
+            const tone = counts.failure || counts.unknown || counts.unexecuted || counts.pending || counts.incomplete ? 'info' : 'success';
+            showMessageModal('Antigravity 批量额度/权限结果', escapeHtml(antigravityQuotaBatchSummary(batch)), tone);
+            // Deliver results first. This GET must start after the batch writes and
+            // must not overwrite the persistent progress/result region.
+            Promise.resolve(manager.refresh({afterMutation: true, silent: true})).catch(() => {});
+            if (counts.pending) {
+                manager.quotaBatchFollowupTimer = setTimeout(() => {
+                    if (!current()) return;
+                    manager.quotaBatchFollowupTimer = null;
+                    Promise.resolve(manager.refresh({afterMutation: true, silent: true})).catch(() => {});
+                }, 30000);
+            }
+        }
+    }
+}
+
 async function batchRefreshCooldownCredentials(manager, label) {
+    if (manager.type === 'antigravity') return runAntigravityQuotaBatch(manager);
     const selectedFiles = Array.from(manager.selectedFiles);
     if (selectedFiles.length === 0) {
         showStatus(`请先选择要检测额度的${label}凭证`, 'error');
@@ -2658,7 +2996,7 @@ async function batchRefreshCooldownCredentials(manager, label) {
             return `${tag} ${r.filename}:${cleared}${added}${kept}${unknown}${trail}${access}${manualResultSummary(r) ? '\n' + manualResultSummary(r) : ''}`;
         });
 
-        await manager.refresh();
+        await manager.refresh(manager.type === 'antigravity' ? {afterMutation: true} : {});
 
         const addedTotal = data.added_total || 0;
         const affectedAdded = data.affected_creds_added || 0;
@@ -3118,7 +3456,7 @@ async function _toggleQuotaDetails(pathId, mode) {
                                         }
                                     });
                                     button.remove();
-                                    await AppState.antigravityCreds.refresh();
+                                    await AppState.antigravityCreds.refresh({afterMutation: true});
                                 } catch (error) {
                                     if (!sessionCurrent()) return;
                                     showStatus('解除异常额度拦截失败', 'error');
@@ -3241,6 +3579,10 @@ async function toggleErrorDetailsCommon(pathId, manager) {
     const errorDetails = document.getElementById('errors-' + pathId);
     if (!errorDetails) return;
 
+    const epoch = manager.sessionEpoch();
+    const requestId = manager.type === 'antigravity' ? (errorDetails._detailRequestId = (errorDetails._detailRequestId || 0) + 1) : 0;
+    const current = () => manager.type !== 'antigravity' || (epoch === manager.sessionEpoch() &&
+        errorDetails.isConnected !== false && errorDetails._detailRequestId === requestId && errorDetails.classList.contains('show'));
     // 切换显示状态
     const isShowing = errorDetails.classList.toggle('show');
 
@@ -3259,6 +3601,7 @@ async function toggleErrorDetailsCommon(pathId, manager) {
                     headers: getAuthHeaders()
                 });
                 const data = await response.json();
+                if (!current()) return;
 
                 if (response.ok) {
                     const errorCodes = data.error_codes || [];
@@ -3377,6 +3720,7 @@ async function toggleErrorDetailsCommon(pathId, manager) {
                     showStatus(`❌ 获取报错信息失败: ${errorMsg}`, 'error');
                 }
             } catch (error) {
+                if (!current()) return;
                 contentDiv.innerHTML = `
                     <div style="text-align: center; padding: 20px; color: #dc3545;">
                         <div style="font-size: 48px; margin-bottom: 10px;">❌</div>
@@ -3549,7 +3893,7 @@ async function batchVerifyAntigravityProjectIds() {
         }
     });
 
-    await AppState.antigravityCreds.refresh();
+    await AppState.antigravityCreds.refresh({afterMutation: true});
 
     const incompleteCount = results.filter(result => result.success && result.updateIncomplete).length;
     const summary = `Antigravity批量检验完成！\n\nGoogle 检验成功: ${successCount} 个\n其中状态回写未完成: ${incompleteCount} 个\n失败: ${failCount} 个\n总计: ${selectedFiles.length} 个\n\n详细结果:\n${resultMessages.join('\n')}`;
@@ -3687,7 +4031,7 @@ async function refreshAllAntigravityEmails() {
         const data = await response.json();
         if (response.ok) {
             showStatus(`邮箱刷新完成：成功获取 ${data.success_count}/${data.total_count} 个邮箱地址`, 'success');
-            await AppState.antigravityCreds.refresh();
+            await AppState.antigravityCreds.refresh({afterMutation: true});
         } else {
             showStatus(data.message || '邮箱刷新失败', 'error');
         }
@@ -3740,7 +4084,7 @@ async function deduplicateAntigravityByEmail() {
         if (response.ok) {
             const msg = `去重完成：删除 ${data.deleted_count} 个重复凭证，保留 ${data.kept_count} 个凭证（${data.unique_emails_count} 个唯一邮箱）`;
             showStatus(msg, 'success');
-            await AppState.antigravityCreds.refresh();
+            await AppState.antigravityCreds.refresh({afterMutation: true});
             
             // 显示详细信息
             if (data.duplicate_groups && data.duplicate_groups.length > 0) {
@@ -4492,7 +4836,7 @@ function updateCooldownDisplays() {
         ag.cooldownRefreshAfter = now + 15;
         // Only cached status is read here; never query Google quota from the timer.
         Promise.resolve().then(() => {
-            if (epoch === (AppState.sessionEpoch || 0) && (AppState.sessionEpoch === undefined || AppState.sessionReady)) return ag.refresh();
+            if (epoch === (AppState.sessionEpoch || 0) && (AppState.sessionEpoch === undefined || AppState.sessionReady)) return ag.refresh({silent: true});
         }).catch(() => {}).finally(() => {
             if (epoch !== (AppState.sessionEpoch || 0)) return;
             ag.cooldownRefreshPending = false;
@@ -4608,6 +4952,7 @@ function updateRtTokenCount() {
 }
 
 async function addCredentialByRefreshToken() {
+    const epoch = AppState.sessionEpoch;
     const tokensRaw = document.getElementById('rtRefreshToken').value;
     const mode = document.getElementById('rtAddMode').value;
     const clientId = document.getElementById('rtClientId').value.trim();
@@ -4647,6 +4992,7 @@ async function addCredentialByRefreshToken() {
             body: JSON.stringify(payload),
         });
         const data = await response.json();
+        if (mode === 'antigravity' && epoch !== AppState.sessionEpoch) return;
 
         if (!response.ok) {
             resultBox.innerHTML = `
@@ -4700,6 +5046,7 @@ async function addCredentialByRefreshToken() {
         `;
 
         if (successCount > 0) {
+            if (mode === 'antigravity') refreshAntigravityAfterImport(data, epoch);
             showStatus(`批量添加完成：成功 ${successCount}/${total}`, failureCount === 0 ? 'success' : 'info');
             // 清空输入
             document.getElementById('rtRefreshToken').value = '';

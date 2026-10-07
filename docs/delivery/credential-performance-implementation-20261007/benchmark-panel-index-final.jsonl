@@ -1,0 +1,9 @@
+{"accounts": 2000, "path": "legacy", "seconds": 0.3927, "selects": 5, "index_scan_rows": 0, "page_rows": 0, "retained_cache_rows": 0, "estimated_cache_bytes": 0, "json_decode_calls": 26000, "returned": 25}
+{"accounts": 2000, "path": "new_cold", "seconds": 0.2117, "selects": 2, "index_scan_rows": 2000, "page_rows": 25, "retained_cache_rows": 2000, "estimated_cache_bytes": 4556073, "json_decode_calls": 10175, "returned": 25}
+{"accounts": 2000, "path": "new_repeat", "seconds": 0.0224, "selects": 1, "index_scan_rows": 0, "page_rows": 25, "retained_cache_rows": 2000, "estimated_cache_bytes": 4556073, "json_decode_calls": 175, "returned": 25}
+{"accounts": 10000, "path": "legacy", "seconds": 1.0087, "selects": 5, "index_scan_rows": 0, "page_rows": 0, "retained_cache_rows": 0, "estimated_cache_bytes": 0, "json_decode_calls": 130000, "returned": 25}
+{"accounts": 10000, "path": "new_cold", "seconds": 1.0437, "selects": 2, "index_scan_rows": 10000, "page_rows": 25, "retained_cache_rows": 10000, "estimated_cache_bytes": 22780073, "json_decode_calls": 50175, "returned": 25}
+{"accounts": 10000, "path": "new_repeat", "seconds": 0.0953, "selects": 1, "index_scan_rows": 0, "page_rows": 25, "retained_cache_rows": 10000, "estimated_cache_bytes": 22780073, "json_decode_calls": 175, "returned": 25}
+{"accounts": 50000, "path": "legacy", "seconds": 14.2318, "selects": 5, "index_scan_rows": 0, "page_rows": 0, "retained_cache_rows": 0, "estimated_cache_bytes": 0, "json_decode_calls": 650000, "returned": 25}
+{"accounts": 50000, "path": "new_cold", "seconds": 12.3292, "selects": 2, "index_scan_rows": 50000, "page_rows": 25, "retained_cache_rows": 0, "estimated_cache_bytes": 0, "json_decode_calls": 250175, "returned": 25}
+{"accounts": 50000, "path": "new_repeat", "seconds": 12.1591, "selects": 2, "index_scan_rows": 50000, "page_rows": 25, "retained_cache_rows": 0, "estimated_cache_bytes": 0, "json_decode_calls": 250175, "returned": 25}

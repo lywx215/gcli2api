@@ -149,6 +149,7 @@ class AntigravityImportMixin:
                     raise
         else:
             raise RuntimeError("unsupported_import_storage")
+        self.panel_index_invalidate()
         if (inserted and cache_state.get("disabled", False) in (False, 0)
                 and not cache_state.get("permanent_disabled", False) and hasattr(self, "_redis_add_cred")):
             try:

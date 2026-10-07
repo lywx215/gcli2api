@@ -63,7 +63,8 @@ class AntigravityModelAccessMixin:
             return None
         snapshot = await self.manual_snapshot(filename)
         if snapshot:
-            snapshot["access"] = row_state(snapshot["raw"])
+            if "access" not in snapshot:
+                snapshot["access"] = row_state(snapshot["raw"])
         return snapshot
 
     async def model_access_public(self, filename):
@@ -152,19 +153,40 @@ class AntigravityModelAccessMixin:
         if self.model_access_storage_ready:
             await self._quota_atomic(filename, operation, validate=False)
 
-    async def model_access_observe(self, filename, snapshot, models=None, *, model=None, success=None, reason=None, now=None):
+    async def model_access_observe(self, filename, snapshot, models=None, **kwargs):
+        result = await self.model_access_observe_with_projection(filename, snapshot, models, **kwargs)
+        return result["applied"]
+
+    async def model_access_clear_lease(self, filename, generation, lease_id):
+        """Clear only the exact claimed lease; preserve evidence and backoff."""
+        if not generation or not lease_id:
+            return False
+        def operation(row):
+            if row.get("quota_credential_generation") != generation:
+                return False
+            state = decode(row.get("model_access_state"))
+            if state.get("lease", {}).get("id") != lease_id:
+                return False
+            state.pop("lease", None)
+            row["model_access_state"] = state
+            return True
+        return bool(await self._quota_atomic(filename, operation, validate=False))
+
+    async def model_access_observe_with_projection(self, filename, snapshot, models=None, *, model=None, success=None, reason=None, now=None):
         """Observe version permissions and only the native routes actually evidenced."""
         if not self.model_access_storage_ready:
-            return False
+            return {"applied": False, "public": {}, "families": {}}
         if models is None and success is not None and model not in ROUTES:
-            return False
+            return {"applied": False, "public": {}, "families": {}}
         now = time.time() if now is None else now
         def operation(row):
+            def result(applied, state):
+                return {"applied": applied, "public": public(state), "families": public_families(state)}
             if not self._access_fence(row, snapshot):
-                return False
+                return result(False, row_state(row))
             state = row_state(row)
             if snapshot.get("lease_id") and state.get("lease", {}).get("id") != snapshot["lease_id"]:
-                return False
+                return result(False, row_state(row))
             prior = decode(snapshot.get("access", {}))
             targets = (access_family(model),) if model in ROUTES else FAMILIES
             applied = False
@@ -199,8 +221,8 @@ class AntigravityModelAccessMixin:
                 state.pop("lease", None)
             state["identity"] = identity(row)
             row["model_access_state"] = state
-            return applied
-        return bool(await self._quota_atomic(filename, operation, validate=False))
+            return result(applied, state)
+        return await self._quota_atomic(filename, operation, validate=False) or {"applied": False, "public": {}, "families": {}}
 
     async def model_access_union(self):
         if not self.model_access_storage_ready:

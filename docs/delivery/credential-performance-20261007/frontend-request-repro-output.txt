@@ -1,0 +1,7 @@
+{"case":"batch-start toast lifetime","delaysMs":[3000,300],"toastClearedWithoutBatchCompletion":true}
+{"case":"normal first refresh with capabilities","requests":1}
+{"case":"three overlapping refreshes","requests":3,"abortSignals":0}
+{"case":"batch HTTP completed, list HTTP pending","requests":["./creds/batch-refresh-cooldown","./creds/status"],"completionModals":0}
+{"case":"list HTTP completed","completionModals":1}
+{"case":"two batch clicks with both confirmations accepted","concurrentBatchRequests":2,"disabledButtons":0}
+All offline assertions passed.

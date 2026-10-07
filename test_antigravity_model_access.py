@@ -494,7 +494,7 @@ async def test_global_directory_concurrency_never_exceeds_two(access_store, monk
         assert (await store.model_access_snapshot(row["filename"]))["access"]["models"][HIGH]["state"] == "supported"
     assert await store.model_access_union() == set(MODELS)
 
-async def test_scheduler_keeps_scanning_while_two_checks_are_busy(monkeypatch):
+async def test_scheduler_keeps_scanning_while_one_background_check_is_busy(monkeypatch):
     import src.antigravity_access_runtime as runtime
     service = ModelAccessService()
     scanned = asyncio.Event()
@@ -515,7 +515,7 @@ async def test_scheduler_keeps_scanning_while_two_checks_are_busy(monkeypatch):
     await service.start()
     try:
         await asyncio.wait_for(scanned.wait(), 1)
-        assert len(checks) == 2 and len(set(checks)) == 2
+        assert len(checks) == 1 and len(set(checks)) == 1
     finally:
         await service.close()
     assert not service._workers and service._task is None

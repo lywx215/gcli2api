@@ -75,13 +75,13 @@ test('A-B-A changes cancel old selection; old response cannot commit',async()=>{
  h.reply(0,page(['old.json']));await selection;assert.equal(h.ag.selectedFiles.size,0);
  h.reply(1,page(['middle.json']));h.reply(2,page(['current.json']));await tick();assert.deepEqual(Object.keys(h.ag.data),['current.json']);
 });
-test('page navigation keeps all-selection alive; manual change cancels; uncheck only this page',async()=>{
+test('page navigation keeps all-selection alive; manual change cancels; uncheck clears all pages',async()=>{
  const h=harness();h.ag.applyCapabilities(CAPS);const boxes=h.boxes(['visible.json']);
  const selection=h.ag.selectAllMatching();h.ag.currentPage=2;h.ag.pageSize=50;h.reply(0,page(['visible.json','offpage.json']));await selection;
  assert.equal(h.ag.selectedFiles.size,2);assert.equal(boxes[0].checked,true);
- h.elements.get('selectAllAntigravityCheckbox').checked=false;h.c.toggleSelectAllAntigravity();assert.deepEqual([...h.ag.selectedFiles],['offpage.json']);
+ h.elements.get('selectAllAntigravityCheckbox').checked=false;h.c.toggleSelectAllAntigravity();assert.deepEqual([...h.ag.selectedFiles],[]);
  const next=h.ag.selectAllMatching();h.c.toggleAntigravityFileSelection('manual.json');h.reply(1,page(['late.json']));await next;
- assert.deepEqual([...h.ag.selectedFiles],['offpage.json','manual.json']);
+ assert.deepEqual([...h.ag.selectedFiles],['manual.json']);
 });
 test('second selection page capability withdrawal cancels entire task and loads ordinary list once',async()=>{
  const h=harness();h.ag.applyCapabilities(CAPS);h.ag.currentModelAccessFamily='claude-opus-4-6';h.ag.currentModelAccessFilter='supported';
@@ -167,4 +167,37 @@ test('group-only 501 with default family parameters preserves family capability'
  h.reply(0,{detail:'synthetic explicit family unavailable',error_code:'capability_unavailable',capability:FAMILY},501);await tick();
  assert.equal(h.ag.failedCapabilities.has(FAMILY),true);assert.equal(h.ag.failedCapabilities.has(GROUP),false);
  h.reply(1,page([],CAPS));await pending;
+});
+
+
+test('unchecking page selection clears all 50 selections and keeps pages unchecked',()=>{
+ const h=harness(),header=h.elements.get('selectAllAntigravityCheckbox');
+ const first=Array.from({length:25},(_,i)=>`first-${i}.json`);
+ const second=Array.from({length:25},(_,i)=>`second-${i}.json`);
+ h.boxes(first);header.checked=true;h.c.toggleSelectAllAntigravity();
+ assert.equal(h.ag.selectedFiles.size,25);
+ h.ag.currentPage=2;h.boxes(second);header.checked=true;h.c.toggleSelectAllAntigravity();
+ assert.equal(h.ag.selectedFiles.size,50);
+ header.checked=false;h.c.toggleSelectAllAntigravity();
+ assert.equal(h.ag.selectedFiles.size,0);
+ assert.equal(h.elements.get('antigravitySelectedCount').textContent,'已选择 0 项');
+ assert.equal(h.elements.get('antigravityBatchDeleteBtn').disabled,true);
+ assert.equal(header.checked,false);assert.equal(header.indeterminate,false);
+ for(const [page,names] of [[1,first],[2,second]]){
+  h.ag.currentPage=page;const boxes=h.boxes(names);h.ag.updateBatchControls();
+  assert.ok(boxes.every(box=>!box.checked));assert.equal(header.checked,false);
+ }
+});
+
+test('unchecking cancels a pending cross-page selection before a late response',async()=>{
+ const h=harness();h.ag.applyCapabilities(CAPS);h.boxes(['visible.json']);
+ h.ag.selectedFiles.add('visible.json');h.ag.selectedFiles.add('offpage.json');h.ag.updateBatchControls();
+ const pending=h.ag.selectAllMatching();
+ const button=h.elements.get('antigravitySelectAllMatchingBtn');assert.equal(button.disabled,true);
+ h.elements.get('selectAllAntigravityCheckbox').checked=false;h.c.toggleSelectAllAntigravity();
+ assert.equal(h.ag.selectedFiles.size,0);assert.equal(button.disabled,false);
+ h.reply(0,page(['visible.json','offpage.json','late.json']));await pending;
+ assert.equal(h.ag.selectedFiles.size,0);assert.equal(button.disabled,false);
+ assert.equal(h.elements.get('antigravitySelectedCount').textContent,'已选择 0 项');
+ assert.equal(h.elements.get('selectAllAntigravityCheckbox').checked,false);
 });

@@ -13,7 +13,7 @@ import uuid
 import zipfile
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Response, Body
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Response, Body, Request
 from fastapi.responses import JSONResponse
 
 from log import log
@@ -515,6 +515,44 @@ async def upload_credentials_common(
 
 async def get_creds_status_common(
     offset: int, limit: int, status_filter: str, mode: str = "geminicli",
+    error_code_filter: str = None, cooldown_filter: str = None,
+    preview_filter: str = None, tier_filter: str = None, remark_filter: str = None,
+    model_access_filter: str = "all", model_access_tier: str = "any",
+    model_access_family: str = "claude-opus-5-5",
+) -> JSONResponse:
+    kwargs = dict(offset=offset, limit=limit, status_filter=status_filter, mode=mode,
+                  error_code_filter=error_code_filter, cooldown_filter=cooldown_filter,
+                  preview_filter=preview_filter, tier_filter=tier_filter, remark_filter=remark_filter,
+                  model_access_filter=model_access_filter, model_access_tier=model_access_tier,
+                  model_access_family=model_access_family)
+    if mode != "antigravity":
+        return await _get_creds_status_common(**kwargs)
+    from src.antigravity_panel_budget import PanelBudgetConfigError, panel_list_budget
+    from src.antigravity_panel_metrics import trace_phase
+    from src.storage.antigravity_panel import PanelListBusy, PanelListChanged
+    try:
+        async with asyncio.timeout(panel_list_budget()):
+            with trace_phase("list_request") as timing:
+                response = await _get_creds_status_common(**kwargs)
+                if response.status_code == 200:
+                    timing.rows = len(json.loads(response.body).get("items", []))
+                return response
+    except PanelBudgetConfigError:
+        return JSONResponse(status_code=503, content={"detail": "Credential list deadline configuration is invalid.",
+                            "error_code": "credential_list_budget_configuration"})
+    except PanelListBusy:
+        return JSONResponse(status_code=503, content={"detail": "Credential list queue is full; retry later.",
+                            "error_code": "credential_list_queue_full"})
+    except PanelListChanged:
+        return JSONResponse(status_code=503, content={"detail": "Credential list changed during reading; retry later.",
+                            "error_code": "credential_list_changed"})
+    except TimeoutError:
+        return JSONResponse(status_code=504, content={"detail": "Credential list timed out; retry later.",
+                            "error_code": "credential_list_timeout"})
+
+
+async def _get_creds_status_common(
+    offset: int, limit: int, status_filter: str, mode: str = "geminicli",
     error_code_filter: str = None, cooldown_filter: str = None, preview_filter: str = None, tier_filter: str = None, remark_filter: str = None,
     model_access_filter: str = "all", model_access_tier: str = "any",
     model_access_family: str = "claude-opus-5-5"
@@ -563,25 +601,30 @@ async def get_creds_status_common(
         return JSONResponse(status_code=501, content={"detail": "当前存储后端不支持共享额度筛选",
             "error_code": "capability_unavailable", "capability": "antigravity.cooldown.group_filter"})
 
-    # Antigravity counts and permission filters cover all matching summaries.
-    # Keep the legacy Gemini CLI pagination path unchanged.
-    result = await storage_adapter._backend.get_credentials_summary(
-        offset=0 if mode == "antigravity" else offset,
-        limit=None if mode == "antigravity" else limit,
-        status_filter=status_filter,
-        mode=mode,
-        error_code_filter=error_code_filter if error_code_filter and error_code_filter != "all" else None,
-        cooldown_filter=cooldown_filter if cooldown_filter and cooldown_filter != "all" else None,
-        preview_filter=preview_filter if preview_filter and preview_filter != "all" else None,
-        tier_filter=tier_filter if tier_filter and tier_filter != "all" else None,
-        remark_filter=remark_filter if remark_filter is not None and remark_filter != "__all__" else None,
-        include_error_classifications=True,
-    )
+    panel_reader = getattr(storage_adapter._backend, "get_antigravity_panel_summary", None)
+    optimized = mode == "antigravity" and callable(panel_reader)
+    filters = dict(status_filter=status_filter,
+                   error_code_filter=error_code_filter if error_code_filter and error_code_filter != "all" else None,
+                   cooldown_filter=cooldown_filter if cooldown_filter and cooldown_filter != "all" else None,
+                   preview_filter=preview_filter if preview_filter and preview_filter != "all" else None,
+                   tier_filter=tier_filter if tier_filter and tier_filter != "all" else None,
+                   remark_filter=remark_filter if remark_filter is not None and remark_filter != "__all__" else None)
+    if optimized:
+        result = await panel_reader(offset=offset, limit=limit,
+                                    model_access_filter=model_access_filter,
+                                    model_access_tier=model_access_tier,
+                                    model_access_family=model_access_family, **filters)
+    else:
+        # Preserve legacy backends and Gemini CLI pagination.
+        result = await storage_adapter._backend.get_credentials_summary(
+            offset=0 if mode == "antigravity" else offset,
+            limit=None if mode == "antigravity" else limit,
+            mode=mode, include_error_classifications=True, **filters)
     supports_group_filter = supports_group_filter and result.get("quota_group_filter_supported") is True
     if cooldown_filter in GROUP_FILTERS and not supports_group_filter:
         return JSONResponse(status_code=501, content={"detail": "当前存储后端未能提供共享额度状态",
             "error_code": "capability_unavailable", "capability": "antigravity.cooldown.group_filter"})
-    if mode == "antigravity":
+    if mode == "antigravity" and not optimized:
         from src.antigravity_model_access import filter_summaries
         reader = getattr(storage_adapter._backend, "model_access_list_public", None)
         states = await reader() if callable(reader) else {}
@@ -1997,7 +2040,8 @@ async def _fetch_quota_for_credential(filename: str, mode: str, *, origin="legac
                 or access_snapshot.get("generation") != (quota_snapshot or {}).get("quota_credential_generation")):
             access_snapshot = None
         info = await fetch_quota_info(access_token)
-        if access_snapshot:
+        # Local admission/timeout/shutdown results contain no Google evidence.
+        if access_snapshot and not info.get("error_code"):
             try:
                 await storage_adapter._backend.model_access_observe(filename, access_snapshot,
                     info.get("models") if info.get("success") else None,
@@ -2026,11 +2070,38 @@ async def _fetch_quota_for_credential(filename: str, mode: str, *, origin="legac
     return info
 
 
+def _antigravity_batch_quota_response(results):
+    from src.antigravity_model_access import filter_summaries
+    success_count = sum(1 for row in results if row.get("success"))
+    cleared_total = sum(len(row.get("cleared", [])) for row in results)
+    added_total = sum(len(row.get("added_cooldown", [])) for row in results)
+    affected_cleared = sum(1 for row in results if row.get("cleared"))
+    affected_added = sum(1 for row in results if row.get("added_cooldown"))
+    projected = [row for row in results if isinstance(row.get("model_access_families"), dict)
+                 and row["model_access_families"]]
+    access_summary = filter_summaries(
+        {"items": [{"filename": row["filename"]} for row in projected]}, {},
+        offset=0, limit=len(projected),
+        family_states={row["filename"]: row["model_access_families"] for row in projected},
+    )["model_access_summary"]
+    return JSONResponse(content={
+        "success_count": success_count, "failure_count": len(results) - success_count,
+        "total_count": len(results), "cleared_total": cleared_total, "added_total": added_total,
+        "affected_creds": affected_cleared, "affected_creds_cleared": affected_cleared,
+        "affected_creds_added": affected_added, "results": results,
+        "model_access_summary": access_summary,
+        "message": (f"完成：{success_count}/{len(results)} 凭证拉取额度成功，"
+                    f"解除 {cleared_total} 个冷却（涉及 {affected_cleared} 凭证），"
+                    f"补加 {added_total} 个冷却（涉及 {affected_added} 凭证）"),
+    })
+
+
 @router.post("/batch-refresh-cooldown")
 async def batch_refresh_cooldown(
     request: CredFileBatchTestRequest,
     mode: str = "geminicli",
     _token: str = Depends(verify_panel_token),
+    http_request: Request = None,
 ):
     """批量检测凭证额度。Antigravity 使用共享组与持久异常拦截。
 
@@ -2054,6 +2125,15 @@ async def batch_refresh_cooldown(
 
         if not filenames:
             raise HTTPException(status_code=400, detail="请选择要检测的凭证")
+
+        if mode == "antigravity":
+            from .antigravity_manual import batch_quota
+            rows = await batch_quota(filenames, request=http_request)
+            results = [{**row, "added_cooldown": row.get("added", []),
+                        "family_has_quota": {}, "skipped_no_quota": [],
+                        "skipped_unknown": [], "cooldown_skipped_active": [],
+                        "model_count": len(row.get("models", {}) or {})} for row in rows]
+            return _antigravity_batch_quota_response(results)
 
         storage_adapter = await get_storage_adapter()
         backend = getattr(storage_adapter, "_backend", None)
