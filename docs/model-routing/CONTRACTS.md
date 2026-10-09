@@ -4,7 +4,9 @@
 
 本次用户明确授权自动执行、监控、审查和多个窗口并行开发；旧提示词的逐窗口人工启动限制仅作为历史记录，不约束本次已启动运行。用户后续指定子窗口 GPT-6.1 SOL / Ultra，覆盖旧 Astra 设置。最终验证后按用户新要求进行实际 Claude 审核，不在开发阶段调用。
 
-冻结字段具体化：RequestProjection.fields/tools/image_context；FeatureSnapshot.compatibility_mode/return_thoughts/antigravity_stream2nostream/values；RoutingPolicySnapshot.chains/static_rules/parameter_classes/proof_version；TargetProfile.target/parameter_actions/proofs/capabilities；RoutingConfigSnapshot.exists/raw_table/digest/channels。所有容器通过 freeze/thaw 实现递归不可变和独立复制。缺键 exists=false；读取失败 RoutingConfigReadError，不伪装为空表。
+冻结字段具体化：RequestProjection.fields/tools/image_context；FeatureSnapshot.compatibility_mode/return_thoughts/antigravity_stream2nostream/values/antigravity_flash_non_stream_mode；RoutingPolicySnapshot.chains/static_rules/parameter_classes/proof_version；TargetProfile.target/parameter_actions/proofs/capabilities；RoutingConfigSnapshot.exists/raw_table/digest/channels。所有容器通过 freeze/thaw 实现递归不可变和独立复制。缺键 exists=false；读取失败 RoutingConfigReadError，不伪装为空表。
+
+2026-10-09 增量：`FeatureSnapshot.antigravity_flash_non_stream_mode` 默认 `inherit`，追加在 `values` 之后，保留既有位置参数语义。仅 Antigravity 请求及目录快照读取该配置，其他渠道保持默认值。非流式传输按最终目标模型选择；真实流式不消费此选项。配置热更新只影响后续快照，不修改进行中的请求。此增量不改变路由表、管理协议或功能证明的模型目录指纹。
 
 I 增量接线合同：两 normalizer 和两请求 converter 增加可选 keyword-only route_context=None；merge_system_messages 增加 keyword-only compatibility_mode=None（该 shared 文件由 I 负责）。有上下文只消费固定 feature_snapshot；默认/Vertex 保留原配置读取和行为。显式目标在 normalizer/API 处验证最终目标，不以覆写模型修补错误家族参数；未映射路径仍以实际 master 链的接受/错误/目标为准。R 必须审查这些 opt-in 增量后冻结候选源码证明摘要，不可自动信任当前文件哈希。
 

@@ -11,6 +11,7 @@ async def prepare_route_context(channel, protocol, requested_model, raw_request)
     Legacy requests still execute the original converter/normalizer chain.
     """
     from config import (
+        get_antigravity_flash_non_stream_mode,
         get_antigravity_stream2nostream,
         get_compatibility_mode_enabled,
         get_return_thoughts_to_frontend,
@@ -40,6 +41,9 @@ async def prepare_route_context(channel, protocol, requested_model, raw_request)
         compatibility_mode=await get_compatibility_mode_enabled(),
         return_thoughts=await get_return_thoughts_to_frontend(),
         antigravity_stream2nostream=await get_antigravity_stream2nostream(),
+        antigravity_flash_non_stream_mode=(
+            await get_antigravity_flash_non_stream_mode() if channel == "antigravity" else "inherit"
+        ),
     )
     projection = project_request(channel, protocol, requested_model, raw_request, feature_snapshot)
     resolution = resolve(
@@ -92,6 +96,7 @@ async def adapt_model_response(response, *, route_context):
 async def prepare_catalog_context(channel):
     """Validate fresh routing before any dynamic catalog/credential acquisition."""
     from config import (
+        get_antigravity_flash_non_stream_mode,
         get_antigravity_stream2nostream, get_compatibility_mode_enabled,
         get_return_thoughts_to_frontend,
     )
@@ -117,5 +122,8 @@ async def prepare_catalog_context(channel):
         compatibility_mode=await get_compatibility_mode_enabled(),
         return_thoughts=await get_return_thoughts_to_frontend(),
         antigravity_stream2nostream=await get_antigravity_stream2nostream(),
+        antigravity_flash_non_stream_mode=(
+            await get_antigravity_flash_non_stream_mode() if channel == "antigravity" else "inherit"
+        ),
     )
     return result.compiled, policy, features

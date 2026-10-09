@@ -86,6 +86,7 @@ class FeatureSnapshot(ImmutableContract):
     return_thoughts: bool = True
     antigravity_stream2nostream: bool = False
     values: Mapping[str, Any] = field(default_factory=dict)
+    antigravity_flash_non_stream_mode: str = "inherit"
 
 
 @dataclass(frozen=True)

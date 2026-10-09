@@ -30,6 +30,8 @@ const AppState = {
 
     // 配置管理
     currentConfig: {},
+    configCapabilities: new Set(),
+    configLoadVersion: 0,
     envLockedFields: new Set(),
     securityConfig: {},
 
@@ -1779,6 +1781,8 @@ async function toggleCredDetailsCommon(pathId, manager) {
 // =====================================================================
 function stopPanelSession() {
     AppState.sessionEpoch++;
+    AppState.configLoadVersion++;
+    resetConfigCapabilities();
     AppState.sessionReady = false;
     AppState.tabLoadVersion++;
     resetPanelTabTransition();
@@ -4574,7 +4578,34 @@ async function clearEnvCredentials() {
 // =====================================================================
 // 配置管理
 // =====================================================================
+function resetConfigCapabilities() {
+    AppState.configCapabilities = new Set();
+    updateFlashNonStreamControl();
+}
+
+function updateFlashNonStreamControl() {
+    const field = document.getElementById('antigravityFlashNonStreamMode');
+    const status = document.getElementById('antigravityFlashNonStreamStatus');
+    const supported = AppState.configCapabilities.has('antigravity.flash.non_stream_transport');
+    const locked = AppState.envLockedFields.has('antigravity_flash_non_stream_mode');
+    if (field) {
+        field.disabled = !supported || locked;
+        if (supported && locked) field.classList.add('env-locked');
+        else field.classList.remove('env-locked');
+    }
+    if (status) status.textContent = !supported ? '当前服务尚未确认支持此设置' :
+        locked ? '由环境变量 ANTIGRAVITY_FLASH_NON_STREAM_MODE 控制' : '支持热更新，保存后立即生效';
+}
+
+function normalizeFlashNonStreamMode(value) {
+    return ['inherit', 'native', 'stream_collect'].includes(value) ? value : 'inherit';
+}
+
 async function loadConfig() {
+    const epoch = AppState.sessionEpoch;
+    const version = ++AppState.configLoadVersion;
+    const current = () => epoch === AppState.sessionEpoch && version === AppState.configLoadVersion;
+    resetConfigCapabilities();
     const loading = document.getElementById('configLoading');
     const form = document.getElementById('configForm');
 
@@ -4585,11 +4616,14 @@ async function loadConfig() {
         const response = await fetch('./config/get', { headers: getAuthHeaders() });
         const data = await response.json();
 
+        if (!current()) return;
         if (response.ok) {
             AppState.currentConfig = data.config;
-            AppState.envLockedFields = new Set(data.env_locked || []);
+            AppState.envLockedFields = new Set(Array.isArray(data.env_locked) ? data.env_locked : []);
             AppState.securityConfig = data.security || {};
 
+            AppState.configCapabilities = new Set(Array.isArray(data.capabilities) &&
+                data.capabilities.every(value => typeof value === 'string') ? data.capabilities : []);
             populateConfigForm();
             form.classList.remove('hidden');
             showStatus('配置加载成功', 'success');
@@ -4599,9 +4633,12 @@ async function loadConfig() {
             showStatus(`加载配置失败: ${data.detail || data.error || '未知错误'}`, 'error');
         }
     } catch (error) {
-        showStatus(`网络错误: ${error.message}`, 'error');
+        if (current()) {
+            resetConfigCapabilities();
+            showStatus(`网络错误: ${error.message}`, 'error');
+        }
     } finally {
-        loading.style.display = 'none';
+        if (current()) loading.style.display = 'none';
     }
 }
 
@@ -4642,6 +4679,8 @@ function populateConfigForm() {
     document.getElementById('compatibilityModeEnabled').checked = Boolean(c.compatibility_mode_enabled);
     document.getElementById('returnThoughtsToFrontend').checked = Boolean(c.return_thoughts_to_frontend !== false);
     document.getElementById('antigravityStream2nostream').checked = Boolean(c.antigravity_stream2nostream !== false);
+    setConfigField('antigravityFlashNonStreamMode', normalizeFlashNonStreamMode(c.antigravity_flash_non_stream_mode));
+    updateFlashNonStreamControl();
     document.getElementById('antigravitySwitchCredentialEnabled').checked = Boolean(c.antigravity_switch_credential_enabled);
     document.getElementById('debugMode').checked = Boolean(c.debug_mode);
 
@@ -4717,6 +4756,11 @@ async function saveConfig() {
             keepalive_url: getValue('keepaliveUrl'),
             keepalive_interval: getInt('keepaliveInterval', 60)
         };
+
+        if (AppState.configCapabilities.has('antigravity.flash.non_stream_transport') &&
+            !AppState.envLockedFields.has('antigravity_flash_non_stream_mode')) {
+            config.antigravity_flash_non_stream_mode = normalizeFlashNonStreamMode(getValue('antigravityFlashNonStreamMode'));
+        }
 
         const response = await fetch('./config/save', {
             method: 'POST',

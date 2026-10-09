@@ -9,6 +9,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from fastapi import Response
 from config import (
     get_antigravity_api_url,
     get_antigravity_stream2nostream,
+    get_antigravity_flash_non_stream_mode,
     get_auto_ban_error_codes,
     is_smart_429_protection_enabled,
 )
@@ -821,6 +823,35 @@ async def _stream_request(
         await close_credential_prefetch(next_cred_task)
 
 
+_TEXT_FLASH_MODEL = re.compile(
+    r"gemini-[0-9]+(?:\.[0-9]+)?-flash"
+    r"(?:-(?:lite|preview|thinking|agent|tiered|extra-low|high|medium|low|minimal))*",
+    re.ASCII,
+)
+
+
+def is_antigravity_text_flash_model(model_id: str) -> bool:
+    """Classify the final dispatch model without changing routing acceptance."""
+    return isinstance(model_id, str) and _TEXT_FLASH_MODEL.fullmatch(model_id.lower()) is not None
+
+
+async def _use_stream_collector(model_name, route_context=None):
+    """Select transport once from final dispatch identity and captured options."""
+    if route_context is not None:
+        snapshot = route_context.feature_snapshot
+        global_mode = snapshot.antigravity_stream2nostream
+        flash_mode = snapshot.antigravity_flash_non_stream_mode
+    else:
+        global_mode = await get_antigravity_stream2nostream()
+        flash_mode = await get_antigravity_flash_non_stream_mode()
+    if is_antigravity_text_flash_model(model_name):
+        if flash_mode == "native":
+            return False
+        if flash_mode == "stream_collect":
+            return True
+    return global_mode
+
+
 async def _non_stream_request(
     body: Dict[str, Any],
     headers: Optional[Dict[str, str]] = None,
@@ -839,8 +870,7 @@ async def _non_stream_request(
         Response对象
     """
     # 检查是否启用流式收集模式
-    stream2nostream = (route_context.feature_snapshot.antigravity_stream2nostream
-                      if route_context is not None else await get_antigravity_stream2nostream())
+    stream2nostream = await _use_stream_collector(body.get("model", ""), route_context)
     if stream2nostream:
         log.debug("[ANTIGRAVITY] 使用流式收集模式实现非流式请求")
 

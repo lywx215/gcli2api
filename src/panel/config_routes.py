@@ -217,6 +217,9 @@ async def get_config(token: str = Depends(verify_panel_token)):
         current_config["quota_fallback_cooldown_minutes"] = (
             await config.get_quota_fallback_cooldown_minutes()
         )
+        current_config["antigravity_flash_non_stream_mode"] = (
+            await config.get_antigravity_flash_non_stream_mode()
+        )
 
         embed_policy = await get_embed_policy()
         current_config[config.GCLI_EMBED_MODE_KEY] = embed_policy.mode
@@ -225,6 +228,7 @@ async def get_config(token: str = Depends(verify_panel_token)):
         return JSONResponse(
             content={
                 "config": current_config,
+                "capabilities": [config.ANTIGRAVITY_FLASH_NON_STREAM_CAPABILITY],
                 "env_locked": list(env_locked_keys),
                 "security": {
                     "node_management_token": await management_token_status(),
@@ -250,6 +254,14 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
         new_config = request.config
         if any(_sensitive_key(key) for key in new_config):
             raise HTTPException(status_code=400, detail="敏感配置只能通过专用接口修改")
+
+        if "antigravity_flash_non_stream_mode" in new_config:
+            value = new_config["antigravity_flash_non_stream_mode"]
+            if not isinstance(value, str) or value not in config.ANTIGRAVITY_FLASH_NON_STREAM_MODES:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Antigravity Flash 非流式模式必须是 inherit、native 或 stream_collect",
+                )
 
         if "smart_429_protection_enabled" in new_config:
             if not isinstance(new_config["smart_429_protection_enabled"], bool):

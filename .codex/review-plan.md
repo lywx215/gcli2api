@@ -1,42 +1,45 @@
-# p08 Antigravity 凭证页面性能改善方案
+# 当前 Claude 复审方案：Antigravity Flash 独立请求方式
 
-## 目标与基线
-以本地 master f1ddd67 及现有未提交的跨页取消选择修复为实施基线；p08 当前运行 d9b65ba。减少 10 月 4 日引入的全量摘要、双重权限读取和两路目录并发限制，以及前端重复请求、等待刷新后才报告完成的问题。既有调查的模拟成本证据不是 p08 实测延迟，不承诺未经验证的毫秒指标。
-采用用户已选择的默认值（本轮又确认保留旧大批量兼容）：列表显示缓存最多 5 秒，本进程写入成功立即失效；目录 HTTP 全进程最多 5 路，后台最多 1 路；额度批量按 10 个凭证一批顺序执行，复用现有批量接口、支持停止后续批次；旧调用方仍可一次提交大批量，由服务端分窗口处理并完整返回逐项结果。实时额度、权限检测、模型选择、最终 admission 和 CAS 不读取该列表缓存。
+以 d1007/6245cbb 为基线，分支 codex/antigravity-flash-transport。依据 .codex/flash-transport-requirements.md；用户要求实际Claude审核且无三轮上限。本批只继续修复测试工具、合成验证、复审和交付记录，不提交、推送或部署。
 
-## 第一批：轻量索引、分页与显示缓存
-- 本批先新增共享只读解析器及配置文档：ANTIGRAVITY_PANEL_CHAIN_TIMEOUT_SECONDS正有限数表示已核对T，显式unbounded表示确认无中间期限，未设置为unknown；其余值（含非正、NaN/infinity、非法字符串）为配置错误。列表与后续额度批次复用，不通过Management API配置，不新增面板配置控件。解析器随第一批保留，单独回退第二批不得移除。第一批独立验证T=12、T≤10、unset、unbounded及非法值。
-- 四后端提供 Antigravity 专用轻量索引读取和按文件名批量读取当前页展示字段的内部接口，不改变原管理或 Legacy HTTP 字段。索引保留原后端排序键、状态、套餐、备注、错误代码、冷却期限、额度组及两版权限的最小安全状态，以及私有 generation/version；不保留 credential_data、令牌、完整原始行或错误消息。每次冷构建仅进行一次权限读取与身份校验，从同一有效状态产生两版权限投影；凭证原文仅在游标单批处理中暂用并释放。
-- 保持统计顺序：stats 按原各后端定义统计全库；model_access_summary 在普通筛选之后、权限筛选之前统计；total 在所有筛选后计算，然后分页。当前页按 filename 批量读取 email、计数、周期统计、last_success 等较重字段，恢复原排序。SQLite 普通无高级筛选时沿用有界分页；高级筛选及其他后端从轻索引选出页名后只读取该页重字段，避免完整摘要物化和重复额度解析。
-- 普通列表只为当前页 403 项补读详情。403_tos_violation/subscription_required/other 筛选须在分页前分类全部候选 403，每批 500 读取消息，缓存仅分类枚举，丢弃原文；分类与索引共用 epoch 和 TTL，不独立延长缓存。筛选、计数和分页与当前接口一致。
-- 每 backend 实例仅缓存一份未筛选索引；TTL 从读取开始按 monotonic 计时，固定 5 秒、不滑动。每请求统一取 wall-clock now，从保留期限重新计算冷却、权限过期、quota_next_expiry 和相关计数；纯时间到期不复读数据库，损坏、缺失及矛盾数据继续按原安全规则显示未知或受限。构建用时≥5秒不发布持久缓存，仍在各自有效列表预算内的本次singleflight等待者共享完整结果并按请求now重投影；完成后清在途引用，后续请求重建，不偷偷延长TTL，基准明确记录此低命中边界。纯投影函数可新增兼容的 now 关键字参数，默认行为不变。
-- 仅实际修改索引字段时在 backend 成功提交后失效，覆盖保存/原子导入/删除及状态、套餐、备注、排序键、错误代码/403分类依据、冷却、额度、权限或凭证身份变化；纯 counts、周期统计、last_success、updated_at 和不参与展示投影的 lease 更新不失效。现各后端按 rotation_order 排序（SQLite 另用 rowid），不以调用统计排序。record_success/failure 同时改变错误/冷却时仍须失效；用现有原子读取或写入返回的旧小字段识别实际变化，不为失效再全库读。失败/回滚不失效，失效不依赖 Redis 及 _quota_cache_changed 的早退。用 epoch 加 singleflight 防止并发重建及旧构建重新发布；当前页读取发现删除、generation/version 失配或本地 epoch 变化时最多重建一次，仍冲突则走一次不缓存的新鲜读取。私有身份字段不返回给面板。页校验仅约束本实例/当前页，不承诺跨实例全接口线性一致。
-- 构建游标每批 500 行；每实例最多缓存 50,000 项或 32 MiB 保留对象估算内存，先到为止，403 分类也计入；这不是进程或单个巨大原文的硬内存上限。超限释放候选缓存、不发布截断结果，使用后端稳定排序的流式扫描：全库 stats→普通过滤/403分类→权限 summary→权限筛选→total/页面窗口，必须扫描完，不能保留 offset+limit 行或全体 filename/分类集合。需要403分类时扫描批次暂带候选错误内容、批内分类释放，游标关闭后再查页字段，禁止占住池连接后嵌套借连接。若重扫，弃用首遍全部统计和页结果，重扫仍计入一次重试上限。所有冷构建/超限扫描每实例共用一个全库扫描名额；同backend/server、规范化筛选/页码/pageSize/epoch的流式请求合并，其他键等待，最多接纳20个等待中的列表请求（同键等待者也计数），从列表入口起默认15秒工作预算包含排队/扫描/页读取；与同一已核对T联动，有限T>10时取min(15,T-10)，预留5秒响应和5秒链路余量，未知/明确unbounded时默认15秒。T≤10或非法配置不开始扫描，503 credential_list_budget_configuration；等待超限503 credential_list_queue_full、预算到期504 credential_list_timeout，保留原detail；不能返回部分total/stats或当能力撤回。失效/取消安全关闭游标后释放扫描名额。同键一个等待者取消不取消其他等待者仍需要的共享构建；最后一个等待者结束可取消并回收。能力/storage_ready 每次请求重新检查，变化清缓存；查询失败不缓存为空库。跨实例写入的显示缓存额外滞后最多5秒（另有在途DB读取时长），初始化/关闭清缓存，不引入 Redis、广播或 DDL。
+## 功能实现及既有验证
 
-## 第二批：目录并发、期限与重复数据库读取
-- 用统一目录 HTTP broker 替换全局 Semaphore(2) 与 slot_held 绕过路径；限制实际 fetchAvailableModels HTTP 为 5，background 同时最多 1。不为空闲后台保留槽位，claim、DB、OAuth、JSON 处理不占 HTTP 槽；响应体读取和连接关闭完成后释放槽，取消也要释放。调用类别显式传递：单个面板为 interactive、面板批量为 batch、业务 select/模型目录为 business、scan/start 为 background，旧未分类调用默认为 business。
-- 每类 FIFO，工作保持的加权轮转 business:interactive:batch:background=4:4:2:1，交互优先于批量/后台但不低估真实业务；公平保证仅针对仍在预算内可调度的任务，不保证10秒后台预算在前台长请求满占时必能执行。跳过空队列和已用满后台名额的类别。HTTP 待执行队列上限 200，超限立即返回明确逐项错误，不无限等待；后台使用一个固定worker；所有Antigravity面板批量请求共享全进程5个worker和最多200个等待文件的队列，容量不足逐项quota_queue_full/phase=worker_queue。按request_id轮转，每请求内部FIFO；5个运行项不抢占，单项/窗口50秒也包含等待这些共享worker。一个请求完成当前窗口后才接纳下一窗口，未接纳窗口仅保存请求的原文件名单，不创建任务。不能每请求另开5worker或裸gather全部文件。既有后台待检名单去重和 200 上限继续保留。
-- 设置窗口预算与整个请求预算两层absolute deadline。复用第一批的链路期限解析；ANTIGRAVITY_LEGACY_BATCH_WORK_TIMEOUT_SECONDS为可选正数旧请求工作上限L，未设置不额外压短旧请求，仅受窗口总预算及已确认T约束。配置仅文档/服务端读取，不增加管理协议字段或面板配置控件。单项/每个10项窗口最多50秒；单项从接口受理时、批量从窗口进入调度时统一计入共享worker等待、准备、OAuth、HTTP排队、Google和CAS。OAuth≤15秒、Google≤30秒，实际阶段预算=min(阶段上限,窗口remaining,请求remaining)，不能用httpx分阶段timeout代替整体期限。窗口等待超时phase=worker_queue，窗口不重置。
-- 新页面≤10项请求，默认请求工作预算50秒，预留最多5秒处理/序列化，服务端目标55秒内返回。发布前只读核对最短客户端/代理期限T；已知T时单项/新页请求工作预算=min(50,T-10)，确保5秒响应余量后仍距链路期限至少5秒；T未知或明确unbounded时新页预算50秒，未知时不能声称线上期限验收通过或发布。T≤10或非法期限配置对所有请求规模都不启动准备/Google/CAS，逐项503/error_code=quota_budget_configuration/phase=config/started=false，原单项/批量响应外形不变。不擅改代理。
-- 旧请求>10项仍接纳原规模、按原顺序完整返回N项，不加10项请求硬上限；服务端顺序执行10项窗口。整个旧请求工作预算以50×ceil(N/10)为基准；配置L时取与L的小值，已知有限T时再取与T-10的小值，明确unbounded或T未知时不默认压成50秒。每窗受请求remaining限制；旧直连脚本可显式unbounded并选择L，已知代理T必须按真实值配置而不能用L绕过。未知T不承诺外部调用方能收到长请求结果，发布前必须确认有限T或确有无中间期限；兼容文档说明逐项504/pending属于时间/结算限制、并非Google拒绝，不修改旧调用方接纳量。额度查询不能保证全部执行成功：请求预算耗尽时不接纳后续窗口，尚未开始项逐项success=false/status_code=504/error_code=quota_timeout/phase=request_budget/started=false；已开始项返回真实结果或对应超时/pending，不能标未执行。started的统一边界是该项首次进入prepare之前：worker队满拒绝、worker等待超时、请求期限耗尽的未开始项、未接纳窗口、关闭/取消/断连移除的等待项、期限配置错误一律started=false；进入prepare后即使HTTP队满或Google未调用也不标未执行，返回started=true和真实phase。没有接收方时该分类只用于内部结算/计数，不声称已发送结果；不能从state_update.skipped推断。保持结果数和请求顺序，在响应余量内返回，不能为兼容继续等到代理截断。文档举例T=60秒、100项时请求工作预算50秒，实际按进度执行若干窗口，其余明确未执行；保留大请求兼容不承诺无期限地执行所有项。
-- 请求体解析后监测客户端断开/请求取消：停止接纳窗口、移除未开始文件和HTTP等待项，取消未完成的非原子准备/网络，仅由registry结算已开始CAS及允许的原lease清理；不为无接收方新启动Google/业务CAS，不能当已回滚。外部链路比配置更早断开时承认无法发送结果，不宣称调用方拿到完整结果。监测任务与请求共同回收；区别于“停止后续批次”按钮。后台10秒尝试、业务30秒整体/每次10秒预算不变，排队计入。
-- 保留 success/status_code/error 与批量结构，增量安全 error_code/phase：quota_queue_full、quota_timeout，队满逐项503/超时504；worker等待过期在phase明确。Google成功但回写未完成不能伪报查询失败。仅shield已经开始的单个完整原子操作；必须先取得registry名额再交驱动，不能shield整条业务链。强引用结算registry最多200，等待容量也计预算，满时未开始写入报告未执行而非pending；超时后不启动新业务/结果CAS，已开始的该次CAS单列pending，后续quota-sync不得因此自动接着启动。回收真实提交/冲突/失败，不假称回滚。发布前只读核对容器/进程管理器的最短实际优雅停止时限S，并新增内部ANTIGRAVITY_SHUTDOWN_GRACE_SECONDS记录已核对值。关闭先停止受理、取消队列/HTTP，并立即记录不含身份的待确认数量；取消等待及registry结算共用从收到关闭信号开始的absolute deadline，不能各阶段重置；有限S时总等待max(0,min(30,S-5))秒，S未知时总等待最多5秒且验收列缺口，S≤5立即把未确认记未知而不等待。已确认无强杀期限时最多30秒。等待后关连接，不能把断连/强杀视为回滚或声称所有结算/日志已持久化；发布须核对实际S足以完成该预算和5秒收尾，不能假定默认30秒生效。此状态不扩展Management schema/capability。
-- 保留原 claim 的 generation、lease_id 和权限 revision；OAuth 成功仅推进 credential version。失败/取消/排队超时使用原claim；不能读取新身份强行写回。预算耗尽后仅允许受registry管理的lease清理CAS，严格比较generation+lease_id、只清原租约，不改权限或退避；registry无名额时不绕过上限，等待原租约自然到期。本地拥塞不记录为Google拒绝权限或触发自动禁用。现有刷新令牌失败 directory_query_failed 和 900 秒退避保留。
-- 手动 prepare 的首次 snapshot 同时取得 raw/access，保留原 policy、权限 revision 和 lease 基线；去掉后续重复 access snapshot。OAuth 后仅推进必要凭证/version，并保持现有 same-refresh-identity 冲突处理。新增内部 model_access_observe_with_projection，原 bool 接口不变；提交/matched_count 成功后从同一最终状态返回 applied、public、families，失败不发布投影，仍独立执行 quota sync。正常无刷新无冲突路径从 4 次单读+2 次原子操作降至 1 次单读+2 次原子操作；Mongo 静态往返由 8 降至 5，不合并语义不同的两个 CAS。
+1. config.py 增加 antigravity_flash_non_stream_mode 三态：inherit跟随全局，native使用generateContent，stream_collect聚合streamGenerateContent。非空ENV优先并锁定；空值视未设置。非法历史/ENV值回退inherit，保存严格枚举；GET在存储合并后返回规范化值。
+2. /config/get声明 antigravity.flash.non_stream_transport。桌面/手机下拉框初始禁用，确认能力才允许发送字段；能力撤销、加载失败、退出或ENV锁定禁用并省略，使用会话及加载版本防止旧响应恢复能力。
+3. API中央非流分支按最终dispatch模型选择现有RPC。支持文本Flash/Lite及现有preview/thinking/agent/档位，排除图片、tab_*及非Flash；双向别名按实际目标判断。假流复用非流，真实流及抗截断保持原实时路径。沿用准入/重试/超时/错误/统计，不在native失败后额外改用流式重发。
+4. FeatureSnapshot在values之后追加默认inherit的新字段，保留旧位置参数；Antigravity捕获一次，重试使用同一快照，热更新只影响后续请求。
+5. 仅Antigravity及必要共享代码，不恢复CLI或MGMT专属开发。不改管理协议/schema/panel-version、受保护路由AST、既有凭证或数据库；manager无需动作。
 
-## 第三批：前端刷新与批量反馈
-- Antigravity 列表刷新按 session epoch、全部筛选、页码、pageSize、freshness generation 合并相同在途请求；不同条件 abort 旧列表 GET 并提升请求版本。筛选 A→B→A、200/501 能力撤回、一次补请求上限、旧 finally 不影响新会话继续保留；能力恢复不能递归等待自身 singleflight。写动作/批量结束用 afterMutation 提升 freshness generation，保证复用不到写入前的同键请求。
-- 后台冷却到期刷新静默按 filename key 更新既有卡片的 header、权限徽章、action 和状态 class，保留原详情/报错/额度 DOM 节点、事件及在途请求引用；不先清空列表，也不复制 innerHTML。已被删除、筛掉或移出本页的卡片正常移除；会话变化清旧节点，凭证导入/替换后的本地刷新重建对应详情。文件内容/报错详情节点保留，但每次列表更新使已加载缓存失效、下次用户展开重新按需读取；在途响应可完成显示，却不能重新把已失效缓存标为长期有效，用详情请求编号/失效版本保护。保持额度每次展开重新查询的原行为，不因后台列表刷新自动额外查询。列表503/504保留仍适用的已有列表并提示重试，初次加载展示明确失败，不重置能力、不自动反复重试。
-- 仅 Antigravity 额度/权限批量新增独立 busy、batchTask 和 session epoch。开始时按选中顺序固定去重名单，每批 10 项，顺序请求原接口；入口和 updateBatchControls 均防重复额度批量提交，其他现有批量动作保持原行为。两种页面在批量区新增持久进度与“停止后续批次”按钮；每批完成更新成功、失败、结果未知、未执行，额度组 skipped 和 state_update.skipped 不当作整凭证未执行。
-- 逐项按本批filename核对结果；缺失、重复或不能解析的项标结果未知，新增started=false的明确未启动项计未执行，其余按既有success/status_code，Google成功但回写失败/pending单列。整批网络错误/无效JSON/无逐项结果的5xx不自动重试，已发送但未确认项为未知、未发送项为未执行并停止；逐项quota_queue_full达到本批项数50%，或出现quota_budget_configuration，也停止后续批次并提示稍后重试，其他明确逐项失败可继续。取消只停止未来批次，当前 POST 等待结算，不传列表 AbortController。筛选/翻页不改变已固定任务，登出禁止后续批次且旧响应/finally 不能影响重登录。
-- 最后先显示累计汇总，再异步触发一次 afterMutation 静默列表刷新，不等待慢列表才提示完成，也不让“已加载”覆盖批量结果。存在pending时，同会话/同batchTask下30秒后最多再补一次afterMutation静默刷新；仍未确认则保留提示让用户手动刷新，不轮询。新任务/登出取消旧补刷新。权限family_counts仅合并有效逐项投影，区别执行结果未知与权限unknown。新前端缺error_code/phase/pending时必须退回原success/status_code规则，与旧后端兼容。保持最新“取消全选可清除跨页选择”修复及全部选择/认证回归，不扩展 Gemini CLI 专属批量流程。
+已完成合成/模拟测试：81个Python模块2620 passed、1 skipped（Windows不适用的POSIX SIGTERM）；新旧JS89 passed；11个保护AST与基线一致。覆盖配置/ENV/能力/快照、最终模型及别名、三协议非流/假流/真流/抗截断、重试/超时/工具调用/usage/计数。既有9个超时测试只补合成内存路由与配置初始化，保持504及单次计数断言。这些证据不能证明真实Google生成可用性。
 
-## 验收与交付边界
-- 各批补针对性回归，最终完整隔离 pytest、既有与新增 Node 测试及 Management/Legacy 契约测试。四后端验证筛选组合、排序/统计、过期/坏数据、索引字段失效、纯统计不失效与构建竞争、删除/覆盖身份失配、403 分类、内存超限流式路径、能力错误；真实临时 SQLite 与其余后端 mock 分开记录，有可用隔离 DB 再运行真实集成，缺项明确标注。
-- 对 10,000/50,000 合成凭证、每页 25 项记录冷/热 p50/p95、SQL/游标次数、解析/hash 行数与内存：冷构建仅一次权限身份扫描，热请求不扫描全库 credential_data，不构造 N 个完整摘要，页重字段仅P行；冷构建>5秒仍只服务该singleflight cohort、不发持久缓存，过有效列表预算明确失败；同键并发10请求只构建一次；超限下同键10请求扫描一次、异键全库扫描峰值1；等待第21请求立即拒绝，排队/扫描有效预算到期清游标/名额，T=12时工作≤2秒且服务端先于代理返回504、T≤10列表配置错误且不扫描，同键取消单个等待者不影响其他等待者，纯统计高频写仍可命中。403 子类全候选分类作为有界例外记录；不把合成数字当 p08 实测。
-- 用可控事件/barrier 验证 HTTP 总峰值 5、后台峰值 1、四类FIFO/仍存活任务公平、business与interactive混合满载下预算内完成或明确超时、满队列、排队计时、OAuth/Google/CAS 超时及取消释放、原claim fences、允许的超时lease清理、registry满额及权限pending后不再启动额度CAS、已知S不足30秒/未知S/提前强杀的未知结算边界、多个批量请求共享5 worker且request轮转公平；以原 20×100ms 案例复测报告改善，不用易抖动的时间断言代替并发正确性。
-- 契约覆盖旧请求100项在充足T下分10窗完整返回、T=60秒时50秒请求预算下已完成/未执行仍N项且顺序一致、期限耗尽不调度后续窗口；另测T未知或显式unbounded不将旧100项压成一窗、配置L限制、T≤10所有项配置错误，worker拒绝/等待超时/断连未开始统一started=false；并模拟更早代理断开停止未开始项、仅结算已开始CAS；Node VM覆盖23项分10/10/3、重复点击、部分失败/未知/取消、50%队满停止、pending一次补刷新及旧后端缺新字段、筛选翻页、200/501 恢复、防旧请求/finally、写后新读取、展开额度请求与自动刷新、详情缓存刷新后重开及在途响应不能恢复旧loaded标记、登出重登录、桌面移动端控件。新增低频阶段计时（默认 1% 采样）仅含阶段耗时、行数和低基数错误类型，不记录文件名、邮箱、凭证或上游正文；为后续获授权的 p08 验收提供列表/队列/OAuth/Google/CAS/渲染 p50/p95 分解。
-- 实施记录区分方案审核、代码审核、mock、真实 DB 与线上证据；Python 3.13 未验证须注明。仅 Antigravity 与必要共享代码；Management schema/capability 不变，manager=no_counterpart_action，不恢复 MGMT 或 Gemini CLI 专属维护。不部署/重启，不修改生产凭证/数据库，不新增 DDL，不手改 panel-version，不自动提交或推送。优化按三批实施，接口增量及前端旧字段回退允许独立回退；先验证第三批对旧第二批响应兼容，验证不足时按第三→二→一逆序回退；无论何种回退，链路配置解析只随第一批撤回，保留现有安全逻辑和用户未提交修复；实施后再通过共享 Hook 对实际代码进行 Claude 审核。
+## 已执行的真实测试与当前限制
 
-## 本轮实施基线
-master f1ddd675；保留既有跨页取消选择修复。实施和验证在 gcli2api-master-integration。原7轮审核仅方案文本，未伪造Hook正式批准状态；实际代码另行复审。
+用户唯一真实测试授权是使用 D:/0502/at 目录，先Claude审核和修复后实测。初始真实测试计划第二轮通过，代码和脚本第三轮通过；之后执行一次真实调用。只读选择一份凭证，执行时所有源短期token已过期，原Credentials.refresh()在内存刷新一次HTTP200，Gemini native HTTP429，累计HTTP2次。模型gemini-3.8-flash-low，全局流转非流开启但实际使用generateContent；最终输出上限512。源文件hash不变，无导入或持久化，无账号/凭证/原始响应输出。
+
+429触发既定停止规则，未执行collect、真流、OpenAI或Anthropic，不宣称native生成成功或余下协议通过。刷新所得token只在已退出的进程内存中，原文件仍是过期token。当前余预算6，原约束为本任务总计8、至多一次OAuth刷新；刷新额度已用完，没有新用户测试请求、预算调整或第二次刷新授权。
+
+因此当前工具修复后的真实复测不执行，也无法在当前预算及刷新约束下完成完整矩阵。不会轮询其他凭证/模型、探测429是否解除或将复审视为重置调用权限。生成及剩余协议验收明确未完成；后续真实复测属于另行明确启动的任务。本批可以完成本地工具修复及实际Claude复审，无需向用户索取更大预算。
+
+## 测试脚本保留行为
+
+scripts/verify_antigravity_flash_live.py默认只做本地预检，真实执行必须显式--execute与--max-http-requests（1..8）。调用者跨运行持久化安全预算，启动前预占剩余值并传入，依最终network_summary结算，无可靠计数全额扣预占；不保存凭证。
+
+实际router、converter、API及HTTP仍运行，仅凭证provider、配置/路由状态、统计使用内存，禁用日志和持久化写入；不触碰既有服务/DB，不启用Credit，不做onboarding/API enable。每例最多一次网络尝试，原helper刷新最多一次。HTTPS仅允许原Google生成host/path及必要oauth2.googleapis.com/token，不跟重定向，不使用环境代理。401/403/429/503或重定向立即停止；native其他错误仅一次独立collect诊断，native未通过则不进入真流或其余协议。
+
+成功路径为7次生成：Gemini native、collect、真流，然后OpenAI、Anthropic各native/collect。每例90秒，OAuth45秒。结果独立报告协议状态、真实transport、正文是否存在、安全usage及finish枚举。HTTP200但MAX_TOKENS/空正文为inconclusive_output_budget并停止；不能标为transport失效或通过。任何未执行项明确跳过。
+
+原production normalizer强制64000。本脚本只在已选择API传输后的原HTTP helper wrapper深拷贝最终JSON，仅将request.generationConfig.maxOutputTokens压512，发送前guard验证；其他字段/URL/model不改。报告output_budget_guard_applied和effective_max_output_tokens。此护栏不证明产品客户上限或默认64000上游可用性，不修改受保护normalizer。
+
+## 当前待实施的两项前置检查
+
+集中常量：PLANNED_GENERATIONS=7，CASE_TIMEOUT_SECONDS=90，OAUTH_TIMEOUT_SECONDS=45，TOKEN_MARGIN_SECONDS=60。存储token剩余有效期严格大于735秒（7*90+45+60）才可直接使用，否则标记需要单次内存刷新。刷新后原helper的expires_at也须超过该保守门槛；未知或不足则停止，不再刷新或换凭证。
+
+执行前按所选凭证计算required_http_requests=7+int(refresh_required)。若显式预算不足完整矩阵，在任何OAuth或生成前报告insufficient_complete_run_budget、required/available请求数，network_summary=0、completed=false。默认预检仍零网络，并报告所需预算。完整矩阵门禁是本地工具的保守选择，不冒称用户要求，亦不意味着本任务将再执行真实调用。
+
+用合成凭证和模拟HTTP验证：有效token预算6及需刷新预算7均零请求；完整预算7/8下保持原矩阵；近到期token改走刷新，刷新token过短仅一次OAuth后停；native普通失败仅两次诊断；429立即停；非法/缺预算在读取凭证前拒绝。不读真实目录，不重新实测。
+
+## 审核与交付
+
+继续使用 C:/Users/lywx2/.codex/review/hook.py 与实际 claude-opus-5-5，共享脚本不改，仅本任务进程解除轮次限制。当前方案批准后实施两项脚本修复，做适当模拟回归并更新说明，再提交稳定快照代码审核。最终检查当前需求/方案/16交付文件签名与批准状态一致。
+
+新报告区分第三轮批准后实际429试验、后续未再实测的脚本修复、先前离线回归和最终实际Claude结论。原始安全记录位于.cache/flash-live-claude-review；当前测试脚本修订不改变已执行429路径的证据。报告明确尚未证明native生成可用，旧审核快照仅作为历史，不套用到新文档或脚本。

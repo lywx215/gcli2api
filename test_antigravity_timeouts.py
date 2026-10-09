@@ -182,6 +182,20 @@ async def test_real_routes_timeout_before_first_content(short_limits, monkeypatc
     from src.router.antigravity import gemini, openai, anthropic
     from src.models import GeminiRequest, OpenAIChatCompletionRequest, ClaudeRequest
     from src.converter import antigravity_fix, openai2gemini, anthropic2gemini
+    from types import SimpleNamespace
+    import config
+    import src.storage_adapter as adapter_module
+
+    # Real routing now requires an initialized authoritative store. Keep this
+    # timeout case entirely synthetic while exercising snapshot preparation.
+    async def fresh(key, default=None):
+        assert key == "model_routing"
+        return {"routes": []}
+
+    monkeypatch.setattr(adapter_module, "_storage_adapter", SimpleNamespace(
+        _initialized=True, get_config_fresh=fresh))
+    monkeypatch.setattr(config, "_config_initialized", True)
+    monkeypatch.setattr(config, "_config_cache", {})
     module = {'gemini':gemini, 'openai':openai, 'anthropic':anthropic}[protocol]
     # Mode selection is now captured once by the real routing snapshot. Use
     # the existing public prefixes rather than patching obsolete local helpers.

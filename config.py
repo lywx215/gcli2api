@@ -31,6 +31,8 @@ QUOTA_FALLBACK_COOLDOWN_MAX_MINUTES = 1440
 NODE_MANAGEMENT_TOKEN_HASH_KEY = "node_management_token_hash"
 GCLI_EMBED_MODE_KEY = "gcli_embed_mode"
 GCLI_EMBED_ORIGINS_KEY = "gcli_embed_allowed_origins"
+ANTIGRAVITY_FLASH_NON_STREAM_CAPABILITY = "antigravity.flash.non_stream_transport"
+ANTIGRAVITY_FLASH_NON_STREAM_MODES = frozenset(("inherit", "native", "stream_collect"))
 
 # Client Configuration
 
@@ -63,6 +65,7 @@ ENV_MAPPINGS = {
     "COMPATIBILITY_MODE": "compatibility_mode_enabled",
     "RETURN_THOUGHTS_TO_FRONTEND": "return_thoughts_to_frontend",
     "ANTIGRAVITY_STREAM2NOSTREAM": "antigravity_stream2nostream",
+    "ANTIGRAVITY_FLASH_NON_STREAM_MODE": "antigravity_flash_non_stream_mode",
     "ANTIGRAVITY_SWITCH_CREDENTIAL": "antigravity_switch_credential_enabled",
     "HOST": "host",
     "PORT": "port",
@@ -493,6 +496,19 @@ async def get_antigravity_stream2nostream() -> bool:
         return env_value.lower() in ("true", "1", "yes", "on")
 
     return bool(await get_config_value("antigravity_stream2nostream", True))
+
+
+async def get_antigravity_flash_non_stream_mode() -> str:
+    """Return Flash transport mode, with ENV > storage > inherit priority.
+
+    Invalid values preserve the legacy global transport choice via inherit.
+    """
+    value = os.getenv("ANTIGRAVITY_FLASH_NON_STREAM_MODE")
+    if not value:
+        value = await get_config_value("antigravity_flash_non_stream_mode", "inherit")
+    if isinstance(value, str) and value in ANTIGRAVITY_FLASH_NON_STREAM_MODES:
+        return value
+    return "inherit"
 
 
 async def get_antigravity_switch_credential_enabled() -> bool:
