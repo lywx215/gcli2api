@@ -1114,6 +1114,34 @@
                 padding: 12px 20px;
             }
         }
+
+        /* Antigravity credential rows use the available width without splitting labels. */
+        #antigravity-manageTab .ag-filter-group { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+        #antigravity-manageTab .ag-filter-group label { margin: 0; white-space: nowrap; flex-shrink: 0; }
+        #antigravity-manageTab .ag-filter-group select { min-width: 0; max-width: 100%; }
+        #antigravity-manageTab .ag-search-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; }
+        #antigravity-manageTab .ag-search-row input { flex: 1 1 230px; min-width: 0; width: auto; }
+        #antigravity-manageTab .ag-search-actions { display: flex; gap: 8px; flex-shrink: 0; }
+        #antigravity-manageTab .ag-search-row button { padding: 8px 12px; border: 0; border-radius: 4px; color: white; background: #28a745; font-size: 14px; }
+        #antigravity-manageTab .ag-search-row button:disabled { background: #e9ecef; color: #85929e; cursor: default; }
+        #antigravity-manageTab .ag-search-row label { margin: 0; white-space: nowrap; }
+        #antigravity-manageTab .ag-search-hint { flex-basis: 100%; font-size: 12px; color: #666; }
+        #antigravity-manageTab .cred-header { flex-wrap: wrap; gap: 12px 20px; }
+        #antigravity-manageTab .cred-identity { flex: 1 1 340px; min-width: 0; max-width: 100%; }
+        #antigravity-manageTab .cred-identity input[type="checkbox"] { flex: 0 0 auto; }
+        #antigravity-manageTab .cred-identity-text { flex: 1; min-width: 0; }
+        #antigravity-manageTab .cred-filename, #antigravity-manageTab .cred-email { min-width: 0; white-space: nowrap; word-break: normal; overflow: hidden; text-overflow: ellipsis; }
+        #antigravity-manageTab .cred-status { flex: 0 1 auto; flex-wrap: wrap; max-width: 100%; }
+        #antigravity-manageTab .status-badge, #antigravity-manageTab .error-codes, #antigravity-manageTab .cooldown-badge,
+        #antigravity-manageTab [data-model-access-badges] > span, #antigravity-manageTab button { white-space: nowrap; word-break: normal; overflow-wrap: normal; flex-shrink: 0; }
+        #antigravity-manageTab .cred-remark { margin: 4px 0; overflow-wrap: anywhere; }
+        #antigravity-manageTab .cred-remark .status-badge { margin-left: 0 !important; white-space: normal; }
+        #antigravity-manageTab .email-enrichment-progress { padding: 12px; margin: 12px 0; border-radius: 6px; background: #eef6ff; font-size: 13px; white-space: pre-line; overflow-wrap: anywhere; }
+        @media (max-width: 600px) {
+            #antigravity-manageTab .cred-status { width: 100%; }
+            #antigravity-manageTab .cooldown-badge { font-size: 10px; padding-left: 6px; padding-right: 6px; }
+            #antigravity-manageTab .ag-filter-group { width: 100%; }
+        }
     </style>
     <meta name="gcli-embed-policy" content="__GCLI_EMBED_POLICY__">
 </head>
@@ -2008,20 +2036,28 @@
                     </div>
                 </div>
 
-                <div class="filter-container">
-                    <label for="antigravityModelAccessFamily">Opus 版本：</label>
+                <div class="filter-container" style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
+                    <div class="ag-filter-group"><label for="antigravityModelAccessFamily">Opus 版本：</label>
                     <select id="antigravityModelAccessFamily" class="filter-select" onchange="applyAntigravityStatusFilter()" disabled>
                         <option value="claude-opus-5-5">Opus 5.5</option>
                         <option value="claude-opus-4-6">Opus 4.6</option>
-                    </select>
-                    <label for="antigravityModelAccessFilter">权限：</label>
+                    </select></div>
+                    <div class="ag-filter-group"><label for="antigravityModelAccessFilter">权限：</label>
                     <select id="antigravityModelAccessFilter" class="filter-select" onchange="applyAntigravityStatusFilter()" disabled>
                         <option value="all">全部状态</option>
                         <option value="supported">目录支持</option>
                         <option value="unavailable">暂不可用</option>
                         <option value="unknown">待确认 / 已过期</option>
-                    </select>
+                    </select></div>
                 </div>
+                <div class="ag-search-row">
+                    <label for="antigravitySearchInput">检索凭证：</label>
+                    <input type="text" id="antigravitySearchInput" placeholder="输入编号、文件名或邮箱" aria-describedby="antigravitySearchHint" disabled onkeydown="if(event.key==='Enter') { event.preventDefault(); AppState.antigravityCreds.applySearch(); }">
+                    <span class="ag-search-actions"><button type="button" id="antigravitySearchBtn" disabled onclick="AppState.antigravityCreds.applySearch()">搜索</button>
+                    <button type="button" id="antigravitySearchClearBtn" disabled onclick="AppState.antigravityCreds.applySearch(true)">清除</button></span>
+                    <span id="antigravitySearchHint" class="ag-search-hint">编号精确匹配；文件名或已保存邮箱支持包含检索。</span>
+                </div>
+                <div id="antigravityEmailEnrichmentProgress" class="email-enrichment-progress" role="status" aria-live="polite" hidden></div>
                 <div id="antigravityModelAccessOverview" style="white-space:pre-line;overflow-wrap:anywhere;padding:12px;margin-bottom:12px;background:#eef6ff;border-radius:6px;font-size:13px;">加载已保存的版本权限状态。</div>
 
                 <div id="antigravityCredsListSection">

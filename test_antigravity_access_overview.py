@@ -165,7 +165,7 @@ async def test_all_backend_cached_projection_includes_disabled_and_tenant_fence(
 def test_frontend_filters_badges_and_cross_page_selection():
     node = shutil.which("node")
     if not node: pytest.skip("Node runtime unavailable")
-    source = Path("front/common.js").read_text()
+    source = Path("front/common.js").read_text(encoding="utf-8")
     manager = source[source.index("function createCredsManager("):source.index("function createUploadManager(")]
     helpers = source[source.index("function modelAccessStatus("):source.index("async function _toggleQuotaDetails(")]
     card = source[source.index("function createCredCard("):source.index("async function updateCredRemark(")]
@@ -181,6 +181,8 @@ global.window = {location: {href: 'http://localhost/control_panel'}};
 global.getAuthHeaders = () => ({});
 global.escapeHtml = global.escapeHtmlAttribute = String;
 global.showStatus = () => {};
+// Production AppState initializes the tracker; this extracted-renderer fixture supplies its read-only view.
+global.AppState = {emailEnrichment: {forFilename: () => undefined}};
 const now = Date.now() / 1000;
 const mixed = {'claude-opus-5-5': {state: 'supported', checked_at: now},
     'claude-opus-4-6': {state: 'unavailable'},
@@ -252,13 +254,13 @@ assert.ok(!createCredCard(info, legacy).innerHTML.includes('data-model-access-ba
 })().catch(error => {console.error(error);process.exitCode=1;});
 '''
     # Pass the extracted frontend through stdin, not Windows' bounded argv.
-    result = subprocess.run([node], input=script, capture_output=True, text=True, timeout=15)
+    result = subprocess.run([node], input=script, capture_output=True, text=True, encoding="utf-8", timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_family_permission_controls_exist_on_desktop_and_mobile():
     for path in ("front/control_panel.html", "front/control_panel_mobile.html"):
-        html = Path(path).read_text()
+        html = Path(path).read_text(encoding="utf-8")
         for element in ("antigravityModelAccessFamily", "antigravityModelAccessFilter", "antigravityModelAccessOverview"):
             assert f'id="{element}"' in html
         assert 'antigravityModelAccessTier' not in html

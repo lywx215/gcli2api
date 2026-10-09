@@ -11,6 +11,7 @@ import os
 from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 
 from log import log
+from src.storage.antigravity_import import ImportReceipt
 
 
 class StorageBackend(Protocol):
@@ -31,6 +32,10 @@ class StorageBackend(Protocol):
 
     async def import_antigravity_credential(self, filename, credential_data, *, initial_state=None) -> bool:
         """Import an account with atomic access-evidence invalidation."""
+        ...
+
+    async def import_antigravity_credential_with_receipt(self, filename, credential_data, *, initial_state=None) -> ImportReceipt:
+        """Return the identity of the committed import for fenced email completion."""
         ...
 
     async def get_credential(self, filename: str, mode: str = "geminicli") -> Optional[Dict[str, Any]]:
@@ -250,6 +255,29 @@ class StorageAdapter:
         self._ensure_initialized()
         return await self._backend.import_antigravity_credential(
             filename, credential_data, initial_state=initial_state)
+
+    async def import_antigravity_credential_with_receipt(self, filename, credential_data, *, initial_state=None) -> ImportReceipt:
+        self._ensure_initialized()
+        method = getattr(self._backend, "import_antigravity_credential_with_receipt", None)
+        if callable(method):
+            return await method(filename, credential_data, initial_state=initial_state)
+        # Older/custom backends retain upload compatibility without inventing an
+        # identity from a subsequent read that could observe a different import.
+        saved = await self._backend.import_antigravity_credential(
+            filename, credential_data, initial_state=initial_state)
+        if not saved:
+            raise RuntimeError("credential_import_not_applied")
+        from src.storage.antigravity_quota import credential_version
+        return ImportReceipt(os.path.basename(filename), None, credential_version(credential_data), False)
+
+    async def quota_current_credential(self, filename, generation):
+        self._ensure_initialized()
+        return await self._backend.quota_current_credential(filename, generation)
+
+    async def quota_refresh_credential(self, filename, generation, credential_data, expected_version=None, state_updates=None):
+        self._ensure_initialized()
+        return await self._backend.quota_refresh_credential(filename, generation,
+            credential_data, expected_version=expected_version, state_updates=state_updates)
 
     async def get_credential(self, filename: str, mode: str = "geminicli") -> Optional[Dict[str, Any]]:
         """获取凭证数据"""

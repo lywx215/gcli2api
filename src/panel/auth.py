@@ -24,7 +24,7 @@ from src.utils import verify_panel_token
 
 def _oauth_subscription_fields(result: dict, mode: str) -> dict:
     if mode == "antigravity":
-        return {}
+        return {"email_enrichment": result.get("email_enrichment"), "warnings": result.get("warnings", [])}
     return {
         "subscription_tier": result.get("subscription_tier"),
         "tier_raw_id": result.get("tier_raw_id"),

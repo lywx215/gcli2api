@@ -5,6 +5,16 @@ import math
 import os
 import time
 import uuid
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ImportReceipt:
+    """Internal identity of the exact committed import, never a public response."""
+    filename: str
+    generation: str | None
+    credential_version: str
+    email_fence_supported: bool
 
 
 _INITIAL_FIELDS = {"disabled", "error_codes", "last_success", "user_email", "tier"}
@@ -57,6 +67,11 @@ def _encoded(value):
 
 class AntigravityImportMixin:
     async def import_antigravity_credential(self, filename, credential_data, *, initial_state=None):
+        await self.import_antigravity_credential_with_receipt(
+            filename, credential_data, initial_state=initial_state, _update_advisory_cache=True)
+        return True
+
+    async def import_antigravity_credential_with_receipt(self, filename, credential_data, *, initial_state=None, _update_advisory_cache=False):
         """Replace contents and invalidate access in one database write.
 
         Initial state is insert-only. Existing quota/state bytes are not decoded.
@@ -69,11 +84,16 @@ class AntigravityImportMixin:
             raise ValueError("invalid_import_credential")
         initial = _initial_state(initial_state)
         changes = {"credential_data": copy.deepcopy(credential_data),
-                   "quota_credential_generation": uuid.uuid4().hex, "model_access_state": {}}
+                   "quota_credential_generation": uuid.uuid4().hex, "model_access_state": {},
+                   "user_email": None}
         # Validate serializability before any database operation.
         json.dumps(changes)
+        from src.storage.antigravity_quota import credential_version
+        version = credential_version(changes["credential_data"])
         engine, now = self.QUOTA_ENGINE, time.time()
         inserted = False
+        email_fence_supported = engine == "mongo"
+        generation_supported = engine == "mongo"
         cache_state = initial
         if engine == "mongo":
             from pymongo.errors import DuplicateKeyError
@@ -81,7 +101,9 @@ class AntigravityImportMixin:
             maximum = await collection.find_one({}, sort=[("rotation_order", -1)], projection={"rotation_order": 1})
             last_order = (maximum or {}).get("rotation_order", -1)
             rotation = (last_order if type(last_order) is int else -1) + 1
-            defaults = {"filename": filename, "preview": True, **_defaults(initial, now, rotation)}
+            defaults = {"filename": filename, "preview": True,
+                        **{key: value for key, value in _defaults(initial, now, rotation).items()
+                           if key not in changes}}
             try:
                 result = await collection.update_one({"filename": filename},
                     {"$set": changes, "$setOnInsert": defaults}, upsert=True)
@@ -102,6 +124,8 @@ class AntigravityImportMixin:
                     columns = {row[1] for row in await cur.fetchall()}
                 async with conn.execute(f"SELECT COALESCE(MAX(rotation_order), -1) + 1 FROM {table}") as cur:
                     rotation = (await cur.fetchone())[0]
+                generation_supported = "quota_credential_generation" in columns
+                email_fence_supported = {"quota_credential_generation", "user_email"} <= columns
                 values, updates = self._import_sql_values(columns, filename, changes, initial, now, rotation)
                 query = self._import_upsert(table, values, updates, engine)
                 await conn.execute(query, tuple(_encoded(v) for v in values.values()))
@@ -113,6 +137,8 @@ class AntigravityImportMixin:
                     found = await conn.fetch("SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1", table)
                     columns = {row["column_name"] for row in found}
                     rotation = await conn.fetchval(f"SELECT COALESCE(MAX(rotation_order), -1) + 1 FROM {table}")
+                    generation_supported = "quota_credential_generation" in columns
+                    email_fence_supported = {"quota_credential_generation", "user_email"} <= columns
                     values, updates = self._import_sql_values(columns, filename, changes, initial, now, rotation)
                     await conn.execute(self._import_upsert(table, values, updates, engine), *(_encoded(v) for v in values.values()))
         elif engine == "mysql":
@@ -125,6 +151,8 @@ class AntigravityImportMixin:
                         columns = {row[0] for row in await cur.fetchall()}
                         await cur.execute(f"SELECT COALESCE(MAX(rotation_order), -1) + 1 FROM {table} WHERE server_name = %s", (self._server_name,))
                         rotation = (await cur.fetchone())[0]
+                        generation_supported = "quota_credential_generation" in columns
+                        email_fence_supported = {"quota_credential_generation", "user_email"} <= columns
                         values, updates = self._import_sql_values(columns, filename, changes, initial, now, rotation)
                         if "server_name" not in columns:
                             raise RuntimeError("invalid_import_schema")
@@ -149,8 +177,9 @@ class AntigravityImportMixin:
                     raise
         else:
             raise RuntimeError("unsupported_import_storage")
+        self.import_email_fence_supported = email_fence_supported
         self.panel_index_invalidate()
-        if (inserted and cache_state.get("disabled", False) in (False, 0)
+        if (_update_advisory_cache and inserted and cache_state.get("disabled", False) in (False, 0)
                 and not cache_state.get("permanent_disabled", False) and hasattr(self, "_redis_add_cred")):
             try:
                 await self._redis_add_cred("antigravity", filename, tier=cache_state.get("tier") or "pro", preview=True)
@@ -158,7 +187,10 @@ class AntigravityImportMixin:
                 # Cache is advisory; the import has already atomically committed.
                 from log import log
                 log.warning("[ANTIGRAVITY] import cache update unavailable")
-        return True
+        return ImportReceipt(filename=filename,
+            generation=changes["quota_credential_generation"] if generation_supported else None,
+            credential_version=version,
+            email_fence_supported=email_fence_supported)
 
     def _import_sql_values(self, columns, filename, changes, initial, now, rotation):
         if not {"filename", "credential_data"} <= columns:
@@ -167,8 +199,8 @@ class AntigravityImportMixin:
             self.model_access_storage_ready = False
         updates = {key: value for key, value in changes.items() if key in columns}
         defaults = _defaults(initial, now, rotation)
-        values = {"filename": filename, **updates,
-                  **{key: value for key, value in defaults.items() if key in columns}}
+        values = {"filename": filename,
+                  **{key: value for key, value in defaults.items() if key in columns}, **updates}
         return values, updates
 
     @staticmethod

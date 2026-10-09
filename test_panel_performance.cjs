@@ -63,7 +63,7 @@ function harness({render = false} = {}) {
     c.state.sessionEpoch = 1; c.state.sessionReady = true; c.state.authToken = 'synthetic';
     const ag = c.state.antigravityCreds;
     ag.applyCapabilities(CAPS); ag.updatePagination = () => {}; ag.updateStatsDisplay = () => {};
-    const realRender = ag.renderList;
+    const realRender = ag.renderList, realCard = c.createCredCard;
     if (!render) ag.renderList = () => ag.updateBatchControls();
     c.createCredCard = (info, manager) => {
         const card = new Element(); card.dataset.filename = info.filename; card.className = 'cred-card';
@@ -82,7 +82,7 @@ function harness({render = false} = {}) {
     const select = count => { ag.selectedFiles = new Set(Array.from({length: count}, (_, i) => `synthetic-${i}.json`)); ag.updateBatchControls(); };
     const loadCards = names => { ag.filteredData = ag.data = Object.fromEntries(names.map(filename => [filename, {filename, status: {disabled: false}}])); ag.totalCount = names.length; realRender.call(ag); };
     elements.get('antigravity-manageTab').classList.add('active');
-    return {c, ag, elements, requests, timers, intervals, modals, statuses, reply, replyBatch, select, loadCards, Element};
+    return {c, ag, elements, requests, timers, intervals, modals, statuses, reply, replyBatch, select, loadCards, Element, realCard};
 }
 
 test('same-key refresh is one exact promise; query/page changes abort and reject stale writes', async () => {
@@ -336,4 +336,35 @@ test('legacy import without names invalidates all visible details even when its 
     const before = h.requests.length; h.c.stopPanelSession();
     h.c.refreshAntigravityAfterImport({success_count: 1, results: [{filename: 'old.json', success: true}]}, 1);
     assert.equal(h.requests.length, before, 'old-session import completion must not refresh a new session');
+});
+
+test('earlier successful enrichment cannot restore an email cleared by a later same-name import', () => {
+    const h = harness(), tracker = h.c.state.emailEnrichment;
+    tracker.remember('replaced.json', {status:'success',sequence:1,user_email:'old-account@example.invalid'});
+    const info = {filename:'replaced.json',status:{disabled:false,error_codes:[]},user_email:null};
+    const card = h.realCard(info,h.ag);
+    assert.doesNotMatch(card.innerHTML,/old-account@example.invalid/);
+    assert.match(card.innerHTML,/未获取邮箱/);
+    const pending = h.realCard({...info,email_enrichment_status:'running'},h.ag);
+    assert.match(pending.innerHTML,/邮箱获取中/); assert.doesNotMatch(pending.innerHTML,/old-account@example.invalid/);
+    tracker.remember('replaced.json', {status:'failed',sequence:2});
+    const newer = h.realCard({...info,email_enrichment_status:'running'},h.ag);
+    assert.doesNotMatch(newer.innerHTML,/重新获取邮箱/);
+    const manual = h.realCard({...info,user_email:'current@example.invalid'},h.ag);
+    assert.match(manual.innerHTML,/current@example.invalid/); assert.doesNotMatch(manual.innerHTML,/重新获取邮箱/);
+});
+
+test('completed enrichment with an omitted saved item clears pending text and provides manual retry', async () => {
+    const h = harness(), tracker = h.c.state.emailEnrichment;
+    tracker.track({uploaded_count:1,results:[{filename:'omitted.json',status:'success'}],email_enrichment:{job_id:'omitted-job',accepted:0,skipped:1},warnings:['UPSTREAM MUST NOT BE DISPLAYED']},1);
+    const info = {filename:'omitted.json',status:{disabled:false,error_codes:[]},user_email:null};
+    assert.match(h.realCard(info,h.ag).innerHTML,/邮箱获取中/);
+    const timer = [...h.timers].find(([,entry])=>entry.ms===0);
+    timer[1].fn(); await tick();
+    h.reply(0,{job_id:'omitted-job',sealed:true,complete:true,counts:{skipped:1},total:0,items:[]}); await tick();
+    const card = h.realCard(info,h.ag);
+    assert.doesNotMatch(card.innerHTML,/邮箱获取中/); assert.match(card.innerHTML,/邮箱获取未完成，可手动获取/);
+    assert.match(card.innerHTML,/重新获取邮箱/); assert.equal(tracker.forFilename('omitted.json').status,'skipped');
+    assert.doesNotMatch(card.innerHTML,/UPSTREAM|not_reported_after_completion/);
+    assert.equal(tracker.jobs.get('omitted-job').complete,true);
 });

@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from src.antigravity_import_limits import ImportLimits, import_slot, limit_exceeded
 from src.credential_manager import CredentialStorageError
+from src.antigravity_email_enrichment import email_enrichment_service, import_with_email_receipt
 
 
 @dataclass
@@ -176,6 +177,7 @@ def _prepare(files, limits):
 async def _upload_antigravity_files(files, manager):
     async with import_slot():
         prepared = None
+        email_batch = email_enrichment_service.batch()
         task = asyncio.create_task(asyncio.to_thread(_prepare, files, ImportLimits.load()))
         try:
             try:
@@ -196,7 +198,7 @@ async def _upload_antigravity_files(files, manager):
                 prepared.data.seek(item['position'])
                 data = json.loads(prepared.data.read(item['length']))
                 try:
-                    await manager.add_antigravity_credential(item['filename'], data)
+                    await import_with_email_receipt(manager, item['filename'], data, email_batch=email_batch)
                     results.append({'filename':item['filename'], 'status':'success', 'message':'上传成功'})
                 except CredentialStorageError as exc:
                     results.append({'filename':item['filename'], 'status':'error',
@@ -207,11 +209,13 @@ async def _upload_antigravity_files(files, manager):
             count = sum(item['status'] == 'success' for item in results)
             payload = {'uploaded_count':count, 'total_count':len(results),
                        'failed_count':len(results)-count, 'results':results,
+                       'email_enrichment':email_batch.public(), 'warnings':email_batch.warnings,
                        'message':f'批量上传完成: 成功 {count}/{len(results)} 个 antigravity 文件'}
             if not count:
                 payload['detail'] = '没有 antigravity 文件上传成功'
             return JSONResponse(status_code=200 if count else 400, content=payload)
         finally:
+            email_batch.seal()
             if prepared is not None:
                 prepared.close()
 

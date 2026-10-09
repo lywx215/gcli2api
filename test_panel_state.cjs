@@ -201,3 +201,161 @@ test('unchecking cancels a pending cross-page selection before a late response',
  assert.equal(h.elements.get('antigravitySelectedCount').textContent,'已选择 0 项');
  assert.equal(h.elements.get('selectAllAntigravityCheckbox').checked,false);
 });
+
+const SEARCH = 'antigravity.credentials.search';
+const SEARCH_CAPS = [...CAPS, SEARCH];
+test('search remains disabled until supported, draft is isolated and submitting clears selection', async () => {
+ const h = harness(), input = h.elements.get('antigravitySearchInput');
+ h.ag.applyCapabilities([]); input.value = '1621';
+ assert.equal(input.disabled, true); assert.equal(h.ag.applySearch(), undefined);
+ assert(!new URL(h.ag.getStatusUrl(0, 25), h.c.window.location.href).searchParams.has('search'));
+ h.ag.applyCapabilities(SEARCH_CAPS); assert.equal(input.disabled, false);
+ assert.equal(h.ag.currentSearch, ''); assert(!h.ag.getStatusUrl(0, 25).includes('search='));
+ h.ag.selectedFiles.add('old.json'); h.ag.currentPage = 3; input.value = ' 001621 ';
+ const before = h.ag.filterRevision, pending = h.ag.applySearch();
+ assert.equal(h.ag.currentSearch, '001621'); assert.equal(input.value, '001621'); assert.equal(h.ag.currentPage, 1);
+ assert.equal(h.ag.selectedFiles.size, 0); assert.equal(h.ag.filterRevision, before + 1);
+ assert.equal(new URL(h.requests[0].url, h.c.window.location.href).searchParams.get('search'), '001621');
+ h.reply(0, page(['001621_synthetic.json'], SEARCH_CAPS)); await pending;
+ input.value = 'unsubmitted@example.invalid'; h.ag.currentPage = 2;
+ assert.equal(new URL(h.ag.getStatusUrl(25, 25), h.c.window.location.href).searchParams.get('search'), '001621');
+ const clear = h.ag.applySearch(true); assert.equal(input.value, ''); assert.equal(h.ag.currentSearch, '');
+ h.reply(1, page([], SEARCH_CAPS)); await clear;
+ input.value = 'x'.repeat(256); assert.equal(h.ag.applySearch(), undefined); assert.equal(h.requests.length, 2);
+ // Gemini CLI does not send the Antigravity-only parameter.
+ h.c.state.creds.currentSearch = '1621'; h.c.state.creds.searchCapability = true;
+ assert(!h.c.state.creds.getStatusUrl(0, 25).includes('search='));
+});
+test('HTTP 200 search capability withdrawal cancels all-selection before applying any page', async () => {
+ const h = harness(); h.ag.applyCapabilities(SEARCH_CAPS); h.ag.currentSearch = '1621';
+ h.elements.get('antigravitySearchInput').value = '1621';
+ const selection = h.ag.selectAllMatching(); h.reply(0, page(['1621_first.json'], SEARCH_CAPS, true)); await tick();
+ assert.equal(new URL(h.requests[1].url, h.c.window.location.href).searchParams.get('search'), '1621');
+ h.reply(1, page(['unfiltered-old-service.json'], CAPS)); await tick();
+ assert.equal(h.ag.currentSearch, ''); assert.equal(h.elements.get('antigravitySearchInput').value, '');
+ assert.equal(h.ag.selectedFiles.size, 0); assert.equal(h.elements.get('antigravitySearchBtn').disabled, true);
+ assert.equal(h.requests.length, 3); assert(!h.requests[2].url.includes('search='));
+ h.reply(2, page(['ordinary.json'], CAPS)); await selection; assert.equal(h.ag.selectedFiles.size, 0);
+});
+test('search changes invalidate pending selections including A-B-A, and capability 501 cannot be re-enabled in session', async () => {
+ const h = harness(); h.ag.applyCapabilities(SEARCH_CAPS); h.ag.currentSearch = 'A';
+ const selection = h.ag.selectAllMatching(); h.ag.currentSearch = 'B'; h.ag.invalidateFilters(); h.ag.currentSearch = 'A'; h.ag.invalidateFilters();
+ h.reply(0, page(['late.json'], SEARCH_CAPS)); await selection; assert.equal(h.ag.selectedFiles.size, 0);
+ const read = h.ag.refresh(); h.reply(1, {capability: SEARCH}, 501); await tick();
+ assert.equal(h.ag.searchCapability, false); assert(!h.requests[2].url.includes('search='));
+ h.reply(2, page([], SEARCH_CAPS)); await read; assert.equal(h.ag.searchCapability, false);
+});
+const progress = (id, items, counts, complete = false, total = items.length) => ({job_id:id, sealed:true, complete, total, counts, items});
+const uploadWithJob = (id, filename = '1621_synthetic.json') => ({uploaded_count:1, results:[{filename,status:'success'}], email_enrichment:{job_id:id, accepted:1, skipped:0}});
+test('email jobs poll outside credential tab, finish once, and refresh after confirmed email writes', async () => {
+ const h = harness(), tracker = h.c.state.emailEnrichment;
+ h.elements.get('antigravity-manageTab').classList.remove('active');
+ tracker.track(uploadWithJob('job-one'), 1); assert.equal(tracker.forFilename('1621_synthetic.json').status, 'queued');
+ h.timers.shift()(); await tick(); assert.match(h.requests[0].url, /email-enrichment\/job-one/);
+ h.reply(0, progress('job-one', [{filename:'1621_synthetic.json',status:'running'}], {running:1})); await tick();
+ assert.equal(tracker.forFilename('1621_synthetic.json').status, 'running'); assert.equal(h.timers.length, 1);
+ h.elements.get('antigravity-manageTab').classList.add('active'); h.ag.applyCapabilities(SEARCH_CAPS);
+ h.timers.shift()(); await tick(); h.reply(1, progress('job-one', [{filename:'1621_synthetic.json',status:'success',user_email:'synthetic@example.invalid'}], {success:1}, true)); await tick();
+ assert.equal(tracker.forFilename('1621_synthetic.json').user_email, 'synthetic@example.invalid'); assert.equal(h.requests.length, 3);
+ assert.match(h.requests[2].url, /creds\/status/); h.reply(2, page(['1621_synthetic.json'], SEARCH_CAPS)); await tick();
+ assert.equal(h.timers.length, 0); assert.equal(tracker.jobs.get('job-one').complete, true);
+ assert.match(h.elements.get('antigravityEmailEnrichmentProgress').textContent, /成功 1/);
+});
+test('email progress consumes all pages and older job cannot mask a newer upload', async () => {
+ const h = harness(), tracker = h.c.state.emailEnrichment;
+ tracker.track(uploadWithJob('old-job'), 1); h.timers.shift()(); await tick();
+ tracker.track(uploadWithJob('new-job'), 1);
+ h.reply(0, progress('old-job', [{filename:'1621_synthetic.json',status:'success',user_email:'old@example.invalid'}], {success:1}, true, 2)); await tick();
+ assert.match(h.requests[1].url, /offset=1/);
+ h.reply(1, progress('old-job', [{filename:'other.json',status:'failed',reason:'do-not-render-sensitive-response'}], {success:1,failed:1}, true, 2)); await tick();
+ assert.match(h.requests[2].url, /new-job/);
+ h.reply(2, progress('new-job', [{filename:'1621_synthetic.json',status:'settlement_pending'}], {settlement_pending:1})); await tick();
+ assert.equal(tracker.forFilename('1621_synthetic.json').status, 'settlement_pending');
+ assert(!h.elements.get('antigravityEmailEnrichmentProgress').textContent.includes('do-not-render-sensitive-response'));
+ h.reply(3, page([], CAPS)); await tick();
+});
+test('expired jobs explain restart and late progress after logout cannot affect new session', async () => {
+ const h = harness(), tracker = h.c.state.emailEnrichment;
+ tracker.track(uploadWithJob('expired-job'), 1); h.timers.shift()(); await tick(); h.reply(0, {}, 404); await tick();
+ assert.equal(tracker.forFilename('1621_synthetic.json').status, 'expired'); assert.equal(h.timers.length, 0);
+ assert.match(h.elements.get('antigravityEmailEnrichmentProgress').textContent, /失效.*重启/);
+ tracker.track(uploadWithJob('late-job'), 1); h.timers.shift()(); await tick();
+ const oldSignal = h.requests[1].options.signal; h.c.logout(); assert.equal(oldSignal.aborted, true); assert.equal(tracker.jobs.size, 0);
+ h.c.beginPanelSession('new-synthetic'); h.reply(1, progress('late-job', [{filename:'1621_synthetic.json',status:'success',user_email:'stale@example.invalid'}], {success:1}, true)); await tick();
+ assert.equal(tracker.jobs.size, 0); assert.equal(tracker.byFilename.size, 0); assert.equal(h.elements.get('antigravityEmailEnrichmentProgress').hidden, true);
+ assert.equal(h.requests.length, 2);
+});
+test('disabled automatic enrichment warnings are fixed summaries and no job polling starts', () => {
+ const h = harness(), tracker = h.c.state.emailEnrichment;
+ tracker.track({email_enrichment:{job_id:null,accepted:0,skipped:1},warnings:['RAW UPSTREAM SECRET MUST NEVER APPEAR']},1);
+ assert.equal(h.timers.length, 0); assert.match(h.elements.get('antigravityEmailEnrichmentProgress').textContent, /上传仍已保存/);
+ assert(!h.elements.get('antigravityEmailEnrichmentProgress').textContent.includes('RAW UPSTREAM'));
+});
+test('wide layout is scoped to Antigravity, same-tab entry and logout reset it', () => {
+ const h = harness(), classes = new Set();
+ h.c.document.body.classList = {add: value => classes.add(value), remove: value => classes.delete(value)};
+ h.c.state.loadedSessionTab = '1:antigravity-manage'; h.c.switchTab('antigravity-manage'); assert(classes.has('antigravity-wide'));
+ h.c.switchTab('config'); assert(!classes.has('antigravity-wide'));
+ h.c.switchTab('antigravity-manage'); assert(classes.has('antigravity-wide')); h.c.logout(); assert(!classes.has('antigravity-wide'));
+});
+
+test('a failed later progress page keeps polling rather than losing terminal item details', async () => {
+ const h = harness(), tracker = h.c.state.emailEnrichment;
+ h.elements.get('antigravity-manageTab').classList.remove('active');
+ tracker.track(uploadWithJob('partial-job'), 1); h.timers.shift()(); await tick();
+ h.reply(0, progress('partial-job', [{filename:'1621_synthetic.json',status:'success',user_email:'synthetic@example.invalid'}], {success:1,failed:1}, true, 2)); await tick();
+ h.reply(1, {}, 500); await tick(); assert.equal(tracker.jobs.get('partial-job').complete, false); assert.equal(h.timers.length, 1);
+ h.timers.shift()(); await tick(); h.reply(2, progress('partial-job', [{filename:'1621_synthetic.json',status:'success',user_email:'synthetic@example.invalid'}, {filename:'other.json',status:'failed'}], {success:1,failed:1}, true, 2)); await tick();
+ assert.equal(tracker.jobs.get('partial-job').complete, true); assert.equal(tracker.forFilename('other.json').status, 'failed'); assert.equal(h.timers.length, 0);
+});
+
+test('malformed sparse progress pages have a hard per-poll request bound', async () => {
+ const h = harness(), tracker = h.c.state.emailEnrichment;
+ h.elements.get('antigravity-manageTab').classList.remove('active');
+ tracker.track(uploadWithJob('bounded-job'), 1); h.timers.shift()(); await tick();
+ for (let offset = 0; offset < 50; offset++) {
+   assert.equal(h.requests.length, offset + 1);
+   h.reply(offset, progress('bounded-job', [{filename:'sparse-' + offset + '.json',status:'failed'}], {failed:5000}, true, 5000)); await tick();
+ }
+ assert.equal(h.requests.length, 50); assert.equal(tracker.jobs.get('bounded-job').complete, false); assert.equal(h.timers.length, 1);
+});
+
+test('complete full job marks omitted saved filenames skipped without touching a newer upload', async () => {
+ const h = harness(), tracker = h.c.state.emailEnrichment;
+ h.elements.get('antigravity-manageTab').classList.remove('active');
+ tracker.track({...uploadWithJob('omitted-job'),results:[{filename:'omitted.json',status:'success'},{filename:'reused.json',status:'success'}]},1);
+ h.timers.shift()(); await tick();
+ tracker.track(uploadWithJob('newer-job','reused.json'),1);
+ const newerSequence = tracker.forFilename('reused.json').sequence;
+ h.reply(0,progress('omitted-job',[],{skipped:2},true,0)); await tick();
+ assert.equal(tracker.forFilename('omitted.json').status,'skipped');
+ assert.equal(tracker.forFilename('omitted.json').reason,'not_reported_after_completion');
+ assert.equal(tracker.forFilename('reused.json').status,'queued'); assert.equal(tracker.forFilename('reused.json').sequence,newerSequence);
+ assert.equal(tracker.jobs.get('omitted-job').complete,true);
+ h.reply(1,progress('newer-job',[{filename:'reused.json',status:'running'}],{running:1},false)); await tick();
+ assert.equal(tracker.forFilename('reused.json').status,'running');
+ assert.match(h.elements.get('antigravityEmailEnrichmentProgress').textContent,/未完成 2/);
+ assert(!h.elements.get('antigravityEmailEnrichmentProgress').textContent.includes('not_reported_after_completion'));
+});
+test('omitted queued records stay pending after partial failures or malformed missing pages', async () => {
+ for (const failure of ['http','empty','wrong-job','invalid-item','invalid-total']) {
+  const h = harness(), tracker = h.c.state.emailEnrichment;
+  h.elements.get('antigravity-manageTab').classList.remove('active');
+  tracker.track(uploadWithJob('incomplete-job','omitted.json'),1); h.timers.shift()(); await tick();
+  h.reply(0,progress('incomplete-job',[{filename:'reported.json',status:'failed'}],{failed:2,skipped:1},true,2)); await tick();
+  if(failure==='http') h.reply(1,{},500);
+  if(failure==='empty') h.reply(1,progress('incomplete-job',[],{failed:2,skipped:1},true,2));
+  if(failure==='wrong-job') h.reply(1,progress('other-job',[{filename:'reported-two.json',status:'failed'}],{failed:2,skipped:1},true,2));
+  if(failure==='invalid-item') h.reply(1,progress('incomplete-job',[{filename:'reported-two.json',status:'invalid'}],{failed:2,skipped:1},true,2));
+  if(failure==='invalid-total') h.reply(1,progress('incomplete-job',[{filename:'reported-two.json',status:'failed'}],{failed:2,skipped:1},true,'2'));
+  await tick(); assert.equal(tracker.forFilename('omitted.json').status,'queued',failure);
+  assert.equal(tracker.jobs.get('incomplete-job').complete,false,failure); assert.equal(h.timers.length,1,failure);
+ }
+});
+test('client records and jobs retain their fixed bounds when completed jobs include omitted names', () => {
+ const h = harness(), tracker = h.c.state.emailEnrichment;
+ const names = Array.from({length:5001},(_,index)=>({filename:'bounded-'+index+'.json',status:'success'}));
+ tracker.track({...uploadWithJob('large-job'),results:names},1); assert.equal(tracker.byFilename.size,5000);
+ for(let index=0;index<130;index++) tracker.track(uploadWithJob('bounded-job-'+index,'job-'+index+'.json'),1);
+ assert.equal(tracker.jobs.size,128); assert.equal(tracker.byFilename.size,5000);
+});

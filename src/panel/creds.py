@@ -19,6 +19,9 @@ from fastapi.responses import JSONResponse
 from log import log
 from src.credential_manager import credential_manager, CredentialStorageError
 from src.antigravity_import_limits import import_slot, import_write_slot
+from src.antigravity_email_enrichment import (email_enrichment_service, import_with_email_receipt,
+    SEARCH_CAPABILITY, AUTO_EMAIL_CAPABILITY)
+from src.storage.antigravity_panel import normalize_credential_search, matches_credential_search
 from src.antigravity_quota import GROUP_FILTERS, GROUP_FILTER_CAPABILITY
 from src.error_classification import get_error_classifications
 from src.models import (
@@ -518,13 +521,13 @@ async def get_creds_status_common(
     error_code_filter: str = None, cooldown_filter: str = None,
     preview_filter: str = None, tier_filter: str = None, remark_filter: str = None,
     model_access_filter: str = "all", model_access_tier: str = "any",
-    model_access_family: str = "claude-opus-5-5",
+    model_access_family: str = "claude-opus-5-5", search: str = None,
 ) -> JSONResponse:
     kwargs = dict(offset=offset, limit=limit, status_filter=status_filter, mode=mode,
                   error_code_filter=error_code_filter, cooldown_filter=cooldown_filter,
                   preview_filter=preview_filter, tier_filter=tier_filter, remark_filter=remark_filter,
                   model_access_filter=model_access_filter, model_access_tier=model_access_tier,
-                  model_access_family=model_access_family)
+                  model_access_family=model_access_family, search=search)
     if mode != "antigravity":
         return await _get_creds_status_common(**kwargs)
     from src.antigravity_panel_budget import PanelBudgetConfigError, panel_list_budget
@@ -555,10 +558,16 @@ async def _get_creds_status_common(
     offset: int, limit: int, status_filter: str, mode: str = "geminicli",
     error_code_filter: str = None, cooldown_filter: str = None, preview_filter: str = None, tier_filter: str = None, remark_filter: str = None,
     model_access_filter: str = "all", model_access_tier: str = "any",
-    model_access_family: str = "claude-opus-5-5"
+    model_access_family: str = "claude-opus-5-5", search: str = None,
 ) -> JSONResponse:
     """获取凭证文件状态的通用函数"""
     mode = validate_mode(mode)
+    try:
+        search = normalize_credential_search(search)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="search 不能超过 255 个字符") from None
+    if search and mode != "antigravity":
+        raise HTTPException(status_code=400, detail="凭证检索仅支持 Antigravity")
     # 验证分页参数
     if offset < 0:
         raise HTTPException(status_code=400, detail="offset 必须大于等于 0")
@@ -613,7 +622,7 @@ async def _get_creds_status_common(
         result = await panel_reader(offset=offset, limit=limit,
                                     model_access_filter=model_access_filter,
                                     model_access_tier=model_access_tier,
-                                    model_access_family=model_access_family, **filters)
+                                    model_access_family=model_access_family, **({"search": search} if search else {}), **filters)
     else:
         # Preserve legacy backends and Gemini CLI pagination.
         result = await storage_adapter._backend.get_credentials_summary(
@@ -625,6 +634,9 @@ async def _get_creds_status_common(
         return JSONResponse(status_code=501, content={"detail": "当前存储后端未能提供共享额度状态",
             "error_code": "capability_unavailable", "capability": "antigravity.cooldown.group_filter"})
     if mode == "antigravity" and not optimized:
+        if search:
+            result = {**result, "items": [row for row in result["items"]
+                      if matches_credential_search(row.get("filename"), row.get("user_email"), search)]}
         from src.antigravity_model_access import filter_summaries
         reader = getattr(storage_adapter._backend, "model_access_list_public", None)
         states = await reader() if callable(reader) else {}
@@ -633,6 +645,9 @@ async def _get_creds_status_common(
                                   status=model_access_filter, tier=model_access_tier,
                                   family=model_access_family, family_states=families)
 
+    email_annotations = (email_enrichment_service.annotations(
+        os.path.basename(row["filename"]) for row in result["items"])
+        if mode == "antigravity" else {})
     creds_list = []
     for summary in result["items"]:
         cred_info = {
@@ -660,6 +675,7 @@ async def _get_creds_status_common(
         if mode == "geminicli":
             cred_info["preview"] = summary.get("preview", True)
         else:
+            cred_info.update(email_annotations.get(cred_info["filename"], {}))
             cred_info["enable_credit"] = summary.get("enable_credit", False)
             cred_info["model_access_state"] = summary.get("model_access_state", {})
             if supports_family_filter:
@@ -679,7 +695,8 @@ async def _get_creds_status_common(
         "stats": result.get("stats", {"total": 0, "normal": 0, "disabled": 0}),
         **({"model_access_summary": result["model_access_summary"]} if mode == "antigravity" else {}),
         **({"panel_capabilities": ([GROUP_FILTER_CAPABILITY] if supports_group_filter else []) +
-           (["antigravity.model_access.family_filter"] if supports_family_filter else [])} if mode == "antigravity" else {}),
+           (["antigravity.model_access.family_filter"] if supports_family_filter else []) +
+           [SEARCH_CAPABILITY] + ([AUTO_EMAIL_CAPABILITY] if email_enrichment_service.supports(storage_adapter._backend) else [])} if mode == "antigravity" else {}),
     })
 
 
@@ -1225,7 +1242,8 @@ async def get_creds_status(
     mode: str = "geminicli",
     model_access_filter: str = "all",
     model_access_tier: str = "any",
-    model_access_family: str = "claude-opus-5-5"
+    model_access_family: str = "claude-opus-5-5",
+    search: str = None,
 ):
     """
     获取凭证文件的状态（轻量级摘要，不包含完整凭证数据，支持分页和状态筛选）
@@ -1257,13 +1275,24 @@ async def get_creds_status(
             remark_filter=remark_filter,
             model_access_filter=model_access_filter,
             model_access_tier=model_access_tier,
-            model_access_family=model_access_family
+            model_access_family=model_access_family, search=search
         )
     except HTTPException:
         raise
     except Exception as e:
         log.error(f"获取凭证状态失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/email-enrichment/{job_id}")
+async def email_enrichment_progress(job_id: str, offset: int = 0, limit: int = 100,
+                                    token: str = Depends(verify_panel_token)):
+    if offset < 0 or not 1 <= limit <= 200:
+        raise HTTPException(status_code=400, detail="无效的邮箱任务分页参数")
+    result = email_enrichment_service.snapshot(job_id, offset, limit)
+    if result is None:
+        raise HTTPException(status_code=404, detail="邮箱任务已过期或服务已重启，请手动获取邮箱")
+    return JSONResponse(content=result)
 
 
 @router.post("/remark/{filename}")
@@ -3117,6 +3146,7 @@ async def _upload_credentials_by_refresh_token(
     2. 如果未提供 project_id，自动调 loadCodeAssist/onboardUser 探测
     3. 组装成完整凭证 JSON 并入库
     """
+    email_batch = email_enrichment_service.batch() if req.mode == "antigravity" else None
     try:
         mode = validate_mode(req.mode or "geminicli")
 
@@ -3129,7 +3159,7 @@ async def _upload_credentials_by_refresh_token(
             client_secret=req.client_secret,
             project_id=req.project_id,
             custom_filename=req.custom_filename,
-            mode=mode,
+            mode=mode, email_batch=email_batch,
         )
 
         if not result["success"]:
@@ -3143,7 +3173,8 @@ async def _upload_credentials_by_refresh_token(
             "project_id": result["project_id"],
             "subscription_tier": result["subscription_tier"],
             "mode": mode,
-            **({"warnings": result.get("warnings", [])} if mode == "antigravity" else {}),
+            **({"warnings": [*result.get("warnings", []), *email_batch.warnings],
+                "email_enrichment": email_batch.public()} if mode == "antigravity" else {}),
             "message": f"凭证添加成功: {result['filename']}",
         })
 
@@ -3155,6 +3186,9 @@ async def _upload_credentials_by_refresh_token(
                 "error_code": "credential_import_failed", "detail": "凭证添加失败"})
         log.error(f"通过 refresh_token 添加凭证失败: {e}")
         raise HTTPException(status_code=500, detail=f"添加失败: {str(e)}")
+    finally:
+        if email_batch is not None:
+            email_batch.seal()
 
 
 @router.post("/upload-by-refresh-token-batch")
@@ -3173,6 +3207,7 @@ async def _upload_credentials_by_refresh_token_batch(
 
     并发执行，限流 5，避免多个 token 同时冲击 Google API。
     """
+    email_batch = email_enrichment_service.batch() if req.mode == "antigravity" else None
     try:
         mode = validate_mode(req.mode or "geminicli")
 
@@ -3206,7 +3241,7 @@ async def _upload_credentials_by_refresh_token_batch(
                         client_secret=req.client_secret,
                         project_id=None,  # 批量场景不手填 project_id
                         custom_filename=custom,
-                        mode=mode,
+                        mode=mode, email_batch=email_batch,
                     )
                     return {
                         "index": idx,
@@ -3238,6 +3273,8 @@ async def _upload_credentials_by_refresh_token_batch(
             "total_count": len(results),
             "results": results,
             "message": f"批量添加完成：成功 {success_count}/{len(results)}",
+            **({"email_enrichment": email_batch.public(), "warnings": email_batch.warnings}
+               if email_batch is not None else {}),
         })
 
     except HTTPException:
@@ -3248,6 +3285,9 @@ async def _upload_credentials_by_refresh_token_batch(
                 "detail": "批量凭证添加失败"})
         log.error(f"批量通过 refresh_token 添加凭证失败: {e}")
         raise HTTPException(status_code=500, detail=f"批量添加失败: {str(e)}")
+    finally:
+        if email_batch is not None:
+            email_batch.seal()
 
 
 async def _add_credential_by_refresh_token(
@@ -3257,6 +3297,7 @@ async def _add_credential_by_refresh_token(
     project_id: Optional[str],
     custom_filename: Optional[str],
     mode: str,
+    email_batch=None,
 ) -> dict:
     """核心逻辑：换 token + 探测 project + 入库。单个/批量接口共用。"""
     cid = (client_id or DEFAULT_GEMINI_CLI_CLIENT_ID).strip()
@@ -3332,9 +3373,18 @@ async def _add_credential_by_refresh_token(
     warnings = []
     if mode == "antigravity":
         try:
-            await credential_manager.add_antigravity_credential(
-                filename, credential_data,
-                initial_state={"tier": subscription_tier} if subscription_tier else None)
+            own_email_batch = email_batch is None
+            email_batch = email_batch or email_enrichment_service.batch()
+            try:
+                await import_with_email_receipt(credential_manager, filename, credential_data,
+                    initial_state={"tier": subscription_tier} if subscription_tier else None,
+                    email_batch=email_batch)
+            finally:
+                if own_email_batch:
+                    email_batch.seal()
+            # Shared batch warnings describe the request, not this credential.
+            if own_email_batch:
+                warnings.extend(email_batch.warnings)
         except CredentialStorageError as exc:
             return {"success": False, "filename": filename,
                     "error_code": exc.code, "error": str(exc)}

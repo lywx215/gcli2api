@@ -240,7 +240,10 @@ class AntigravityQuotaMixin(AntigravityPanelMixin, AntigravityModelAccessMixin, 
         rows = await self._quota_rows(filename)
         if not rows or rows[0].get("quota_credential_generation") != generation:
             return None
-        row = _decode(rows[0])
+        # Identity and token reads are independent of quota policy. A malformed
+        # quota remains fail-closed for admission without blocking fenced email
+        # or token metadata lookup for this exact imported account.
+        row = rows[0]
         data = _object(row.get("credential_data"))
         return {**data, "_quota_generation": generation,
                 "_quota_credential_version": credential_version(row.get("credential_data")),

@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from src.models import CredFilenameListRequest
+from src.storage.antigravity_import import ImportReceipt
+from src.storage.antigravity_quota import credential_version
 from src.panel import creds as creds_panel
 
 
@@ -153,6 +155,7 @@ async def test_antigravity_refresh_import_persists_detected_tier(
 
     async def fake_add(filename, data, *, initial_state=None):
         calls["added"].append((filename, dict(data), dict(initial_state or {})))
+        return ImportReceipt(filename, "synthetic-generation", credential_version(data), True)
 
     async def fake_update(filename, state, mode="geminicli"):
         calls["updated"].append((filename, dict(state), mode))
@@ -163,7 +166,7 @@ async def test_antigravity_refresh_import_persists_detected_tier(
     monkeypatch.setattr(creds_panel, "fetch_project_id_and_tier", fake_detect)
     monkeypatch.setattr(creds_panel, "Credentials", _ImportedCredentialsFactory)
     monkeypatch.setattr(
-        creds_panel.credential_manager, "add_antigravity_credential", fake_add
+        creds_panel.credential_manager, "add_antigravity_credential_with_receipt", fake_add
     )
     monkeypatch.setattr(
         creds_panel.credential_manager, "update_credential_state", fake_update

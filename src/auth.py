@@ -718,7 +718,8 @@ async def asyncio_complete_auth_flow(
                         log.warning(f"无法从API获取project_id，使用默认project_id: {project_id}")
 
                     # 保存antigravity凭证
-                    saved_filename = await save_credentials(credentials, project_id, mode="antigravity", subscription_tier=subscription_tier)
+                    email_result = {}
+                    saved_filename = await save_credentials(credentials, project_id, mode="antigravity", subscription_tier=subscription_tier, email_result=email_result)
 
                     # 准备返回的凭证数据
                     creds_data = _prepare_credentials_data(credentials, project_id, mode="antigravity", subscription_tier=subscription_tier)
@@ -733,6 +734,7 @@ async def asyncio_complete_auth_flow(
                         "file_path": saved_filename,
                         "auto_detected_project": False,
                         "mode": "antigravity",
+                        **email_result,
                     }
 
                 # 如果需要自动检测项目ID且没有提供项目ID（标准模式）
@@ -900,7 +902,8 @@ async def complete_auth_flow_from_callback_url(
                     log.warning(f"无法从API获取project_id，使用默认project_id: {project_id}")
 
                 # 保存antigravity凭证
-                saved_filename = await save_credentials(credentials, project_id, mode="antigravity", subscription_tier=subscription_tier)
+                email_result = {}
+                saved_filename = await save_credentials(credentials, project_id, mode="antigravity", subscription_tier=subscription_tier, email_result=email_result)
 
                 # 准备返回的凭证数据
                 creds_data = _prepare_credentials_data(credentials, project_id, mode="antigravity", subscription_tier=subscription_tier)
@@ -915,6 +918,7 @@ async def complete_auth_flow_from_callback_url(
                     "file_path": saved_filename,
                     "auto_detected_project": False,
                     "mode": "antigravity",
+                    **email_result,
                 }
 
             # 标准模式的项目ID处理逻辑
@@ -1019,6 +1023,7 @@ async def save_credentials(
     mode: str = "geminicli",
     subscription_tier: str = None,
     subscription_info: Optional[GeminiCliSubscriptionInfo] = None,
+    email_result: Optional[dict] = None,
 ) -> str:
     """通过统一存储系统保存凭证"""
     # 生成文件名（使用project_id和时间戳）
@@ -1036,13 +1041,17 @@ async def save_credentials(
     # 通过存储适配器保存
     storage_adapter = await get_storage_adapter()
     if mode == "antigravity":
-        success = await storage_adapter.import_antigravity_credential(
-            filename, creds_data, initial_state={
-                "error_codes": [], "disabled": False, "last_success": time.time(),
-                "user_email": None, "tier": subscription_tier or default_tier_for_mode(mode),
-            })
-        if not success:
-            raise Exception(f"保存凭证失败: {filename}")
+        from src.antigravity_email_enrichment import email_enrichment_service, import_with_email_receipt
+        email_batch = email_enrichment_service.batch()
+        try:
+            await import_with_email_receipt(storage_adapter, filename, creds_data,
+                initial_state={"error_codes": [], "disabled": False, "last_success": time.time(),
+                               "user_email": None, "tier": subscription_tier or default_tier_for_mode(mode)},
+                email_batch=email_batch)
+        finally:
+            email_batch.seal()
+            if email_result is not None:
+                email_result.update(email_enrichment=email_batch.public(), warnings=email_batch.warnings)
         return filename
     credential_existed = (
         await storage_adapter.get_credential(filename, mode=mode) is not None

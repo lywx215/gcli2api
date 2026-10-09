@@ -156,6 +156,14 @@ class DirectoryBroker:
                 ticket.task.cancel()
 
 
+@dataclass(frozen=True)
+class AtomicSettlement:
+    """Transient operation result delivered once to a synchronous metadata callback."""
+    status: str
+    result: object = None
+    exception: BaseException | None = None
+
+
 class AtomicRegistry:
     """Reserve capacity before starting exactly one atomic operation.
 
@@ -188,7 +196,7 @@ class AtomicRegistry:
         task.add_done_callback(finished)
         return task
 
-    async def run(self, operation, *, deadline=None, phase="settlement", on_abandoned=None):
+    async def run(self, operation, *, deadline=None, phase="settlement", on_abandoned=None, on_settled=None):
         deadline = deadline if deadline is not None else work_deadline.get()
         if self.closing:
             raise QuotaWorkError("quota_shutdown", phase)
@@ -215,6 +223,23 @@ class AtomicRegistry:
                     return
                 self.cleanup(lambda: on_abandoned(value))
         task.add_done_callback(cleanup)
+        if on_settled is not None:
+            def settled(done):
+                if done.cancelled():
+                    outcome = AtomicSettlement("cancelled")
+                else:
+                    exception = done.exception()
+                    outcome = (AtomicSettlement("failed", exception=exception) if exception is not None
+                               else AtomicSettlement("succeeded", result=done.result()))
+                try:
+                    # Callbacks are notification-only. They cannot replace the
+                    # caller result, start asynchronous compensation or retry.
+                    on_settled(outcome)
+                except BaseException:
+                    from log import log
+                    log.warning("[ANTIGRAVITY] atomic settlement notification failed")
+            # Install before the first wait, including fast completion/cancel races.
+            task.add_done_callback(settled)
         try:
             async with asyncio.timeout_at(deadline):
                 return await asyncio.shield(task)
@@ -309,6 +334,8 @@ def begin_directory_shutdown(*, from_signal=False, started_at=None):
     deadline = started + budget
     atomic_registry.begin_close(deadline)
     directory_broker.begin_close()
+    from src.antigravity_email_enrichment import email_enrichment_service
+    email_enrichment_service.begin_close()
     batch_pool.begin_close()
     return deadline
 

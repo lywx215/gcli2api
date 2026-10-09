@@ -97,3 +97,71 @@ async def test_batch_passes_disconnect_request_and_keeps_result_order(monkeypatc
     assert [row["filename"] for row in data["results"]] == names
     assert data["total_count"] == 3 and data["failure_count"] == 3
     assert data["model_access_summary"]["total"] == 0
+
+@pytest.mark.parametrize('search,mode,status', [('a'*256,'antigravity',400),('1621','geminicli',400)])
+async def test_search_validation_rejects_before_storage(monkeypatch,search,mode,status):
+    init=AsyncMock(side_effect=AssertionError('must not read storage'))
+    monkeypatch.setattr(creds,'get_storage_adapter',init)
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        await creds.get_creds_status_common(0,25,'all',mode,search=search)
+    assert exc.value.status_code == status
+    init.assert_not_awaited()
+
+
+async def test_search_normalizes_optimized_reader_and_empty_legacy_geminicli(monkeypatch):
+    result={'items':[], 'total':0, 'stats':{'total':99}, 'model_access_summary':{'total':0}}
+    reader=AsyncMock(return_value=result)
+    backend=SimpleNamespace(get_antigravity_panel_summary=reader)
+    adapter=SimpleNamespace(_backend=backend,get_backend_info=AsyncMock(return_value={'backend_type':'synthetic'}))
+    monkeypatch.setattr(creds,'get_storage_adapter',AsyncMock(return_value=adapter))
+    response=await creds.get_creds_status_common(0,25,'all','antigravity',search=' 001 ')
+    assert reader.await_args.kwargs['search']=='001'
+    assert 'antigravity.credentials.search' in json.loads(response.body)['panel_capabilities']
+    backend.get_credentials_summary=AsyncMock(return_value=result)
+    response=await creds.get_creds_status_common(0,25,'all','geminicli',search='   ')
+    assert response.status_code==200
+    assert 'search' not in backend.get_credentials_summary.await_args.kwargs
+
+
+@pytest.mark.parametrize('search,expected', [('1621',['1621_one.json']),('ALPHA',['1621_one.json','16210_two.json']),('001',['001_three.json']),('%_',['001_three.json'])])
+async def test_legacy_search_before_page_and_opus_summary_preserves_global_stats(monkeypatch,search,expected):
+    rows=[{'filename':'1621_one.json','user_email':'Alpha@example.test'},
+          {'filename':'16210_two.json','user_email':'ALPHA@other.test'},
+          {'filename':'001_three.json','user_email':'a%_b@example.test'}]
+    rows=[{**row,'disabled':False,'error_codes':[],'last_success':None} for row in rows]
+    backend=SimpleNamespace(model_access_storage_ready=True,model_access_list_family_public=AsyncMock(return_value={}),
+        get_credentials_summary=AsyncMock(return_value={'items':rows,'total':3,'stats':{'total':99}}))
+    adapter=SimpleNamespace(_backend=backend,get_backend_info=AsyncMock(return_value={'backend_type':'synthetic'}))
+    monkeypatch.setattr(creds,'get_storage_adapter',AsyncMock(return_value=adapter))
+    response=await creds.get_creds_status_common(0,25,'all','antigravity',search=search)
+    data=json.loads(response.body)
+    assert [item['filename'] for item in data['items']]==expected
+    assert data['total']==data['model_access_summary']['total']==len(expected)
+    assert data['stats']['total']==99
+    assert backend.get_credentials_summary.await_args.kwargs['offset']==0
+    assert backend.get_credentials_summary.await_args.kwargs['limit'] is None
+    assert 'antigravity.credentials.search' in data['panel_capabilities']
+
+async def test_large_page_builds_email_annotations_once(monkeypatch):
+    rows=[{"filename":f"credential-{i}.json","user_email":None,"disabled":False,
+           "error_codes":[],"last_success":None} for i in range(1000)]
+    reader=AsyncMock(return_value={"items":rows,"total":1000,"stats":{"total":1000},
+                                  "model_access_summary":{"total":1000}})
+    backend=SimpleNamespace(get_antigravity_panel_summary=reader)
+    adapter=SimpleNamespace(_backend=backend,get_backend_info=AsyncMock(return_value={"backend_type":"synthetic"}))
+    monkeypatch.setattr(creds,"get_storage_adapter",AsyncMock(return_value=adapter))
+    calls=[]
+    def annotations(filenames):
+        calls.append(list(filenames))
+        return {"credential-500.json":{"email_enrichment_status":"queued", "email_enrichment_reason":None}}
+    def individual(filename):
+        raise AssertionError("page must not scan the registry once per row")
+    service=SimpleNamespace(annotations=annotations,annotate=individual,supports=lambda backend:False)
+    monkeypatch.setattr(creds,"email_enrichment_service",service)
+    response=await creds.get_creds_status_common(0,1000,"all","antigravity")
+    assert len(calls)==1 and calls[0]==[row["filename"] for row in rows]
+    result=json.loads(response.body)
+    assert len(result["items"])==1000
+    assert result["items"][500]["email_enrichment_status"]=="queued"
+    assert "email_enrichment_status" not in result["items"][499]

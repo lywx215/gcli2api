@@ -27,13 +27,41 @@ MAX_ROWS = 50000
 MAX_BYTES = 32 * 1024 * 1024
 BATCH = 500
 INDEX_FIELDS = frozenset(('filename', 'rotation_order', 'disabled', 'permanent_disabled',
-    'tier', 'remark', 'error_codes', 'error_messages', 'model_cooldowns',
+    'tier', 'remark', 'user_email', 'error_codes', 'error_messages', 'model_cooldowns',
     'quota_group_states', 'quota_credential_generation', 'model_access_state', 'credential_data'))
-LIGHT_COLUMNS = ('filename', 'rotation_order', 'disabled', 'tier', 'remark', 'error_codes',
+LIGHT_COLUMNS = ('filename', 'rotation_order', 'disabled', 'tier', 'remark', 'user_email', 'error_codes',
     'model_cooldowns', 'quota_group_states', 'quota_credential_generation',
     'model_access_state', 'credential_data')
-HEAVY_COLUMNS = ('user_email', 'last_success', 'success_count', 'failure_count',
+HEAVY_COLUMNS = ('last_success', 'success_count', 'failure_count',
                  'cycle_stats', 'last_cycle_stats', 'enable_credit')
+
+_ASCII_LOWER = str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')
+
+
+def normalize_credential_search(value):
+    """Normalize a literal public search condition without changing leading zeros."""
+    if value is None:
+        return ''
+    if not isinstance(value, str):
+        raise ValueError('invalid_credential_search')
+    value = value.strip()
+    if len(value) > 255:
+        raise ValueError('credential_search_too_long')
+    return value
+
+
+def matches_credential_search(filename, user_email, search):
+    """Numeric window IDs match exactly; text search is ASCII case insensitive."""
+    search = normalize_credential_search(search)
+    if not search:
+        return True
+    filename = os.path.basename(filename) if isinstance(filename, str) else ''
+    if search.isascii() and search.isdecimal():
+        return filename.startswith(search + '_')
+    needle = search.translate(_ASCII_LOWER)
+    return (needle in filename.translate(_ASCII_LOWER)
+            or isinstance(user_email, str) and needle in user_email.translate(_ASCII_LOWER))
+
 
 class PanelListBusy(RuntimeError):
     pass
@@ -180,6 +208,8 @@ class _Accumulator:
         if cd == 'no_cooldown' and row['model_cooldowns']:
             return
         if cd in ('pro_no_cooldown', 'flash_no_cooldown') and cooldowns_affect_antigravity_family(row['model_cooldowns'], cd.split('_')[0]):
+            return
+        if not matches_credential_search(row['filename'], row.get('user_email'), o.get('search')):
             return
         self.base_total += 1
         statuses = {family: _status(row['model_access_families'].get(family, {}), self.now)
@@ -348,7 +378,7 @@ class AntigravityPanelMixin:
         if self.QUOTA_ENGINE != 'mysql':
             columns.append('permanent_disabled')
         if heavy:
-            columns.extend(HEAVY_COLUMNS if self.QUOTA_ENGINE != 'mysql' else ('user_email', 'last_success'))
+            columns.extend(HEAVY_COLUMNS if self.QUOTA_ENGINE != 'mysql' else ('last_success',))
         if errors:
             columns.append('error_messages')
         return columns
@@ -550,13 +580,14 @@ class AntigravityPanelMixin:
     async def get_antigravity_panel_summary(self, *, offset=0, limit=20, status_filter='all',
             error_code_filter=None, cooldown_filter=None, tier_filter=None, remark_filter=None,
             model_access_filter='all', model_access_family='claude-opus-5-5',
-            preview_filter=None, model_access_tier='any'):
+            preview_filter=None, model_access_tier='any', search=None):
         from src.antigravity_panel_budget import panel_list_budget
         self._ensure_initialized()
         opts = dict(offset=offset, limit=limit, status_filter=status_filter,
             error_code_filter=error_code_filter, cooldown_filter=cooldown_filter,
             tier_filter=tier_filter, remark_filter=remark_filter,
-            model_access_filter=model_access_filter, model_access_family=model_access_family)
+            model_access_filter=model_access_filter, model_access_family=model_access_family,
+            search=normalize_credential_search(search))
         if not getattr(self, 'model_access_storage_ready', False):
             if model_access_filter != 'all' or model_access_family != FAMILIES[0]:
                 raise RuntimeError('model_access_capability_unavailable')

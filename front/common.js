@@ -26,6 +26,7 @@ const AppState = {
     // 文件上传
     uploadFiles: createUploadManager('normal'),
     antigravityUploadFiles: createUploadManager('antigravity'),
+    emailEnrichment: createEmailEnrichmentTracker(),
 
     // 配置管理
     currentConfig: {},
@@ -232,6 +233,8 @@ function createCredsManager(type) {
         currentModelAccessFilter: 'all',
         currentModelAccessFamily: 'claude-opus-5-5',
         modelAccessFamilyCapability: false,
+        searchCapability: false,
+        currentSearch: '',
         filterRevision: 0,
         selectionTask: 0,
         refreshTask: 0,
@@ -298,6 +301,7 @@ function createCredsManager(type) {
                 tier_filter: this.currentTierFilter || 'all',
                 remark_filter: this.currentRemarkFilter || '__all__'});
             if (this.type === 'antigravity') {
+                if (this.searchCapability && this.currentSearch) params.set('search', this.currentSearch);
                 if (this.modelAccessFamilyCapability) {
                     params.set('model_access_filter', this.currentModelAccessFilter || 'all');
                     params.set('model_access_family', this.currentModelAccessFamily);
@@ -313,7 +317,7 @@ function createCredsManager(type) {
         filterSignature() {
             return JSON.stringify([this.currentStatusFilter, this.currentErrorCodeFilter,
                 this.currentCooldownFilter, this.currentPreviewFilter, this.currentTierFilter,
-                this.currentRemarkFilter, this.currentModelAccessFamily, this.currentModelAccessFilter]);
+                this.currentRemarkFilter, this.currentModelAccessFamily, this.currentModelAccessFilter, this.currentSearch]);
         },
 
         cancelSelection() {
@@ -334,13 +338,24 @@ function createCredsManager(type) {
             if (this.type !== 'antigravity') return false;
             const familyCap = 'antigravity.model_access.family_filter';
             const groupCap = 'antigravity.cooldown.group_filter';
+            const searchCap = 'antigravity.credentials.search';
             this.advertisedCapabilities = Array.isArray(capabilities) ? capabilities : [];
             const family = this.advertisedCapabilities.includes(familyCap) && !this.failedCapabilities.has(familyCap);
             const groups = this.advertisedCapabilities.includes(groupCap) && !this.failedCapabilities.has(groupCap);
+            const search = this.advertisedCapabilities.includes(searchCap) && !this.failedCapabilities.has(searchCap);
             const before = this.filterSignature();
-            const revoked = (this.modelAccessFamilyCapability && !family) || (this.cooldownGroupCapability && !groups);
+            const revoked = (this.searchCapability && !search) || (this.modelAccessFamilyCapability && !family) || (this.cooldownGroupCapability && !groups);
             this.modelAccessFamilyCapability = family;
             this.cooldownGroupCapability = groups;
+            this.searchCapability = search;
+            if (!search) this.currentSearch = '';
+            for (const id of ['antigravitySearchInput', 'antigravitySearchBtn', 'antigravitySearchClearBtn']) {
+                const element = document.getElementById(id);
+                if (!element) continue;
+                element.disabled = !search;
+                element.title = search ? '' : '当前服务暂不支持凭证检索';
+                if (!search && id === 'antigravitySearchInput') element.value = '';
+            }
             if (!family) {
                 this.currentModelAccessFamily = 'claude-opus-5-5';
                 this.currentModelAccessFilter = 'all';
@@ -366,13 +381,14 @@ function createCredsManager(type) {
 
         downgradeCapabilities(response, data, requestUrl) {
             if (this.type !== 'antigravity' || response.status !== 501) return false;
-            const family = 'antigravity.model_access.family_filter', group = 'antigravity.cooldown.group_filter';
+            const family = 'antigravity.model_access.family_filter', group = 'antigravity.cooldown.group_filter', search = 'antigravity.credentials.search';
             const params = new URL(requestUrl, window.location.href).searchParams;
             const used = [];
             if ((params.has('model_access_family') && params.get('model_access_family') !== 'claude-opus-5-5') ||
                 (params.has('model_access_filter') && params.get('model_access_filter') !== 'all')) used.push(family);
             if (params.get('cooldown_filter') && params.get('cooldown_filter') !== 'all') used.push(group);
-            if ([family, group].includes(data.capability)) used.push(data.capability);
+            if (params.has('search') && params.get('search')) used.push(search);
+            if ([family, group, search].includes(data.capability)) used.push(data.capability);
             if (!used.length) return false;
             used.forEach(cap => this.failedCapabilities.add(cap));
             if (!this.applyCapabilities(this.advertisedCapabilities)) this.invalidateFilters();
@@ -528,6 +544,8 @@ function createCredsManager(type) {
                             },
                             remark: item.remark || '',
                             user_email: item.user_email,
+                            email_enrichment_status: item.email_enrichment_status,
+                            email_enrichment_reason: item.email_enrichment_reason,
                             model_cooldowns: item.model_cooldowns || {},
                             quota_groups: item.quota_groups,
                             quota_group_states: item.quota_group_states,
@@ -741,6 +759,22 @@ function createCredsManager(type) {
             this.refresh();
         },
 
+        applySearch(clear = false) {
+            if (this.type !== 'antigravity' || !this.searchCapability) return;
+            const input = document.getElementById('antigravitySearchInput');
+            const search = clear ? '' : (input?.value || '').trim();
+            if (Array.from(search).length > 255) {
+                showStatus('检索内容不能超过 255 个字符', 'error');
+                return;
+            }
+            if (input) input.value = search;
+            if (search !== this.currentSearch) {
+                this.currentSearch = search;
+                this.invalidateFilters();
+            }
+            return this.refresh();
+        },
+
         // 更新批量控件
         updateBatchControls() {
             const selectedCount = this.selectedFiles.size;
@@ -936,9 +970,168 @@ function createCredsManager(type) {
 // =====================================================================
 // Successful local imports can replace a credential without changing its name.
 // Use server-returned names (including ZIP entries), never the archive's filename.
+// In-memory, authenticated-session tracking only. Never persist job IDs or credential data.
+function createEmailEnrichmentTracker() {
+    return {
+        jobs: new Map(), byFilename: new Map(), timer: null, flight: null, sequence: 0, warningCount: 0,
+        forFilename(filename) { return this.byFilename.get(filename); },
+        remember(filename, entry) {
+            if ((this.byFilename.get(filename)?.sequence || 0) > entry.sequence) return;
+            if (!this.byFilename.has(filename) && this.byFilename.size >= 5000) {
+                const terminal = [...this.byFilename].find(([, value]) => !['queued', 'running', 'settlement_pending'].includes(value.status));
+                if (!terminal) return;
+                this.byFilename.delete(terminal[0]);
+            }
+            this.byFilename.set(filename, entry);
+        },
+        stop() {
+            if (this.timer !== null) clearTimeout(this.timer);
+            this.timer = null;
+            this.flight?.abort();
+            this.flight = null;
+            this.jobs.clear();
+            this.byFilename.clear();
+            this.warningCount = 0;
+            const progress = document.getElementById('antigravityEmailEnrichmentProgress');
+            if (progress) { progress.hidden = true; progress.textContent = ''; }
+        },
+        track(data, epoch) {
+            if (epoch !== AppState.sessionEpoch || !AppState.sessionReady) return;
+            const reference = data?.email_enrichment;
+            if (Array.isArray(data?.warnings) && data.warnings.length) this.warningCount++;
+            if (reference && typeof reference.job_id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(reference.job_id)) {
+                if (!this.jobs.has(reference.job_id)) {
+                    // Bound client records to the server's session job limit.
+                    for (const [id, job] of this.jobs) {
+                        if (this.jobs.size < 128) break;
+                        if (job.complete) {
+                            this.jobs.delete(id);
+                            for (const [filename, entry] of this.byFilename) if (entry.sequence === job.sequence) this.byFilename.delete(filename);
+                        }
+                    }
+                    if (this.jobs.size < 128) {
+                        const sequence = ++this.sequence;
+                        const job = {id: reference.job_id, sequence, counts: {}, complete: false, sealed: false, expired: false};
+                        this.jobs.set(job.id, job);
+                        const names = Array.isArray(data.results) ? data.results.filter(item => item?.status === 'success' || item?.success === true).map(item => item.filename) : [];
+                        const direct = data.filename || data.file_path;
+                        if (typeof direct === 'string') names.push(direct.split(/[\\/]/).pop());
+                        for (const filename of names) if (typeof filename === 'string') this.remember(filename, {status: 'queued', sequence});
+                        this.schedule(epoch, 0);
+                    }
+                }
+            }
+            this.render();
+        },
+        schedule(epoch, delay = 2000) {
+            if (this.timer !== null || this.flight || epoch !== AppState.sessionEpoch || !AppState.sessionReady || ![...this.jobs.values()].some(job => !job.complete)) return;
+            this.timer = setTimeout(() => {
+                this.timer = null;
+                if (epoch === AppState.sessionEpoch && AppState.sessionReady) this.poll(epoch);
+            }, delay);
+        },
+        async poll(epoch) {
+            if (this.flight || epoch !== AppState.sessionEpoch || !AppState.sessionReady) return;
+            const controller = new AbortController();
+            this.flight = controller;
+            const current = () => epoch === AppState.sessionEpoch && AppState.sessionReady && this.flight === controller && !controller.signal.aborted;
+            let emailWritten = false;
+            try {
+                for (const job of this.jobs.values()) {
+                    if (!current()) return;
+                    if (job.complete) continue;
+                    const previousSuccess = Number(job.counts.success || 0);
+                    let offset = 0, pageCount = 0;
+                    let reportedComplete = false, paginationComplete = false;
+                    const seen = new Set();
+                    const itemStates = ['queued', 'running', 'settlement_pending', 'success', 'failed', 'superseded', 'skipped', 'unknown'];
+                    do {
+                        pageCount++;
+                        const response = await fetch(`./creds/email-enrichment/${encodeURIComponent(job.id)}?offset=${offset}&limit=100`, {headers: getAuthHeaders(), signal: controller.signal});
+                        if (!current()) return;
+                        if (response.status === 404) {
+                            job.complete = true; job.expired = true;
+                            for (const [filename, entry] of this.byFilename) if (entry.sequence === job.sequence && ['queued', 'running', 'settlement_pending'].includes(entry.status)) {
+                                this.byFilename.set(filename, {...entry, status: 'expired'});
+                            }
+                            break;
+                        }
+                        if (!response.ok) { reportedComplete = false; break; }
+                        const data = await response.json();
+                        if (!current()) return;
+                        if (data.job_id !== job.id || !Array.isArray(data.items) || data.items.length > 100 ||
+                            !Number.isInteger(data.total) || data.total < 0 || data.total > 5000 || offset + data.items.length > data.total ||
+                            data.items.some(item => !item || typeof item.filename !== 'string' || !item.filename || !itemStates.includes(item.status))) {
+                            reportedComplete = false;
+                            break;
+                        }
+                        job.counts = data.counts && typeof data.counts === 'object' ? data.counts : {};
+                        reportedComplete = data.complete === true;
+                        job.sealed = data.sealed === true;
+                        for (const item of data.items) {
+                            seen.add(item.filename);
+                            const entry = {status: item.status, sequence: job.sequence, ...(item.status === 'success' && typeof item.user_email === 'string' ? {user_email: item.user_email} : {})};
+                            this.remember(item.filename, entry);
+                        }
+                        offset += data.items.length;
+                        if (offset === data.total) { paginationComplete = true; break; }
+                        if (!data.items.length) { reportedComplete = false; break; }
+                        if (pageCount >= 50) { reportedComplete = false; break; }
+                    } while (current());
+                    if (!job.expired) job.complete = reportedComplete && job.sealed && paginationComplete;
+                    if (job.complete && !job.expired) {
+                        // Record capacity can omit a saved upload from job.items. Only a full
+                        // terminal snapshot proves it will never leave the local queued state.
+                        for (const [filename, entry] of this.byFilename) {
+                            if (entry.sequence === job.sequence && entry.status === 'queued' && !seen.has(filename)) {
+                                this.byFilename.set(filename, {...entry, status: 'skipped', reason: 'not_reported_after_completion'});
+                            }
+                        }
+                    }
+                    if (Number(job.counts.success || 0) > previousSuccess) emailWritten = true;
+                }
+                if (!current()) return;
+                this.render();
+                const manager = AppState.antigravityCreds;
+                const active = document.getElementById('antigravity-manageTab')?.classList.contains('active');
+                if (emailWritten) {
+                    // A job's GET observes completed writes; start a new list generation.
+                    if (active) Promise.resolve(manager.refresh({afterMutation: true, silent: true})).catch(() => {});
+                    else manager.refreshFreshness++;
+                } else if (active) manager.renderList();
+            } catch (error) {
+                // Keep transient failures resumable. Job IDs survive only this login.
+                if (current() && error.name !== 'AbortError') this.render(true);
+            } finally {
+                if (this.flight === controller) this.flight = null;
+                if (epoch === AppState.sessionEpoch && AppState.sessionReady) this.schedule(epoch);
+            }
+        },
+        render(networkPending = false) {
+            const element = document.getElementById('antigravityEmailEnrichmentProgress');
+            if (!element) return;
+            element.hidden = this.jobs.size === 0 && this.warningCount === 0;
+            const counts = {pending: 0, success: 0, failed: 0, expired: 0};
+            for (const job of this.jobs.values()) {
+                if (job.expired) { counts.expired++; continue; }
+                counts.pending += Number(job.counts.queued || 0) + Number(job.counts.running || 0) + Number(job.counts.settlement_pending || 0);
+                if (!job.complete && !Object.keys(job.counts).length) counts.pending++;
+                counts.success += Number(job.counts.success || 0);
+                counts.failed += Number(job.counts.failed || 0) + Number(job.counts.skipped || 0) + Number(job.counts.unknown || 0);
+            }
+            const lines = [`上传后的邮箱获取：等待/执行 ${counts.pending} · 成功 ${counts.success} · 未完成 ${counts.failed}`];
+            if (counts.expired) lines.push('部分邮箱任务已失效（服务重启或记录过期），请用“查看账号邮箱”手动获取。');
+            if (counts.failed || this.warningCount) lines.push('部分上传凭证未完成自动获取；上传仍已保存，可在凭证卡片手动获取邮箱。');
+            if (networkPending) lines.push('任务状态暂时无法读取，将继续查询。');
+            element.textContent = lines.join('\n');
+        }
+    };
+}
+
 function refreshAntigravityAfterImport(data, epoch) {
     const manager = AppState.antigravityCreds;
     if (epoch !== manager.sessionEpoch()) return;
+    AppState.emailEnrichment.track(data, epoch);
     const names = Array.isArray(data.results)
         ? data.results.filter(item => item && (item.status === 'success' || item.success === true))
             .map(item => item.filename).filter(name => typeof name === 'string' && name.length > 0)
@@ -1385,6 +1578,7 @@ function createCredCard(credInfo, manager) {
     const pathId = (managerType === 'antigravity' ? 'ag_' : '') + btoa(encodeURIComponent(filename)).replace(/[+/=]/g, '_');
 
     // 操作按钮
+    const emailRetry = managerType === 'antigravity' && !credInfo.user_email && ['failed', 'skipped', 'unknown', 'expired'].includes(credInfo.email_enrichment_status || AppState.emailEnrichment.forFilename(filename)?.status);
     const actionButtons = `
         ${status.permanent_disabled
             ? `<button class="cred-btn enable" data-filename="${filename}" data-action="enable">恢复启用</button>`
@@ -1395,7 +1589,7 @@ function createCredCard(credInfo, manager) {
         ${status.permanent_disabled ? '' : `<button class="cred-btn disable" data-filename="${filename}" data-action="permanent_disable" title="从普通禁用区移入永久禁用区，不删除凭证">永久禁用</button>`}
         <button class="cred-btn view" onclick="toggle${managerType === 'antigravity' ? 'Antigravity' : ''}CredDetails('${pathId}')">查看内容</button>
         <button class="cred-btn download" onclick="download${managerType === 'antigravity' ? 'Antigravity' : ''}Cred('${filename}')">下载</button>
-        <button class="cred-btn email" onclick="fetch${managerType === 'antigravity' ? 'Antigravity' : ''}UserEmail('${filename}')">查看账号邮箱</button>
+        <button class="cred-btn email" onclick="fetch${managerType === 'antigravity' ? 'Antigravity' : ''}UserEmail('${filename}')">${emailRetry ? '重新获取邮箱' : '查看账号邮箱'}</button>
         ${managerType === 'antigravity' ? `<button class="cred-btn" onclick="toggleAntigravityQuotaDetails('${pathId}')" title="查看该凭证的额度信息">查看额度</button>` : `<button class="cred-btn" onclick="toggleGeminicliQuotaDetails('${pathId}')" title="查看每个模型的剩余额度">查看额度</button>`}
         ${managerType === 'antigravity' ? (credInfo.enable_credit
             ? `<button class="cred-btn" data-filename="${filename}" data-action="disable_credit" title="关闭该凭证的Credit模式">关闭 Credit</button>`
@@ -1415,9 +1609,16 @@ function createCredCard(credInfo, manager) {
         ? `<span class="status-badge" style="background-color: #6f42c1; color: white; margin-left: 6px;" title="备注/标签: ${escapeHtml(remark)}">🏷 ${escapeHtml(remark)}</span>`
         : '';
 
-    const emailInfo = credInfo.user_email
-        ? `<div class="cred-email" style="font-size: 12px; color: #666; margin-top: 2px;">${escapeHtml(credInfo.user_email)}</div>`
-        : '<div class="cred-email" style="font-size: 12px; color: #999; margin-top: 2px; font-style: italic;">未获取邮箱</div>';
+    const enrichment = managerType === 'antigravity' ? AppState.emailEnrichment.forFilename(filename) : null;
+    const emailStatus = credInfo.email_enrichment_status || enrichment?.status;
+    const emailPending = ['queued', 'running', 'settlement_pending'].includes(emailStatus);
+    const emailFailed = ['failed', 'skipped', 'unknown', 'expired'].includes(emailStatus);
+    const emailLabel = emailPending ? '邮箱获取中' : emailFailed ? '邮箱获取未完成，可手动获取' : '未获取邮箱';
+    // Only the latest status read owns identity; an earlier job may describe a replaced file.
+    const email = credInfo.user_email;
+    const emailInfo = email
+        ? `<div class="cred-email" title="${escapeHtmlAttribute(email)}" style="font-size: 12px; color: #666; margin-top: 2px;">${escapeHtml(email)}</div>`
+        : `<div class="cred-email" title="${emailLabel}" style="font-size: 12px; color: #999; margin-top: 2px; font-style: italic;">${emailLabel}</div>`;
     const currentCycle = credInfo.cycle_stats || {};
     const lastCycle = credInfo.last_cycle_stats || {};
     const cycleTotal = Number(currentCycle.total || 0);
@@ -1438,10 +1639,11 @@ function createCredCard(credInfo, manager) {
 
     div.innerHTML = `
         <div class="cred-header">
-            <div style="display: flex; align-items: center; gap: 10px;">
+            <div class="cred-identity" style="display: flex; align-items: center; gap: 10px;">
                 <input type="checkbox" class="${checkboxClass}" data-filename="${filename}" onchange="toggle${managerType === 'antigravity' ? 'Antigravity' : ''}FileSelection('${filename}')">
-                <div>
-                    <div class="cred-filename">${escapeHtml(filename)}${remarkBadge}</div>
+                <div class="cred-identity-text">
+                    <div class="cred-filename" title="${escapeHtmlAttribute(filename)}">${escapeHtml(filename)}${managerType === 'antigravity' ? '' : remarkBadge}</div>
+                    ${managerType === 'antigravity' && remarkBadge ? `<div class="cred-remark">${remarkBadge}</div>` : ''}
                     ${emailInfo}
                     ${usageStatsInfo}
                 </div>
@@ -1580,6 +1782,8 @@ function stopPanelSession() {
     AppState.sessionReady = false;
     AppState.tabLoadVersion++;
     resetPanelTabTransition();
+    setAntigravityWideLayout(false);
+    AppState.emailEnrichment.stop();
     AppState.loadedSessionTab = null;
     stopCooldownTimer();
     stopStatsAutoRefresh();
@@ -1787,6 +1991,14 @@ function resetPanelTabTransition() {
     });
 }
 
+function setAntigravityWideLayout(enabled) {
+    if (!document.body?.classList) return;
+    if (enabled) document.body.classList.add('antigravity-wide');
+    else document.body.classList.remove('antigravity-wide');
+    const activeTab = document.querySelector('.tab.active');
+    if (activeTab) updateTabSlider(activeTab, false);
+}
+
 function switchTab(tabName, eventOrTarget = null) {
     const epoch = AppState.sessionEpoch;
     const transition = ++AppState.tabLoadVersion;
@@ -1799,6 +2011,7 @@ function switchTab(tabName, eventOrTarget = null) {
     const currentContent = document.querySelector('.tab-content.active');
     const targetContent = document.getElementById(safeTabName + 'Tab');
 
+    setAntigravityWideLayout(safeTabName === 'antigravity-manage' && AppState.sessionReady);
     syncPanelHash(safeTabName);
 
     const explicitTarget = eventOrTarget && eventOrTarget.target

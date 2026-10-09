@@ -101,6 +101,8 @@ async def lifespan(app: FastAPI):
     from src.antigravity_directory_runtime import start_directory_runtime
     start_directory_runtime()
     await model_access_service.start()
+    from src.antigravity_email_enrichment import email_enrichment_service
+    await email_enrichment_service.start()
 
     yield
 
@@ -113,6 +115,7 @@ async def lifespan(app: FastAPI):
     from src.smart_429 import smart_429_service
     stops = [
         asyncio.create_task(model_access_service.close(deadline=deadline)),
+        asyncio.create_task(email_enrichment_service.close(deadline=deadline)),
         asyncio.create_task(keepalive_service.stop()),
         asyncio.create_task(smart_429_service.close()),
         asyncio.create_task(shutdown_all_tasks(timeout=max(0, deadline - asyncio.get_running_loop().time()))),
@@ -237,6 +240,8 @@ def main():
     from hypercorn.config import Config
 
     workers = int(os.environ.get("WORKERS", 1))
+    from src.antigravity_email_enrichment import confirm_native_single_worker
+    confirm_native_single_worker(workers)
 
     async def _run():
         port = await get_server_port()

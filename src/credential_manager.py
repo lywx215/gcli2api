@@ -211,6 +211,29 @@ class CredentialManager:
             raise CredentialStorageError()
         log.info("Antigravity credential added/updated")
 
+    async def add_antigravity_credential_with_receipt(self, credential_name: str, credential_data: Dict[str, Any], *, initial_state=None):
+        """Save an upload and return only its own committed storage identity."""
+        try:
+            await self._ensure_initialized()
+            async with import_write_slot():
+                receipt = await self._storage_adapter.import_antigravity_credential_with_receipt(
+                    credential_name, credential_data, initial_state=initial_state)
+        except Exception:
+            raise CredentialStorageError() from None
+        if receipt is None:
+            raise CredentialStorageError()
+        log.info("Antigravity credential added/updated")
+        return receipt
+
+    async def quota_current_credential(self, filename, generation):
+        await self._ensure_initialized()
+        return await self._storage_adapter.quota_current_credential(filename, generation)
+
+    async def quota_refresh_credential(self, filename, generation, credential_data, expected_version=None, state_updates=None):
+        await self._ensure_initialized()
+        return await self._storage_adapter.quota_refresh_credential(filename, generation,
+            credential_data, expected_version=expected_version, state_updates=state_updates)
+
     async def remove_credential(self, credential_name: str, mode: str = "geminicli") -> bool:
         """删除一个凭证"""
         await self._ensure_initialized()

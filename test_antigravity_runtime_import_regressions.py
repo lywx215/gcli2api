@@ -98,6 +98,7 @@ async def test_refresh_none_observes_original_claim_with_retry_and_cas(access_st
 async def test_oauth_same_second_replace_preserves_disabled_and_tier(access_store, monkeypatch):
     store = access_store
     adapter = SimpleNamespace(import_antigravity_credential=store.import_antigravity_credential,
+        import_antigravity_credential_with_receipt=store.import_antigravity_credential_with_receipt,
         update_credential_state=AsyncMock(side_effect=AssertionError("no post-write state")))
     monkeypatch.setattr(auth, "get_storage_adapter", AsyncMock(return_value=adapter))
     monkeypatch.setattr(auth, "_prepare_credentials_data", lambda *a: {"access_token": "synthetic"})
@@ -140,6 +141,7 @@ async def test_refresh_token_custom_name_uses_atomic_insert_only_tier(access_sto
     manager = CredentialManager()
     manager._initialized = True
     adapter = SimpleNamespace(import_antigravity_credential=store.import_antigravity_credential,
+        import_antigravity_credential_with_receipt=store.import_antigravity_credential_with_receipt,
         update_credential_state=AsyncMock(side_effect=AssertionError("no post-import tier write")))
     manager._storage_adapter = adapter
     monkeypatch.setattr(creds, "credential_manager", manager)
@@ -147,7 +149,7 @@ async def test_refresh_token_custom_name_uses_atomic_insert_only_tier(access_sto
     monkeypatch.setattr(creds, "fetch_project_id_and_tier", AsyncMock(return_value=("project", "pro")))
     monkeypatch.setattr(creds, "get_antigravity_api_url", AsyncMock(return_value="https://example.test"))
     result = await creds._add_credential_by_refresh_token("synthetic", None, None, None, "custom", "antigravity")
-    assert result["success"] and result["warnings"] == []
+    assert result["success"] and result["warnings"]  # Safe warning for unknown external startup.
     state = await store.get_credential_state(name, "antigravity")
     assert state["tier"] == ("ultra" if existing else "pro")
     assert state["disabled"] == existing
