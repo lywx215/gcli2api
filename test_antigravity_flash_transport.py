@@ -108,6 +108,7 @@ async def test_error_does_not_fallback(monkeypatch, mode, status):
 @pytest.mark.parametrize("mode", ["native", "stream_collect"])
 async def test_transport_preserves_total_budget(monkeypatch, mode):
     calls = await wire_http(monkeypatch, stall=True)
+    monkeypatch.setattr(api, "get_antigravity_native_timeout_seconds", AsyncMock(return_value=.06))
     policy = limits.GenerationLimits(first=.04, idle=.04, total=.06, headers=.03)
     monkeypatch.setattr(limits.GenerationLimits, "load", classmethod(lambda cls: policy))
     monkeypatch.setattr(api, "get_antigravity_flash_non_stream_mode", AsyncMock(return_value=mode))

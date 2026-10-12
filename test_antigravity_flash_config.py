@@ -123,7 +123,7 @@ async def test_get_normalizes_after_storage_merge_and_advertises_capability(stor
     expected = value if isinstance(value, str) and value in MODES else "inherit"
     assert payload["config"][KEY] == expected
     assert payload["config"]["existing_custom_setting"] == "preserved"
-    assert payload["capabilities"] == ["antigravity.flash.non_stream_transport"]
+    assert "antigravity.flash.non_stream_transport" in payload["capabilities"]
     assert config.ANTIGRAVITY_FLASH_NON_STREAM_CAPABILITY in payload["capabilities"]
     assert storage.writes == []
 

@@ -21,6 +21,7 @@ from config import (
     get_antigravity_api_url,
     get_antigravity_stream2nostream,
     get_antigravity_flash_non_stream_mode,
+    get_antigravity_native_timeout_seconds,
     get_auto_ban_error_codes,
     is_smart_429_protection_enabled,
 )
@@ -852,6 +853,16 @@ async def _use_stream_collector(model_name, route_context=None):
     return global_mode
 
 
+async def create_non_stream_budget(model_name, route_context=None):
+    """Freeze transport and deadline once, including the fake-stream outer owner."""
+    from src.antigravity_limits import GenerationBudget, GenerationLimits
+    collect = await _use_stream_collector(model_name, route_context)
+    seconds = (route_context.feature_snapshot.antigravity_native_timeout_seconds
+               if route_context is not None else await get_antigravity_native_timeout_seconds())
+    policy = GenerationLimits.load() if collect else GenerationLimits.native(seconds)
+    return GenerationBudget(policy, non_stream=True, stream_collect=collect)
+
+
 async def _non_stream_request(
     body: Dict[str, Any],
     headers: Optional[Dict[str, str]] = None,
@@ -870,7 +881,9 @@ async def _non_stream_request(
         Response对象
     """
     # 检查是否启用流式收集模式
-    stream2nostream = await _use_stream_collector(body.get("model", ""), route_context)
+    budget = current_budget.get()
+    stream2nostream = (budget.stream_collect if budget is not None and budget.stream_collect is not None
+                      else await _use_stream_collector(body.get("model", ""), route_context))
     if stream2nostream:
         log.debug("[ANTIGRAVITY] 使用流式收集模式实现非流式请求")
 
@@ -1008,7 +1021,7 @@ async def _non_stream_request(
                     json=final_payload,
                     headers=auth_headers,
                     timeout=current_budget.get().limits.http_timeout(),
-                    response_header_timeout=current_budget.get().limits.headers
+                    response_header_timeout=current_budget.get().remaining
                 ), diagnostic_attempt, model_name)
 
                 status_code = response.status_code
@@ -1196,11 +1209,11 @@ async def non_stream_request(
     route_context=None,
 ) -> Response:
     """Execute one client logical request after all internal retry attempts."""
-    from src.antigravity_limits import GenerationBudget, GenerationLimits, timeout_response
+    from src.antigravity_limits import timeout_response
     from src.model_routing.stream_runtime import dispatch_request_body
     body = dispatch_request_body(body, route_context)
     inherited = current_budget.get()
-    budget = inherited or GenerationBudget(GenerationLimits.load(), non_stream=True)
+    budget = inherited or await create_non_stream_budget(body.get("model", ""), route_context)
     try:
         response = await budget.run(_non_stream_request(body=body, headers=headers, **({"protected": True} if protected else {}),
             **({"route_context": route_context} if route_context is not None else {})))

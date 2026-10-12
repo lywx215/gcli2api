@@ -4583,7 +4583,16 @@ function resetConfigCapabilities() {
     updateFlashNonStreamControl();
 }
 
+function updateNativeTimeoutControl() {
+    const field = document.getElementById('antigravityNativeTimeoutSeconds');
+    const status = document.getElementById('antigravityNativeTimeoutStatus');
+    const supported = AppState.configCapabilities.has('antigravity.native.timeout');
+    if (field) field.disabled = !supported;
+    if (status) status.textContent = supported ? '保存后对新请求立即生效，进行中的请求保持原超时' : '当前服务尚未确认支持此设置';
+}
+
 function updateFlashNonStreamControl() {
+    updateNativeTimeoutControl();
     const field = document.getElementById('antigravityFlashNonStreamMode');
     const status = document.getElementById('antigravityFlashNonStreamStatus');
     const supported = AppState.configCapabilities.has('antigravity.flash.non_stream_transport');
@@ -4680,6 +4689,7 @@ function populateConfigForm() {
     document.getElementById('returnThoughtsToFrontend').checked = Boolean(c.return_thoughts_to_frontend !== false);
     document.getElementById('antigravityStream2nostream').checked = Boolean(c.antigravity_stream2nostream !== false);
     setConfigField('antigravityFlashNonStreamMode', normalizeFlashNonStreamMode(c.antigravity_flash_non_stream_mode));
+    setConfigField('antigravityNativeTimeoutSeconds', Number.isInteger(c.antigravity_native_timeout_seconds) && c.antigravity_native_timeout_seconds >= 30 && c.antigravity_native_timeout_seconds <= 3600 ? c.antigravity_native_timeout_seconds : 480);
     updateFlashNonStreamControl();
     document.getElementById('antigravitySwitchCredentialEnabled').checked = Boolean(c.antigravity_switch_credential_enabled);
     document.getElementById('debugMode').checked = Boolean(c.debug_mode);
@@ -4760,6 +4770,15 @@ async function saveConfig() {
         if (AppState.configCapabilities.has('antigravity.flash.non_stream_transport') &&
             !AppState.envLockedFields.has('antigravity_flash_non_stream_mode')) {
             config.antigravity_flash_non_stream_mode = normalizeFlashNonStreamMode(getValue('antigravityFlashNonStreamMode'));
+        }
+
+        if (AppState.configCapabilities.has('antigravity.native.timeout')) {
+            const value = Number(getValue('antigravityNativeTimeoutSeconds'));
+            if (!Number.isInteger(value) || value < 30 || value > 3600) {
+                showStatus('Antigravity 直接非流超时必须是 30–3600 秒的整数', 'error');
+                return;
+            }
+            config.antigravity_native_timeout_seconds = value;
         }
 
         const response = await fetch('./config/save', {

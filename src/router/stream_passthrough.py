@@ -67,13 +67,14 @@ async def build_streaming_response_or_error(
     protected: bool = False,
     protocol: Optional[ModelApiProtocol | str] = None,
     non_stream: bool = False,
+    route_context=None,
 ):
     """
     Prefetch the first async item so router code can return an upstream error
     response directly before FastAPI commits a 200 streaming response.
     """
     if mode == "antigravity":
-        return await _antigravity_response(iterator, media_type, model_name, protocol, non_stream, protected)
+        return await _antigravity_response(iterator, media_type, model_name, protocol, non_stream, protected, route_context)
     should_count = bool(model_name and mode)
     try:
         first_item = await read_first_async_item(iterator)
@@ -188,12 +189,14 @@ async def build_streaming_response_or_error(
     return response
 
 
-async def _antigravity_response(iterator, media_type, model_name, protocol, non_stream, protected):
+async def _antigravity_response(iterator, media_type, model_name, protocol, non_stream, protected, route_context):
     from src.antigravity_limits import (
         GenerationBudget, GenerationLimits, meaningful_frame, timeout_event, timeout_response,
     )
     protocol = protocol or "gemini"
-    budget = GenerationBudget(GenerationLimits.load(), non_stream=non_stream)
+    from src.api.antigravity import create_non_stream_budget
+    budget = (await create_non_stream_budget(model_name, route_context) if non_stream else
+              GenerationBudget(GenerationLimits.load()))
 
     def failure(kind):
         return make_model_api_error(origin=ErrorOrigin.UPSTREAM, kind=kind)

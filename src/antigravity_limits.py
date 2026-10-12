@@ -36,6 +36,13 @@ class GenerationLimits:
         return cls(**{key: positive_setting('TIMEOUT_' + key.upper(), default)
                       for key, default in cls().__dict__.items()})
 
+    @classmethod
+    def native(cls, seconds):
+        # Native uses one persistent budget instead of the legacy headers/total ENV caps.
+        return cls(**{key: seconds if key in ('headers', 'total') else
+                      positive_setting('TIMEOUT_' + key.upper(), default)
+                      for key, default in cls().__dict__.items()})
+
     def http_timeout(self):
         return httpx.Timeout(connect=self.connect, write=self.write,
                              pool=self.connect, read=None)
@@ -99,6 +106,11 @@ class GenerationBudget:
     timers: list = field(default_factory=list)
     expired: bool = False
     streaming: bool = False
+    stream_collect: bool | None = None
+
+    @property
+    def remaining(self):
+        return max(0, self.deadline - time.monotonic())
 
     @property
     def deadline(self):

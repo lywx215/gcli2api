@@ -136,3 +136,29 @@ test('HTTP and malformed JSON failures revoke previous support',async()=>{
         assert.equal(Object.hasOwn(h.posts.at(-1),key),false);
     }
 });
+
+test('native timeout capability supports save, refresh and rejects invalid input', async()=>{
+    const h=context(), cap='antigravity.native.timeout', key='antigravity_native_timeout_seconds';
+    for(const value of [30,480,3600]) {
+        h.payload({config:{[key]:value},capabilities:[cap]}); await h.c.loadConfig();
+        const field=h.element('antigravityNativeTimeoutSeconds');
+        assert.equal(field.value,value); assert.equal(field.disabled,false);
+        field.value=String(value); await h.c.saveConfig(); assert.equal(h.posts.at(-1)[key],value);
+        await h.timers.at(-1)(); assert.equal(field.value,value);
+    }
+    for(const value of ['', '29', '3601', '30.5', 'null']) {
+        const count=h.posts.length; h.element('antigravityNativeTimeoutSeconds').value=value;
+        await h.c.saveConfig(); assert.equal(h.posts.length,count);
+    }
+    h.payload({config:{[key]:900},capabilities:[]}); await h.c.loadConfig();
+    assert.equal(h.element('antigravityNativeTimeoutSeconds').disabled,true);
+    await h.c.saveConfig(); assert.equal(Object.hasOwn(h.posts.at(-1),key),false);
+});
+test('both templates expose disabled native timeout with bounds',()=>{
+    for(const path of ['front/control_panel.html','front/control_panel_mobile.html']){
+        const html=fs.readFileSync(path,'utf8');
+        const fields=html.match(/<input[^>]*id="antigravityNativeTimeoutSeconds"[^>]*>/g);
+        assert.equal(fields.length,1);
+        for(const text of ['min="30"','max="3600"','step="1"','value="480"','disabled','config-input']) assert.ok(fields[0].includes(text));
+    }
+});

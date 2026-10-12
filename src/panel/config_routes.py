@@ -221,6 +221,8 @@ async def get_config(token: str = Depends(verify_panel_token)):
             await config.get_antigravity_flash_non_stream_mode()
         )
 
+        current_config["antigravity_native_timeout_seconds"] = await config.get_antigravity_native_timeout_seconds()
+
         embed_policy = await get_embed_policy()
         current_config[config.GCLI_EMBED_MODE_KEY] = embed_policy.mode
         current_config[config.GCLI_EMBED_ORIGINS_KEY] = list(embed_policy.origins)
@@ -228,7 +230,7 @@ async def get_config(token: str = Depends(verify_panel_token)):
         return JSONResponse(
             content={
                 "config": current_config,
-                "capabilities": [config.ANTIGRAVITY_FLASH_NON_STREAM_CAPABILITY],
+                "capabilities": [config.ANTIGRAVITY_FLASH_NON_STREAM_CAPABILITY, config.ANTIGRAVITY_NATIVE_TIMEOUT_CAPABILITY],
                 "env_locked": list(env_locked_keys),
                 "security": {
                     "node_management_token": await management_token_status(),
@@ -254,6 +256,11 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
         new_config = request.config
         if any(_sensitive_key(key) for key in new_config):
             raise HTTPException(status_code=400, detail="敏感配置只能通过专用接口修改")
+
+        if "antigravity_native_timeout_seconds" in new_config:
+            value = new_config["antigravity_native_timeout_seconds"]
+            if type(value) is not int or not 30 <= value <= 3600:
+                raise HTTPException(status_code=400, detail="Antigravity 直接非流超时必须是 30–3600 秒的整数")
 
         if "antigravity_flash_non_stream_mode" in new_config:
             value = new_config["antigravity_flash_non_stream_mode"]

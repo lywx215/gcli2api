@@ -32,6 +32,7 @@ NODE_MANAGEMENT_TOKEN_HASH_KEY = "node_management_token_hash"
 GCLI_EMBED_MODE_KEY = "gcli_embed_mode"
 GCLI_EMBED_ORIGINS_KEY = "gcli_embed_allowed_origins"
 ANTIGRAVITY_FLASH_NON_STREAM_CAPABILITY = "antigravity.flash.non_stream_transport"
+ANTIGRAVITY_NATIVE_TIMEOUT_CAPABILITY = "antigravity.native.timeout"
 ANTIGRAVITY_FLASH_NON_STREAM_MODES = frozenset(("inherit", "native", "stream_collect"))
 
 # Client Configuration
@@ -509,6 +510,12 @@ async def get_antigravity_flash_non_stream_mode() -> str:
     if isinstance(value, str) and value in ANTIGRAVITY_FLASH_NON_STREAM_MODES:
         return value
     return "inherit"
+
+
+async def get_antigravity_native_timeout_seconds() -> int:
+    """Persistent native request budget; deliberately has no environment override."""
+    value = await get_config_value("antigravity_native_timeout_seconds", 480)
+    return value if type(value) is int and 30 <= value <= 3600 else 480
 
 
 async def get_antigravity_switch_credential_enabled() -> bool:

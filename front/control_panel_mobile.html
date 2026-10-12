@@ -2384,6 +2384,13 @@
                             </div>
 
                             <div class="form-group">
+                                <label for="antigravityNativeTimeoutSeconds">Antigravity 直接非流超时（秒）</label>
+                                <input type="number" class="config-input" id="antigravityNativeTimeoutSeconds" min="30" max="3600" step="1" value="480" disabled />
+                                <small>默认 480 秒，可设 30–3600 的整数。适用于所有直接非流请求，包含内部重试；流转非流和真实流式保持原限制。</small>
+                                <small id="antigravityNativeTimeoutStatus" role="status">当前服务尚未确认支持此设置</small>
+                            </div>
+
+                            <div class="form-group">
                                 <label style="display: flex; align-items: center; gap: 8px;">
                                     <input type="checkbox" id="antigravitySwitchCredentialEnabled"
                                         style="width: auto; margin: 0;" />

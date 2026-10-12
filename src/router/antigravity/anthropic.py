@@ -370,7 +370,7 @@ async def messages(
 
     # ========== 根据模式选择生成器 ==========
     if use_fake_streaming:
-        response = await build_streaming_response_or_error(fake_stream_generator(), model_name=dispatch_model, mode="antigravity", protected=True, protocol="claude", non_stream=True)
+        response = await build_streaming_response_or_error(fake_stream_generator(), model_name=dispatch_model, mode="antigravity", protected=True, protocol="claude", non_stream=True, route_context=route_context)
     elif use_anti_truncation:
         log.info("启用流式抗截断功能")
         response = await build_streaming_response_or_error(anti_truncation_generator(), model_name=dispatch_model, mode="antigravity", protected=True, protocol="claude")

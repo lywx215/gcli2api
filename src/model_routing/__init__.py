@@ -12,6 +12,7 @@ async def prepare_route_context(channel, protocol, requested_model, raw_request)
     """
     from config import (
         get_antigravity_flash_non_stream_mode,
+        get_antigravity_native_timeout_seconds,
         get_antigravity_stream2nostream,
         get_compatibility_mode_enabled,
         get_return_thoughts_to_frontend,
@@ -43,6 +44,9 @@ async def prepare_route_context(channel, protocol, requested_model, raw_request)
         antigravity_stream2nostream=await get_antigravity_stream2nostream(),
         antigravity_flash_non_stream_mode=(
             await get_antigravity_flash_non_stream_mode() if channel == "antigravity" else "inherit"
+        ),
+        antigravity_native_timeout_seconds=(
+            await get_antigravity_native_timeout_seconds() if channel == "antigravity" else 480
         ),
     )
     projection = project_request(channel, protocol, requested_model, raw_request, feature_snapshot)
@@ -97,6 +101,7 @@ async def prepare_catalog_context(channel):
     """Validate fresh routing before any dynamic catalog/credential acquisition."""
     from config import (
         get_antigravity_flash_non_stream_mode,
+        get_antigravity_native_timeout_seconds,
         get_antigravity_stream2nostream, get_compatibility_mode_enabled,
         get_return_thoughts_to_frontend,
     )
@@ -124,6 +129,9 @@ async def prepare_catalog_context(channel):
         antigravity_stream2nostream=await get_antigravity_stream2nostream(),
         antigravity_flash_non_stream_mode=(
             await get_antigravity_flash_non_stream_mode() if channel == "antigravity" else "inherit"
+        ),
+        antigravity_native_timeout_seconds=(
+            await get_antigravity_native_timeout_seconds() if channel == "antigravity" else 480
         ),
     )
     return result.compiled, policy, features

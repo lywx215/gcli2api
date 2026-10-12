@@ -87,6 +87,7 @@ class FeatureSnapshot(ImmutableContract):
     antigravity_stream2nostream: bool = False
     values: Mapping[str, Any] = field(default_factory=dict)
     antigravity_flash_non_stream_mode: str = "inherit"
+    antigravity_native_timeout_seconds: int = 480
 
 
 @dataclass(frozen=True)
