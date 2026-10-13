@@ -17,7 +17,7 @@ it("routes explicit DEV requests through the shared transport and preserves PUT 
   expect(fetch).not.toHaveBeenCalled();
 });
 it("production or fixture-disabled requests never invoke the synthetic routing handler", async () => {
-  mock.handler.mockClear(); vi.mocked(fetch).mockResolvedValue(Response.json({ routes: [] }));
+  mock.handler.mockClear(); vi.mocked(fetch).mockImplementation(async () => Response.json({ routes: [] }));
   vi.stubEnv("DEV", false); vi.stubEnv("VITE_UI_FIXTURES", "true");
   await requestJson("config/model-routing");
   vi.stubEnv("DEV", true); vi.stubEnv("VITE_UI_FIXTURES", "false");
