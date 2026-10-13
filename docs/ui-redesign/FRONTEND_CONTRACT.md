@@ -23,15 +23,16 @@ frontend/
     pages/import/            # import owner
     pages/settings/          # settings owner
     pages/logs/              # logs owner
+    pages/model-routing/     # workflows owner：页面确认后新增第六页
 ```
 
-每页入口固定为 `pages/<name>/index.tsx`（内部可拆 `<Name>Page.tsx`，但 index 必须默认导出），默认导出 `function OverviewPage()`、`CredentialsPage()`、`ImportPage()`、`SettingsPage()`、`LogsPage()`，不要求外部传入 props。feature-specific API、hooks、类型、组件、合成 fixture 与测试均放在各自页面目录中，不写到全局 hooks/domain 争用公共文件。跨页依赖必须经 foundation 合并，页面不得直接 import 另一页面内部文件。
+每页入口固定为 `pages/<name>/index.tsx`（内部可拆 `<Name>Page.tsx`，但 index 必须默认导出），默认导出 `function OverviewPage()`、`CredentialsPage()`、`ImportPage()`、`SettingsPage()`、`LogsPage()`、`ModelRoutingPage()`，不要求外部传入 props。feature-specific API、hooks、类型、组件、合成 fixture 与测试均放在各自页面目录中，不写到全局 hooks/domain 争用公共文件。跨页依赖必须经 foundation 合并，页面不得直接 import 另一页面内部文件。
 
 foundation 拥有上述工程配置及共享目录，包括 `src/main.tsx`；页面 owner 只改自己的目录。组件需求先发给 foundation，禁止页面 owner 直接改 registry 配置或共享组件。所有页面独立源码模块，App 只做装配，以 `React.lazy(() => import(...))` 建立动态导入边界；不能把业务页面搬进 App，也不能使用单文件 HTML 插件。
 
 ## 2. 导航、服务根与构建
 
-新版入口规范化为 `/ui/`，`/ui` 重定向到保留部署前缀的 `/ui/`，应用内部采用 hash 路由：`#/overview`、`#/credentials`、`#/import`、`#/settings`、`#/logs`。未知路由回概览。模型路由首期链接现有 `/model-routing`，Gemini CLI 使用旧入口。旧 `/`、旧 hash、`/front/*`、独立模型路由及 legacy manage ready 消息不变，新版 AG 不发送冒充旧 manage 的 ready 消息。
+新版入口规范化为 `/ui/`，`/ui` 重定向到保留部署前缀的 `/ui/`，应用内部采用 hash 路由：`#/overview`、`#/credentials`、`#/import`、`#/settings`、`#/logs`、`#/model-routing`。未知路由回概览。模型路由首期链接旧 `/model-routing`，页面确认后本轮追加新版内页；旧独立编辑器仍保留。Gemini CLI 专属功能继续使用旧入口。旧 `/`、旧 hash、`/front/*`、独立模型路由及 legacy manage ready 消息不变，新版 AG 不发送冒充旧 manage 的 ready 消息。
 
 Vite 构建产物目录统一为仓库根 `ui-dist/`（`frontend` 配置的 outDir 为 `../ui-dist`），asset base 为相对 `./`；后端服务 base 与 asset base 分开。后端 HTML 注入服务 base（含部署前缀、以 `/` 结尾）及既有 embed policy，foundation 读取并校验同源 URL。开发环境通过 Vite 同源代理访问隔离后端；不能依靠页面相对路径 `./creds/*`。反向代理前缀由部署注入，不从当前 hash 或生产地址猜测。
 
@@ -80,7 +81,7 @@ HTTP 200 只代表传输成功：各页面端点适配器检查 `success`、单�
 
 持久化只沿用 `gcli2api_auth_token`，localStorage 不可用时回退内存；不持久化其他秘密、配置全文、凭证 JSON 或 OAuth 回调。login 成功、logout 和认证失效必须推进 sessionEpoch。HTTP 401/403 必须区分节点面板认证失败与上游拒绝：AG quota 会把上游状态直接用作 HTTP 状态，具有明确 `response_source`/`upstream_status` 业务来源的错误保留为 ApiError 交页面展示，不注销会话；只有确认属于 panel Bearer 认证失败才触发中央失效回调，不凭状态码一刀切。同一代并发失败幂等处理，旧代请求的 401/403 不得注销刚建立的新会话。登录请求失败只展示登录错误。
 
-读请求捕获 sessionEpoch 与页面请求序号，并在响应后核对，两者失配即丢弃；AbortController 是取消优化，不能代替代次校验。登出销毁受保护读数据、选择状态、轮询与 WS。设置/模型路由未保存草稿只留内存并标记需重新认证，秘密输入与 OAuth 敏感中间状态清理；重新登录不得自动重试写入或用 GET 静默覆盖草稿。跨窗口 storage 事件引起 token 变化同样推进代次并清理旧读状态。
+读请求捕获 sessionEpoch 与页面请求序号，并在响应后核对，两者失配即丢弃；AbortController 是取消优化，不能代替代次校验。登出销毁受保护读数据、选择状态、轮询与 WS。设置的非敏感内页草稿按既有生命周期保留；模型路由草稿只留当前会话内存，两渠道切换保留，登出、认证失效或 token 代次变化清理旧读数据和草稿。秘密输入与 OAuth 敏感中间状态清理；重新登录不得自动重试写入，也不得跨会话展示先前路由草稿。跨窗口 storage 事件引起 token 变化同样推进代次并清理旧读状态。
 
 ## 5. 页面行为合同
 
@@ -95,6 +96,18 @@ HTTP 200 只代表传输成功：各页面端点适配器检查 `success`、单�
 能力不存在、类型错误或撤回即禁用相关控件并移除不受支持的请求参数；版本号、样式和 200 外观均不能代替能力探测。capability 的具体来源以现有端点为准，不把 Management capability 当作 panel capability。
 
 写操作结果至少区分成功、明确拒绝、部分成功与结果未知。超时/断线/5xx 可能已经写入，保留草稿或逐项结果、提示重新读取，禁止盲目重放。GET 只能展示当前观察值，不能补造提交版本、原子性或与他人写入无冲突的保证。
+
+### 模型路由第六页（用户页面确认后的增量）
+
+`ModelRoutingPage` 复用 `requestJson` 的同源 `GET/PUT config/model-routing` 和现有 panel Bearer；不使用模型 Key、Management Token、通用 config/get/save，也不改变后端分派、数据库 schema 或 Management 能力。
+
+GET/PUT 成功返回 `routes` 原表、`supported_channels`、`capabilities`、`policy_digest`、按渠道的 `validation: {valid, issues}`。PUT 只发 `{routes}` 完整双渠道表，包含每行原始 `channel/public_name/upstream_name/enabled`，不携带响应元数据；未知行字段/历史坏类型不得被悄悄过滤或转换。默认 Antigravity，跨渠道同名可存在，编号和 `row/related_rows` 以完整数组为准，服务端 0 基索引在界面加 1。
+
+缺键为 200 空表；可分区的历史字段/语义错误为 200 原始坏表与 validation；不可分区损坏为 503，不能自动当空表。400 明确校验拒绝且未写，字段/相关行均关联可见错误并可聚焦。PUT 503 可能已写入但读回失败；5xx/网络或无效成功响应均结果待核对，保留草稿、不自动重放，GET 展示观察值后由用户明确采用。`policy_digest` 不是 CAS 或版本号，多提交者保持原协议的最后写入语义。能力不支持或响应不可识别不得伪造可编辑/成功。503 全表替换修复须明确确认，不能自动建立或保存空表。
+
+共享 `app/routes` 提供 `registerRouteGuard((attempt: {from: RouteId; to: RouteId; href: string; retry(): void}) => boolean): () => void`。返回 false 时保持渲染页面并恢复地址；确认重试仅本次一次，旧尝试/卸载/会话变化失效。页面处理 dirty、busy 与未确认提交，`#main-content` 不算离页；整页导航与用户登出同样明确确认，取消后焦点回到当前有效可见控件。Header 退出按钮提供 `data-panel-action="logout"`，页面不得依赖按钮显示文字匹配或阻止强制认证失效。
+
+DEV transport 沿用 `app/fixtures.ts`，仅双条件开关下动态导入页内 `fixtures.ts` 的 `fixtureModelRoutingRequest(url, init)`，404 不会穿透到真实后端。生产第六页必须形成独立 lazy chunk；即使显式设置 `VITE_UI_FIXTURES=true`，生产产物仍没有合成数据或 fixture 模块。六页本轮结果绑定新候选 SHA，历史五页结果保留原时点。
 
 ## 6. 合成预览、主题与验证
 

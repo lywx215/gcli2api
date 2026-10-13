@@ -9,7 +9,7 @@
 | 本轮负责人 | 文件范围 | 执行内容 |
 | --- | --- | --- |
 | workflowsPages | `frontend/src/pages/model-routing/**` | 复用既有 GET/PUT，全表草稿与验证、读回/未知结果、恢复、离站保护与会话隔离；独立目录及局部测试 |
-| foundation | `frontend/src/app/`、共享 layout/guard、`frontend/src/dev/**`、`frontend/vite.config.ts`、`frontend/check-build.mjs`，以及 settings/index 的模型路由链接 | 生产第六页 lazy 入口、通用导航阻止、DEV 合成接线、六页生产隔离；不得改其他 settings 业务 |
+| foundation | `frontend/src/app/`、共享 layout/guard、`frontend/src/app/fixtures.ts`、`frontend/vite.config.ts`、`frontend/check-build.mjs`，以及 settings/index 的模型路由链接 | 生产第六页 lazy 入口、通用导航阻止、DEV 合成接线、六页生产隔离；不得改其他 settings 业务 |
 | plan | `docs/ui-redesign/DEVELOPMENT_PLAN.md` | 页面确认来源、增量范围及真实进度；历史五页证据保持 |
 | build | 独立冻结构建/附件及必要托管验证 | 等根提供新 SHA 后输出六页静态产物、构建证据和摘要；Docker 不可构建 |
 | root | 新集成分支、`DELIVERY.md`、合同/本文件、最终验证与交付记录 | 保存原草稿，集成来源提交，维护 API 边界及最终候选证据 |
