@@ -25,7 +25,7 @@ async def install(monkeypatch, reader):
                               model_access_list_family_public=AsyncMock(side_effect=AssertionError("full family read")),
                               model_access_list_public=AsyncMock(side_effect=AssertionError("full native read")),
                               get_credentials_summary=AsyncMock(side_effect=AssertionError("legacy full read")))
-    adapter = SimpleNamespace(_backend=backend, get_backend_info=AsyncMock(return_value={"backend_type": "synthetic"}))
+    adapter = SimpleNamespace(_backend=backend, get_backend_info=AsyncMock(return_value={"backend_type": "sqlite"}))
     monkeypatch.setattr(creds, "get_storage_adapter", AsyncMock(return_value=adapter))
     return backend
 

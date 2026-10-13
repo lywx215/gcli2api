@@ -66,6 +66,10 @@ from config import (
 )
 from datetime import datetime, timedelta, timezone
 from .utils import validate_mode
+from .credential_capabilities import (
+    ACTION_CAPABILITIES, PERMANENT_DISABLED, REMARK, credential_capabilities,
+    unavailable_capability, capability_unavailable_response,
+)
 
 
 # 创建路由器
@@ -600,6 +604,12 @@ async def _get_creds_status_common(
     storage_adapter = await get_storage_adapter()
     backend_info = await storage_adapter.get_backend_info()
     backend_type = backend_info.get("backend_type", "unknown")
+    credential_caps = credential_capabilities(backend_type)
+    if mode == "antigravity":
+        if status_filter == "permanent_disabled" and PERMANENT_DISABLED not in credential_caps:
+            return capability_unavailable_response(PERMANENT_DISABLED)
+        if remark_filter is not None and remark_filter != "__all__" and REMARK not in credential_caps:
+            return capability_unavailable_response(REMARK)
     supports_group_filter = getattr(storage_adapter._backend, "SUPPORTS_QUOTA_GROUP_FILTER", False) is True
     family_reader = getattr(storage_adapter._backend, "model_access_list_family_public", None)
     supports_family_filter = getattr(storage_adapter._backend, "model_access_storage_ready", False) is True and callable(family_reader)
@@ -676,6 +686,7 @@ async def _get_creds_status_common(
             cred_info["preview"] = summary.get("preview", True)
         else:
             cred_info.update(email_annotations.get(cred_info["filename"], {}))
+            cred_info["permanent_disabled"] = summary.get("permanent_disabled", False)
             cred_info["enable_credit"] = summary.get("enable_credit", False)
             cred_info["model_access_state"] = summary.get("model_access_state", {})
             if supports_family_filter:
@@ -694,7 +705,7 @@ async def _get_creds_status_common(
         "has_more": (offset + limit) < result["total"],
         "stats": result.get("stats", {"total": 0, "normal": 0, "disabled": 0}),
         **({"model_access_summary": result["model_access_summary"]} if mode == "antigravity" else {}),
-        **({"panel_capabilities": ([GROUP_FILTER_CAPABILITY] if supports_group_filter else []) +
+        **({"panel_capabilities": list(credential_caps) + ([GROUP_FILTER_CAPABILITY] if supports_group_filter else []) +
            (["antigravity.model_access.family_filter"] if supports_family_filter else []) +
            [SEARCH_CAPABILITY] + ([AUTO_EMAIL_CAPABILITY] if email_enrichment_service.supports(storage_adapter._backend) else [])} if mode == "antigravity" else {}),
     })
@@ -1313,6 +1324,9 @@ async def update_cred_remark(
             raise HTTPException(status_code=400, detail="备注不能超过 64 个字符")
 
         storage_adapter = await get_storage_adapter()
+        unavailable = await unavailable_capability(storage_adapter, mode, REMARK)
+        if unavailable:
+            return capability_unavailable_response(unavailable)
         credential_data = await storage_adapter.get_credential(filename, mode=mode)
         if not credential_data:
             raise HTTPException(status_code=404, detail="凭证不存在")
@@ -1419,6 +1433,10 @@ async def creds_action(
 
         # 获取存储适配器
         storage_adapter = await get_storage_adapter()
+
+        unavailable = await unavailable_capability(storage_adapter, mode, ACTION_CAPABILITIES.get(action))
+        if unavailable:
+            return capability_unavailable_response(unavailable)
 
         # 对于删除操作，不需要检查凭证数据是否完整，只需检查条目是否存在
         # 对于其他操作，需要确保凭证数据存在且完整
@@ -1541,11 +1559,16 @@ async def creds_batch_action(
 
         storage_adapter = await get_storage_adapter()
 
+        unavailable = await unavailable_capability(storage_adapter, mode, ACTION_CAPABILITIES.get(action))
         for filename in filenames:
             try:
                 # 验证文件名安全性
                 if not filename.endswith(".json"):
                     errors.append(f"{filename}: 无效的文件类型")
+                    continue
+
+                if unavailable:
+                    errors.append(f"{filename}: capability_unavailable: {unavailable}")
                     continue
 
                 # 对于删除操作，不需要检查凭证数据完整性
@@ -1558,18 +1581,27 @@ async def creds_batch_action(
 
                 # 执行相应操作
                 if action == "enable":
-                    await credential_manager.set_cred_disabled(filename, False, mode=mode)
-                    success_count += 1
+                    updated = await credential_manager.set_cred_disabled(filename, False, mode=mode)
+                    if updated:
+                        success_count += 1
+                    else:
+                        errors.append(f"{filename}: 启用失败")
 
                 elif action == "disable":
-                    await credential_manager.set_cred_disabled(filename, True, mode=mode)
-                    success_count += 1
+                    updated = await credential_manager.set_cred_disabled(filename, True, mode=mode)
+                    if updated:
+                        success_count += 1
+                    else:
+                        errors.append(f"{filename}: 禁用失败")
 
                 elif action == "permanent_disable":
-                    await credential_manager.update_credential_state(
+                    updated = await credential_manager.update_credential_state(
                         filename, {"disabled": True, "permanent_disabled": True}, mode=mode
                     )
-                    success_count += 1
+                    if updated:
+                        success_count += 1
+                    else:
+                        errors.append(f"{filename}: 永久禁用失败")
 
                 elif action == "delete":
                     try:
