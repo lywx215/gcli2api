@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from html.parser import HTMLParser
+import importlib.util
 import json
 from pathlib import Path
 import socket
+import sys
 
 import pytest
 from fastapi import FastAPI
@@ -205,7 +207,13 @@ def test_app_import_without_dist_registers_existing_routes_without_lifespan(host
     install = ui.install_ui
     monkeypatch.setattr(ui, 'install_ui', lambda app: install(app, tmp_path / 'absent'))
     # Import only: TestClient is deliberately not entered as a context manager.
-    import web
+    cached_web = sys.modules.get('web')
+    cached_app = getattr(cached_web, 'app', None)
+    # Other test modules may already have imported web with a real UI build.
+    # Load a separate app without replacing their cached module or app instance.
+    spec = importlib.util.spec_from_file_location('_ui_hosting_web', ROOT / 'web.py')
+    web = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(web)
     client = TestClient(web.app)
     assert client.get('/ui/').status_code == 503
     assert client.get('/').status_code == 200
@@ -213,3 +221,7 @@ def test_app_import_without_dist_registers_existing_routes_without_lifespan(host
     paths = web.app.openapi()['paths']
     assert '/v1/chat/completions' in paths
     assert '/antigravity/v1/chat/completions' in paths
+    assert sys.modules.get('web') is cached_web
+    if cached_web is not None:
+        assert cached_web.app is cached_app
+        assert web.app is not cached_app

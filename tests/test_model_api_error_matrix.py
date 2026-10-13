@@ -7,6 +7,8 @@ production request.
 
 import importlib
 import json
+from copy import deepcopy
+from types import SimpleNamespace
 from urllib.parse import quote
 
 import httpx
@@ -28,6 +30,49 @@ from src.utils import authenticate_bearer, authenticate_gemini_flexible
 BACKENDS = ("geminicli", "antigravity")
 PROTOCOLS = ("openai", "claude", "gemini")
 MODES = ("nonstream", "fake", "stream", "anti")
+
+
+@pytest.fixture(autouse=True)
+def isolated_routing_runtime(monkeypatch, tmp_path):
+    """Supply the initialized routing contract without starting real storage.
+
+    The app deliberately has no lifespan. Routing now reads its authoritative
+    configuration before the upstream mocks, so each case needs a fresh,
+    initialized in-memory adapter even when the route table is absent.
+    """
+    import config
+    import src.storage_adapter as adapter_module
+
+    values = {}
+
+    async def fresh(key, default=None):
+        assert key == "model_routing"
+        return deepcopy(values[key]) if key in values else default
+
+    async def save(key, value):
+        assert key == "model_routing"
+        values[key] = deepcopy(value)
+        return True
+
+    monkeypatch.setattr(adapter_module, "_storage_adapter", SimpleNamespace(
+        _initialized=True, get_config_fresh=fresh, set_config=save,
+    ))
+    monkeypatch.setattr(config, "_config_initialized", True)
+    monkeypatch.setattr(config, "_config_cache", {
+        "compatibility_mode_enabled": False,
+        "return_thoughts_to_frontend": True,
+        "antigravity_stream2nostream": True,
+        "antigravity_flash_non_stream_mode": "inherit",
+        "antigravity_native_timeout_seconds": 480,
+        "anti_truncation_max_attempts": 3,
+    })
+    for key in (*config.ENV_MAPPINGS, "POSTGRESQL_URI", "MONGODB_URI",
+                "MYSQL_URI", "DATABASE_URL", "GCLI_SERVER_NAME",
+                "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("CREDENTIALS_DIR", str(tmp_path))
+    monkeypatch.setenv("ENABLE_LOG", "0")
+    monkeypatch.setenv("LOG_FILE", str(tmp_path / "unused.log"))
 
 
 def _app() -> FastAPI:
