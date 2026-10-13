@@ -4,6 +4,20 @@
 
 ## 授权与协作原则
 
+2026-10-13 正式收尾更新：用户确认方案并明确要求继续操作、并发加速。本轮以主分支已提交 `419873f` 为起点，开发阶段可执行相关测试；配色风格后置，旧入口保留，不部署。当前增量任务及临时文件所有权如下，优先于下方首轮历史分配：
+
+| 本轮负责人 | 文件范围 | 具体收尾 |
+| --- | --- | --- |
+| workflowsPages | `frontend/src/pages/settings/**` | 未保存修改离站保护、字段错误关联与定位，保留内页草稿/秘密清理语义 |
+| credentialsPage | `frontend/src/pages/credentials/**` | 抽屉内动作状态可见且可宣布；列表刷新/删除后恢复到有效焦点 |
+| deploy | `frontend/package.json`、`frontend/package-lock.json`、`docs/UI_STATIC_DEPLOYMENT.md`、`docs/ui-redesign/DOCKER_VALIDATION.md` | 根 Node engines 与锁依赖交集一致；只改元数据，不升级依赖；Docker 不可构建且门禁未验证 |
+| modelMatrix | `tests/test_model_api_error_matrix.py`、`docs/ui-redesign/MODEL_MATRIX_VALIDATION.md` | 每例内存路由配置初始化与还原；不改模型运行时或弱化原断言 |
+| legacyCompatibility | `test_ui_hosting.py` | 纳入已有独立导入隔离草稿及相关旧接口回归 |
+| plan | `docs/ui-redesign/DEVELOPMENT_PLAN.md` | 同步正式收尾状态与真实门禁，不预写未完成结果 |
+| root | 集成分支、`DELIVERY.md`、合同/所有权、最终集成证据 | 按来源提交集成，解决共享依赖与跨窗口冲突 |
+
+浏览器与独立代码审阅只读；发现超出表格的真实问题先由根协调 owner。原始 G 盘 checkout 和任何已有草稿保留。当前 Docker 环境限制不阻止其他已授权开发，也不能据此宣称发布就绪。
+
 仅实施 Antigravity 新 UI 与必要共享基础设施、已明确的最小兼容后端修正。旧入口继续可用；不恢复 Gemini CLI 专属维护或已取消的 MGMT-009/010/012，不改模型 API 或 Management schema/capability。manager 无配套动作，不生成要求对端继续的 handoff。本任务允许各独立分支作本地实现提交以供集成，保留提交钩子且不生成新面板版本号。本文不授权生产调用、真实 OAuth/模型调用、数据库/凭证/Volume 修改、部署、推送或 Claude 审核。
 
 按用户要求采用六个开发窗口和一个设计窗口；分工按文件所有权执行，根窗口负责集成、冲突处理和验收结论。窗口可在指定独立 worktree 工作；合同采用仓库相对路径，交付时给出自己 worktree 的绝对路径与 diff/验证结果，不能假定其他窗口修改已经合入自己的 checkout。共享文件需求发给 owner，不自行扩大改动范围。其他窗口不覆盖 foundation 的 lockfile、路由、client、auth 或共享组件。

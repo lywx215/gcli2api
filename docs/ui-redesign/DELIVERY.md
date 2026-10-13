@@ -1,6 +1,6 @@
 # 新 UI 首轮并行开发交付
 
-当前阶段：**客户页面确认**。用户最新要求先确认页面，确认后再正式开发，详细测试安排在正式开发阶段。以下实现与验证是此前已完成的本地预览快照和历史证据；暂停新增开发与测试，不将其视为客户已确认或发布就绪。配色和最终风格继续后置，不部署。
+当前阶段：**本轮正式并行收尾已完成，本地候选已保存**。执行依据为用户确认方案并明确要求继续操作、并发加速。首轮历史证据与本轮重新执行结果分开记录；本轮设置、凭证抽屉、Node 声明和共享测试隔离已集成，最终前端与相关兼容检查通过。配色和最终风格继续后置，不部署；Docker 实际构建仍未验证。
 
 2026-10-13，用户已授权并行开发及 OAuth 兼容修正。实现保存在独立 `codex/ui-redesign` 分支，基线为 `d1012` / `ebda92be2a4a5562963360bdbab2d33379e63077`。原始 checkout 的用户改动保留；本次没有发布、推送、生成面板版本号或执行 Claude 审核。
 
@@ -29,7 +29,25 @@ React + TypeScript + Vite + Tailwind CSS + shadcn/ui，五个独立功能目录�
 
 设计聊天交付五张静态结构 PNG、独立 HTML、主题变量和规范。新增完整方案聊天单独维护 [完整开发方案](DEVELOPMENT_PLAN.md)，主聊天继续集成；[前端合同](FRONTEND_CONTRACT.md) 和 [并行边界](PARALLEL_DEVELOPMENT.md) 定义共享接口与文件所有权。
 
-## 当前验证证据
+## 正式开发本轮进展
+
+本轮从 `419873f` 启动，开发阶段测试已获用户授权。最终产品源码时点为 `e27698e`；其后仅更新文档。以下结果重新执行，历史预览与已撤回 fixture 实验不作为本轮通过结论。
+
+| 收尾项 | 实际状态 |
+| --- | --- |
+| 共享测试隔离 | 已集成 `d6905a0`；模型矩阵原 282 项正式通过，共享路由组合 407 项通过，逐例确认状态恢复 |
+| 旧接口组合 | 主窗口合并运行模型/共享路由、凭证、OAuth/config、Management/OpenAPI、旧面板与 UI 托管，740 passed；6 条既有弃用提示，完整 XML 在 `formal-closeout/python-integration.xml` |
+| Node 版本声明 | 来源 `0723e8d` → 集成 `84de8fc`；根 engines 收紧，依赖版本/integrity 不变，本机 24.19.0 满足 133 条锁约束，npm ci/typecheck/build/check:build 通过 |
+| 设置页 | 来源 `f732755` + `15c23d2` → 集成 `1e87074` + `e27698e`；离站保护、字段错误关联/定位、秘密清理、未确认提交提醒及取消后的有效焦点已完成；局部 35 项通过 |
+| 凭证抽屉 | 来源 `85011df` → 集成 `87134ba`；抽屉内结构化动作反馈可见、可宣布，删除后禁用后续动作，刷新后按当前可见行或标题恢复焦点；局部 116 项通过 |
+| 最终前端与浏览器 | 主集成 `e27698e`：259 项/24 文件、typecheck/build/check:build 通过；10 hashed JS + 1 CSS、五页独立 chunk、显式 fixture env 生产数据为 0；五页闭环与凭证/设置专项 Chromium 1440/390、真实产物内存 ASGI 通过 |
+| Docker | 当前环境不可构建，实际镜像及容器运行未验证，不尝试启动引擎或安装绕行 |
+
+正式结果与脚本位于同一本机附件目录的 `formal-closeout/`：`summary.json`、`python-integration.xml`、`UI_SMOKE.json`、`UI_HOSTING_SMOKE.json`、`credential-browser.json`、`settings-browser.json`。Python 740 项在 `84de8fc` 时点运行；后续候选的相关 Python 实现和这两份测试隔离文件未变化，未为仅前端修改重复该组。模型 fixture 清理的独立证据仍在 `model-matrix/formal/`。
+
+实际浏览器限制：beforeunload 只核验阻止状态，原生弹窗是否出现由浏览器决定；合成删除不移除列表行，因此行消失后的标题焦点由单元测试覆盖；partial/unknown 写入按页内单元测试覆盖，没有伪造真实浏览器成功证据。没有全仓库或真实外部上游/数据库验收，不宣称完整跨浏览器、缩放和屏幕阅读器矩阵通过。
+
+## 首轮预览验证证据
 
 | 检查 | 实际结果/范围 |
 | --- | --- |
@@ -38,7 +56,7 @@ React + TypeScript + Vite + Tailwind CSS + shadcn/ui，五个独立功能目录�
 | DEV fixture 隔离 | 通过：构建显式设置 `VITE_UI_FIXTURES=true`，公共 transport 与页面合成数据标识均为 0，manifest 不含 fixture 模块；反例产物曾被加强后的门禁明确拒绝，改动态导入后通过 |
 | Python 集成 A | 凭证能力、OAuth、配置、安全、Management/OpenAPI、embed、旧静态面板、Flash/timeout：261 passed |
 | Python 集成 B | UI 托管、embed、旧静态面板、Management/OpenAPI、选中工具、搜索及页大小：114 passed；与 A 重叠 42 项，不能相加为不同测试数量 |
-| 额外模型 API 矩阵 | 原始干净 ebda92b 与 fe99b43 各 282 项均为 253 failed / 29 passed；全部 nodeid、结果、阶段和规范化失败内容指纹逐项一致，0 差异。本次 UI 改造未引入这组失败；原矩阵仍未通过，fixture 修正暂缓。完整证据见 [矩阵归因记录](MODEL_MATRIX_VALIDATION.md) |
+| 额外模型 API 矩阵 | 原始干净 ebda92b 与 fe99b43 各 282 项均为 253 failed / 29 passed；全部 nodeid、结果、阶段和规范化失败内容指纹逐项一致，0 差异。本次 UI 改造未引入这组失败；此处保留当时的原始失败状态；正式 fixture 修正及重新执行结果见上方。完整证据见 [矩阵归因记录](MODEL_MATRIX_VALIDATION.md) |
 | 旧面板 JavaScript | state、cooldown、quota layout、Flash：68 passed |
 | 真实产物托管 | 内存 ASGI 验证真实 index/五页 JS 的 meta/CSP/no-store/MIME/immutable、私有文件与缺资源 404、307 query 通过；不启动真实应用 lifespan |
 | 合成浏览器 | 独立 Chromium：五页导航、导入部分成功、settings 草稿与合成保存、详情/storage 登出/重新登录、移动导航登出清理通过；1440/390 无横向溢出，零真实 API/外部请求和 pageerror |
@@ -48,11 +66,11 @@ React + TypeScript + Vite + Tailwind CSS + shadcn/ui，五个独立功能目录�
 
 移动布局折叠已完成，390px 首屏第一张凭证卡可见，展开/折叠保留筛选草稿的实际浏览器检查通过。生产 fixture 动态导入修正已完成，215 项完整前端测试、加强后的生产构建检查与最终 Chromium/ASGI 复验均通过。未执行的门禁不得标通过。
 
-## 页面确认阶段与待开发事项
+## 页面确认材料与正式收尾事项
 
-客户材料为离线预览册、11 张合成数据截图及确认表，供确认五页信息组织、操作入口与手机布局。可转发包位于本聊天本机附件目录的 `gcli2api-ui-customer-review.zip`，离线入口为 `customer-review/index.html`，说明为 `customer-review/客户确认说明.md`；这些资料只用于页面确认。先收集客户通过/需调整/待讨论意见，确认后再安排正式实现、详细测试和发布门禁。客户包不执行真实业务，最终颜色字体风格另行确认。
+客户材料为离线预览册、11 张合成数据截图及确认表，供确认五页信息组织、操作入口与手机布局。可转发包位于本聊天本机附件目录的 `gcli2api-ui-customer-review.zip`，离线入口为 `customer-review/index.html`，说明为 `customer-review/客户确认说明.md`；这些资料只用于页面确认。用户已确认方案并明确启动正式并行收尾；客户反馈表仍供后续页面意见记录，正式实现及开发阶段测试按本轮授权推进。客户包不执行真实业务，最终颜色字体风格另行确认。
 
-本轮停止详细测试前已完成 333 项旧接口/托管组合回归。组合中发现并修正了测试的 `web` 导入缓存干扰；`test_ui_hosting.py` 修正保留为未提交草稿，不改变产品行为，待正式开发阶段处理。工程 Node 声明范围低于部分锁依赖要求，建议收紧到 `^22.22.2 || ^24.15.0 || >=26.0.0`，作为待开发事项，不宣称主分支已修正或 Node 22 镜像已验证。
+本轮停止详细测试前已完成 333 项旧接口/托管组合回归。组合中发现并修正了测试的 `web` 导入缓存干扰；`test_ui_hosting.py` 隔离修正已纳入本轮 `d6905a0`，不改变产品行为。工程根 Node engines 已在本轮收紧到 `^22.22.2 || ^24.15.0 || >=26.0.0`；当前 Node 24 本机验证不能等同 Node 22 镜像已验证。
 
 ## 未验证与后续边界
 
