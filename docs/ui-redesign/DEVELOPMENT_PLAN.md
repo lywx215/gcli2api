@@ -1,8 +1,8 @@
 # gcli2api 新 UI 完整开发方案
 
-日期：2026-10-13（Asia/Shanghai）。用户在主聊天明确表示“页面确认 OK，请继续”，当前状态为**用户页面确认通过，转入本地交付收尾**。确认依据是用户本次明确指令；历史 Review、实现及测试保留各自时点，不补造外部客户签字、默认入口替换或发布批准。颜色、字体与最终风格后置，旧接口与旧面板保持，生产发布门禁仍未通过。
+日期：2026-10-13（Asia/Shanghai）。用户在主聊天明确表示“页面确认 OK，请继续”，当前状态为**用户页面结构确认通过，模型路由正式接入与本地交付收尾已启动**。确认依据是用户本次明确指令；历史 Review、实现及测试保留各自时点，不补造外部客户签字、默认入口替换或发布批准。颜色、字体与最终风格后置，旧接口与旧面板保持，生产发布门禁仍未通过。
 
-本方案由方案窗口编写，根窗口统一更新与集成；方案窗口的文件所有权仅限本文件。主集成工作区为 `C:/Users/lywx2/.codex/worktrees/ui-redesign/gcli2api`，分支 `codex/ui-redesign`；共同开发基线为 `d1012` / `ebda92be2a4a5562963360bdbab2d33379e63077`。本文件的独立工作区为 `C:/Users/lywx2/.codex/worktrees/ui-development-plan/gcli2api`；此前文档分支 `codex/ui-development-plan` 及其审阅包提交保留。此前正式收尾从 `419873f` 建立 `codex/ui-formal-plan`；本次在独立工作区无未提交改动的前提下，从主集成已提交 `7a1d3841a5a50717b8312480a58b76afc2263716` 创建 `codex/ui-page-confirmed`，仅更新本文件。主工作树新出现的模型路由 DEV 草稿来源待根核对，不读取为本轮候选、不修改或纳入此次文档提交。只交付本地文档提交，不改主工作树。
+本方案由方案窗口编写，根窗口统一更新与集成；方案窗口的文件所有权仅限本文件。主集成工作区为 `C:/Users/lywx2/.codex/worktrees/ui-redesign/gcli2api`，分支 `codex/ui-redesign`；共同开发基线为 `d1012` / `ebda92be2a4a5562963360bdbab2d33379e63077`。本文件的独立工作区为 `C:/Users/lywx2/.codex/worktrees/ui-development-plan/gcli2api`；此前文档分支 `codex/ui-development-plan` 及其审阅包提交保留。此前正式收尾从 `419873f` 建立 `codex/ui-formal-plan`；本次在独立工作区无未提交改动的前提下，从主集成已提交 `7a1d3841a5a50717b8312480a58b76afc2263716` 创建 `codex/ui-page-confirmed`，仅更新本文件。现行确认材料含本地模型路由 DEV 合成预览，但来源未核实的主工作树草稿仍须保留，不自动读取为正式候选、不修改或纳入本方案提交；正式实现由独立工作区按已提交基线接入。只交付本地文档提交，不改主工作树。
 
 ## 独立 Review 结论与收敛
 
@@ -24,11 +24,11 @@ Review 所引用的 `419873f` 为历史时点；本次核查的产品源码已�
 
 ## 1. 决策、范围与权威依据
 
-采用 React + TypeScript + Vite + Tailwind CSS + shadcn/ui，配合 TanStack Table、React Hook Form 与 Zod。借鉴 CLIProxyAPI 管理中心的导航、任务分区、差异预览和状态反馈，沿用本项目的 API、认证及业务语义。源码按页面与功能模块拆分，五个页面分别 lazy 加载；不接受单文件页面全集、单 HTML 打包或所有业务代码塞入 App。配色、字体和最终视觉风格后置，只使用可替换语义 tokens。
+采用 React + TypeScript + Vite + Tailwind CSS + shadcn/ui，配合 TanStack Table、React Hook Form 与 Zod。借鉴 CLIProxyAPI 管理中心的导航、任务分区、差异预览和状态反馈，沿用本项目的 API、认证及业务语义。源码按页面与功能模块拆分；首轮五个页面分别 lazy 加载，本轮追加模型路由第六页的正式接入和独立生产 chunk，新增结果待实际实现/验证；不接受单文件页面全集、单 HTML 打包或所有业务代码塞入 App。配色、字体和最终视觉风格后置，只使用可替换语义 tokens。
 
 首版增加 `/ui/` 并保留全部旧入口，面向 Antigravity 及必要共享面板功能。它不是中央 manager 新版本，也不是全量替换旧控制面板。Gemini CLI 专属功能继续留在旧入口，不恢复其维护；MGMT-009、MGMT-010、MGMT-012 的 cancelled 工作保持终止。Management schema 保持 **1.4**，Management capability 不变；下文新增能力只属于面板 `panel_capabilities`。manager 无需配套动作，记录 `no_counterpart_action`，不投递要求对端执行的 handoff。
 
-此前用户授权的本地并行实施与开发阶段验证已执行并保留证据；本次按用户页面确认通过的最新指令进行本地交付收尾，不据历史执行包扩大开发或测试。用户最新指定本次 UI 子聊天使用 GPT-6.1 SOL（`gpt-6.1-sol`）、推理强度 Ultra；此前 AGENTS 的 Astra 要求保留为历史约束，本次遵循用户明确覆盖。方案窗口只更新本文，无产品源码新增，无需重跑已通过的应用测试。排除部署、推送、生产访问、真实 OAuth/模型调用、真实凭证/数据库/Volume 修改、迁移、凭证轮换、Claude 审核及默认根入口切换。原 checkout `G:/code/gemini30/gcli2api` 的用户改动和历史分支不得编辑、reset 或切换。提交保留 `.githooks/pre-commit`，对生成版本号的提示选择否，`panel-version.txt` 不变。
+此前用户授权的本地并行实施与开发阶段验证已执行并保留证据；本次用户页面确认覆盖现行包中的模型路由合成预览，因此明确启动模型路由前端正式接入和六页产物验证；除此不据历史执行包扩大范围。用户最新指定本次 UI 子聊天使用 GPT-6.1 SOL（`gpt-6.1-sol`）、推理强度 Ultra；此前 AGENTS 的 Astra 要求保留为历史约束，本次遵循用户明确覆盖。方案窗口只更新本文，不运行应用测试；产品窗口需为本轮模型路由新增实现安排相关测试和新的六页构建证据，既有五页通过结果不自动转为六页验收。排除部署、推送、生产访问、真实 OAuth/模型调用、真实凭证/数据库/Volume 修改、迁移、凭证轮换、Claude 审核及默认根入口切换。原 checkout `G:/code/gemini30/gcli2api` 的用户改动和历史分支不得编辑、reset 或切换。提交保留 `.githooks/pre-commit`，对生成版本号的提示选择否，`panel-version.txt` 不变。
 
 依据及优先级：
 
@@ -39,13 +39,13 @@ Review 所引用的 `419873f` 为历史时点；本次核查的产品源码已�
 
 ## 2. 当前候选确认与此前正式开发记录
 
-2026-10-13 用户在主聊天明确“页面确认 OK，请继续”，页面确认已通过，后续仅转为本地交付收尾。当前方案基线为已提交 `7a1d384`；下述正式开发和测试仍是其原时点的技术证据，本次确认不改变测试数字，也不推定发布批准。
+2026-10-13 用户在主聊天明确“页面确认 OK，请继续”，页面确认已通过，后续转为模型路由正式接入与本地交付收尾。当前方案基线为已提交 `7a1d384`；下述正式开发和测试仍是其原时点的技术证据，本次确认不改变测试数字，也不推定发布批准。
 
-现行五页确认材料位于 `C:/Users/lywx2/.codex/visualizations/2026/10/13/01a132fa-9639-7c50-a301-b42ba28f74ee/`：目录 `customer-confirmation-current/` 与可转发包 `gcli2api-ui-confirmation-20261013.zip`。两处已核实存在，作为本次用户页面确认的现行材料。旧 `customer-review/`、`gcli2api-ui-customer-review.zip` 及旧截图只保留历史时点，不再作为现行确认包。
+现行确认材料位于 `C:/Users/lywx2/.codex/visualizations/2026/10/13/01a132fa-9639-7c50-a301-b42ba28f74ee/`：目录 `customer-confirmation-current/` 与可转发包 `gcli2api-ui-confirmation-20261013.zip`。两处已核实存在。当前 `manifest.json` 标明候选为 `7a1d384（附本地未提交模型路由预览）`，包含 **14 张图**；原有五页产品源码为 `e27698e`，模型路由是 DEV+fixture 合成补充，真实接入此前待确认。用户此次“页面确认 OK，请继续”覆盖这份现行材料，作为本轮模型路由正式接入依据；素材检查不证明真实 API 接线或第六页生产产物已经完成。旧 `customer-review/`、`gcli2api-ui-customer-review.zip` 及旧截图只保留历史时点，不再作为现行确认包。
 
 用户已确认当前方案并明确启动正式开发与开发阶段测试，五页结构、导航、主要流程、移动布局及旧入口保留作为本轮实施依据。历史页面确认材料基于 `fe99b43`，原样保留；本轮正式源从 `419873f` 开始，最终产品源码时点为 `e27698e`。设置离站保护/字段错误关联、Node engines、共享测试隔离、凭证抽屉反馈/焦点已完成并集成；259项前端、740项相关Python联合回归及本地构建/合成浏览器已通过。配色和最终风格后置，Docker/真实外部服务/完整跨浏览器门禁保持未验证，不部署。
 
-以下为此前实现和验证的历史记录；正式收尾结果在第 12 节按原提交时点单列。本次页面确认记录没有产品源码新增、不产生新的测试通过结论。
+以下为此前实现和验证的历史记录；正式收尾结果在第 12 节按原提交时点单列。本次文档提交没有产品源码改动；新启动的模型路由产品实现/测试尚待完成，此处不产生新的通过结论。
 
 初次只读核实时主集成 HEAD 为 `040fa5d66dd390fdb2b494d40be52785106b66d8`，五页真实 lazy 接线等仍是未提交修改。最终证据更新时读取到主分支 HEAD `41acf286053f1f6c1357cbcbc976b779944fc6c5`；移动布局与 fixture 排除修正已合入，根窗口的 `docs/ui-redesign/DELIVERY.md` 已记录 215 项前端测试、加强后的生产隔离检查及最终 Chromium/ASGI 复验通过，根已保存其集成源码提交 `e5cdd3d`。以下来源 SHA 是可追溯依据；最终交付 SHA 和工作树状态以根交付为准，本方案不声称自己重新运行这些验证。
 
@@ -66,7 +66,7 @@ Review 所引用的 `419873f` 为历史时点；本次核查的产品源码已�
 
 ## 3. 产品结构与功能对照
 
-导航采用一个响应式外壳：宽屏侧栏、窄屏可关闭的导航 Sheet、页头与主内容。五页 hash 为 `#/overview`、`#/credentials`、`#/import`、`#/settings`、`#/logs`，未知 hash 回到概览。页面标题、当前导航、主要操作和错误提示须保持一致，不能依赖颜色表达状态。新 UI 不产生 legacy manage-ready 消息。
+导航采用一个响应式外壳：宽屏侧栏、窄屏可关闭的导航 Sheet、页头与主内容。五页 hash 为 `#/overview`、`#/credentials`、`#/import`、`#/settings`、`#/logs`，未知 hash 回到概览。本轮新增模型路由内部页 `#/model-routing`，由 foundation 统一接入生产导航与 lazy 路由；在正式接入及兼容验证完成前，旧 `/model-routing` 继续保留。页面标题、当前导航、主要操作和错误提示须保持一致，不能依赖颜色表达状态。新 UI 不产生 legacy manage-ready 消息。
 
 | 页面/入口 | 首版任务与已落地实现 | 接口/组件 | 验收与保留边界 |
 | --- | --- | --- | --- |
@@ -77,7 +77,8 @@ Review 所引用的 `419873f` 为历史时点；本次核查的产品源码已�
 | 选中工具 | 选中 ZIP 下载、已保存邮箱复制及缺失计数 | download-selected、copy-emails；Blob+Response、Clipboard | 1–100 项，超过 100 禁用并说明；不是自动分批绕过上限；剪贴板拒绝不能显示已复制 |
 | 添加凭证 | JSON/ZIP、多文件、单个/批量 refresh token、OAuth 自动回调/手动回调及项目选择续接；逐项结果、邮箱任务 | upload、upload-by-refresh-token、upload-by-refresh-token-batch、auth/start/callback/callback-url、email-enrichment | 413 资源预算与部分成功分开；取消仅停止等待/跟踪；真实换码须以后端修正为前置 |
 | 设置 | 服务、访问安全、网络、保护/重试、AG、保活白名单字段；环境锁、差异对照、dirty 保存、专用管理 token 状态/操作 | config/get、save、management-token、storage-engine；RHF/Zod、表单、对照表 | 不回写 config 全文；敏感输入不回填；保存后读回不是 CAS；运行配置可能需重启，不自动重启 |
-| 存储与模型路由 | 新页只读当前存储引擎，提供旧配置页的预览/切换入口；模型路由沿用独立编辑器 | 旧 `/#config`、`/model-routing` | 存储迁移/切换未搬入新页；保留旧模型路由全表校验、草稿与失败保存；不新增数据迁移 |
+| 存储 | 新页只读当前存储引擎，提供旧配置页预览/切换入口 | 旧 `/#config` | 存储迁移/切换未搬入新页，不新增数据迁移 |
+| 模型路由（本轮新增） | 将已确认的合成页面接入现有真实配置 API，保留全表校验、分渠道草稿、加载/保存失败与未知结果行为 | 既有 `GET/PUT /config/model-routing`；独立页面模块、共享 client、内部导航与生产 lazy entry | 正式源码、接口适配及第六页 chunk 尚待完成；不以 DEV 预览通过代替真实接线验证，旧 `/model-routing` 保留兼容入口 |
 | 日志 | 单连接、连接状态、等级筛选、有限缓存、下载、显式清空、可停止/重连 | logs/stream、download、clear；LogViewer、stream hook | 纯文本；断线不保证无损补发；下载/清空只在显式动作发生 |
 | Gemini CLI 与其他未迁移动作 | 保持旧控制面板入口和业务 | `/`、旧 hash、`/front/*` | 不恢复 GCLI 专属维护；不因新页可用删除旧入口 |
 
@@ -85,7 +86,7 @@ Review 所引用的 `419873f` 为历史时点；本次核查的产品源码已�
 
 - 当前凭证 adapter 已有复制已保存邮箱，但未见手动获取邮箱 `fetch-email` 端点接线（旧实现保留在 `src/panel/creds.py`、`front/common.js`）；导入任务结束/失效提示中的“到凭证页手动获取邮箱”需核对实际可达入口。根已将提示指向旧 AG 面板，并在凭证/导入页提供 `/#antigravity-manage` 高级工具入口；复制不作为补全。
 - 当前凭证 adapter 覆盖单项 test 与批量额度；batch-test、手动获取邮箱与异常额度组人工解除继续由旧 AG 高级工具入口承接，本轮不迁入新页。不能把 batch-refresh-cooldown 当成批量模型测试或异常解除，必须保留清楚的旧入口及功能说明。
-- 存储预览/切换和模型路由旧页入口是已确认的首版范围安排。完整迁入 React、独立短时会话、配置事务/CAS、WS 新认证、全站代理子路径、默认根入口切换均属后续另行启动。
+- 存储预览/切换继续由旧页承接；首轮模型路由旧入口安排保留为历史，但当前已确认把模型路由正式接入 React。本轮仅迁入现有模型路由配置工作流；独立短时会话、配置事务/CAS、WS 新认证、全站代理子路径、默认根入口切换仍属后续另行启动。
 - 新设置页非敏感草稿支持跨路由/重新认证保留；刷新或关闭仍会丢失内存。本轮已实现按 dirty/未确认提交状态保护整页离站、清除秘密后切页确认，以及稳定错误 ID、aria-describedby/aria-invalid 与错误定位；手机导航卸载后取消可恢复有效焦点。原生 beforeunload 弹窗取决于浏览器，当前只核验阻止状态，不引入秘密持久化。
 
 ## 4. 目录、组件、状态与传输架构
@@ -108,6 +109,7 @@ frontend/
   src/pages/import/                     index、api、types、hooks、components、fixtures 与测试
   src/pages/settings/                   index、api、types、hooks、ManagementToken 与测试
   src/pages/logs/                       index、api、stream、useLogStream、LogViewer 与测试
+  src/pages/model-routing/              本轮新增：独立入口、现有配置API适配、草稿/校验/状态与测试（由owner接线）
 ui-dist/                               同版本构建产物，不作为源码提交
 src/panel/ui.py                         动态 HTML 与受限 assets 托管
 ```
@@ -222,7 +224,7 @@ management token 使用专用 PUT/DELETE，与模型 API 密码和面板 token �
 
 ## 9. 正式实施分工与候选交付记录
 
-下表保留此前已授权工作及其收尾证据；本次评审收敛不重新启动这些执行包。
+下表保留此前已授权工作及其收尾证据；当前新增执行包仅为后文 UI-MR1–MR4，不重做首轮已完成任务。
 
 用户已明确启动正式并行开发与开发阶段测试。下表保留六窗口文件所有权；本轮只对明确的收尾项安排改动，不重做已存在实现。设计窗口保留历史确认材料，颜色/字体/最终风格后置；根窗口统一协调实现、测试与最终证据，不等待 Docker 环境恢复才推进其他已授权工作。
 
@@ -230,7 +232,7 @@ management token 使用专用 PUT/DELETE，与模型 API 密码和面板 token �
 | --- | --- | --- | --- |
 | foundation | frontend 工程配置/lock、main、app、auth、api/client、domain/shared、components/ui/layout、styles、公共测试配置 | 与后端/托管并行；页面按稳定合同开发 | 共享接口、组件清单、依赖锁、会话/URL 测试；共享修正由此 owner 或根统一合并 |
 | credentialsPage | `frontend/src/pages/credentials/**` | 与四页/两个后端并行 | 列表、选择、动作、详情、fixtures、页内测试；移动布局补丁仅本目录 |
-| workflowsPages | `frontend/src/pages/{overview,import,settings,logs}/**` | 各页内部可拆模块，不能另改共享工程 | 四页入口/adapter/hooks/测试，OAuth/config 失败处理、WS 生命周期 |
+| workflowsPages | `frontend/src/pages/{overview,import,settings,logs}/**`；本轮新增 `frontend/src/pages/model-routing/**` | 各页内部可拆模块，不能另改共享工程 | 四个原页及新增模型路由入口/adapter/hooks/测试，OAuth/config 失败处理、WS 生命周期 |
 | backendCreds | `src/panel/creds.py`、`credential_capabilities.py` 及对应测试 | 与 auth/config 和前端并行 | 能力矩阵、501、False/partial、投影及副作用反例 |
 | backendAuthConfig | `src/auth.py`、`src/panel/auth.py`、`config_routes.py` 及对应测试 | 与 creds/托管并行 | OAuth owner/state/mode/TTL/完成锁、日志、配置失败语义 |
 | deploy | Dockerfile、忽略规则、panel/root、panel/ui、必要 web 接线及托管测试/说明 | 与 foundation 协调两个 HTML 注入点和 outDir 后并行 | Python `/ui/`、assets、旧入口兼容、镜像构建定义与部署/回滚说明 |
@@ -243,7 +245,7 @@ flowchart TD
   Q --> C[以419873f按确认意见明确合同与所有权]
   C --> F[前端基础与公共组件]
   C --> P[凭证页面]
-  C --> W[概览导入设置日志]
+  C --> W[概览导入设置日志与新增模型路由页]
   C --> B[凭证后端最小兼容修正]
   C --> A[OAuth与配置最小兼容修正]
   C --> H[同源托管与构建配置]
@@ -260,14 +262,14 @@ flowchart TD
 
 | 执行包 | 前置与可并行性 | 可审阅产出与退出条件 | 当前状态 |
 | --- | --- | --- | --- |
-| UI-C 页面确认 | 2026-10-13 用户在主聊天明确“页面确认 OK，请继续” | 现行 `customer-confirmation-current/` 与 `gcli2api-ui-confirmation-20261013.zip`；旧包仅历史，不补造外部签字/反馈 | 页面确认通过；后续转入本地交付收尾 |
+| UI-C 页面确认 | 2026-10-13 用户在主聊天明确“页面确认 OK，请继续” | 现行14图 `customer-confirmation-current/` 与 `gcli2api-ui-confirmation-20261013.zip`，含模型路由合成预览；旧包仅历史，不补造外部签字/反馈 | 页面结构确认通过；本轮新增模型路由正式接入 |
 | UI-P0 本轮基线与所有权 | UI-C；统一从主集成 `419873f` 开始，先检查状态 | 复用干净 checkout 建 `codex/ui-formal-*`；脏树保留草稿，必要时新建管理 worktree；共享文件唯一 owner | 已明确；各窗口保留自己已有草稿 |
 | UI-P1 工程/托管 | P0；foundation 与 deploy 可并行 | Node engines 真实交集与锁/构建配置对齐；纳入并审阅托管测试缓存草稿，检查测试隔离和旧入口 | Node engines `84de8fc`、托管测试隔离 `d6905a0` 已交付；相关Python联合740项通过，Docker实际未验 |
 | UI-P2 后端兼容边界 | P0；复用已交付最小修正 | 本轮不改模型 runtime 或 Management schema/capability；共享矩阵只修隔离 fixture，不弱化断言 | 原修正历史证据保留；共享 fixture `d6905a0` 已交付，正式隔离结果见第 12 节 |
 | UI-P3 页面收尾 | P0/P1 共享合同；与工具链/测试工作并行 | settings 离站保护、表单错误关联，以及凭证抽屉动作反馈和刷新后关闭焦点恢复；五页及旧高级入口保持，颜色字体后置 | 设置与凭证补丁已集成；局部与最终前端259项、合成浏览器专项通过 |
 | UI-P4 根集成 | 各收尾包来源提交、范围与局部证据齐全 | 逐提交集成，解决共享文件冲突；不修改用户原 checkout，不复制旧分支共享实现 | 已按来源提交统一合入，产品源码时点e27698e，原checkout用户改动保留 |
 | UI-P5 开发阶段验证 | 本轮同一候选源码、实际 Node 与产物 | 相关隔离单元/接口/Legacy回归、构建/五页manifest/fixture检查及浏览器验证；保留原矩阵与修正后证据区别 | 已完成相关本地检查：前端 259 项、Python 联合 740 项、生产构建/隔离及合成 Chromium；完整 Docker/跨浏览器矩阵未验 |
-| UI-P6 本地候选交付 | P5 的实际证据、最终 SHA、已知限制 | 候选说明、兼容影响与回滚；版本/钩子不变；Docker 未验明确列出 | 用户页面确认已通过，当前进行本地交付文档/提交收尾；保留原验证时点及未验门禁，不推送、不部署 |
+| UI-P6 本地候选交付 | P5 的实际证据、最终 SHA、已知限制 | 候选说明、兼容影响与回滚；版本/钩子不变；Docker 未验明确列出 | 用户页面确认已通过；本轮新增模型路由接入及六页候选待完成，不能仅按旧五页快照交付；保留原时点，不推送、不部署 |
 | UI-P7 后续发布 | 用户另行明确启动并确认范围 | 实际镜像与生产计划、默认入口决定和发布门禁 | 未启动，不自动继续 |
 
 本轮正式收尾包在上述所有权内并行执行；以下仅记录实际已报告的提交/结果，其他项目保留待验证：
@@ -284,6 +286,21 @@ flowchart TD
 F1、F2、F3、F4、F5 按所有权并行；F6 的最终结论依赖实际合入后的同一源码和产物。F2/F4 的 Docker 相关限制仅阻断真实容器验证及发布就绪判断，不阻断本地开发、静态检查、实际 Node 本机验证或其他隔离测试。
 
 不以天数代替依赖门禁，不从旧 issue/handoff 恢复工作。所有后续补丁注明 owner、来源 SHA、改动接口与相关复验；相同文件冲突由根处理，不让多个窗口互相覆盖。已通过检查只有代码变化或新发现关联时才重复，移动样式补丁仍需重跑相关页面/构建与浏览器布局检查。
+
+### 本轮新增模型路由正式接入
+
+范围是前端迁移现有模型路由配置工作流，复用 `GET/PUT /config/model-routing` 的请求、响应、全表校验及既有错误语义，不新建后端端点、不改模型 runtime、路由存储 schema 或 Management schema/capability。响应中的 supported_channels、capabilities、validation 等按真实合同处理；policy_digest 是策略摘要，不能当 CAS 或提交版本。双渠道配置只保留既有共享编辑能力，不恢复 Gemini CLI 专属维护。
+
+现行 manifest 的 14 图和 DEV 合成交互证明页面结构已供用户确认；它仍明确生产产物保留五个原页、不含模型路由合成模块。正式页面必须关闭 fixture 后使用统一 client 接线；失败不回退合成成功，PUT 不自动重试，校验失败/partial/unknown 保留可恢复草稿并按现有协议重新观察，不能伪造原子保存或并发保证。会话变化清理受保护读数据及敏感输入，隔离旧响应；hash 离开和整页导航遵守草稿确认/取消，桌面与手机采用同一领域状态。
+
+| 新增执行包 | Owner 与依赖 | 交付与验收目标 | 当前状态 |
+| --- | --- | --- | --- |
+| UI-MR1 foundation 共享接线 | foundation 独占 app/routes、导航/布局、共享 client 接口及工程/构建检查器；先与 workflows 冻结页面入口与签名 | 生产 `#/model-routing` 路由、侧栏与设置内部入口，独立 lazy 边界；检查器支持六页且拒绝缺第六页/fixture残留；不把业务页面塞入 App | 已授权，源码和验证待交付 |
+| UI-MR2 模型路由页面 | workflows 拥有 `frontend/src/pages/model-routing/**`；依赖 MR1 共享合同，业务测试/fixtures 留页内 | 真实 GET/PUT 适配、完整表校验、支持渠道/能力门控、草稿与取消、加载/保存失败/unknown、移动与键盘；DEV fixture 双条件隔离 | 已授权；合成预览不能记为正式接线通过 |
+| UI-MR3 root 集成 | root 核对来源并集成 MR1/MR2；独立于主 dirty tree，未知来源草稿保留 | 同一已提交基线和新候选 SHA、六页实际装配、旧 `/model-routing` 与既有五页回归；源码/合同冲突由root统一处理 | 待来源确认、实现提交及合并 |
+| UI-MR4 新候选证据 | root 在 MR3 新 SHA 上统一验证 | 相关前端行为/配置接口兼容、生产六页独立 chunk/完整manifest/0fixture、桌面与手机模型路由闭环及旧入口兼容；记录命令、版本、结果与未验项 | 全部待完成，不引用历史259/740/五页构建作为本轮通过 |
+
+MR1/MR2 按合同并行，MR3 依赖实际来源交付，MR4 依赖同一集成 SHA 和生产产物。旧五页、259 项前端、740 项 Python 以及首轮产物/浏览器结果保留原时点，不改写为六页已通过。Docker 仍不可构建、不启动引擎；真实外部联调、部署、推送、默认根入口替换未授权，颜色字体风格后置。
 
 ## 10. 响应式、键盘和异常状态
 
@@ -306,7 +323,7 @@ F1、F2、F3、F4、F5 按所有权并行；F6 的最终结论依赖实际合入
 
 ### 11.1 主题后置
 
-foundation 统一维护 background、foreground、card、muted、border、primary、destructive、ring 等 CSS 变量，字体通过 `--font-interface`；业务需 success/warning/info 时先定义语义再选值。页面不写品牌色、任意 hex 或固定字体，状态文字/图标独立于颜色。未来主题工作只需集中改变量、组件 variants 和必要的密度/字号规则，再对五页截图、对比度、focus、暗色候选与移动布局复验。当前 neutral 是基础配置，不是用户确认的最终设计；设计图不锁定风格。
+foundation 统一维护 background、foreground、card、muted、border、primary、destructive、ring 等 CSS 变量，字体通过 `--font-interface`；业务需 success/warning/info 时先定义语义再选值。页面不写品牌色、任意 hex 或固定字体，状态文字/图标独立于颜色。未来主题工作只需集中改变量、组件 variants 和必要的密度/字号规则，再对包含模型路由的六页截图、对比度、focus、暗色候选与移动布局复验；本次不锁定最终风格。当前 neutral 是基础配置，不是用户确认的最终设计；设计图不锁定风格。
 
 ### 11.2 构建与完整产物
 
@@ -320,7 +337,7 @@ npm --prefix frontend run build
 npm --prefix frontend run check:build
 ```
 
-Vite `base='./'`、`outDir='../ui-dist'`、manifest 开启。检查器必须验证：五个 `src/pages/<name>/index.tsx` 都是 isDynamicEntry 且文件各不相同；每个 manifest entry 的 file/css/assets 在产物内真实存在；每个 imports/dynamicImports 引用存在；JS/CSS 带 hash；HTML 资源相对寻址且两个注入点存在；没有内联 bootstrap/单文件产物；生产即使设置 `VITE_UI_FIXTURES=true` 也不含 DEV fixture。浏览器还要验证实际按需加载，不能只数 JS 文件。
+Vite `base='./'`、`outDir='../ui-dist'`、manifest 开启。首轮检查器曾验证五个独立页面；本轮 MR1/MR4 必须升级并验证六个页面入口（含模型路由）都是 isDynamicEntry 且文件各不相同，第六页缺失须失败；每个 manifest entry 的 file/css/assets 在产物内真实存在；每个 imports/dynamicImports 引用存在；JS/CSS 带 hash；HTML 资源相对寻址且两个注入点存在；没有内联 bootstrap/单文件产物；生产即使设置 `VITE_UI_FIXTURES=true` 也不含 DEV fixture。浏览器还要验证实际按需加载，不能只数 JS 文件。
 
 本次产物审阅曾发现凭证 fixture 顶层合成数据虽在生产分支不执行，仍残留于 chunk；这是生产隔离检查不足，不是真实数据泄漏。现已改为 DEV 双条件动态 import，并通过更强检查：公共哨兵、页面业务合成标识和 manifest fixture 模块均为 0。加强后的门禁曾明确拒绝反例产物，修正后通过；不能只证明开关为 false。
 
