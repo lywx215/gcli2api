@@ -63,11 +63,30 @@ describe("auth lifecycle", () => {
   it("cross-tab replacement and clear advance epoch, while unrelated storage is ignored", () => {
     setSessionToken("synthetic-old"); const { result } = renderHook(useAuth, { wrapper });
     const before = getSessionSnapshot().sessionEpoch;
+    localStorage.setItem(AUTH_STORAGE_KEY, "synthetic-new");
     act(() => window.dispatchEvent(new StorageEvent("storage", { key: AUTH_STORAGE_KEY, newValue: "synthetic-new", storageArea: localStorage })));
     expect(result.current).toMatchObject({ token: "synthetic-new", sessionEpoch: before + 1 });
     act(() => window.dispatchEvent(new StorageEvent("storage", { key: "unrelated", newValue: "ignored", storageArea: localStorage })));
     expect(result.current.sessionEpoch).toBe(before + 1);
+    localStorage.clear();
     act(() => window.dispatchEvent(new StorageEvent("storage", { key: null, storageArea: localStorage })));
     expect(result.current).toMatchObject({ token: null, sessionEpoch: before + 2 });
   });
+});
+
+it("a delayed old storage event cannot replace a newer current login", () => {
+  setSessionToken("newer-synthetic-Y");
+  const { result } = renderHook(useAuth, { wrapper });
+  const epoch = result.current.sessionEpoch;
+  act(() => window.dispatchEvent(new StorageEvent("storage", { key: AUTH_STORAGE_KEY, newValue: "older-synthetic-X", storageArea: localStorage })));
+  expect(result.current).toMatchObject({ token: "newer-synthetic-Y", sessionEpoch: epoch });
+  act(() => window.dispatchEvent(new StorageEvent("storage", { key: null, storageArea: localStorage })));
+  expect(result.current).toMatchObject({ token: "newer-synthetic-Y", sessionEpoch: epoch });
+});
+it("storage read failures preserve the authoritative memory session", () => {
+  setSessionToken("synthetic-memory");
+  const { result } = renderHook(useAuth, { wrapper });
+  vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new DOMException("blocked", "SecurityError"); });
+  act(() => window.dispatchEvent(new StorageEvent("storage", { key: AUTH_STORAGE_KEY, newValue: null, storageArea: localStorage })));
+  expect(result.current.token).toBe("synthetic-memory");
 });

@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { AUTH_STORAGE_KEY, setSessionToken } from "@/auth/session";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 import App from "./App";
@@ -32,4 +33,21 @@ it("shows safe login failures without echoing the payload", async () => {
 it("unknown hashes fall back to overview", () => {
   expect(routeFromHash("#/does-not-exist")).toBe("overview");
   expect(routeFromHash("#manage")).toBe("overview");
+});
+
+it("closes the portalled navigation on cross-tab logout and leaves login operable", async () => {
+  vi.stubEnv("DEV", true); vi.stubEnv("VITE_UI_FIXTURES", "true");
+  setSessionToken("synthetic-before-logout");
+  const user = userEvent.setup(); render(<App />);
+  await user.click(screen.getByRole("button", { name: "打开导航" }));
+  expect(screen.getByRole("dialog", { name: "节点导航" })).toBeInTheDocument();
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+  act(() => window.dispatchEvent(new StorageEvent("storage", { key: AUTH_STORAGE_KEY, newValue: null, storageArea: localStorage })));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(document.querySelector('[data-radix-focus-guard]')).toBeNull();
+  await user.type(screen.getByLabelText("面板密码"), "synthetic-again");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await screen.findByRole("button", { name: "退出登录" });
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(fetch).not.toHaveBeenCalled();
 });

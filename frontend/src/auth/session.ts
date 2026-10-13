@@ -37,8 +37,11 @@ export function invalidateSession(epoch: number) {
 }
 export function syncSessionFromStorage(event: StorageEvent) {
   if (event.key !== AUTH_STORAGE_KEY && event.key !== null) return;
-  try { if (event.storageArea && event.storageArea !== window.localStorage) return; }
-  catch { return; }
-  const token = event.key === null ? null : event.newValue || null;
+  let token: string | null;
+  try {
+    if (event.storageArea && event.storageArea !== window.localStorage) return;
+    // Events can be delayed: read the latest persisted value instead of replaying newValue.
+    token = window.localStorage.getItem(AUTH_STORAGE_KEY) || null;
+  } catch { return; /* unavailable storage must not overwrite a valid memory session */ }
   if (token !== getSessionSnapshot().token) setSessionToken(token, false);
 }
