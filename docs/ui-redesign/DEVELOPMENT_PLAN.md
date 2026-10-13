@@ -2,7 +2,7 @@
 
 日期：2026-10-13（Asia/Shanghai）。用户在主聊天明确表示“页面确认 OK，请继续”，当前状态为**用户页面结构确认通过，模型路由正式接入与本地交付收尾已启动**。确认依据是用户本次明确指令；历史 Review、实现及测试保留各自时点，不补造外部客户签字、默认入口替换或发布批准。颜色、字体与最终风格后置，旧接口与旧面板保持，生产发布门禁仍未通过。
 
-本方案由方案窗口编写，根窗口统一更新与集成；方案窗口的文件所有权仅限本文件。主集成工作区为 `C:/Users/lywx2/.codex/worktrees/ui-redesign/gcli2api`，分支 `codex/ui-redesign`；共同开发基线为 `d1012` / `ebda92be2a4a5562963360bdbab2d33379e63077`。本文件的独立工作区为 `C:/Users/lywx2/.codex/worktrees/ui-development-plan/gcli2api`；此前文档分支 `codex/ui-development-plan` 及其审阅包提交保留。此前正式收尾从 `419873f` 建立 `codex/ui-formal-plan`；本次在独立工作区无未提交改动的前提下，从主集成已提交 `7a1d3841a5a50717b8312480a58b76afc2263716` 创建 `codex/ui-page-confirmed`，仅更新本文件。现行确认材料含本地模型路由 DEV 合成预览，但来源未核实的主工作树草稿仍须保留，不自动读取为正式候选、不修改或纳入本方案提交；正式实现由独立工作区按已提交基线接入。只交付本地文档提交，不改主工作树。
+本方案由方案窗口编写，根窗口统一更新与集成；方案窗口的文件所有权仅限本文件。首轮主集成工作区为 `C:/Users/lywx2/.codex/worktrees/ui-redesign/gcli2api`，分支 `codex/ui-redesign`；本轮正式来源提交统一集成到新的干净工作区 `C:/Users/lywx2/.codex/worktrees/ui-confirmed-integration/gcli2api`、分支 `codex/ui-confirmed-integration`，起点为已提交 `7a1d384`。原工作树的七份 DEV 草稿由根原样复制到附件 `confirmed-delivery/preview-reference/` 并记录 SHA-256，原件保持；它们只作预览参考，不自动作为正式来源。共同开发基线为 `d1012` / `ebda92be2a4a5562963360bdbab2d33379e63077`。本文件的独立工作区为 `C:/Users/lywx2/.codex/worktrees/ui-development-plan/gcli2api`；此前文档分支 `codex/ui-development-plan` 及其审阅包提交保留。此前正式收尾从 `419873f` 建立 `codex/ui-formal-plan`；本次在独立工作区无未提交改动的前提下，从主集成已提交 `7a1d3841a5a50717b8312480a58b76afc2263716` 创建 `codex/ui-page-confirmed`，仅更新本文件。现行确认材料含本地模型路由 DEV 合成预览，但来源未核实的主工作树草稿仍须保留，不自动读取为正式候选、不修改或纳入本方案提交；正式实现由独立工作区按已提交基线接入。只交付本地文档提交，不改主工作树。
 
 ## 独立 Review 结论与收敛
 
