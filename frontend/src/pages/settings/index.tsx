@@ -1,11 +1,12 @@
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
 import { createServiceUrl, getServiceBase } from '@/api/client';
 import { useSettings } from './hooks';
 import { fixtureMode } from './api';
-import { editable, fields, same, toDraft } from './types';
+import { fields, same, toDraft } from './types';
 import { ManagementToken } from './components/ManagementToken';
+import { ConfigField } from './components/ConfigField';
+import { UnsavedChangesGuard } from './components/UnsavedChangesGuard';
 export default function SettingsPage(){
   const s=useSettings();const values=s.form.watch();const original=toDraft(s.baseline);
   const changes=fields.filter(f=>values[f.key]!==undefined&&!same(values[f.key],original[f.key]));
@@ -15,21 +16,14 @@ export default function SettingsPage(){
     <div className="flex flex-wrap gap-3"><Button variant="outline" disabled={s.busy||!s.auth.authenticated} onClick={()=>void s.refresh()}>重新读取并对照</Button>{s.observed&&<Button variant="outline" disabled={s.busy} onClick={s.acceptObservation}>放弃草稿并采用观察值</Button>}</div>
     <p className="text-sm text-muted-foreground">非敏感草稿只保留在当前标签页内存。切换新版页面可保留修改；刷新、关闭浏览器或前往旧页面会丢失草稿，请先处理未保存修改。</p>
     <p role="status" aria-live="polite">{s.busy?'正在处理…':s.status}</p>
+    <UnsavedChangesGuard />
     <p className="rounded-md border p-3 text-sm text-muted-foreground">监听地址、端口、凭证目录等运行配置保存后可能需要重启服务才生效；保存确认不代表运行进程已切换。本页不会自动重启。</p>
     {!s.auth.authenticated&&<p role="alert">请重新登录。非敏感草稿仅保存在内存，秘密输入已清除。</p>}
-    <form onSubmit={s.form.handleSubmit(s.save)} className="space-y-6">
-      {[...new Set(fields.map(f=>f.section))].map(section=><Card key={section}><CardHeader><CardTitle>{section}</CardTitle></CardHeader><CardContent className="grid gap-4 md:grid-cols-2">{fields.filter(f=>f.section===section).map(field=>{
-        const locked=s.snapshot?.envLocked.includes(field.key);const unsupported=!!field.capability&&!s.snapshot?.capabilities.includes(field.capability);
-        const disabled=s.busy||!s.auth.authenticated||!s.snapshot||!editable(field,s.snapshot);
-        return <div key={field.key} className="space-y-1"><label htmlFor={field.key} className="text-sm font-medium">{field.label}</label>
-          {field.kind==='boolean'?<input id={field.key} type="checkbox" className="ml-3 size-4" disabled={disabled} {...s.form.register(field.key)}/>:
-          field.choices?<select id={field.key} className="h-10 w-full rounded-md border border-input bg-background px-3" disabled={disabled} {...s.form.register(field.key)}><option value="">未提供</option>{field.choices.map(choice=><option key={choice}>{choice}</option>)}</select>:
-          field.kind==='origins'?<textarea id={field.key} className="min-h-24 w-full rounded-md border border-input bg-background p-3" disabled={disabled} {...s.form.register(field.key)}/>:
-          <Input id={field.key} type={field.kind==='secret'?'password':field.kind==='number'?'number':'text'} step={field.integer?1:'any'} min={field.min} max={field.max} autoComplete={field.kind==='secret'?'new-password':'off'} placeholder={field.kind==='secret'?'不修改请留空':undefined} disabled={disabled} {...s.form.register(field.key)}/>}
-          <p className="text-xs text-muted-foreground">{locked?'由环境变量锁定':unsupported?'服务未声明所需能力':field.kind==='secret'?'仅提交明确输入的新密码；空白不清除密码':''}</p>
-          {s.form.formState.errors[field.key]&&<p role="alert" className="text-sm text-destructive">{String(s.form.formState.errors[field.key]?.message)}</p>}
-        </div>;
-      })}</CardContent></Card>)}
+    <form noValidate onSubmit={s.form.handleSubmit(s.save,errors=>{
+      const first=fields.find(field=>errors[field.key]);
+      if(first){s.form.setFocus(first.key);document.getElementById(first.key)?.scrollIntoView?.({block:'center'});}
+    })} className="space-y-6">
+      {[...new Set(fields.map(f=>f.section))].map(section=><Card key={section}><CardHeader><CardTitle>{section}</CardTitle></CardHeader><CardContent className="grid gap-4 md:grid-cols-2">{fields.filter(f=>f.section===section).map(field=><ConfigField key={field.key} field={field} form={s.form} snapshot={s.snapshot} disabled={s.busy||!s.auth.authenticated}/>)}</CardContent></Card>)}
       <Card><CardHeader><CardTitle>修改对照（{changes.length}）</CardTitle></CardHeader><CardContent className="space-y-3"><p className="text-sm text-muted-foreground">读取仅反映当前观察值，不保证事务、原子性或没有其他写入。密码与可能含秘密的网络字段均隐藏值。</p>
         <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr><th>字段</th><th>原基线</th><th>草稿</th><th>最近提交</th><th>当前观察</th></tr></thead><tbody>{changes.map(f=>{
           const redact=f.kind==='secret'||f.section==='网络'||f.key==='keepalive_url';const show=(value:unknown)=>value===undefined?'未提供':redact?'[已隐藏]':JSON.stringify(value);

@@ -75,9 +75,15 @@ export function buildPatch(draft:Draft,baseline:Config,snapshot:Snapshot):Config
 }
 export function draftSchema(baseline:Config,snapshot:Snapshot) {
   return z.record(z.string(),z.union([z.string(),z.boolean()])).superRefine((value,ctx)=>{
+    const parsed:Config={};
     for(const field of fields) {
       if(!editable(field,snapshot)||same(value[field.key],toDraft(baseline)[field.key])||value[field.key]===undefined)continue;
-      try {parseField(field,value[field.key]);}catch {ctx.addIssue({code:'custom',path:[field.key],message:'值无效；请检查范围、格式或密码占位符'});}
+      try {parsed[field.key]=parseField(field,value[field.key]);}catch {ctx.addIssue({code:'custom',path:[field.key],message:'值无效；请检查范围、格式或密码占位符'});}
+    }
+    const merged={...baseline,...parsed};
+    if(merged.gcli_embed_mode==='exact'&&(!Array.isArray(merged.gcli_embed_allowed_origins)||!merged.gcli_embed_allowed_origins.length)){
+      const origins=fields.find(field=>field.key==='gcli_embed_allowed_origins')!;
+      ctx.addIssue({code:'custom',path:[editable(origins,snapshot)?origins.key:'gcli_embed_mode'],message:'精确嵌入至少需要一个有效的 HTTPS Origin'});
     }
   });
 }
