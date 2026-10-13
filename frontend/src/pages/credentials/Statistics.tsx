@@ -1,0 +1,6 @@
+import { count, object, CAP, type CredentialPage } from './model'
+const number = (v: unknown) => count(v) ?? '不可用'
+export function Statistics({ page }: { page: CredentialPage }) {
+  const family = object(page.familySummary.family_counts)
+  return <section aria-label="凭证统计" className="grid gap-3"><div className="grid grid-cols-2 gap-3 xl:grid-cols-5">{[['全局凭证', page.stats.total], ['全局启用', page.stats.normal], ['全局禁用', page.stats.disabled], ['全局永久禁用', page.caps.has(CAP.permanent) ? page.stats.permanent_disabled : null], ['筛选后匹配', page.total]].map(([label, value]) => <div className="rounded-xl border bg-card p-4" key={String(label)}><p className="text-xs text-muted-foreground">{String(label)}</p><p className="mt-1 text-2xl font-semibold">{number(value)}</p></div>)}</div><div className="rounded-xl border p-3 text-xs text-muted-foreground">权限汇总：基础筛选后 {number(page.familySummary.total)} 项（跨全部分页，尚未应用版本权限筛选）。{['claude-opus-5-5', 'claude-opus-4-6'].map(name => <p key={name}>{name}：目录支持 {number(object(family[name]).supported)} / 暂不可用 {number(object(family[name]).unavailable)} / 待确认 {number(object(family[name]).unknown)}</p>)}目录支持不代表剩余额度或已验证生成。</div></section>
+}
