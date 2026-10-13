@@ -10,12 +10,12 @@ const css = assets.filter(file => file.endsWith(".css"));
 assert(js.length >= 2, "Must ship independent lazy JS chunks");
 assert(css.length >= 1, "Must ship independent CSS");
 assert([...js, ...css].every(file => /-[A-Za-z0-9_-]{8,}\.(js|css)$/.test(file)), "Assets must carry content hashes");
-const pageEntries = ["overview", "credentials", "import", "settings", "logs"].map(name => {
+const pageEntries = ["overview", "credentials", "import", "settings", "logs", "model-routing"].map(name => {
   const entry = manifest[`src/pages/${name}/index.tsx`];
   assert(entry?.isDynamicEntry, `${name} must have a real lazy entry`);
   return entry.file;
 });
-assert(new Set(pageEntries).size === 5, "Every page must have its own lazy JS file");
+assert(new Set(pageEntries).size === 6, "Every page must have its own lazy JS file");
 for (const [key, entry] of Object.entries(manifest)) {
   for (const file of [entry.file, ...(entry.css ?? []), ...(entry.assets ?? [])]) {
     const target = resolve(out, file);
@@ -36,4 +36,4 @@ for (const file of js) {
     assert(!body.includes(marker), `DEV fixture marker leaked into production: ${marker} in ${file}`);
   }
 }
-console.log(`Build verified: ${js.length} hashed JS chunks, ${css.length} hashed CSS, five independent pages, complete manifest references, injection points, no DEV fixtures.`);
+console.log(`Build verified: ${js.length} hashed JS chunks, ${css.length} hashed CSS, six independent pages, complete manifest references, injection points, no DEV fixtures.`);

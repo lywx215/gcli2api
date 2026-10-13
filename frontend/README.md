@@ -1,6 +1,6 @@
 # Antigravity frontend
 
-The console provides five independently lazy-loaded pages: overview, credentials, import, settings and logs. Each default export lives in its own `pages/<name>/index.tsx`; App only assembles authentication, navigation and loading boundaries. The existing panel and model-routing editor remain available at their original entries.
+The console provides six independently lazy-loaded pages: overview, credentials, import, settings, logs and model-routing. Each default export lives in its own `pages/<name>/index.tsx`; App only assembles authentication, navigation and loading boundaries. The existing panel and model-routing editor remain available at their original entries.
 
 ## Run and verify
 
@@ -57,7 +57,31 @@ Only the existing FastAPI panel dependency's exact detail-only errors (`密码�
 
 The navigation Sheet closes on auth/epoch change (including its body Portal). Page owners must likewise close their transient Dialog/Sheet portals on session changes. The shell keeps the current page mounted but hidden/inert while reauthenticating so page-owned memory drafts can survive. Pages MUST watch `authenticated` and `sessionEpoch` to clear protected read data, selections and sensitive inputs, release polling/WS, and mark drafts as needing reauthentication. After login, never replay writes or silently overwrite drafts with a GET. Pages own per-request sequence checks and draft persistence across route changes. The foundation does not cache API data. Render boundaries provide explicit reload on chunk failures, with unsaved-content warning; never auto-reload.
 
-`@/domain/shared` exports `cn`, `Query`, `QueryValue`. `@/app/routes` exports `routes`, `RouteId`, `routeFromHash`, `useRoute`. `@/components/layout/*` exports `Sidebar`, `Header`, `AppShell`. `@/app/fixtures` exports `registerFixtureHandler` and `fixtureFetch` only for DEV fixture registration; handlers return 404 to defer. Import it only behind `import.meta.env.DEV && import.meta.env.VITE_UI_FIXTURES === 'true'`. Production eliminates the fixture dynamic import; verify with `npm run check:build` even when VITE_UI_FIXTURES=true is set for a production build.
+`@/domain/shared` exports `cn`, `Query`, `QueryValue`. `@/app/routes` exports `routes`, `RouteId`, `routeFromHash`, `useRoute`, `RouteNavigation`, `registerRouteGuard`. `@/components/layout/*` exports `Sidebar`, `Header`, `AppShell`. `@/app/fixtures` exports `registerFixtureHandler` and `fixtureFetch` only for DEV fixture registration; handlers return 404 to defer. Import it only behind `import.meta.env.DEV && import.meta.env.VITE_UI_FIXTURES === 'true'`. Production eliminates the fixture dynamic import; verify with `npm run check:build` even when VITE_UI_FIXTURES=true is set for a production build.
+
+## Hash-navigation protection
+
+Model routing is a permanent `#/model-routing` lazy page. The old `/model-routing` HTML and its ordinary Vite HTTP proxy remain available; no DEV-only route or redirect plugin is installed. Settings links to the new page in both normal and fixture modes.
+
+A page with drafts may register the shared route guard without importing another page:
+
+```ts
+import { registerRouteGuard, type RouteNavigation } from '@/app/routes'
+// Register only while authenticated. Keep the registration stable and read dirty state through refs.
+useEffect(() => {
+  if (!authenticated) return
+  return registerRouteGuard((attempt: RouteNavigation) => {
+    if (!dirtyRef.current) return true
+    setPending(attempt)
+    return false
+  })
+}, [authenticated, sessionEpoch])
+// Cancel: close the dialog. Confirm: finish the page's discard action, then pending.retry().
+```
+
+A false result holds the accepted React route and restores its URL. `retry()` is fixed to this destination, consumable once, and invalid after a newer attempt, session change, registration disposal or router unmount. Other guards still run. Hash links and browser back/forward use the same subscription; queued obsolete events do not replay an old destination. `#main-content` remains an in-page focus jump. Restoring a rejected fragment uses `history.replaceState` and does not promise an exact restoration of the browser history cursor/stack. Document exits and `beforeunload` are page-owned. Header exposes `data-panel-action="logout"` on the logout button so a page can capture and confirm dirty/busy/unconfirmed exits without matching translated text. Existing settings non-sensitive memory drafts and external-exit guard are unchanged.
+
+The synthetic transport keeps its existing `@/app/fixtures` entry. Only an explicit DEV fixture request to `config/model-routing` dynamically imports `pages/model-routing/fixtures` and calls `fixtureModelRoutingRequest(url, init)`. The handler must return 404 for an unmatched request and never contact a backend. Production cannot activate this import even with VITE_UI_FIXTURES=true; the production build window runs the six-page asset/manifest and marker gate after integration.
 
 ## Component provenance and exports
 
@@ -93,6 +117,6 @@ Official setup: https://ui.shadcn.com/docs/installation/vite and https://ui.shad
 
 ## Scope and validation
 
-66 synthetic Vitest/RTL tests cover service roots and malicious paths, request encodings, structured and non-JSON failures, upstream-vs-panel authentication, stale body/session races, no retry, fixture fail-closed behavior, restricted storage, cross-tab changes, concurrent login, and login/navigation/logout. Typecheck/build pass. Build check enforces hashed independent CSS/JS, five distinct page entries, complete manifest/resource references, both meta injection markers, and no DEV fixture strings. No production, OAuth, model, real credential/database, Python service, deployment, full backend or cross-browser verification is implied. The foundation changes no Management schema/capability; manager action: `no_counterpart_action`.
+66 synthetic Vitest/RTL tests cover service roots and malicious paths, request encodings, structured and non-JSON failures, upstream-vs-panel authentication, stale body/session races, no retry, fixture fail-closed behavior, restricted storage, cross-tab changes, concurrent login, and login/navigation/logout. Typecheck/build pass. Build check enforces hashed independent CSS/JS, six distinct page entries, complete manifest/resource references, both meta injection markers, and no DEV fixture strings. No production, OAuth, model, real credential/database, Python service, deployment, full backend or cross-browser verification is implied. The foundation changes no Management schema/capability; manager action: `no_counterpart_action`.
 
 The latest frozen shared contract is implemented, including relative asset base and Blob+Response. This task does not edit the coordination contract. The integrated branch wires actual page lazy imports and Python HTML/asset serving. Delivery evidence and remaining verification limits are recorded in `../docs/ui-redesign/DELIVERY.md`. Generated ui-dist is a build artifact, not part of this source commit.

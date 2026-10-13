@@ -4,14 +4,14 @@ import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 import App from "./App";
 import { routeFromHash } from "./routes";
-it("logs in using only fixtures, navigates five real lazy pages, and logs out", async () => {
+it("logs in using only fixtures, navigates six real lazy pages, and logs out", async () => {
   vi.stubEnv("DEV", true); vi.stubEnv("VITE_UI_FIXTURES", "true");
   const user = userEvent.setup(); render(<App />);
   await user.type(screen.getByLabelText("面板密码"), "synthetic-preview");
   await user.click(screen.getByRole("button", { name: "登录" }));
   await within(screen.getByRole("main")).findByRole("heading", { level: 1, name: "概览" });
-  expect(screen.getByRole("link", { name: "模型路由" })).toHaveAttribute("href", "http://localhost:3000/model-routing");
-  for (const [id, name, title] of [["credentials", "凭证", "Antigravity 凭证"], ["import", "添加凭证", "导入凭证"], ["settings", "设置", "设置"], ["logs", "日志", "日志"], ["overview", "概览", "概览"]]) {
+  expect(screen.getByRole("link", { name: "模型路由" })).toHaveAttribute("href", "#/model-routing");
+  for (const [id, name, title] of [["credentials", "凭证", "Antigravity 凭证"], ["import", "添加凭证", "导入凭证"], ["settings", "设置", "设置"], ["logs", "日志", "日志"], ["model-routing", "模型路由", "模型路由"], ["overview", "概览", "概览"]]) {
     await user.click(screen.getByRole("link", { name }));
     await waitFor(() => expect(screen.getByRole("link", { name })).toHaveAttribute("aria-current", "page"));
     expect(location.hash).toBe(`#/${id}`);

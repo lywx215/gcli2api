@@ -1,6 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { createServiceUrl, getServiceBase } from '@/api/client';
+import { getServiceBase } from '@/api/client';
 import { useSettings } from './hooks';
 import { fixtureMode } from './api';
 import { fields, same, toDraft } from './types';
@@ -33,6 +33,6 @@ export default function SettingsPage(){
       </CardContent></Card>
     </form>
     <ManagementToken status={s.snapshot?.token} onUpdate={token=>s.setSnapshot(previous=>previous?{...previous,token}:previous)}/>
-    <Card><CardHeader><CardTitle>存储与模型路由</CardTitle></CardHeader><CardContent className="space-y-3"><p>当前存储引擎：{s.engine}</p><p className="text-sm text-muted-foreground">切换存储可能迁移或覆盖数据、改变凭证可见性。请在旧配置页检查预览、备份与目标，再明确确认切换。本页不执行迁移。</p><div className="flex flex-wrap gap-4">{fixtureMode?<span className="text-muted-foreground">合成预览中不打开真实存储与模型路由入口。</span>:<><a className="underline" href={legacy.href}>旧配置页：存储预览与切换</a><a className="underline" href={createServiceUrl('model-routing').href}>模型路由编辑器</a></>}</div></CardContent></Card>
+    <Card><CardHeader><CardTitle>存储与模型路由</CardTitle></CardHeader><CardContent className="space-y-3"><p>当前存储引擎：{s.engine}</p><p className="text-sm text-muted-foreground">切换存储可能迁移或覆盖数据、改变凭证可见性。请在旧配置页检查预览、备份与目标，再明确确认切换。本页不执行迁移。</p><div className="flex flex-wrap gap-4">{fixtureMode?<span className="text-muted-foreground">合成预览中不打开真实存储入口。</span>:<a className="underline" href={legacy.href}>旧配置页：存储预览与切换</a>}<a className="underline" href="#/model-routing">模型路由编辑器</a></div></CardContent></Card>
   </div>;
 }

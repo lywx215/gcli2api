@@ -11,6 +11,7 @@ const pages = {
   import: lazy(() => import("@/pages/import")),
   settings: lazy(() => import("@/pages/settings")),
   logs: lazy(() => import("@/pages/logs")),
+  "model-routing": lazy(() => import("@/pages/model-routing")),
 };
 function SessionContent() {
   const { authenticated } = useAuth();
