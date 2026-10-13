@@ -10,6 +10,7 @@ import { CredentialTable } from './CredentialTable'
 import { CredentialDetail } from './CredentialDetail'
 import { ConfirmAction } from './ConfirmAction'
 import { Statistics } from './Statistics'
+import { MobileControls, mobilePanelIds, type MobilePanels } from './MobileControls'
 import { ManualResultView, type ManualResult } from './ResultView'
 export default function CredentialsPage() {
   const { authenticated, sessionEpoch } = useAuth()
@@ -22,6 +23,7 @@ export function CredentialWorkspace() {
   const [batch, setBatch] = useState<{ filename: string; result: ManualResult }[]>([])
   const [batchRunning, setBatchRunning] = useState(false); const stop = useRef(false)
   const focusReturn = useRef<HTMLElement | null>(null)
+  const [mobilePanels, setMobilePanels] = useState<MobilePanels>({ statistics: false, filters: false, bulk: false })
   useEffect(() => { setDetail(null); setResult(''); setBatch([]); setBusy(false); setBatchRunning(false); stop.current = true }, [c.detailEpoch])
   useEffect(() => () => { stop.current = true }, [])
   useEffect(() => { if (detail && c.data) { const fresh = c.data.items.find(r => r.filename === detail.filename); if (fresh) setDetail(fresh) } }, [c.data])
@@ -65,13 +67,16 @@ export function CredentialWorkspace() {
   const blocked = busy || c.materializing; const noSelection = blocked || !c.selected.size
   return <section className="min-w-0 space-y-5" aria-label="Antigravity 凭证" aria-busy={busy || c.loading}><header className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">Antigravity 凭证</h1><p className="mt-1 text-sm text-muted-foreground">筛选、跨页选择与凭证状态管理</p></div><Button variant="outline" disabled={busy} onClick={c.refresh}>重新读取</Button></header>
     {fixtureMode && <p role="status" className="rounded-lg border p-3 text-sm">开发模式合成预览。操作结果为模拟数据，不代表后端已执行。</p>}
-    {c.data && <Statistics page={c.data} />}
-    <fieldset disabled={busy}><legend className="sr-only">凭证筛选</legend><FiltersPanel filters={c.filters} caps={c.caps} onApply={c.applyFilters} /></fieldset>
-    <section className="space-y-3 rounded-xl border bg-card p-4" aria-label="批量操作"><div className="flex flex-wrap items-center gap-2"><strong className="mr-2 text-sm">已跨页选择 {c.selected.size} 项</strong><Button variant="outline" disabled={blocked || !c.data?.items.length} onClick={() => c.toggle(c.data!.items.map(r => r.filename), true)}>选择当前页</Button><Button variant="outline" disabled={blocked || !c.data?.total} onClick={() => void c.selectAll()}>读取并选择全部匹配</Button><Button variant="ghost" disabled={busy} onClick={c.clearSelection}>清除选择</Button></div>
-    {c.materializing && <div className="flex items-center gap-3"><p role="status">正在物化文件集合，已读取 {c.progress} 项…</p><Button variant="outline" onClick={c.cancelSelection}>取消读取</Button></div>}
+    <MobileControls total={c.data?.total} selected={c.selected.size} panels={mobilePanels} toggle={panel => setMobilePanels(current => ({ ...current, [panel]: !current[panel] }))} />
+    <div id={mobilePanelIds.statistics} className={mobilePanels.statistics ? 'block' : 'hidden md:block'}>{c.data && <Statistics page={c.data} />}</div>
+    <fieldset id={mobilePanelIds.filters} className={mobilePanels.filters ? 'block' : 'hidden md:block'} disabled={busy}><legend className="sr-only">凭证筛选</legend><FiltersPanel filters={c.filters} caps={c.caps} onApply={c.applyFilters} /></fieldset>
+    <section id={mobilePanelIds.bulk} className={`space-y-3 rounded-xl border bg-card p-4 ${mobilePanels.bulk ? 'block' : 'hidden md:block'}`} aria-label="批量操作"><div className="flex flex-wrap items-center gap-2"><strong className="mr-2 text-sm">已跨页选择 {c.selected.size} 项</strong><Button variant="outline" disabled={blocked || !c.data?.items.length} onClick={() => c.toggle(c.data!.items.map(r => r.filename), true)}>选择当前页</Button><Button variant="outline" disabled={blocked || !c.data?.total} onClick={() => void c.selectAll()}>读取并选择全部匹配</Button><Button variant="ghost" disabled={busy} onClick={c.clearSelection}>清除选择</Button></div>
     <div className="flex flex-wrap gap-2"><Button disabled={noSelection} onClick={() => void action([...c.selected], 'enable')}>批量启用</Button><Button variant="outline" disabled={noSelection} onClick={() => void action([...c.selected], 'disable')}>批量禁用</Button><ConfirmAction label="批量永久禁用" disabled={noSelection || !c.caps.has(CAP.permanent)} description={`对已物化集合中的 ${c.selected.size} 个凭证永久禁用；可能部分成功。`} onConfirm={() => void action([...c.selected], 'permanent_disable')} /><ConfirmAction label="批量删除" disabled={noSelection} description={`删除已物化集合中的 ${c.selected.size} 个凭证。此操作不可由页面撤销，可能部分成功。`} onConfirm={() => void action([...c.selected], 'delete')} /><ConfirmAction label="批量开启信用额度" disabled={noSelection || !c.caps.has(CAP.credit)} description="对选中凭证开启信用额度并清除模型冷却，可能部分成功。" onConfirm={() => void action([...c.selected], 'enable_credit')} /><ConfirmAction label="批量关闭信用额度" disabled={noSelection || !c.caps.has(CAP.credit)} description="对选中凭证关闭信用额度并清除模型冷却，可能部分成功。" onConfirm={() => void action([...c.selected], 'disable_credit')} /></div>
-    <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={blocked || !selectedToolsAllowed(c.selected)} onClick={() => void selectedTool('download')}>下载选中</Button><Button variant="outline" disabled={blocked || !selectedToolsAllowed(c.selected)} onClick={() => void selectedTool('emails')}>复制邮箱</Button><ConfirmAction label="批量刷新额度" disabled={noSelection} description={`将为 ${c.selected.size} 个凭证访问上游并同步额度与权限，每批最多 10 项；可停止后续批次，已执行动作不回滚。`} onConfirm={() => void batchQuota()} />{batchRunning && <Button variant="outline" onClick={() => { stop.current = true; setResult('停止请求已记录；当前批次完成后停止，不会回滚。') }}>停止后续批次</Button>}</div>
-    {c.selected.size > 100 && <p className="text-sm text-muted-foreground">下载和复制邮箱最多 100 项，请减少选择。其他批量动作仍可使用当前集合。</p>}<p className="text-xs text-muted-foreground">全部匹配按每页 1000 项读取并保存文件名；读取期间列表可能变化，不保证原子快照。</p></section>
+    <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={blocked || !selectedToolsAllowed(c.selected)} onClick={() => void selectedTool('download')}>下载选中</Button><Button variant="outline" disabled={blocked || !selectedToolsAllowed(c.selected)} onClick={() => void selectedTool('emails')}>复制邮箱</Button><ConfirmAction label="批量刷新额度" disabled={noSelection} description={`将为 ${c.selected.size} 个凭证访问上游并同步额度与权限，每批最多 10 项；可停止后续批次，已执行动作不回滚。`} onConfirm={() => void batchQuota()} /></div>
+    <p className="text-xs text-muted-foreground">全部匹配按每页 1000 项读取并保存文件名；读取期间列表可能变化，不保证原子快照。</p></section>
+    {c.materializing && <div className="flex items-center gap-3"><p role="status">正在物化文件集合，已读取 {c.progress} 项…</p><Button variant="outline" onClick={c.cancelSelection}>取消读取</Button></div>}
+    {batchRunning && <Button variant="outline" onClick={() => { stop.current = true; setResult('停止请求已记录；当前批次完成后停止，不会回滚。') }}>停止后续批次</Button>}
+    {c.selected.size > 100 && <p className="text-sm text-muted-foreground">下载和复制邮箱最多 100 项，请减少选择。其他批量动作仍可使用当前集合。</p>}
     {c.notice && <p role="status" className="text-sm text-muted-foreground">{c.notice}</p>}{result && <p role="status" className="rounded-lg border p-3 text-sm">{result}</p>}{c.error && <div role="alert" className="rounded-lg border border-destructive p-4 text-destructive">{c.error}<Button variant="outline" className="ml-3" onClick={c.refresh}>重试读取</Button></div>}
     {c.loading && <div role="status" aria-label="正在加载列表" className="grid gap-3"><Skeleton className="h-12 w-full" /><Skeleton className="h-32 w-full" /></div>}
     {!c.loading && c.data && !c.data.items.length && <p className="rounded-xl border p-8 text-center text-muted-foreground">{c.data.stats.total === 0 ? '尚无凭证，请前往导入页面。' : '没有匹配的凭证，请调整筛选。'}</p>}
