@@ -12,7 +12,7 @@ describe('Settings form integration',()=>{
   render(<SettingsPage/>);
   await waitFor(()=>expect(screen.getByLabelText('端口')).toHaveValue(7861));
   expect(screen.getByRole('link',{name:'旧配置页：存储预览与切换'}).getAttribute('href')).toMatch(/\/#config$/);
-  expect(screen.getByRole('link',{name:'模型路由编辑器'}).getAttribute('href')).toMatch(/\/model-routing$/);
+  expect(screen.getByRole('link',{name:'模型路由编辑器'}).getAttribute('href')).toBe('#/model-routing');
   fireEvent.click(screen.getByLabelText('调试模式'));
   fireEvent.click(screen.getByRole('button',{name:'保存已修改字段'}));
   await waitFor(()=>expect(mocks.saveConfig).toHaveBeenCalledWith({debug_mode:true}));

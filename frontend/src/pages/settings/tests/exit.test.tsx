@@ -52,9 +52,9 @@ describe('settings exit protection',()=>{
     await screen.findByText(/保存结果未知；保留草稿/);
     expect(warnsOnUnload()).toBe(true);expect(mocks.saveConfig).toHaveBeenCalledTimes(2);
   });
-  it('allows internal hash navigation, retains safe drafts and protects later document exits',async()=>{
+  it('allows the model-routing internal link, retains safe drafts and protects later document exits',async()=>{
     const view=await mount();change('端口','8765');
-    const anchor=document.createElement('a');anchor.href='#/overview';document.body.append(anchor);
+    const anchor=screen.getByRole('link',{name:'模型路由编辑器'});
     expect(clickLink(anchor)).toBe(false);expect(screen.queryByRole('alertdialog')).toBeNull();
     view.unmount();anchor.remove();
     expect(warnsOnUnload()).toBe(true);
@@ -110,7 +110,7 @@ describe('settings exit protection',()=>{
     await waitFor(()=>expect(screen.getByLabelText('端口')).toHaveValue(7861));
     expect(warnsOnUnload()).toBe(true);expect(screen.getByText(/存在尚未确认的配置提交/)).toBeInTheDocument();
     expect(mocks.saveConfig).toHaveBeenCalledTimes(1);
-    act(()=>{clickLink(screen.getByRole('link',{name:'模型路由编辑器'}));});
+    act(()=>{clickLink(screen.getByRole('link',{name:'旧配置页：存储预览与切换'}));});
     expect(await screen.findByRole('alertdialog')).toHaveTextContent('尚未确认的提交');
     fireEvent.click(screen.getByRole('button',{name:'继续编辑'}));
     await waitFor(()=>expect(screen.queryByRole('alertdialog')).toBeNull());
@@ -130,19 +130,19 @@ describe('settings exit protection',()=>{
     await waitFor(()=>expect(screen.getByRole('button',{name:'重新读取并对照'})).toBeEnabled());
     change('端口','8765');fireEvent.click(screen.getByRole('button',{name:'保存已修改字段'}));
     await screen.findByText('服务已确认接收保存；请重新读取对照实际值。');expect(warnsOnUnload()).toBe(true);
-    act(()=>{clickLink(screen.getByRole('link',{name:'模型路由编辑器'}));});
+    act(()=>{clickLink(screen.getByRole('link',{name:'旧配置页：存储预览与切换'}));});
     fireEvent.click(await screen.findByRole('button',{name:'放弃并离开'}));expect(warnsOnUnload()).toBe(false);
   });
   it('does not block opening a separate tab or modified link clicks',async()=>{
     await mount();change('面板密码','synthetic-private-input');
-    const link=screen.getByRole('link',{name:'模型路由编辑器'});
+    const link=screen.getByRole('link',{name:'旧配置页：存储预览与切换'});
     expect(clickLink(link,{ctrlKey:true})).toBe(false);
     link.setAttribute('target','_blank');expect(clickLink(link)).toBe(false);
     expect(screen.queryByRole('alertdialog')).toBeNull();expect(warnsOnUnload()).toBe(true);
   });
   it('closes the exit portal and removes secret-only guards on session change',async()=>{
     const view=await mount();change('面板密码','synthetic-private-input');
-    act(()=>{clickLink(screen.getByRole('link',{name:'模型路由编辑器'}));});
+    act(()=>{clickLink(screen.getByRole('link',{name:'旧配置页：存储预览与切换'}));});
     await screen.findByRole('alertdialog');
     act(()=>{mocks.auth={...mocks.auth,authenticated:false,sessionEpoch:2};mocks.cleanups.forEach(fn=>fn());view.rerender(<SettingsPage/>);});
     expect(screen.queryByRole('alertdialog')).toBeNull();expect(screen.getByLabelText('面板密码')).toHaveValue('');
