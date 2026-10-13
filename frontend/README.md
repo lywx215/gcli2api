@@ -1,6 +1,6 @@
-# Frontend foundation
+# Antigravity frontend
 
-This branch provides the independent Antigravity console foundation. Every route currently lazy-loads `app/PlaceholderPage`; it does not implement a business page or change the legacy panel. Integration replaces the loader with each default `pages/<name>/index.tsx` export (`overview`, `credentials`, `import`, `settings`, `logs`). Do not put page implementation in App.
+The console provides five independently lazy-loaded pages: overview, credentials, import, settings and logs. Each default export lives in its own `pages/<name>/index.tsx`; App only assembles authentication, navigation and loading boundaries. The existing panel and model-routing editor remain available at their original entries.
 
 ## Run and verify
 
@@ -30,7 +30,7 @@ The service base is a same-origin absolute URL or origin-relative path ending `/
 import { requestJson, requestBlob, createServiceUrl, ApiError } from '@/api/client'
 // Illustrative types: each page owns the real response validator and business semantics.
 const result = await requestJson<unknown>('creds/status', {
-  query: { mode: 'antigravity', page: 1 }, signal: controller.signal,
+  query: { mode: 'antigravity', offset: 0, limit: 20 }, signal: controller.signal,
 })
 const { blob, response } = await requestBlob('logs/download')
 const filenameHeader = response.headers.get('content-disposition')
@@ -55,7 +55,7 @@ Login calls `auth/login` with `{password}` and requires a nonempty token, reject
 
 Only the existing FastAPI panel dependency's exact detail-only errors (`密码错误`, `Not authenticated`, `Invalid authentication credentials`) on 401/403 invalidate the session. Upstream quota provenance, other business payloads, unknown 401/403, and login failures remain ApiError without logout. This deliberately favors not misclassifying upstream errors; changing backend auth payloads requires an explicit contract update/test.
 
-The navigation Sheet closes on auth/epoch change (including its body Portal). Page owners must likewise close their transient Dialog/Sheet portals on session changes. The shell keeps visited pages mounted but hidden/inert while reauthenticating so page-owned memory drafts can survive. Pages MUST watch `authenticated` and `sessionEpoch` to clear protected read data, selections and sensitive inputs, release polling/WS, and mark drafts as needing reauthentication. After login, never replay writes or silently overwrite drafts with a GET. Pages own per-request sequence checks and draft persistence across route changes. The foundation does not cache API data. Render boundaries provide explicit reload on chunk failures, with unsaved-content warning; never auto-reload.
+The navigation Sheet closes on auth/epoch change (including its body Portal). Page owners must likewise close their transient Dialog/Sheet portals on session changes. The shell keeps the current page mounted but hidden/inert while reauthenticating so page-owned memory drafts can survive. Pages MUST watch `authenticated` and `sessionEpoch` to clear protected read data, selections and sensitive inputs, release polling/WS, and mark drafts as needing reauthentication. After login, never replay writes or silently overwrite drafts with a GET. Pages own per-request sequence checks and draft persistence across route changes. The foundation does not cache API data. Render boundaries provide explicit reload on chunk failures, with unsaved-content warning; never auto-reload.
 
 `@/domain/shared` exports `cn`, `Query`, `QueryValue`. `@/app/routes` exports `routes`, `RouteId`, `routeFromHash`, `useRoute`. `@/components/layout/*` exports `Sidebar`, `Header`, `AppShell`. `@/app/fixtures` exports `registerFixtureHandler` and `fixtureFetch` only for DEV fixture registration; handlers return 404 to defer. Import it only behind `import.meta.env.DEV && import.meta.env.VITE_UI_FIXTURES === 'true'`. Production eliminates the fixture dynamic import; verify with `npm run check:build` even when VITE_UI_FIXTURES=true is set for a production build.
 
@@ -93,6 +93,6 @@ Official setup: https://ui.shadcn.com/docs/installation/vite and https://ui.shad
 
 ## Scope and validation
 
-66 synthetic Vitest/RTL tests cover service roots and malicious paths, request encodings, structured and non-JSON failures, upstream-vs-panel authentication, stale body/session races, no retry, fixture fail-closed behavior, restricted storage, cross-tab changes, concurrent login, and login/navigation/logout. Typecheck/build pass. Build check enforces hashed independent CSS/JS, a manifest dynamic entry, both meta injection markers, and no DEV fixture strings. No production, OAuth, model, real credential/database, Python service, deployment, full backend or cross-browser verification is implied. The foundation changes no Management schema/capability; manager action: `no_counterpart_action`.
+66 synthetic Vitest/RTL tests cover service roots and malicious paths, request encodings, structured and non-JSON failures, upstream-vs-panel authentication, stale body/session races, no retry, fixture fail-closed behavior, restricted storage, cross-tab changes, concurrent login, and login/navigation/logout. Typecheck/build pass. Build check enforces hashed independent CSS/JS, five distinct page entries, complete manifest/resource references, both meta injection markers, and no DEV fixture strings. No production, OAuth, model, real credential/database, Python service, deployment, full backend or cross-browser verification is implied. The foundation changes no Management schema/capability; manager action: `no_counterpart_action`.
 
-The latest frozen shared contract is implemented, including relative asset base and Blob+Response. This task does not edit the coordination contract. Root integration must wire actual page lazy imports, combine deploy owner's ignore/HTML serving changes, and perform final integrated behavior/browser/Legacy gates. Generated ui-dist is a build artifact, not part of this source commit.
+The latest frozen shared contract is implemented, including relative asset base and Blob+Response. This task does not edit the coordination contract. The integrated branch wires actual page lazy imports and Python HTML/asset serving. Delivery evidence and remaining verification limits are recorded in `../docs/ui-redesign/DELIVERY.md`. Generated ui-dist is a build artifact, not part of this source commit.

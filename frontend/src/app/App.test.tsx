@@ -1,20 +1,21 @@
 import { AUTH_STORAGE_KEY, setSessionToken } from "@/auth/session";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 import App from "./App";
 import { routeFromHash } from "./routes";
-it("logs in using only fixtures, navigates lazy placeholders, and logs out", async () => {
+it("logs in using only fixtures, navigates five real lazy pages, and logs out", async () => {
   vi.stubEnv("DEV", true); vi.stubEnv("VITE_UI_FIXTURES", "true");
   const user = userEvent.setup(); render(<App />);
   await user.type(screen.getByLabelText("面板密码"), "synthetic-preview");
   await user.click(screen.getByRole("button", { name: "登录" }));
-  await screen.findByText("此页面正在接入。当前仅提供新版导航与登录，可从侧栏访问现有控制面板。");
+  await within(screen.getByRole("main")).findByRole("heading", { level: 1, name: "概览" });
   expect(screen.getByRole("link", { name: "模型路由" })).toHaveAttribute("href", "http://localhost:3000/model-routing");
-  for (const [id, name] of [["credentials", "凭证"], ["import", "添加凭证"], ["settings", "设置"], ["logs", "日志"], ["overview", "概览"]]) {
+  for (const [id, name, title] of [["credentials", "凭证", "Antigravity 凭证"], ["import", "添加凭证", "导入凭证"], ["settings", "设置", "设置"], ["logs", "日志", "日志"], ["overview", "概览", "概览"]]) {
     await user.click(screen.getByRole("link", { name }));
     await waitFor(() => expect(screen.getByRole("link", { name })).toHaveAttribute("aria-current", "page"));
     expect(location.hash).toBe(`#/${id}`);
+    await within(screen.getByRole("main")).findByRole("heading", { level: 1, name: title });
   }
   await user.click(screen.getByRole("button", { name: "退出登录" }));
   expect(screen.getByLabelText("面板密码")).toHaveValue("");
@@ -49,5 +50,17 @@ it("closes the portalled navigation on cross-tab logout and leaves login operabl
   await user.click(screen.getByRole("button", { name: "登录" }));
   await screen.findByRole("button", { name: "退出登录" });
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("invalid production service metadata gives a safe boundary instead of a blank authenticated shell", async () => {
+  vi.stubEnv("DEV", false);
+  document.head.innerHTML = '<meta name="gcli-service-base" content="https://other.example.invalid/">';
+  setSessionToken("synthetic-session");
+  vi.spyOn(console, "error").mockImplementation(() => undefined);
+  render(<App />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("页面暂时无法加载");
+  expect(screen.getByRole("button", { name: "刷新页面" })).toBeInTheDocument();
+  expect(screen.queryByText("synthetic-session")).not.toBeInTheDocument();
   expect(fetch).not.toHaveBeenCalled();
 });

@@ -76,7 +76,7 @@ HTTP 200 只代表传输成功：各页面端点适配器检查 `success`、单�
   login(password: string): Promise<void>, logout(): void }
 ```
 
-AuthProvider 包裹 Router，内部完成 client 的 token getter 与失效回调接线，不能让 API 模块循环 import React 页面。`login` 复用 `auth/login` 的 `{password}` 请求及 token 响应；token 目前就是面板密码，不宣称独立短时会话或服务端登出。`authenticated` 仅表示本地存在可用 token，最终授权由服务端每次 HTTP 校验决定。
+`auth` 另导出 `registerSessionCleanup(cleanup: () => void): () => void`，注册同步会话清理并返回注销函数；client 用它取消旧代传输，页面可清理内存读缓存、秘密输入、轮询和 WS，非敏感草稿仍由页面持有。AuthProvider 包裹 Router，内部完成 client 的 token getter 与失效回调接线，不能让 API 模块循环 import React 页面。`login` 复用 `auth/login` 的 `{password}` 请求及 token 响应；token 目前就是面板密码，不宣称独立短时会话或服务端登出。`authenticated` 仅表示本地存在可用 token，最终授权由服务端每次 HTTP 校验决定。
 
 持久化只沿用 `gcli2api_auth_token`，localStorage 不可用时回退内存；不持久化其他秘密、配置全文、凭证 JSON 或 OAuth 回调。login 成功、logout 和认证失效必须推进 sessionEpoch。HTTP 401/403 必须区分节点面板认证失败与上游拒绝：AG quota 会把上游状态直接用作 HTTP 状态，具有明确 `response_source`/`upstream_status` 业务来源的错误保留为 ApiError 交页面展示，不注销会话；只有确认属于 panel Bearer 认证失败才触发中央失效回调，不凭状态码一刀切。同一代并发失败幂等处理，旧代请求的 401/403 不得注销刚建立的新会话。登录请求失败只展示登录错误。
 
@@ -103,6 +103,3 @@ fixture 开关严格为 `import.meta.env.DEV && import.meta.env.VITE_UI_FIXTURES
 组件使用 background、foreground、card、muted、border、primary、destructive 等语义 CSS variables；状态色与业务含义分开，必要时定义 success/warning/info token。页面不硬编码品牌色、阴影或固定 Claude 配色。先验收布局、密度、键盘焦点、响应式、loading/empty/error/partial/unknown，再统一主题。图表颜色同样从 tokens 获取。
 
 各 owner 提交可复查源码和相关验证说明；foundation 统一运行类型检查与生产构建并检查 lazy chunks。业务测试使用隔离后端/合成 fixtures，不调用真实模型、OAuth 或生产管理动作。没有实际运行的测试、浏览器或部署检查必须标记未验证。
-
-
-
