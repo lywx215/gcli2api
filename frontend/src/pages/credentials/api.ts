@@ -75,3 +75,9 @@ export function failureMessage(error: unknown, write = false) {
   if (error instanceof ApiError && error.status < 500) return `请求被拒绝（HTTP ${error.status}）。`
   return write ? '连接或服务异常，操作结果未知；请重新读取，勿盲目重试。' : '列表暂不可用，请手动重试。'
 }
+
+/** Failed transport cannot prove a write did not happen; expose only safe adapter text. */
+export function actionFailure(error: unknown, total: number): Outcome {
+  const rejected = error instanceof ApiError && ((error.status >= 400 && error.status < 500) || error.status === 501)
+  return { kind: rejected ? 'rejected' : 'unknown', succeeded: rejected ? 0 : null, failed: rejected ? total : null, total, message: failureMessage(error, true) }
+}

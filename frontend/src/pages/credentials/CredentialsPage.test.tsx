@@ -17,6 +17,89 @@ const startQuota = async () => { fireEvent.click(screen.getByRole('button', { na
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r }); return { promise, resolve } }
 beforeEach(() => { setSessionToken('synthetic-session') })
 describe('credential workspace components', () => {
+  it('logout during an action prevents late completion from entering a new session drawer', async () => {
+    const pending = deferred<Response>()
+    setup(1, url => url.pathname === '/creds/action' ? pending.promise : null)
+    await loaded(); openDetail(); fireEvent.click(screen.getByRole('button', { name: '启用' }))
+    expect(screen.getByRole('status', { name: '凭证操作状态' })).toHaveTextContent('正在执行')
+    act(() => setSessionToken(null))
+    act(() => setSessionToken('replacement-synthetic-session'))
+    await loaded(); openDetail()
+    await act(async () => pending.resolve(Response.json({ message: 'synthetic old success' })))
+    expect(screen.getByRole('status', { name: '凭证操作状态' })).toBeEmptyDOMElement()
+    expect(screen.getByRole('button', { name: '启用' })).toBeEnabled()
+    expect(callsTo('/creds/action')).toHaveLength(1)
+  })
+
+  it('capability withdrawal closes the old drawer and never publishes its late action feedback', async () => {
+    setup(1, url => url.pathname === '/creds/action' ? Promise.resolve(Response.json({ error_code: 'capability_unavailable', capability: CAP.permanent }, { status: 501 })) : null)
+    await loaded(); openDetail(); fireEvent.click(screen.getByRole('button', { name: '永久禁用' })); fireEvent.click(screen.getByRole('button', { name: '确认永久禁用' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await loaded(); openDetail()
+    expect(screen.getByRole('button', { name: '永久禁用' })).toBeDisabled()
+    expect(screen.getByRole('status', { name: '凭证操作状态' })).toBeEmptyDOMElement()
+    expect(callsTo('/creds/action')).toHaveLength(1)
+  })
+  it.each([
+    [{ message: 'synthetic backend success' }, 200, '操作成功'],
+    [{ success: false, message: 'synthetic backend rejection' }, 200, '操作失败'],
+    [{}, 200, '结果未知'],
+    [{ detail: 'private-payload-marker' }, 400, '操作失败'],
+    [{ detail: 'private-payload-marker' }, 503, '结果未知'],
+  ] as const)('shows safe drawer outcome for response %j HTTP%s', async (body, http, label) => {
+    setup(1, url => url.pathname === '/creds/action' ? Promise.resolve(Response.json(body, { status: http })) : null)
+    await loaded(); openDetail()
+    const drawer = within(screen.getByRole('dialog'))
+    fireEvent.click(drawer.getByRole('button', { name: '启用' }))
+    await waitFor(() => expect(drawer.getByRole('status', { name: '凭证操作状态' })).toHaveTextContent(label))
+    expect(drawer.queryByText(/private-payload-marker|synthetic backend/)).not.toBeInTheDocument()
+    expect(callsTo('/creds/action')).toHaveLength(1)
+  })
+
+  it('returns Escape focus to the current row button after refresh replaces the opener', async () => {
+    setup(1, url => url.pathname === '/creds/action' ? Promise.resolve(Response.json({ message: 'synthetic saved' })) : null)
+    await loaded()
+    const oldButton = screen.getAllByRole('button', { name: '详情与操作' })[0]
+    fireEvent.click(oldButton)
+    fireEvent.click(screen.getByRole('button', { name: '启用' }))
+    await waitFor(() => expect(screen.getByRole('status', { name: '凭证操作状态' })).toHaveTextContent('操作成功'))
+    await waitFor(() => expect(document.querySelector('[data-credential-trigger="desktop-detail"]')).not.toBeNull())
+    const currentButton = document.querySelector('[data-credential-trigger="desktop-detail"]')!
+    expect(oldButton.isConnected).toBe(false)
+    expect(currentButton).not.toBe(oldButton)
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    await waitFor(() => expect(document.querySelector('[data-credential-trigger="desktop-detail"]')).toHaveFocus())
+  })
+
+  it('returns focus to the list title when closing during a pending list refresh', async () => {
+    const refresh = deferred<Response>(); let reads = 0
+    setup(1, url => {
+      if (url.pathname === '/creds/status' && ++reads > 1) return refresh.promise
+      return url.pathname === '/creds/action' ? Promise.resolve(Response.json({ message: 'synthetic saved' })) : null
+    })
+    await loaded(); openDetail(); fireEvent.click(screen.getByRole('button', { name: '启用' }))
+    await waitFor(() => expect(screen.getByRole('status', { name: '凭证操作状态' })).toHaveTextContent('操作成功'))
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    const title = await screen.findByRole('heading', { name: 'Antigravity 凭证' })
+    await waitFor(() => expect(title).toHaveFocus())
+    await act(async () => refresh.resolve(Response.json(status())))
+    expect(title).toHaveFocus()
+  })
+
+  it('retains deletion outcome in the drawer and falls back to the list title after closing', async () => {
+    let deleted = false
+    setup(1, url => {
+      if (url.pathname === '/creds/action') { deleted = true; return Promise.resolve(Response.json({ message: 'synthetic deleted' })) }
+      if (url.pathname === '/creds/status' && deleted) return Promise.resolve(Response.json(status(0)))
+      return null
+    })
+    await loaded(); openDetail(); fireEvent.click(screen.getByRole('button', { name: '删除' })); fireEvent.click(screen.getByRole('button', { name: '确认删除' }))
+    await waitFor(() => expect(screen.getByRole('status', { name: '凭证操作状态' })).toHaveTextContent('操作成功'))
+    expect(screen.getByRole('button', { name: '启用' })).toBeDisabled()
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Antigravity 凭证' })).toHaveFocus())
+    expect(document.querySelector('[data-credential-filename]')).toBeNull()
+  })
   it('mobile tools collapse all panels by default and expose keyboard-compatible aria controls', async () => {
     setup(); await loaded()
     const tools = within(screen.getByRole('region', { name: '移动凭证工具' }))
