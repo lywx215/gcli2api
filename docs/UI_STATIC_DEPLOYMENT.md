@@ -21,8 +21,9 @@ npm --prefix frontend run check:build
 ```
 
 `build` 输出仓库根 `ui-dist/`，Vite `base: './'`、`outDir: '../ui-dist'`。
-`check:build` 验证独立哈希 JS/CSS、动态 chunk、相对资源地址、两个 HTML 注入点及
-DEV fixture 未混入生产 JS。生产构建不访问模型 API 或真实凭证，不以 API 失败回退 fixture。
+`check:build` 验证 overview、credentials、import、settings、logs、model-routing 六个独立页面
+chunk，以及哈希 JS/CSS、完整 manifest 引用、相对资源地址、两个 HTML 注入点和生产产物无 DEV fixture。
+生产构建不访问模型 API 或真实凭证，不以 API 失败回退 fixture。
 不要使用历史安装/更新脚本中的 reset、清理凭证或覆盖本地配置步骤来构建 UI。
 
 构建结束后，在同一版本源码的 Python 环境中安装 `requirements.txt`，再按现有配置

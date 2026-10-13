@@ -88,16 +88,37 @@ lifespan，不调用模型、OAuth、凭证或生产 API；产物与 node_module
 `node:22-bookworm-slim` 保持原样。实际镜像 Node/npm 版本、digest、拉取可用性及 Linux
 依赖安装仍未验证；未来实际构建应确认 Node 22 至少 22.22.2，不把本机结果当作镜像证据。
 
+## 六页冻结确认包（2026-10-13）
+
+新的产品源码冻结于 `c2c7ed6457c2a152e2eb23cd2d3f35788c216ca9`，来自
+`codex/ui-confirmed-integration`。上述 419873f/fe99b43 的五页记录保持原时点的历史证据，
+不能改写为六页结果，也不替代本小节。
+
+该提交的 Git archive 在独立附件目录构建，671 个 tracked 文件构建后逐字节未变。
+Windows/amd64、Node 24.19.0、npm 11.17.0，以 `NODE_ENV=production`、
+`VITE_UI_FIXTURES=true` 执行 typecheck、build、check:build 均为 exit 0；产物为
+13 个哈希 JS、1 个 CSS、六页独立 chunk，全部约定 fixture 标识为 0。
+
+ZIP `gcli2api-ui-dist-c2c7ed6457c2.zip` 的 SHA256 为
+`553c9c41a5e2f10a3f7dc2315f9dfcad66b3dbbad80da0b6374ecf26f5ce3488`；产物继续绑定 c2c7ed6，
+本次仅更新文档，不重新构建或改写 ZIP/metadata 的来源 SHA。
+主窗口的 `model-routing-hosting.json` 对同一真实 dist 记录内存 ASGI 验证通过：六页 chunk、
+全部 14 个 JS/CSS assets、meta/CSP/no-store、MIME/immutable、私有文件 404、query 307，
+以及旧根、旧 `/model-routing` 和 `/front` JS 的 200。真实 lifespan、后端 API 和数据库未运行。
+
+这些是本机静态构建及隔离 ASGI 证据。**Docker build、容器 smoke、Linux 镜像与部署仍未执行、未验证**。
+下方未来 smoke 例子现列出六页，包含 model-routing；此文档修正不表示例子已经运行。
+
 ## 后续完整构建命令（全部尚未执行）
 
 仅在之后允许实际 Docker 验证、且环境可用时执行；当前禁止运行，不包含启动引擎或环境绕行。
-以下 PowerShell 一次解析 `codex/ui-redesign` 为完整 SHA，然后固定该 SHA 创建 Git archive，
+以下 PowerShell 将已确认的六页产品提交解析为完整 SHA，然后固定该 SHA 创建 Git archive，
 不复制工作树真实配置。先确认主分支已集成 engines 修正，再运行；命令会检查归档 manifest
 的范围并记录完整 SHA，防止拿未集成版本代替验收。
 
 ```powershell
-$repo = 'C:/Users/lywx2/.codex/worktrees/ui-redesign/gcli2api'
-$revision = (git -C $repo rev-parse --verify 'codex/ui-redesign^{commit}').Trim()
+$repo = 'C:/Users/lywx2/.codex/worktrees/ui-confirmed-integration/gcli2api'
+$revision = (git -C $repo rev-parse --verify 'c2c7ed6457c2a152e2eb23cd2d3f35788c216ca9^{commit}').Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve integration commit' }
 Write-Output "Frozen source revision: $revision"
 $validationRoot = Join-Path ([IO.Path]::GetTempPath()) ('gcli-ui-docker-' + [guid]::NewGuid().ToString('N'))
@@ -114,7 +135,7 @@ $image = 'gcli2api:ui-verify-' + $revision.Substring(0,12)
 $builderImage = 'gcli2api:ui-builder-verify-' + $revision.Substring(0,12)
 $iidFile = Join-Path $validationRoot 'image-id.txt'
 docker version
-docker build --pull --progress=plain --platform linux/amd64 --build-arg "REVISION=$revision" --build-arg SOURCE_REF=codex/ui-redesign --tag $image --iidfile $iidFile $context 2>&1 | Tee-Object (Join-Path $validationRoot 'build.log')
+docker build --pull --progress=plain --platform linux/amd64 --build-arg "REVISION=$revision" --build-arg SOURCE_REF=codex/ui-confirmed-integration --tag $image --iidfile $iidFile $context 2>&1 | Tee-Object (Join-Path $validationRoot 'build.log')
 if ($LASTEXITCODE -ne 0) { throw 'Build failed; preserve actual log, do not run smoke' }
 docker image inspect --format '{{.Id}} {{.Os}}/{{.Architecture}} {{json .RepoDigests}}' $image
 if ($LASTEXITCODE -ne 0) { throw 'Image inspect failed' }
@@ -126,7 +147,7 @@ docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-
 if ($LASTEXITCODE -ne 0) { throw 'npm version check failed' }
 ```
 
-记录完整 build 日志中的 npm ci/typecheck/Vite/五页分块校验和最终镜像导出成功信息、
+记录完整 build 日志中的 npm ci/typecheck/Vite/六页分块校验和最终镜像导出成功信息、
 实际 Node/npm 版本、基础镜像 digest、最终镜像 ID 及 OS/architecture。
 本地镜像 RepoDigests 为空不等于构建失败。不要把不同版本或未实际执行的结果记为通过。
 
@@ -174,9 +195,9 @@ async def main():
         assert redirect.status_code == 307
         assert redirect.headers["location"] == "/ui/?fixture=1"
         manifest = json.loads(Path("/app/ui-dist/.vite/manifest.json").read_text())
-        pages = [manifest[f"src/pages/{name}/index.tsx"] for name in ("overview", "credentials", "import", "settings", "logs")]
+        pages = [manifest[f"src/pages/{name}/index.tsx"] for name in ("overview", "credentials", "import", "settings", "logs", "model-routing")]
         assert all(page["isDynamicEntry"] for page in pages)
-        assert len({page["file"] for page in pages}) == 5
+        assert len({page["file"] for page in pages}) == 6
         files = {item["file"] for item in manifest.values()}
         files.update(file for item in manifest.values() for file in item.get("css", []))
         for file in sorted(files):
@@ -190,7 +211,7 @@ async def main():
         for path in ("/ui/index.html", "/ui/.vite/manifest.json", "/ui/assets/missing.js"):
             assert (await client.get(path)).status_code == 404, path
     assert not any(synthetic.iterdir())
-    print(json.dumps({"result": "passed", "python": platform.python_version(), "machine": platform.machine(), "asset_count": len(files), "independent_pages": 5, "node_present": False, "lifespan": "not run"}))
+    print(json.dumps({"result": "passed", "python": platform.python_version(), "machine": platform.machine(), "asset_count": len(files), "independent_pages": 6, "node_present": False, "lifespan": "not run"}))
 asyncio.run(main())
 '@
 $smoke | docker run --rm -i --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,size=16m --cap-drop ALL --security-opt no-new-privileges --user 65534:65534 --env ENABLE_LOG=0 --env CREDENTIALS_DIR=/tmp/ui-smoke-credentials --entrypoint python $image - 2>&1 | Tee-Object (Join-Path $validationRoot 'smoke.log')
