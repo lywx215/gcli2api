@@ -50,8 +50,8 @@ async def login(request: LoginRequest):
     except HTTPException:
         raise
     except Exception as e:
-        log.error(f"登录失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error("登录失败")
+        raise HTTPException(status_code=500, detail="认证操作失败，请重试")
 
 
 @router.post("/start")
@@ -84,8 +84,8 @@ async def start_auth(request: AuthStartRequest, token: str = Depends(verify_pane
     except HTTPException:
         raise
     except Exception as e:
-        log.error(f"开始认证流程失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error("开始认证流程失败")
+        raise HTTPException(status_code=500, detail="认证操作失败，请重试")
 
 
 @router.post("/callback")
@@ -137,8 +137,8 @@ async def auth_callback(request: AuthCallbackRequest, token: str = Depends(verif
     except HTTPException:
         raise
     except Exception as e:
-        log.error(f"处理认证回调失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error("处理认证回调失败")
+        raise HTTPException(status_code=500, detail="认证操作失败，请重试")
 
 
 @router.post("/callback-url")
@@ -151,7 +151,7 @@ async def auth_callback_url(request: AuthCallbackUrlRequest, token: str = Depend
 
         # 从回调URL完成认证
         result = await complete_auth_flow_from_callback_url(
-            request.callback_url, request.project_id, mode=request.mode
+            request.callback_url, request.project_id, mode=request.mode, user_session=token
         )
 
         if result["success"]:
@@ -187,20 +187,20 @@ async def auth_callback_url(request: AuthCallbackUrlRequest, token: str = Depend
     except HTTPException:
         raise
     except Exception as e:
-        log.error(f"从回调URL处理认证失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error("从回调URL处理认证失败")
+        raise HTTPException(status_code=500, detail="认证操作失败，请重试")
 
 
 @router.get("/status/{project_id}")
-async def check_auth_status(project_id: str, token: str = Depends(verify_panel_token)):
+async def check_auth_status(project_id: str, token: str = Depends(verify_panel_token), mode: str = "geminicli"):
     """检查认证状态"""
     try:
         if not project_id:
             raise HTTPException(status_code=400, detail="Project ID 不能为空")
 
-        status = get_auth_status(project_id)
+        status = get_auth_status(project_id, user_session=token, mode=mode)
         return JSONResponse(content=status)
 
     except Exception as e:
-        log.error(f"检查认证状态失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error("检查认证状态失败")
+        raise HTTPException(status_code=500, detail="认证操作失败，请重试")

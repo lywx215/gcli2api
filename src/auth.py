@@ -6,7 +6,9 @@ import asyncio
 import socket
 import threading
 import time
-import uuid
+import hashlib
+import hmac
+import secrets
 from datetime import timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, Optional
@@ -104,78 +106,88 @@ def _prepare_credentials_data(credentials: Credentials, project_id: str, mode: s
     return creds_data
 
 
-def _cleanup_auth_flow_server(state: str):
-    """清理认证流程的服务器资源"""
-    if state in auth_flows:
-        flow_data_to_clean = auth_flows[state]
-        try:
-            if flow_data_to_clean.get("server"):
-                server = flow_data_to_clean["server"]
-                port = flow_data_to_clean.get("callback_port")
-                async_shutdown_server(server, port)
-        except Exception as e:
-            log.debug(f"关闭服务器时出错: {e}")
-        del auth_flows[state]
-
-
-class _OAuthLibPatcher:
-    """oauthlib参数验证补丁的上下文管理器"""
-    def __init__(self):
-        import oauthlib.oauth2.rfc6749.parameters
-        self.module = oauthlib.oauth2.rfc6749.parameters
-        self.original_validate = None
-
-    def __enter__(self):
-        self.original_validate = self.module.validate_token_parameters
-
-        def patched_validate(params):
-            try:
-                return self.original_validate(params)
-            except Warning:
-                pass
-
-        self.module.validate_token_parameters = patched_validate
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.original_validate:
-            self.module.validate_token_parameters = self.original_validate
-
-
-# 全局状态管理 - 严格限制大小
-auth_flows = {}  # 存储进行中的认证流程
-MAX_AUTH_FLOWS = 20  # 严格限制最大认证流程数
+# Process-local ownership and expiry; panel tokens are never stored in flow state.
+auth_flows = {}
+MAX_AUTH_FLOWS = 20
+AUTH_FLOW_TTL = 600
 DEFAULT_PROJECT_ID = "gemini-pro-1751713012-07fc4dfd"
+_SESSION_SECRET = secrets.token_bytes(32)
+_flows_lock = threading.RLock()
+_FLOW_ERROR = "认证流程无效或已过期，请重新获取认证链接"
+_COMPLETE_ERROR = "认证未完成，请重新获取认证链接"
+
+
+def _session_key(user_session):
+    if not isinstance(user_session, str) or not user_session:
+        return None
+    return hmac.new(_SESSION_SECRET, user_session.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _live_flow(state, data):
+    return (
+        auth_flows.get(state) is data
+        # TTL gates entry into persistence. Once accepted, let that single
+        # commit finish before replacement/expiry can invalidate its result.
+        and (data.get("persisting") or 0 <= time.time() - data["created_at"] < AUTH_FLOW_TTL)
+    )
+
+
+def _cleanup_auth_flow_server(state):
+    with _flows_lock:
+        data = auth_flows.pop(state, None)
+    if data and data.get("server"):
+        try:
+            async_shutdown_server(data["server"], data.get("callback_port"))
+        except Exception:
+            log.warning("OAuth回调服务器清理失败")
+
+
+def cleanup_expired_flows():
+    with _flows_lock:
+        for state, data in list(auth_flows.items()):
+            if not _live_flow(state, data):
+                _cleanup_auth_flow_server(state)
 
 
 def cleanup_auth_flows_for_memory():
-    """清理认证流程以释放内存"""
-    global auth_flows
-    cleanup_expired_flows()
-    # 如果还是太多，强制清理一些旧的流程
-    if len(auth_flows) > 10:
-        # 按创建时间排序，保留最新的10个
-        sorted_flows = sorted(
-            auth_flows.items(), key=lambda x: x[1].get("created_at", 0), reverse=True
+    with _flows_lock:
+        cleanup_expired_flows()
+        oldest = sorted(
+            (state for state, data in auth_flows.items() if not data.get("persisting")),
+            key=lambda state: auth_flows[state]["created_at"],
         )
-        new_auth_flows = dict(sorted_flows[:10])
+        for state in oldest[:max(0, len(auth_flows) - 10)]:
+            _cleanup_auth_flow_server(state)
+        return len(auth_flows)
 
-        # 清理被移除的流程
-        for state, flow_data in auth_flows.items():
-            if state not in new_auth_flows:
-                try:
-                    if flow_data.get("server"):
-                        server = flow_data["server"]
-                        port = flow_data.get("callback_port")
-                        async_shutdown_server(server, port)
-                except Exception:
-                    pass
-                flow_data.clear()
 
-        auth_flows = new_auth_flows
-        log.info(f"强制清理认证流程，保留 {len(auth_flows)} 个最新流程")
+def _select_auth_flow(user_session, mode, state=None, project_id=None):
+    owner = _session_key(user_session)
+    with _flows_lock:
+        cleanup_expired_flows()
+        if owner is None or mode not in ("geminicli", "antigravity"):
+            return None, None
+        candidates = [(state, auth_flows.get(state))] if state else list(auth_flows.items())
+        for candidate, data in candidates:
+            if (data and data.get("session_key") == owner and data.get("mode") == mode
+                    and _live_flow(candidate, data)
+                    and (not project_id or data.get("project_id") == project_id
+                         or data.get("auto_project_detection"))):
+                return candidate, data
+    return None, None
 
-    return len(auth_flows)
+
+def _accept_callback(state, code, callback_port):
+    with _flows_lock:
+        cleanup_expired_flows()
+        data = auth_flows.get(state)
+        if (not data or not code or not _live_flow(state, data)
+                or data.get("callback_port") != callback_port
+                or data.get("exchange_started") or data.get("code")):
+            return False
+        data["code"] = code
+        data["completed"] = True
+        return True
 
 
 async def find_available_port(start_port: int = None) -> int:
@@ -202,7 +214,7 @@ async def find_available_port(start_port: int = None) -> int:
             log.info(f"系统分配可用端口: {port}")
             return port
     except OSError as e:
-        log.error(f"无法找到可用端口: {e}")
+        log.error("OAuth操作失败")
         raise RuntimeError("无法找到可用端口")
 
 
@@ -220,7 +232,7 @@ def create_callback_server(port: int) -> HTTPServer:
         log.info(f"创建OAuth回调服务器，监听端口: {port}")
         return server
     except OSError as e:
-        log.error(f"创建端口{port}的服务器失败: {e}")
+        log.error("OAuth操作失败")
         raise
 
 
@@ -232,15 +244,8 @@ class AuthCallbackHandler(BaseHTTPRequestHandler):
         code = query_components.get("code", [None])[0]
         state = query_components.get("state", [None])[0]
 
-        log.info(f"收到OAuth回调: code={'已获取' if code else '未获取'}, state={state}")
-
-        if code and state and state in auth_flows:
-            # 更新流程状态
-            auth_flows[state]["code"] = code
-            auth_flows[state]["completed"] = True
-
-            log.info(f"OAuth回调成功处理: state={state}")
-
+        valid = len(query_components.get("state", [])) == 1 and len(query_components.get("code", [])) == 1
+        if valid and _accept_callback(state, code, self.server.server_port):
             self.send_response(200)
             self.send_header("Content-type", "text/html")
             self.end_headers()
@@ -271,750 +276,470 @@ class AuthCallbackHandler(BaseHTTPRequestHandler):
 async def create_auth_url(
     project_id: Optional[str] = None, user_session: str = None, mode: str = "geminicli"
 ) -> Dict[str, Any]:
-    """创建认证URL，支持动态端口分配"""
+    owner = _session_key(user_session)
+    if owner is None or mode not in ("geminicli", "antigravity"):
+        return {"success": False, "error": _FLOW_ERROR}
+    callback_server = None
+    server_started = False
     try:
-        # 动态分配端口
+        # Port lookup may yield; replacement and publication below must not.
         callback_port = await find_available_port()
         callback_url = f"http://{CALLBACK_HOST}:{callback_port}"
-
-        # 立即启动回调服务器
-        try:
-            callback_server = create_callback_server(callback_port)
-            # 在后台线程中运行服务器
-            server_thread = threading.Thread(
-                target=callback_server.serve_forever,
-                daemon=True,
-                name=f"OAuth-Server-{callback_port}",
+        with _flows_lock:
+            cleanup_expired_flows()
+            for old_state, data in list(auth_flows.items()):
+                if data.get("session_key") == owner and data.get("mode") == mode:
+                    if data.get("persisting"):
+                        return {"success": False, "error": "认证正在保存中，请等待当前请求完成"}
+                    _cleanup_auth_flow_server(old_state)
+            while len(auth_flows) >= MAX_AUTH_FLOWS:
+                removable = [key for key, data in auth_flows.items() if not data.get("persisting")]
+                if not removable:
+                    return {"success": False, "error": "认证服务忙，请稍后重试"}
+                _cleanup_auth_flow_server(min(removable, key=lambda key: auth_flows[key]["created_at"]))
+            flow = Flow(
+                client_id=ANTIGRAVITY_CLIENT_ID if mode == "antigravity" else CLIENT_ID,
+                client_secret=ANTIGRAVITY_CLIENT_SECRET if mode == "antigravity" else CLIENT_SECRET,
+                scopes=ANTIGRAVITY_SCOPES if mode == "antigravity" else SCOPES,
+                redirect_uri=callback_url,
             )
+            state = secrets.token_urlsafe(32)
+            auth_url = flow.get_auth_url(state=state)
+            callback_server = create_callback_server(callback_port)
+            server_thread = threading.Thread(target=callback_server.serve_forever, daemon=True)
             server_thread.start()
-            log.info(f"OAuth回调服务器已启动，端口: {callback_port}")
-        except Exception as e:
-            log.error(f"启动回调服务器失败: {e}")
-            return {
-                "success": False,
-                "error": f"无法启动OAuth回调服务器，端口{callback_port}: {str(e)}",
+            server_started = True
+            auth_flows[state] = {
+                "flow": flow, "project_id": project_id, "session_key": owner,
+                "callback_port": callback_port, "callback_url": callback_url,
+                "server": callback_server, "server_thread": server_thread,
+                "code": None, "completed": False, "created_at": time.time(),
+                "auto_project_detection": project_id is None, "mode": mode,
+                "completion_lock": threading.Lock(), "exchange_started": False,
             }
-
-        # 创建OAuth流程
-        # 根据模式选择配置
-        if mode == "antigravity":
-            client_id = ANTIGRAVITY_CLIENT_ID
-            client_secret = ANTIGRAVITY_CLIENT_SECRET
-            scopes = ANTIGRAVITY_SCOPES
-        else:
-            client_id = CLIENT_ID
-            client_secret = CLIENT_SECRET
-            scopes = SCOPES
-
-        flow = Flow(
-            client_id=client_id,
-            client_secret=client_secret,
-            scopes=scopes,
-            redirect_uri=callback_url,
-        )
-
-        # 生成状态标识符，包含用户会话信息
-        if user_session:
-            state = f"{user_session}_{str(uuid.uuid4())}"
-        else:
-            state = str(uuid.uuid4())
-
-        # 生成认证URL
-        auth_url = flow.get_auth_url(state=state)
-
-        # 严格控制认证流程数量 - 超过限制时立即清理最旧的
-        if len(auth_flows) >= MAX_AUTH_FLOWS:
-            # 清理最旧的认证流程
-            oldest_state = min(auth_flows.keys(), key=lambda k: auth_flows[k].get("created_at", 0))
-            try:
-                # 清理服务器资源
-                old_flow = auth_flows[oldest_state]
-                if old_flow.get("server"):
-                    server = old_flow["server"]
-                    port = old_flow.get("callback_port")
-                    async_shutdown_server(server, port)
-            except Exception as e:
-                log.warning(f"Failed to cleanup old auth flow {oldest_state}: {e}")
-
-            del auth_flows[oldest_state]
-            log.debug(f"Removed oldest auth flow: {oldest_state}")
-
-        # 保存流程状态
-        auth_flows[state] = {
-            "flow": flow,
-            "project_id": project_id,  # 可能为None，稍后在回调时确定
-            "user_session": user_session,
-            "callback_port": callback_port,  # 存储分配的端口
-            "callback_url": callback_url,  # 存储完整回调URL
-            "server": callback_server,  # 存储服务器实例
-            "server_thread": server_thread,  # 存储服务器线程
-            "code": None,
-            "completed": False,
-            "created_at": time.time(),
-            "auto_project_detection": project_id is None,  # 标记是否需要自动检测项目ID
-            "mode": mode,  # 凭证模式
-        }
-
-        # 清理过期的流程（30分钟）
-        cleanup_expired_flows()
-
-        log.info(f"OAuth流程已创建: state={state}, project_id={project_id}")
-        log.info(f"用户需要访问认证URL，然后OAuth会回调到 {callback_url}")
-        log.info(f"为此认证流程分配的端口: {callback_port}")
-
+        log.info("OAuth流程已创建")
         return {
-            "auth_url": auth_url,
-            "state": state,
-            "callback_port": callback_port,
-            "success": True,
-            "auto_project_detection": project_id is None,
+            "auth_url": auth_url, "state": state, "callback_port": callback_port,
+            "success": True, "auto_project_detection": project_id is None,
             "detected_project_id": project_id,
         }
-
-    except Exception as e:
-        log.error(f"创建认证URL失败: {e}")
-        return {"success": False, "error": str(e)}
+    except Exception:
+        if callback_server:
+            try:
+                if server_started:
+                    async_shutdown_server(callback_server, callback_port)
+                else:
+                    callback_server.server_close()
+            except Exception:
+                log.warning("OAuth回调服务器清理失败")
+        log.error("创建OAuth流程失败")
+        return {"success": False, "error": "创建OAuth流程失败，请重试"}
 
 
 def wait_for_callback_sync(state: str, timeout: int = 300) -> Optional[str]:
-    """同步等待OAuth回调完成，使用对应流程的专用服务器"""
-    if state not in auth_flows:
-        log.error(f"未找到状态为 {state} 的认证流程")
-        return None
-
-    flow_data = auth_flows[state]
-    callback_port = flow_data["callback_port"]
-
-    # 服务器已经在create_auth_url时启动了，这里只需要等待
-    log.info(f"等待OAuth回调完成，端口: {callback_port}")
-
-    # 等待回调完成
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        if flow_data.get("code"):
-            log.info("OAuth回调成功完成")
-            return flow_data["code"]
-        time.sleep(0.5)  # 每0.5秒检查一次
-
-        # 刷新flow_data引用
-        if state in auth_flows:
-            flow_data = auth_flows[state]
-
-    log.warning(f"等待OAuth回调超时 ({timeout}秒)")
+    started = time.time()
+    while time.time() - started < timeout:
+        with _flows_lock:
+            cleanup_expired_flows()
+            data = auth_flows.get(state)
+            if not data:
+                return None
+            if data.get("code"):
+                return data["code"]
+        time.sleep(0.5)
     return None
 
 
-async def complete_auth_flow(
-    project_id: Optional[str] = None, user_session: str = None
-) -> Dict[str, Any]:
-    """完成认证流程并保存凭证，支持自动检测项目ID"""
-    try:
-        # 查找对应的认证流程
-        state = None
-        flow_data = None
-
-        # 如果指定了project_id，先尝试匹配指定的项目
-        if project_id:
-            for s, data in auth_flows.items():
-                if data["project_id"] == project_id:
-                    # 如果指定了用户会话，优先匹配相同会话的流程
-                    if user_session and data.get("user_session") == user_session:
-                        state = s
-                        flow_data = data
-                        break
-                    # 如果没有指定会话，或没找到匹配会话的流程，使用第一个匹配项目ID的
-                    elif not state:
-                        state = s
-                        flow_data = data
-
-        # 如果没有指定项目ID或没找到匹配的，查找需要自动检测项目ID的流程
-        if not state:
-            for s, data in auth_flows.items():
-                if data.get("auto_project_detection", False):
-                    # 如果指定了用户会话，优先匹配相同会话的流程
-                    if user_session and data.get("user_session") == user_session:
-                        state = s
-                        flow_data = data
-                        break
-                    # 使用第一个找到的需要自动检测的流程
-                    elif not state:
-                        state = s
-                        flow_data = data
-
-        if not state or not flow_data:
-            return {"success": False, "error": "未找到对应的认证流程，请先点击获取认证链接"}
-
-        if not project_id:
-            project_id = flow_data.get("project_id")
-            if not project_id:
-                project_id = DEFAULT_PROJECT_ID
-                log.warning(f"未获取到project_id，使用默认project_id: {project_id}")
-
-        flow = flow_data["flow"]
-
-        # 如果还没有授权码，需要等待回调
-        if not flow_data.get("code"):
-            log.info(f"等待用户完成OAuth授权 (state: {state})")
-            auth_code = wait_for_callback_sync(state)
-
-            if not auth_code:
-                return {
-                    "success": False,
-                    "error": "未接收到授权回调，请确保完成了浏览器中的OAuth认证",
-                }
-
-            # 更新流程数据
-            auth_flows[state]["code"] = auth_code
-            auth_flows[state]["completed"] = True
-        else:
-            auth_code = flow_data["code"]
-
-        # 使用认证代码获取凭证
-        with _OAuthLibPatcher():
-            try:
-                credentials = await flow.exchange_code(auth_code)
-                # credentials 已经在 exchange_code 中获得
-                subscription_tier = None
-
-                # 如果需要自动检测项目ID且没有提供项目ID
-                if flow_data.get("auto_project_detection", False) and not project_id:
-                    log.info("尝试通过API获取用户项目列表...")
-                    log.info(f"使用的token: {credentials.access_token[:20]}...")
-                    log.info(f"Token过期时间: {credentials.expires_at}")
-                    user_projects = await get_user_projects(credentials)
-
-                    if user_projects:
-                        # 如果只有一个项目，自动使用
-                        if len(user_projects) == 1:
-                            # Google API returns projectId in camelCase
-                            project_id = user_projects[0].get("projectId")
-                            if project_id:
-                                flow_data["project_id"] = project_id
-                                log.info(f"自动选择唯一项目: {project_id}")
-                        # 如果有多个项目，尝试选择默认项目
-                        else:
-                            project_id = await select_default_project(user_projects)
-                            if project_id:
-                                flow_data["project_id"] = project_id
-                                log.info(f"自动选择默认项目: {project_id}")
-                            else:
-                                # 返回项目列表让用户选择
-                                return {
-                                    "success": False,
-                                    "error": "请从以下项目中选择一个",
-                                    "requires_project_selection": True,
-                                    "available_projects": [
-                                        {
-                                            # Google API returns projectId in camelCase
-                                            "project_id": p.get("projectId"),
-                                            "name": p.get("displayName") or p.get("projectId"),
-                                            "projectNumber": p.get("projectNumber"),
-                                        }
-                                        for p in user_projects
-                                    ],
-                                }
-                    else:
-                        # 如果无法获取项目列表，使用默认project_id
-                        project_id = DEFAULT_PROJECT_ID
-                        flow_data["project_id"] = project_id
-                        log.warning(f"无法获取项目列表，使用默认project_id: {project_id}")
-
-                # 如果仍然没有项目ID，返回错误
-                if not project_id:
-                    project_id = DEFAULT_PROJECT_ID
-                    flow_data["project_id"] = project_id
-                    log.warning(f"仍未获取到project_id，使用默认project_id: {project_id}")
-
-                # 保存凭证
-                subscription_info = await _detect_geminicli_subscription(
-                    credentials, project_id
-                )
-                subscription_tier = subscription_info.tier
-                saved_filename = await save_credentials(
-                    credentials, project_id, subscription_tier=subscription_tier,
-                    subscription_info=subscription_info,
-                )
-
-                # 准备返回的凭证数据
-                creds_data = _prepare_credentials_data(credentials, project_id, mode="geminicli", subscription_tier=subscription_tier)
-
-                # 清理使用过的流程
-                _cleanup_auth_flow_server(state)
-
-                log.info("OAuth认证成功，凭证已保存")
-                return {
-                    "success": True,
-                    "credentials": creds_data,
-                    "file_path": saved_filename,
-                    "auto_detected_project": flow_data.get("auto_project_detection", False),
-                    **_subscription_response_fields(subscription_info),
-                }
-
-            except Exception as e:
-                log.error(f"获取凭证失败: {e}")
-                return {"success": False, "error": f"获取凭证失败: {str(e)}"}
-
-    except Exception as e:
-        log.error(f"完成认证流程失败: {e}")
-        return {"success": False, "error": str(e)}
+async def complete_auth_flow(project_id=None, user_session=None, mode="geminicli"):
+    return await asyncio_complete_auth_flow(project_id, user_session, mode)
 
 
-async def asyncio_complete_auth_flow(
-    project_id: Optional[str] = None, user_session: str = None, mode: str = "geminicli"
-) -> Dict[str, Any]:
-    """异步完成认证流程，支持自动检测项目ID"""
-    try:
-        log.info(
-            f"asyncio_complete_auth_flow开始执行: project_id={project_id}, user_session={user_session}"
-        )
-
-        # 查找对应的认证流程
-        state = None
-        flow_data = None
-
-        log.debug(f"当前所有auth_flows: {list(auth_flows.keys())}")
-
-        # 如果指定了project_id，先尝试匹配指定的项目
-        if project_id:
-            log.info(f"尝试匹配指定的项目ID: {project_id}")
-            for s, data in auth_flows.items():
-                if data["project_id"] == project_id:
-                    # 如果指定了用户会话，优先匹配相同会话的流程
-                    if user_session and data.get("user_session") == user_session:
-                        state = s
-                        flow_data = data
-                        log.info(f"找到匹配的用户会话: {s}")
-                        break
-                    # 如果没有指定会话，或没找到匹配会话的流程，使用第一个匹配项目ID的
-                    elif not state:
-                        state = s
-                        flow_data = data
-                        log.info(f"找到匹配的项目ID: {s}")
-
-        # 如果没有指定项目ID或没找到匹配的，查找需要自动检测项目ID的流程
-        if not state:
-            log.info("没有找到指定项目的流程，查找自动检测流程")
-            # 首先尝试找到已完成的流程（有授权码的）
-            completed_flows = []
-            for s, data in auth_flows.items():
-                if data.get("auto_project_detection", False):
-                    if user_session and data.get("user_session") == user_session:
-                        if data.get("code"):  # 优先选择已完成的
-                            completed_flows.append((s, data, data.get("created_at", 0)))
-
-            # 如果有已完成的流程，选择最新的
-            if completed_flows:
-                completed_flows.sort(key=lambda x: x[2], reverse=True)  # 按时间倒序
-                state, flow_data, _ = completed_flows[0]
-                log.info(f"找到已完成的最新认证流程: {state}")
-            else:
-                # 如果没有已完成的，找最新的未完成流程
-                pending_flows = []
-                for s, data in auth_flows.items():
-                    if data.get("auto_project_detection", False):
-                        if user_session and data.get("user_session") == user_session:
-                            pending_flows.append((s, data, data.get("created_at", 0)))
-                        elif not user_session:
-                            pending_flows.append((s, data, data.get("created_at", 0)))
-
-                if pending_flows:
-                    pending_flows.sort(key=lambda x: x[2], reverse=True)  # 按时间倒序
-                    state, flow_data, _ = pending_flows[0]
-                    log.info(f"找到最新的待完成认证流程: {state}")
-
-        if not state or not flow_data:
-            log.error(f"未找到认证流程: state={state}, flow_data存在={bool(flow_data)}")
-            log.debug(f"当前所有flow_data: {list(auth_flows.keys())}")
-            return {"success": False, "error": "未找到对应的认证流程，请先点击获取认证链接"}
-
-        log.info(f"找到认证流程: state={state}")
-        log.info(
-            f"flow_data内容: project_id={flow_data.get('project_id')}, auto_project_detection={flow_data.get('auto_project_detection')}"
-        )
-        log.info(f"传入的project_id参数: {project_id}")
-
-        # 如果需要自动检测项目ID且没有提供项目ID
-        log.info(
-            f"检查auto_project_detection条件: auto_project_detection={flow_data.get('auto_project_detection', False)}, not project_id={not project_id}"
-        )
-        if flow_data.get("auto_project_detection", False) and not project_id:
-            log.info("跳过自动检测项目ID，进入等待阶段")
-        elif not project_id:
-            log.info("进入project_id检查分支")
-            project_id = flow_data.get("project_id")
-            if not project_id:
-                project_id = DEFAULT_PROJECT_ID
-                flow_data["project_id"] = project_id
-                log.warning(f"缺少项目ID，使用默认project_id: {project_id}")
-        else:
-            log.info(f"使用提供的项目ID: {project_id}")
-
-        # 检查是否已经有授权码
-        log.info("开始检查OAuth授权码...")
-        log.info(f"等待state={state}的授权回调，回调端口: {flow_data.get('callback_port')}")
-        log.info(f"当前flow_data状态: completed={flow_data.get('completed')}, code存在={bool(flow_data.get('code'))}")
-        max_wait_time = 60  # 最多等待60秒
-        wait_interval = 1  # 每秒检查一次
-        waited = 0
-
-        while waited < max_wait_time:
-            if flow_data.get("code"):
-                log.info(f"检测到OAuth授权码，开始处理凭证 (等待时间: {waited}秒)")
-                break
-
-            # 每5秒输出一次提示
-            if waited % 5 == 0 and waited > 0:
-                log.info(f"仍在等待OAuth授权... ({waited}/{max_wait_time}秒)")
-                log.debug(f"当前state: {state}, flow_data keys: {list(flow_data.keys())}")
-
-            # 异步等待
-            await asyncio.sleep(wait_interval)
-            waited += wait_interval
-
-            # 刷新flow_data引用，因为可能被回调更新了
-            if state in auth_flows:
-                flow_data = auth_flows[state]
-
-        if not flow_data.get("code"):
-            log.error(f"等待OAuth回调超时，等待了{waited}秒")
-            return {
-                "success": False,
-                "error": "等待OAuth回调超时，请确保完成了浏览器中的认证并看到成功页面",
-            }
-
-        flow = flow_data["flow"]
-        auth_code = flow_data["code"]
-
-        log.info(f"开始使用授权码获取凭证: code={'***' + auth_code[-4:] if auth_code else 'None'}")
-
-        # 使用认证代码获取凭证
-        with _OAuthLibPatcher():
-            try:
-                log.info("调用flow.exchange_code...")
-                credentials = await flow.exchange_code(auth_code)
-                log.info(
-                    f"成功获取凭证，token前缀: {credentials.access_token[:20] if credentials.access_token else 'None'}..."
-                )
-
-                log.info(
-                    f"检查是否需要项目检测: auto_project_detection={flow_data.get('auto_project_detection')}, project_id={project_id}"
-                )
-
-                # 检查凭证模式
-                cred_mode = flow_data.get("mode", "geminicli") if flow_data.get("mode") else mode
-                if cred_mode == "antigravity":
-                    log.info("Antigravity模式：从API获取project_id...")
-                    # 使用API获取project_id
-                    antigravity_url = await get_antigravity_api_url()
-                    project_id, subscription_tier = await fetch_project_id_and_tier(
-                        credentials.access_token,
-                        ANTIGRAVITY_USER_AGENT,
-                        antigravity_url
-                    )
-                    if project_id:
-                        log.info(f"成功从API获取project_id: {project_id}, tier: {subscription_tier}")
-                    else:
-                        project_id = DEFAULT_PROJECT_ID
-                        log.warning(f"无法从API获取project_id，使用默认project_id: {project_id}")
-
-                    # 保存antigravity凭证
-                    email_result = {}
-                    saved_filename = await save_credentials(credentials, project_id, mode="antigravity", subscription_tier=subscription_tier, email_result=email_result)
-
-                    # 准备返回的凭证数据
-                    creds_data = _prepare_credentials_data(credentials, project_id, mode="antigravity", subscription_tier=subscription_tier)
-
-                    # 清理使用过的流程
-                    _cleanup_auth_flow_server(state)
-
-                    log.info("Antigravity OAuth认证成功，凭证已保存")
-                    return {
-                        "success": True,
-                        "credentials": creds_data,
-                        "file_path": saved_filename,
-                        "auto_detected_project": False,
-                        "mode": "antigravity",
-                        **email_result,
-                    }
-
-                # 如果需要自动检测项目ID且没有提供项目ID（标准模式）
-                subscription_tier = None
-                if flow_data.get("auto_project_detection", False) and not project_id:
-                    log.info("标准模式：优先通过 loadCodeAssist 获取企业 project_id...")
-                    try:
-                        code_assist_url = await get_code_assist_endpoint()
-                        detected_project_id, subscription_tier = await fetch_project_id_and_tier(
-                            credentials.access_token,
-                            get_geminicli_user_agent(""),
-                            code_assist_url,
-                        )
-                        if detected_project_id:
-                            project_id = detected_project_id
-                            flow_data["project_id"] = project_id
-                            log.info(f"成功从 loadCodeAssist 获取 project_id: {project_id}, tier: {subscription_tier}")
-                    except Exception as e:
-                        log.warning(f"loadCodeAssist 获取 project_id 失败，回退项目列表: {e}")
-
-                    if not project_id:
-                        log.info("标准模式：通过项目列表获取project_id...")
-                        user_projects = await get_user_projects(credentials)
-
-                        if user_projects:
-                            # 如果只有一个项目，自动使用
-                            if len(user_projects) == 1:
-                                # Google API returns projectId in camelCase
-                                project_id = user_projects[0].get("projectId")
-                                if project_id:
-                                    flow_data["project_id"] = project_id
-                                    log.info(f"自动选择唯一项目: {project_id}")
-                                    # 自动启用必需的API服务
-                                    log.info("正在自动启用必需的API服务...")
-                                    await enable_required_apis(credentials, project_id)
-                            # 如果有多个项目，尝试选择默认项目
-                            else:
-                                project_id = await select_default_project(user_projects)
-                                if project_id:
-                                    flow_data["project_id"] = project_id
-                                    log.info(f"自动选择默认项目: {project_id}")
-                                    # 自动启用必需的API服务
-                                    log.info("正在自动启用必需的API服务...")
-                                    await enable_required_apis(credentials, project_id)
-                                else:
-                                    # 返回项目列表让用户选择
-                                    return {
-                                        "success": False,
-                                        "error": "请从以下项目中选择一个",
-                                        "requires_project_selection": True,
-                                        "available_projects": [
-                                            {
-                                                # Google API returns projectId in camelCase
-                                                "project_id": p.get("projectId"),
-                                                "name": p.get("displayName") or p.get("projectId"),
-                                                "projectNumber": p.get("projectNumber"),
-                                            }
-                                            for p in user_projects
-                                        ],
-                                    }
-                        else:
-                            # 如果无法获取项目列表，使用默认project_id
-                            project_id = DEFAULT_PROJECT_ID
-                            flow_data["project_id"] = project_id
-                            log.warning(f"无法获取项目列表，使用默认project_id: {project_id}")
-                elif project_id:
-                    # 如果已经有项目ID（手动提供或环境检测），也尝试启用API服务
-                    log.info("正在为已提供的项目ID自动启用必需的API服务...")
-                    await enable_required_apis(credentials, project_id)
-
-                # 如果仍然没有项目ID，返回错误
-                if not project_id:
-                    project_id = DEFAULT_PROJECT_ID
-                    flow_data["project_id"] = project_id
-                    log.warning(f"仍未获取到project_id，使用默认project_id: {project_id}")
-
-                # 保存凭证
-                subscription_info = await _detect_geminicli_subscription(
-                    credentials, project_id
-                )
-                subscription_tier = subscription_info.tier
-                saved_filename = await save_credentials(
-                    credentials, project_id, subscription_tier=subscription_tier,
-                    subscription_info=subscription_info,
-                )
-
-                # 准备返回的凭证数据
-                creds_data = _prepare_credentials_data(credentials, project_id, mode="geminicli", subscription_tier=subscription_tier)
-
-                # 清理使用过的流程
-                _cleanup_auth_flow_server(state)
-
-                log.info("OAuth认证成功，凭证已保存")
-                return {
-                    "success": True,
-                    "credentials": creds_data,
-                    "file_path": saved_filename,
-                    "auto_detected_project": flow_data.get("auto_project_detection", False),
-                    **_subscription_response_fields(subscription_info),
-                }
-
-            except Exception as e:
-                log.error(f"获取凭证失败: {e}")
-                return {"success": False, "error": f"获取凭证失败: {str(e)}"}
-
-    except Exception as e:
-        log.error(f"异步完成认证流程失败: {e}")
-        return {"success": False, "error": str(e)}
+async def asyncio_complete_auth_flow(project_id=None, user_session=None, mode="geminicli"):
+    state, data = _select_auth_flow(user_session, mode, project_id=project_id)
+    if data is None:
+        return {"success": False, "error": _FLOW_ERROR}
+    return await _complete_selected_flow(state, data, project_id, mode)
 
 
 async def complete_auth_flow_from_callback_url(
-    callback_url: str, project_id: Optional[str] = None, mode: str = "geminicli"
-) -> Dict[str, Any]:
-    """从回调URL直接完成认证流程，无需启动本地服务器"""
+    callback_url: str, project_id=None, mode="geminicli", user_session=None
+):
     try:
-        log.info(f"开始从回调URL完成认证: {callback_url}")
-
-        # 解析回调URL
-        parsed_url = urlparse(callback_url)
-        query_params = parse_qs(parsed_url.query)
-
-        # 验证必要参数
-        if "state" not in query_params or "code" not in query_params:
+        parsed = urlparse(callback_url)
+        params = parse_qs(parsed.query)
+        if (parsed.scheme not in ("http", "https")
+                or len(params.get("state", [])) != 1 or len(params.get("code", [])) != 1):
             return {"success": False, "error": "回调URL缺少必要参数 (state 或 code)"}
+        state, data = _select_auth_flow(user_session, mode, state=params["state"][0])
+        if data is None:
+            return {"success": False, "error": _FLOW_ERROR}
+        expected = urlparse(data["callback_url"])
+        if (parsed.scheme != expected.scheme or parsed.hostname != expected.hostname
+                or parsed.port != expected.port or (parsed.path or "/") != (expected.path or "/")
+                or parsed.username is not None or parsed.password is not None or parsed.fragment):
+            return {"success": False, "error": _FLOW_ERROR}
+        return await _complete_selected_flow(
+            state, data, project_id, mode, callback_code=params["code"][0]
+        )
+    except Exception:
+        log.error("回调URL认证失败")
+        return {"success": False, "error": _COMPLETE_ERROR}
 
-        state = query_params["state"][0]
-        code = query_params["code"][0]
 
-        log.info(f"从URL解析到: state={state}, code=xxx...")
-
-        # 检查是否有对应的认证流程
-        if state not in auth_flows:
-            return {
-                "success": False,
-                "error": f"未找到对应的认证流程，请先启动认证 (state: {state})",
-            }
-
-        flow_data = auth_flows[state]
-        flow = flow_data["flow"]
-
-        # 构造回调URL（使用flow中存储的redirect_uri）
-        redirect_uri = flow.redirect_uri
-        log.info(f"使用redirect_uri: {redirect_uri}")
-
-        try:
-            # 使用authorization code获取token
-            credentials = await flow.exchange_code(code)
-            log.info("成功获取访问令牌")
-
-            # 检查凭证模式
-            cred_mode = flow_data.get("mode", "geminicli") if flow_data.get("mode") else mode
-            if cred_mode == "antigravity":
-                log.info("Antigravity模式（从回调URL）：从API获取project_id...")
-                # 使用API获取project_id
-                antigravity_url = await get_antigravity_api_url()
-                project_id, subscription_tier = await fetch_project_id_and_tier(
-                    credentials.access_token,
-                    ANTIGRAVITY_USER_AGENT,
-                    antigravity_url
-                )
-                if project_id:
-                    log.info(f"成功从API获取project_id: {project_id}, tier: {subscription_tier}")
-                else:
-                    project_id = DEFAULT_PROJECT_ID
-                    log.warning(f"无法从API获取project_id，使用默认project_id: {project_id}")
-
-                # 保存antigravity凭证
-                email_result = {}
-                saved_filename = await save_credentials(credentials, project_id, mode="antigravity", subscription_tier=subscription_tier, email_result=email_result)
-
-                # 准备返回的凭证数据
-                creds_data = _prepare_credentials_data(credentials, project_id, mode="antigravity", subscription_tier=subscription_tier)
-
-                # 清理使用过的流程
-                _cleanup_auth_flow_server(state)
-
-                log.info("从回调URL完成Antigravity OAuth认证成功，凭证已保存")
-                return {
-                    "success": True,
-                    "credentials": creds_data,
-                    "file_path": saved_filename,
-                    "auto_detected_project": False,
-                    "mode": "antigravity",
-                    **email_result,
-                }
-
-            # 标准模式的项目ID处理逻辑
-            detected_project_id = None
-            auto_detected = False
-            subscription_tier = None
-
-            if not project_id:
-                try:
-                    log.info("标准模式：优先通过 loadCodeAssist 获取project_id...")
-                    code_assist_url = await get_code_assist_endpoint()
-                    detected_project_id, subscription_tier = await fetch_project_id_and_tier(
-                        credentials.access_token,
-                        get_geminicli_user_agent(""),
-                        code_assist_url,
-                    )
-                    if detected_project_id:
-                        auto_detected = True
-                        log.info(f"成功从 loadCodeAssist 获取 project_id: {detected_project_id}, tier: {subscription_tier}")
-                except Exception as e:
-                    log.warning(f"loadCodeAssist 获取 project_id 失败，回退项目列表: {e}")
-
-                if not detected_project_id:
-                    # 通过项目列表获取项目ID
-                    try:
-                        log.info("标准模式：通过项目列表获取project_id...")
-                        projects = await get_user_projects(credentials)
-                        if projects:
-                            if len(projects) == 1:
-                                # 只有一个项目，自动使用
-                                # Google API returns projectId in camelCase
-                                detected_project_id = projects[0]["projectId"]
-                                auto_detected = True
-                                log.info(f"自动检测到唯一项目ID: {detected_project_id}")
-                            else:
-                                # 多个项目，自动选择第一个
-                                # Google API returns projectId in camelCase
-                                detected_project_id = projects[0]["projectId"]
-                                auto_detected = True
-                                log.info(
-                                    f"检测到{len(projects)}个项目，自动选择第一个: {detected_project_id}"
-                                )
-                                log.debug(f"其他可用项目: {[p['projectId'] for p in projects[1:]]}")
-                        else:
-                            # 没有项目访问权限，使用默认project_id
-                            detected_project_id = DEFAULT_PROJECT_ID
-                            auto_detected = False
-                            log.warning(f"未检测到可访问项目，使用默认project_id: {detected_project_id}")
-                    except Exception as e:
-                        log.warning(f"获取项目列表失败: {e}，使用默认project_id")
-                        detected_project_id = DEFAULT_PROJECT_ID
-                        auto_detected = False
-            else:
-                detected_project_id = project_id
-
-            # 启用必需的API服务
-            if detected_project_id:
-                try:
-                    log.info(f"正在为项目 {detected_project_id} 启用必需的API服务...")
-                    await enable_required_apis(credentials, detected_project_id)
-                    
-                except Exception as e:
-                    log.warning(f"启用API服务失败: {e}")
-
-            # 保存凭证
-            subscription_info = await _detect_geminicli_subscription(
-                credentials, detected_project_id
-            )
-            subscription_tier = subscription_info.tier
-            saved_filename = await save_credentials(
-                credentials, detected_project_id, subscription_tier=subscription_tier,
-                subscription_info=subscription_info,
-            )
-
-            # 准备返回的凭证数据
-            creds_data = _prepare_credentials_data(credentials, detected_project_id, mode="geminicli", subscription_tier=subscription_tier)
-
-            # 清理使用过的流程
+async def _complete_selected_flow(state, flow_data, project_id, mode, callback_code=None):
+    # Nonblocking lock covers exchange, project selection and persistence.
+    lock = flow_data["completion_lock"]
+    if not lock.acquire(blocking=False):
+        return {"success": False, "error": "认证正在处理中，请等待当前请求完成"}
+    try:
+        if not _live_flow(state, flow_data):
+            return {"success": False, "error": _FLOW_ERROR}
+        if callback_code:
+            with _flows_lock:
+                existing_code = flow_data.get("code")
+                if existing_code and existing_code != callback_code:
+                    return {"success": False, "error": _FLOW_ERROR}
+                flow_data["code"] = callback_code
+                flow_data["completed"] = True
+        for _ in range(60):
+            if flow_data.get("code"):
+                break
+            await asyncio.sleep(1)
+            if not _live_flow(state, flow_data):
+                return {"success": False, "error": _FLOW_ERROR}
+        if not flow_data.get("code"):
+            return {"success": False, "error": "等待OAuth回调超时，请确保完成了浏览器中的认证并看到成功页面"}
+        credentials = flow_data.get("credentials")
+        if credentials is None:
+            if flow_data["exchange_started"]:
+                return {"success": False, "error": _COMPLETE_ERROR}
+            # Mark before awaiting: an unknown outcome must never redeem again.
+            flow_data["exchange_started"] = True
+            credentials = await flow_data["flow"].exchange_code(flow_data["code"])
+            flow_data["credentials"] = credentials
+        if not _live_flow(state, flow_data):
+            return {"success": False, "error": _FLOW_ERROR}
+        if project_id is None:
+            project_id = flow_data.get("project_id")
+        finisher = _finish_callback_url if callback_code else _finish_callback
+        result = await finisher(state, flow_data, credentials, project_id, mode)
+        # Project selection is the only resumable intermediate result.
+        if not (result.get("requires_project_selection") or result.get("requires_manual_project_id")):
             _cleanup_auth_flow_server(state)
+        return result
+    except asyncio.CancelledError:
+        _cleanup_auth_flow_server(state)
+        raise
+    except Exception:
+        _cleanup_auth_flow_server(state)
+        log.error("OAuth认证未完成")
+        return {"success": False, "error": _COMPLETE_ERROR}
+    finally:
+        if not _live_flow(state, flow_data):
+            _cleanup_auth_flow_server(state)
+        lock.release()
 
-            log.info("从回调URL完成OAuth认证成功，凭证已保存")
-            return {
-                "success": True,
-                "credentials": creds_data,
-                "file_path": saved_filename,
-                "auto_detected_project": auto_detected,
-                **_subscription_response_fields(subscription_info),
-            }
+
+async def _finish_callback(state, flow_data, credentials, project_id, mode):
+    # 检查凭证模式
+    cred_mode = flow_data.get("mode", "geminicli") if flow_data.get("mode") else mode
+    if cred_mode == "antigravity":
+        log.info("Antigravity模式：从API获取project_id...")
+        # 使用API获取project_id
+        antigravity_url = await get_antigravity_api_url()
+        project_id, subscription_tier = await fetch_project_id_and_tier(
+            credentials.access_token,
+            ANTIGRAVITY_USER_AGENT,
+            antigravity_url
+        )
+        if project_id:
+            log.info(f"成功从API获取project_id: {project_id}, tier: {subscription_tier}")
+        else:
+            project_id = DEFAULT_PROJECT_ID
+            log.warning(f"无法从API获取project_id，使用默认project_id: {project_id}")
+
+        # 保存antigravity凭证
+        email_result = {}
+        if not _live_flow(state, flow_data):
+            return {"success": False, "error": _FLOW_ERROR}
+        saved_filename = await _save_flow_credentials(state, flow_data, credentials, project_id, mode="antigravity", subscription_tier=subscription_tier, email_result=email_result)
+
+        # 准备返回的凭证数据
+        creds_data = _prepare_credentials_data(credentials, project_id, mode="antigravity", subscription_tier=subscription_tier)
+
+        # 清理使用过的流程
+        _cleanup_auth_flow_server(state)
+
+        log.info("Antigravity OAuth认证成功，凭证已保存")
+        return {
+            "success": True,
+            "credentials": creds_data,
+            "file_path": saved_filename,
+            "auto_detected_project": False,
+            "mode": "antigravity",
+            **email_result,
+        }
+
+    # 如果需要自动检测项目ID且没有提供项目ID（标准模式）
+    subscription_tier = None
+    if flow_data.get("auto_project_detection", False) and not project_id:
+        log.info("标准模式：优先通过 loadCodeAssist 获取企业 project_id...")
+        try:
+            code_assist_url = await get_code_assist_endpoint()
+            detected_project_id, subscription_tier = await fetch_project_id_and_tier(
+                credentials.access_token,
+                get_geminicli_user_agent(""),
+                code_assist_url,
+            )
+            if detected_project_id:
+                project_id = detected_project_id
+                flow_data["project_id"] = project_id
+                log.info(f"成功从 loadCodeAssist 获取 project_id: {project_id}, tier: {subscription_tier}")
+        except Exception as e:
+            log.warning("OAuth操作失败")
+
+        if not project_id:
+            log.info("标准模式：通过项目列表获取project_id...")
+            user_projects = await get_user_projects(credentials)
+
+            if user_projects:
+                # 如果只有一个项目，自动使用
+                if len(user_projects) == 1:
+                    # Google API returns projectId in camelCase
+                    project_id = user_projects[0].get("projectId")
+                    if project_id:
+                        flow_data["project_id"] = project_id
+                        log.info(f"自动选择唯一项目: {project_id}")
+                        # 自动启用必需的API服务
+                        log.info("正在自动启用必需的API服务...")
+                        await enable_required_apis(credentials, project_id)
+                # 如果有多个项目，尝试选择默认项目
+                else:
+                    project_id = await select_default_project(user_projects)
+                    if project_id:
+                        flow_data["project_id"] = project_id
+                        log.info(f"自动选择默认项目: {project_id}")
+                        # 自动启用必需的API服务
+                        log.info("正在自动启用必需的API服务...")
+                        await enable_required_apis(credentials, project_id)
+                    else:
+                        # 返回项目列表让用户选择
+                        return {
+                            "success": False,
+                            "error": "请从以下项目中选择一个",
+                            "requires_project_selection": True,
+                            "available_projects": [
+                                {
+                                    # Google API returns projectId in camelCase
+                                    "project_id": p.get("projectId"),
+                                    "name": p.get("displayName") or p.get("projectId"),
+                                    "projectNumber": p.get("projectNumber"),
+                                }
+                                for p in user_projects
+                            ],
+                        }
+            else:
+                # 如果无法获取项目列表，使用默认project_id
+                project_id = DEFAULT_PROJECT_ID
+                flow_data["project_id"] = project_id
+                log.warning(f"无法获取项目列表，使用默认project_id: {project_id}")
+    elif project_id:
+        # 如果已经有项目ID（手动提供或环境检测），也尝试启用API服务
+        log.info("正在为已提供的项目ID自动启用必需的API服务...")
+        await enable_required_apis(credentials, project_id)
+
+    # 如果仍然没有项目ID，返回错误
+    if not project_id:
+        project_id = DEFAULT_PROJECT_ID
+        flow_data["project_id"] = project_id
+        log.warning(f"仍未获取到project_id，使用默认project_id: {project_id}")
+
+    # 保存凭证
+    subscription_info = await _detect_geminicli_subscription(
+        credentials, project_id
+    )
+    subscription_tier = subscription_info.tier
+    if not _live_flow(state, flow_data):
+        return {"success": False, "error": _FLOW_ERROR}
+    saved_filename = await _save_flow_credentials(
+        state, flow_data, credentials, project_id, subscription_tier=subscription_tier,
+        subscription_info=subscription_info,
+    )
+
+    # 准备返回的凭证数据
+    creds_data = _prepare_credentials_data(credentials, project_id, mode="geminicli", subscription_tier=subscription_tier)
+
+    # 清理使用过的流程
+    _cleanup_auth_flow_server(state)
+
+    log.info("OAuth认证成功，凭证已保存")
+    return {
+        "success": True,
+        "credentials": creds_data,
+        "file_path": saved_filename,
+        "auto_detected_project": flow_data.get("auto_project_detection", False),
+        **_subscription_response_fields(subscription_info),
+    }
+
+
+async def _finish_callback_url(state, flow_data, credentials, project_id, mode):
+    # 检查凭证模式
+    cred_mode = flow_data.get("mode", "geminicli") if flow_data.get("mode") else mode
+    if cred_mode == "antigravity":
+        log.info("Antigravity模式（从回调URL）：从API获取project_id...")
+        # 使用API获取project_id
+        antigravity_url = await get_antigravity_api_url()
+        project_id, subscription_tier = await fetch_project_id_and_tier(
+            credentials.access_token,
+            ANTIGRAVITY_USER_AGENT,
+            antigravity_url
+        )
+        if project_id:
+            log.info(f"成功从API获取project_id: {project_id}, tier: {subscription_tier}")
+        else:
+            project_id = DEFAULT_PROJECT_ID
+            log.warning(f"无法从API获取project_id，使用默认project_id: {project_id}")
+
+        # 保存antigravity凭证
+        email_result = {}
+        if not _live_flow(state, flow_data):
+            return {"success": False, "error": _FLOW_ERROR}
+        saved_filename = await _save_flow_credentials(state, flow_data, credentials, project_id, mode="antigravity", subscription_tier=subscription_tier, email_result=email_result)
+
+        # 准备返回的凭证数据
+        creds_data = _prepare_credentials_data(credentials, project_id, mode="antigravity", subscription_tier=subscription_tier)
+
+        # 清理使用过的流程
+        _cleanup_auth_flow_server(state)
+
+        log.info("从回调URL完成Antigravity OAuth认证成功，凭证已保存")
+        return {
+            "success": True,
+            "credentials": creds_data,
+            "file_path": saved_filename,
+            "auto_detected_project": False,
+            "mode": "antigravity",
+            **email_result,
+        }
+
+    # 标准模式的项目ID处理逻辑
+    detected_project_id = None
+    auto_detected = False
+    subscription_tier = None
+
+    if not project_id:
+        try:
+            log.info("标准模式：优先通过 loadCodeAssist 获取project_id...")
+            code_assist_url = await get_code_assist_endpoint()
+            detected_project_id, subscription_tier = await fetch_project_id_and_tier(
+                credentials.access_token,
+                get_geminicli_user_agent(""),
+                code_assist_url,
+            )
+            if detected_project_id:
+                auto_detected = True
+                log.info(f"成功从 loadCodeAssist 获取 project_id: {detected_project_id}, tier: {subscription_tier}")
+        except Exception as e:
+            log.warning("OAuth操作失败")
+
+        if not detected_project_id:
+            # 通过项目列表获取项目ID
+            try:
+                log.info("标准模式：通过项目列表获取project_id...")
+                projects = await get_user_projects(credentials)
+                if projects:
+                    if len(projects) == 1:
+                        # 只有一个项目，自动使用
+                        # Google API returns projectId in camelCase
+                        detected_project_id = projects[0]["projectId"]
+                        auto_detected = True
+                        log.info(f"自动检测到唯一项目ID: {detected_project_id}")
+                    else:
+                        # 多个项目，自动选择第一个
+                        # Google API returns projectId in camelCase
+                        detected_project_id = projects[0]["projectId"]
+                        auto_detected = True
+                        log.info(
+                            f"检测到{len(projects)}个项目，自动选择第一个: {detected_project_id}"
+                        )
+                        log.debug(f"其他可用项目: {[p['projectId'] for p in projects[1:]]}")
+                else:
+                    # 没有项目访问权限，使用默认project_id
+                    detected_project_id = DEFAULT_PROJECT_ID
+                    auto_detected = False
+                    log.warning(f"未检测到可访问项目，使用默认project_id: {detected_project_id}")
+            except Exception as e:
+                log.warning("OAuth操作失败")
+                detected_project_id = DEFAULT_PROJECT_ID
+                auto_detected = False
+    else:
+        detected_project_id = project_id
+
+    # 启用必需的API服务
+    if detected_project_id:
+        try:
+            log.info(f"正在为项目 {detected_project_id} 启用必需的API服务...")
+            await enable_required_apis(credentials, detected_project_id)
 
         except Exception as e:
-            log.error(f"从回调URL获取凭证失败: {e}")
-            return {"success": False, "error": f"获取凭证失败: {str(e)}"}
+            log.warning("OAuth操作失败")
 
-    except Exception as e:
-        log.error(f"从回调URL完成认证流程失败: {e}")
-        return {"success": False, "error": str(e)}
+    # 保存凭证
+    subscription_info = await _detect_geminicli_subscription(
+        credentials, detected_project_id
+    )
+    subscription_tier = subscription_info.tier
+    if not _live_flow(state, flow_data):
+        return {"success": False, "error": _FLOW_ERROR}
+    saved_filename = await _save_flow_credentials(
+        state, flow_data, credentials, detected_project_id, subscription_tier=subscription_tier,
+        subscription_info=subscription_info,
+    )
+
+    # 准备返回的凭证数据
+    creds_data = _prepare_credentials_data(credentials, detected_project_id, mode="geminicli", subscription_tier=subscription_tier)
+
+    # 清理使用过的流程
+    _cleanup_auth_flow_server(state)
+
+    log.info("从回调URL完成OAuth认证成功，凭证已保存")
+    return {
+        "success": True,
+        "credentials": creds_data,
+        "file_path": saved_filename,
+        "auto_detected_project": auto_detected,
+        **_subscription_response_fields(subscription_info),
+    }
+
+
+async def _save_flow_credentials(state, flow_data, *args, **kwargs):
+    """Accept one persistence attempt atomically with replacement/TTL cleanup.
+
+    This is a process-local commit boundary, not a storage transaction. New
+    starts must wait, and expiry/memory eviction must preserve this flow until
+    the completion wrapper reports success or an unknown/failed outcome.
+    """
+    with _flows_lock:
+        if not _live_flow(state, flow_data):
+            raise RuntimeError(_FLOW_ERROR)
+        flow_data["persisting"] = True
+    # AG imports may settle after their waiter is cancelled. Shield the whole
+    # save, including its first storage await, and retain admission/lock until
+    # it settles. Never treat a disconnected HTTP waiter as a rolled-back save.
+    commit = asyncio.create_task(save_credentials(*args, **kwargs))
+    try:
+        return await asyncio.shield(commit)
+    except asyncio.CancelledError:
+        while not commit.done():
+            try:
+                await asyncio.shield(commit)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not commit.cancelled():
+            commit.exception()  # Consume a late failure without logging secrets.
+        raise
 
 
 async def save_credentials(
@@ -1080,7 +805,7 @@ async def save_credentials(
             await storage_adapter.update_credential_state(filename, default_state, mode=mode)
             log.info(f"凭证和状态已保存到: {filename} (mode={mode})")
         except Exception as e:
-            log.warning(f"创建默认状态记录失败 {filename}: {e}")
+            log.warning("OAuth操作失败")
 
         return filename
     else:
@@ -1103,7 +828,7 @@ def async_shutdown_server(server, port):
                     log.info(f"已关闭端口 {port} 的OAuth回调服务器")
                 except Exception as e:
                     shutdown_completed.set()
-                    log.debug(f"关闭服务器时出错: {e}")
+                    log.debug("OAuth操作失败")
 
             # 在单独线程中执行关闭操作
             shutdown_worker = threading.Thread(target=do_shutdown, daemon=True)
@@ -1116,7 +841,7 @@ def async_shutdown_server(server, port):
                 log.warning(f"端口 {port} 服务器关闭超时，但不阻塞主流程")
 
         except Exception as e:
-            log.debug(f"异步关闭服务器时出错: {e}")
+            log.debug("OAuth操作失败")
 
     # 在后台线程中关闭服务器，不阻塞主流程
     shutdown_thread = threading.Thread(target=shutdown_server_async, daemon=True)
@@ -1124,64 +849,14 @@ def async_shutdown_server(server, port):
     log.debug(f"开始异步关闭端口 {port} 的OAuth回调服务器")
 
 
-def cleanup_expired_flows():
-    """清理过期的认证流程"""
-    current_time = time.time()
-    EXPIRY_TIME = 600  # 10分钟过期
-
-    # 直接遍历删除，避免创建额外列表
-    states_to_remove = [
-        state
-        for state, flow_data in auth_flows.items()
-        if current_time - flow_data["created_at"] > EXPIRY_TIME
-    ]
-
-    # 批量清理，提高效率
-    cleaned_count = 0
-    for state in states_to_remove:
-        flow_data = auth_flows.get(state)
-        if flow_data:
-            # 快速关闭可能存在的服务器
-            try:
-                if flow_data.get("server"):
-                    server = flow_data["server"]
-                    port = flow_data.get("callback_port")
-                    async_shutdown_server(server, port)
-            except Exception as e:
-                log.debug(f"清理过期流程时启动异步关闭服务器失败: {e}")
-
-            # 显式清理流程数据，释放内存
-            flow_data.clear()
-            del auth_flows[state]
-            cleaned_count += 1
-
-    if cleaned_count > 0:
-        log.info(f"清理了 {cleaned_count} 个过期的认证流程")
-
-    # 更积极的垃圾回收触发条件
-    if len(auth_flows) > 20:  # 降低阈值
-        import gc
-
-        gc.collect()
-        log.debug(f"触发垃圾回收，当前活跃认证流程数: {len(auth_flows)}")
-
-
-def get_auth_status(project_id: str) -> Dict[str, Any]:
-    """获取认证状态"""
-    for state, flow_data in auth_flows.items():
-        if flow_data["project_id"] == project_id:
-            return {
-                "status": "completed" if flow_data["completed"] else "pending",
-                "state": state,
-                "created_at": flow_data["created_at"],
-            }
-
-    return {"status": "not_found"}
-
-
-# 鉴权功能 - 使用更小的数据结构
-auth_tokens = {}  # 存储有效的认证令牌
-TOKEN_EXPIRY = 3600  # 1小时令牌过期时间
+def get_auth_status(project_id: str, user_session=None, mode="geminicli") -> Dict[str, Any]:
+    state, data = _select_auth_flow(user_session, mode, project_id=project_id)
+    if data is None:
+        return {"status": "not_found"}
+    return {
+        "status": "completed" if data["completed"] else "pending",
+        "state": state, "created_at": data["created_at"],
+    }
 
 
 async def verify_password(password: str) -> bool:

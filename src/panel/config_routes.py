@@ -330,7 +330,6 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
             raise HTTPException(status_code=400, detail="精确嵌入模式至少需要一个HTTPS Origin")
 
         log.debug(f"收到的配置数据: {list(new_config.keys())}")
-        log.debug(f"收到的password值: {new_config.get('password', 'NOT_FOUND')}")
 
         # 验证配置项
         if "retry_429_max_retries" in new_config:
@@ -430,11 +429,19 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
         # written. MySQL may equate distinct spellings under its collation.
         if any([await _sensitive_backend_key(storage_adapter, key) for key in new_config]):
             raise HTTPException(status_code=400, detail="敏感配置只能通过专用接口修改")
-        for key, value in new_config.items():
-            if key not in env_locked_keys:
-                await storage_adapter.set_config(key, value)
-                if key in ("password", "api_password", "panel_password"):
-                    log.debug(f"设置{key}字段为: {value}")
+        attempted_keys = set()
+        try:
+            for key, value in new_config.items():
+                if key not in env_locked_keys:
+                    attempted_keys.add(key)
+                    if not await storage_adapter.set_config(key, value):
+                        raise RuntimeError("config write failed")
+        except Exception:
+            # Writes are sequential, not transactional. Even the failed call
+            # may have persisted a value before reporting an unknown outcome.
+            await _refresh_after_failed_save(attempted_keys)
+            log.error("配置保存未完成")
+            raise HTTPException(status_code=500, detail="配置保存未完成，部分配置可能已保存，请重新读取配置") from None
 
         # 重新加载配置缓存（关键！）
         await config.reload_config()
@@ -447,15 +454,7 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
             try:
                 await keepalive_service.restart()
             except Exception as e:
-                log.warning(f"重启保活服务失败: {e}")
-
-        # 验证保存后的结果
-        test_api_password = await config.get_api_password()
-        test_panel_password = await config.get_panel_password()
-        test_password = await config.get_server_password()
-        log.debug(f"保存后立即读取的API密码: {test_api_password}")
-        log.debug(f"保存后立即读取的面板密码: {test_panel_password}")
-        log.debug(f"保存后立即读取的通用密码: {test_password}")
+                log.warning("重启保活服务失败")
 
         # 构建响应消息
         response_data = {
@@ -473,8 +472,23 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_pa
     except HTTPException:
         raise
     except Exception as e:
-        log.error(f"保存配置失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error("配置保存未完成")
+        raise HTTPException(status_code=500, detail="配置保存未完成，部分配置可能已保存，请重新读取配置") from None
+
+
+async def _refresh_after_failed_save(attempted_keys):
+    """Best effort reconciliation with persisted state; this is not rollback."""
+    if not attempted_keys:
+        return
+    from src.smart_429 import smart_429_service
+    refreshers = [config.reload_config, smart_429_service.reconfigure]
+    if {"keepalive_url", "keepalive_interval"} & attempted_keys:
+        refreshers.append(keepalive_service.restart)
+    for refresh in refreshers:
+        try:
+            await refresh()
+        except Exception:
+            log.warning("配置保存失败后的运行状态刷新未完成")
 
 
 @router.put("/management-token")

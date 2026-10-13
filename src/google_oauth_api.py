@@ -249,9 +249,9 @@ class Flow:
             return self.credentials
 
         except Exception as e:
-            error_msg = f"获取token失败: {str(e)}"
+            error_msg = "获取token失败"
             log.error(error_msg)
-            raise TokenError(error_msg)
+            raise TokenError(error_msg) from None
 
 
 class ServiceAccount:
