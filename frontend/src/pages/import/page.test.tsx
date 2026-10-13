@@ -5,7 +5,7 @@ import ImportPage from './index'
 
 const auth = vi.hoisted(() => ({ authenticated: true, sessionEpoch: 1 }))
 vi.mock('@/auth', () => ({ useAuth: () => auth }))
-vi.mock('@/api/client', () => ({ requestJson: vi.fn(), ApiError: class extends Error { constructor(public status: number, public payload: unknown) { super('safe') } } }))
+vi.mock('@/api/client', () => ({ getServiceBase: () => 'http://localhost:3000/', requestJson: vi.fn(), ApiError: class extends Error { constructor(public status: number, public payload: unknown) { super('safe') } } }))
 beforeEach(() => {
   vi.resetAllMocks(); vi.stubEnv('VITE_UI_FIXTURES', 'false')
   auth.authenticated = true; auth.sessionEpoch = 1
@@ -21,6 +21,7 @@ describe('Import page interactions', () => {
     fireEvent.change(screen.getByLabelText('选择 JSON 或 ZIP（可多选）'), { target: { files: [new File(['{}'], 'example.json')] } })
     expect(requestJson).not.toHaveBeenCalled()
     expect(WebSocket).not.toHaveBeenCalled()
+    expect(screen.getByRole('link', { name: '旧 AG 面板：手动获取邮箱与高级工具' })).toHaveAttribute('href', 'http://localhost:3000/#antigravity-manage')
   })
 
   it('keeps a manual-project 400 in the flow and continues only after a second click', async () => {

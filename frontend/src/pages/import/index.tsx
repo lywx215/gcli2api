@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { getServiceBase } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -19,6 +20,7 @@ export default function ImportPage() {
   const [filename, setFilename] = useState('')
   const [callbackUrl, setCallbackUrl] = useState('')
   const preview = import.meta.env.DEV && import.meta.env.VITE_UI_FIXTURES === 'true'
+  const legacy = new URL(getServiceBase()); legacy.hash = 'antigravity-manage'
   function clearSecrets() { setTokens(''); setClientSecret(''); setCallbackUrl(''); setFiles([]); setFileKey(key => key + 1) }
   useEffect(() => { clearSecrets(); setClientId(''); setProjectId(''); setFilename('') }, [flow.sessionEpoch, flow.authenticated])
   const tokenList = [...new Set(tokens.split(/\r?\n/).map(value => value.trim()).filter(Boolean))]
@@ -66,6 +68,6 @@ export default function ImportPage() {
       {flow.emailMessage && <p role="status">{flow.emailMessage}</p>}
       {flow.jobId && !flow.email?.complete && <Button variant="outline" onClick={flow.stopEmail}>停止跟踪</Button>}
     </CardContent></Card>}
-    <a href="#/credentials" className="inline-block underline underline-offset-4">查看凭证列表</a>
+    <div className="flex flex-wrap gap-4"><a href="#/credentials" className="underline underline-offset-4">查看凭证列表</a>{!preview && <a href={legacy.href} className="underline underline-offset-4">旧 AG 面板：手动获取邮箱与高级工具</a>}</div>
   </section>
 }

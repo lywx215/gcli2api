@@ -73,10 +73,10 @@ export function useImportFlow() {
         if (!current()) return
         setEmail(snapshot)
         if (!snapshot.complete) timer = setTimeout(poll, 2000)
-        else setEmailMessage('邮箱补全任务已结束；失败或跳过项可在凭证页手动获取邮箱。')
+        else setEmailMessage('邮箱补全任务已结束；失败或跳过项可在旧 AG 控制面板手动获取邮箱。')
       } catch (error) {
         if (!current()) return
-        setEmailMessage(error instanceof ApiError && error.status === 404 ? '邮箱任务已过期或服务已重启，请到凭证页手动获取邮箱。' : '无法确认邮箱补全进度，已停止轮询。请到凭证页查看。')
+        setEmailMessage(error instanceof ApiError && error.status === 404 ? '邮箱任务已过期或服务已重启，请到旧 AG 控制面板手动获取邮箱。' : '无法确认邮箱补全进度，已停止轮询。请到凭证页查看。')
       }
     }
     void poll()

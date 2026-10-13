@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { getServiceBase } from '@/api/client'
 import { useAuth } from '@/auth'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -18,6 +19,7 @@ export default function CredentialsPage() {
   return authenticated ? <CredentialWorkspace key={sessionEpoch} /> : <p className="text-muted-foreground">请登录后查看凭证。</p>
 }
 export function CredentialWorkspace() {
+  const legacy = new URL(getServiceBase()); legacy.hash = 'antigravity-manage'
   const c = useCredentials(); const [detail, setDetail] = useState<Credential | null>(null)
   const [busy, setBusy] = useState(false); const [result, setResult] = useState('')
   const [batch, setBatch] = useState<{ filename: string; result: ManualResult }[]>([])
@@ -83,6 +85,7 @@ export function CredentialWorkspace() {
     {c.data && !!c.data.items.length && <CredentialTable rows={c.data.items} selected={c.selected} toggle={c.toggle} open={open} disabled={blocked} />}
     <nav className="flex flex-wrap items-center justify-between gap-3" aria-label="分页"><label className="flex items-center gap-2 text-sm">每页<select aria-label="每页数量" value={c.limit} disabled={blocked} className="rounded-md border bg-background p-2" onChange={e => c.setLimit(Number(e.target.value))}>{[20, 25, 50, 100, 200, 500, 1000].map(n => <option key={n}>{n}</option>)}</select></label><span className="text-sm text-muted-foreground">第 {Math.floor(c.offset / c.limit) + 1} 页 · 匹配 {c.data?.total ?? '未知'} 项</span><div className="flex gap-2"><Button variant="outline" disabled={blocked || c.loading || c.offset === 0} onClick={() => c.setOffset(Math.max(0, c.offset - c.limit))}>上一页</Button><Button variant="outline" disabled={blocked || c.loading || !c.data?.hasMore} onClick={() => c.setOffset(c.offset + c.limit)}>下一页</Button></div></nav>
     {batch.length > 0 && <section className="grid gap-3" aria-label="批量额度逐项结果">{batch.map(item => <details className="rounded-lg border p-3" key={item.filename}><summary className="break-all text-sm">{item.filename} · {item.result.success ? '上游成功' : '未成功 / 未确认'} · 写回 {item.result.updates.map(u => u.status).join(' / ') || '未知'}</summary><ManualResultView result={item.result} /></details>)}</section>}
+    {!fixtureMode && <p className="text-sm text-muted-foreground">手动获取邮箱、批量模型检测及风险检测继续使用 <a className="underline underline-offset-4" href={legacy.href}>旧 AG 面板高级工具</a>。</p>}
     {detail && <CredentialDetail key={`${detail.filename}:${c.detailEpoch}`} row={detail} caps={c.caps} close={close} busy={busy} action={action} beforeManual={() => { setBusy(true); c.invalidateReads() }} afterManual={() => { setBusy(false); c.refresh() }} captureTask={c.captureTask} revoke={c.revoke} />}
   </section>
 }

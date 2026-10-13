@@ -14,18 +14,18 @@
 
 依据及优先级：
 
-1. 本轮用户授权、`AGENTS.md`、[维护范围](../MAINTENANCE_SCOPE.md) 与 [终止记录](../delivery/MGMT-009-development-termination.md)。本轮分支基线由用户明确指定，不启动历史管理路线图。
+1. 本轮用户授权、`AGENTS.md`、[维护范围](../MAINTENANCE_SCOPE.md) 与 [终止记录](../delivery/MGMT-009-development-termination.md)。本轮 UI 基线已核实并记录为 d1012，不启动历史管理路线图。
 2. 按顺序阅读的 [协作规范](../multi-repo/COORDINATION_SPEC.md)、[实施路线图](../multi-repo/IMPLEMENTATION_ROADMAP.md)、[Management 契约](../multi-repo/MANAGEMENT_API_CONTRACT.md)、[节点实施指南](../multi-repo/GCLI2API_CODEX_GUIDE.md)、[自动交接](../multi-repo/AUTOMATED_HANDOFF.md)，仅作为兼容约束，不恢复其取消项。
 3. [开发评估](../UI_REDESIGN_ASSESSMENT.md)、[前端合同](FRONTEND_CONTRACT.md)、[并行边界](PARALLEL_DEVELOPMENT.md)、[静态部署说明](../UI_STATIC_DEPLOYMENT.md)。共享签名及文件所有权以合同为准，根窗口裁定合同变动。
 4. 主集成工作区真实源码、提交及根窗口验证报告。文档中的旧占位路由描述须结合其窗口/时间理解；本方案不依据它宣称主分支仍未接线。
 
 ## 2. 当前实现与状态快照
 
-初次只读核实时主集成 HEAD 为 `040fa5d66dd390fdb2b494d40be52785106b66d8`，五页真实 lazy 接线等仍是未提交修改。最终证据更新时读取到主分支 HEAD `41acf286053f1f6c1357cbcbc976b779944fc6c5`；移动布局与 fixture 排除修正已合入，根窗口的 `docs/ui-redesign/DELIVERY.md` 已记录 215 项前端测试、加强后的生产隔离检查及最终 Chromium/ASGI 复验通过，根正在保存其集成源码提交。以下来源 SHA 是可追溯依据；最终交付 SHA 和工作树状态以根交付为准，本方案不声称自己重新运行这些验证。
+初次只读核实时主集成 HEAD 为 `040fa5d66dd390fdb2b494d40be52785106b66d8`，五页真实 lazy 接线等仍是未提交修改。最终证据更新时读取到主分支 HEAD `41acf286053f1f6c1357cbcbc976b779944fc6c5`；移动布局与 fixture 排除修正已合入，根窗口的 `docs/ui-redesign/DELIVERY.md` 已记录 215 项前端测试、加强后的生产隔离检查及最终 Chromium/ASGI 复验通过，根已保存其集成源码提交 `e5cdd3d`。以下来源 SHA 是可追溯依据；最终交付 SHA 和工作树状态以根交付为准，本方案不声称自己重新运行这些验证。
 
 | 模块 | 已交付来源提交 | 主集成对应提交（本次核实） | 状态与剩余门禁 |
 | --- | --- | --- | --- |
-| foundation | `86027ac`、`88cfdd6`、`1d24989` | `bf0c8f7`、`963ba8b`、`c4fc2c7` | client/auth/组件/工程已合入；真实五页接线与加强检查器已完成根验证，最终集成提交由根保存 |
+| foundation | `86027ac`、`88cfdd6`、`1d24989` | `bf0c8f7`、`963ba8b`、`c4fc2c7` | client/auth/组件/工程已合入；真实五页接线与加强检查器已完成根验证，根接线已保存为 `e5cdd3d` |
 | backendCreds | `4e8f9e4` | `68f37a3` | 面板能力矩阵与结果真实性已合入；最终回归证据随根交付 |
 | backendAuthConfig | `ca5bf0d` | `62df56d` | OAuth 隔离与配置 False/异常修正已合入；真实外部 OAuth 未测试且不属于本次验收 |
 | deploy | `57f050b` | `010f001` | Python 托管、多阶段 Docker 与忽略规则已合入；实际 Docker 镜像未构建 |
@@ -57,7 +57,7 @@
 
 功能对照不能以“页面存在”结束。以下项目必须在最终交付说明中明确其归属，未补齐前不能宣称新 UI 与旧面板全功能等价：
 
-- 当前凭证 adapter 已有复制已保存邮箱，但未见手动获取邮箱 `fetch-email` 端点接线（旧实现保留在 `src/panel/creds.py`、`front/common.js`）；导入任务结束/失效提示中的“到凭证页手动获取邮箱”需核对实际可达入口。根窗口应补正确旧入口或明确限制；不要把复制当成补全。
+- 当前凭证 adapter 已有复制已保存邮箱，但未见手动获取邮箱 `fetch-email` 端点接线（旧实现保留在 `src/panel/creds.py`、`front/common.js`）；导入任务结束/失效提示中的“到凭证页手动获取邮箱”需核对实际可达入口。根已将提示指向旧 AG 面板，并在凭证/导入页提供 `/#antigravity-manage` 高级工具入口；复制不作为补全。
 - 当前凭证 adapter 覆盖单项 test 与批量额度，未见 batch-test 或异常额度组人工解除接线。若保留在旧页，需在功能清单中明确；不能把 batch-refresh-cooldown 当成批量模型测试或异常解除。
 - 存储预览/切换和模型路由旧页入口是已确认的首版范围安排。完整迁入 React、独立短时会话、配置事务/CAS、WS 新认证、全站代理子路径、默认根入口切换均属后续另行启动。
 - 新设置页非敏感草稿已支持跨路由/重新认证保留，浏览器刷新或关闭仍会丢失内存。当前未见 beforeunload/useBlocker 离站保护，跳旧配置/模型路由属于整页导航；设置错误文本也尚未通过 aria-describedby/aria-invalid 与字段关联。根窗口需明确这些缺口的首版处置及实际键盘检查，不能从组件库名称推定合格。
@@ -95,7 +95,7 @@ src/panel/ui.py                         动态 HTML 与受限 assets 托管
 | session | token、authenticated、sessionEpoch | 单一来源；代次变化同步通知清理；token 不是独立后端会话 |
 | 页面读取 | 列表/统计/配置观察值/日志、能力集合 | 内存；会话代次+页面请求序号双重隔离；登出清除 |
 | 选择/任务 | 显式 filename Set、筛选代次、进度、已确认结果 | 筛选/能力/会话变化失效；旧请求不得重建选择或恢复弹层 |
-| 表单草稿 | 基线、dirty 字段、上次提交、读回观察值 | 非敏感变更内存保留；秘密及带秘密风险的网络字段不跨会话保留 |
+| 表单草稿 | 基线、dirty 字段、上次提交、读回观察值 | 按当前字段白名单保留草稿；密码与专用 token 输入清理。网络 URL 按配置字符串处理，不宣称自动识别或清除其所有内嵌秘密 |
 | 临时 UI | Sheet/Dialog、焦点归还位置、loading、error | 页面/会话销毁时关闭，包含 body Portal；不能仅隐藏根 DOM |
 
 共享 client 提供 `getServiceBase`、`createServiceUrl`、`requestJson`、`requestBlob`、`ApiError`；签名以合同为准。服务 base 来自 HTML 注入并校验同源；path 是 `creds/status` 这样的服务根相对路径，拒绝绝对 URL、`//`、根绝对路径、遍历和编码逃逸。filename 使用一次 `encodeURIComponent`，校验匹配后端一次解码，保留字面 `%` 与 Unicode。资源 base `./` 与 API service base 独立。
@@ -234,7 +234,7 @@ flowchart TD
 | UI-P1 工程/托管 | P0；foundation 与 deploy 配合 | 独立工程/lock、登录壳、语义 token、动态 HTML；缺产物旧服务可启动 | 已实现已集成 |
 | UI-P2 后端最小修正 | P0；两后端窗口并行 | 四存储能力、真实计数、OAuth 隔离、config False/敏感日志测试 | 已实现已集成；没有真实后端/生产矩阵承诺 |
 | UI-P3 五页业务 | P0/P1 合同；各页面可先用合成适配器 | 五页模块/失败状态/旧响应隔离；OAuth/config 真适配以 P2 为门禁 | 已实现已集成；fixture 排除修正及根最终全量复验通过 |
-| UI-P4 根集成 | P1/P2/P3 来源提交与测试材料齐全 | 按后端+foundation、托管、四页、凭证页、根 lazy 接线顺序合并；冲突逐文件解决 | 已完成主要接线；待最终提交 |
+| UI-P4 根集成 | P1/P2/P3 来源提交与测试材料齐全 | 按后端+foundation、托管、四页、凭证页、根 lazy 接线顺序合并；冲突逐文件解决 | 已完成主要接线及根提交 `e5cdd3d` |
 | UI-P5 兼容与可用性 | 同一候选源码和产物 | 第 12 节门禁；功能对照缺口有正确入口/说明；移动补丁复验 | 本地测试与最终 Chromium/ASGI 通过；Docker/跨浏览器等仍未验证 |
 | UI-P6 本地交付 | P5 证据、最终 SHA、风险清单 | 仅本地提交、交付文档、可回滚方案；版本/钩子不变 | 根窗口收尾 |
 | UI-P7 后续发布 | 用户另行明确启动并确认范围 | 镜像/生产计划、默认入口决定和发布门禁 | 未启动，不自动继续 |
@@ -308,7 +308,7 @@ Docker ui-build 阶段执行 npm ci、typecheck、build、check:build，再将�
 | 根产物 | 8 个 hashed JS、1 个 CSS；五页独立 dynamic entry、完整 manifest/资源引用、0 fixture 模块、0 公共及业务合成数据标记通过 | 最终 DELIVERY；生产显式设置 `VITE_UI_FIXTURES=true` 同样通过；反例曾被加强门禁拒绝 |
 | Python 集成 | 两组分别 261、114 项通过，含 42 项重叠 | 根报告；不能称 375 个不同测试，不把 mocked backend 当真实四引擎生产验证 |
 | 旧面板 Node | 68 项通过 | 根报告；与某窗口先前 29 项历史记录不累加 |
-| 旧模型 API 独立矩阵 | 282 项中 253 失败、29 通过；未通过，基线归因待独立核查 | 根窗口最新报告，已安排只读基线核对；不能称这些失败由本轮引入或已经排除，也不能被前述通过组覆盖；不据此恢复 GCLI/MGMT 开发 |
+| 旧模型 API 独立矩阵 | 282 项中 253 失败、29 通过；矩阵仍未通过，抽样已证实干净 ebda92b 同现 | 根只读审查从 ebda92b Git 对象导出干净源码，AG/OpenAI/nonstream 原例同样 503；仅补内存 routing adapter 后断言通过，证明该例 fixture 缺初始化。其余失败未整体归因，不把矩阵标通过；不恢复 GCLI/MGMT 开发 |
 | 合成 Chromium | 五页导航、导入 partial、跨路由非敏感 settings 草稿及合成保存、详情/跨窗口登出重登、移动导航登出通过；1440/390 无横向溢出；无外部/真实 API 请求、无 pageerror | 最终 `UI_SMOKE.json` 及截图；移动首屏第一张卡可见，折叠保留筛选草稿；最终复验通过，不扩大为全部键盘/浏览器验证 |
 | 生产产物内存 ASGI | 真实 index+五页 chunks 的 no-store/meta/CSP、MIME/immutable、index/manifest/缺资源 404、带 query 307 通过 | 最终 `UI_HOSTING_SMOKE.json` 再验通过；不启动真实 lifespan，不等同真实镜像运行 |
 | Docker 上下文/实构建 | Moby 原生规则检查 17 保留和 14 排除路径通过；完整镜像未验证 | daemon 不可用；Node 22 容器版本仅检查 engines/lockfile/接线，不把本地 Node 24 验证等同容器运行 |
@@ -329,7 +329,7 @@ Docker ui-build 阶段执行 npm ci、typecheck、build、check:build，再将�
 | Management | `test_management_api.py`、`test_management_openapi.py` | schema 1.4/capability/动作语义不变，无新增对端任务 |
 | 集成浏览器 | 合成登录→导入→筛选/选择→动作→设置→日志→登出；未知/partial/501/chunk404；手机/键盘 | 真五页接线、结果文案和焦点正确、fixture 无外部请求、补丁后无新回归 |
 
-最终本地验收退出条件：来源提交和根修改全部可定位；五页与共享文件 ownership 无越界；相关回归/构建/产物/浏览器证据对应最终候选；已知功能缺口有准确旧入口或限制说明；未验证门禁逐项列明；panel-version 与 hook 保持；没有真实数据/秘密进入 diff、测试或产物。未完成 Docker/跨浏览器门禁以及尚未归因的旧模型 API 矩阵失败必须随本地候选披露，不能称发布就绪。旧模型 API 的基线核查结果由根另行更新；本方案不等待核查、不修代码、不扩大维护范围。
+最终本地验收退出条件：来源提交和根修改全部可定位；五页与共享文件 ownership 无越界；相关回归/构建/产物/浏览器证据对应最终候选；已知功能缺口有准确旧入口或限制说明；未验证门禁逐项列明；panel-version 与 hook 保持；没有真实数据/秘密进入 diff、测试或产物。未完成 Docker/跨浏览器门禁以及尚未归因的旧模型 API 矩阵失败必须随本地候选披露，不能称发布就绪。旧模型 API 抽样基线证据已更新，但整组归因仍未完成；本方案不等待核查、不修代码、不扩大维护范围。
 
 ## 13. 风险、回滚与交付
 
