@@ -2,6 +2,10 @@
 
 The console provides six independently lazy-loaded pages: overview, credentials, import, settings, logs and model-routing. Each default export lives in its own `pages/<name>/index.tsx`; App only assembles authentication, navigation and loading boundaries. The existing panel and model-routing editor remain available at their original entries.
 
+## Visual theme
+
+The console uses the approved warm-gray light style. Semantic colors, typography, radii and shadows are centralized in `src/styles/theme-warm-gray.css`, imported by `globals.css`. Existing Tailwind mappings and component props remain compatible; success/warning/info Badge variants are additive. No theme picker, dark-mode activation or theme persistence is enabled. See [style delivery and validation](../docs/ui-redesign/WARM_GRAY_STYLE.md).
+
 ## Run and verify
 
 Use Node 24 LTS (tested 24.19.0), or the compatible Node range in package.json. From `frontend/`:
