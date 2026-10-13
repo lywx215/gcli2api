@@ -76,7 +76,10 @@ export async function readEmailJob(jobId: string, signal: AbortSignal): Promise<
       if (typeof item.filename !== 'string' || !emailStates.includes(item.status as EmailState)) throw new Error('Invalid job item')
       items.push({ filename: label(item.filename, '凭证'), status: item.status as EmailState, email: item.status === 'success' && typeof item.user_email === 'string' ? item.user_email : undefined })
     }
-    complete = data.complete === true && data.sealed === true
+    // Pages are separate observations: a later terminal response cannot make an
+    // earlier materialized active item terminal. Re-read next poll in that case.
+    complete = data.complete === true && data.sealed === true &&
+      items.every(item => !['queued', 'running', 'settlement_pending'].includes(item.status))
     if (items.length === data.total) return { items, complete }
     if (!data.items.length) throw new Error('Incomplete job page')
   }

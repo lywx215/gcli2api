@@ -57,8 +57,58 @@ describe('bounded plain-text log stream', () => {
     const stop = startLogStream({ url: () => 'ws://example.invalid', socket: factory, onLine: vi.fn(), onState, canRetry: input => { signal = input; return new Promise(done => { resolve = done }) } })
     vi.advanceTimersByTime(0); close(socket, 1006); stop()
     expect(signal.aborted).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
     resolve(true); await Promise.resolve(); vi.runAllTimers()
     expect(factory).toHaveBeenCalledTimes(1)
+  })
+  it('leaves connected immediately and times out a hung auth check before bounded retry', async () => {
+    const sockets: Socket[] = [], onState = vi.fn()
+    let resolve!: (value: boolean) => void, signal!: AbortSignal
+    const stop = startLogStream({
+      url: () => 'ws://example.invalid',
+      socket: () => { const socket = mockSocket(); sockets.push(socket); return socket },
+      onLine: vi.fn(), onState,
+      canRetry: input => { signal = input; return new Promise(done => { resolve = done }) },
+    })
+    vi.advanceTimersByTime(0)
+    sockets[0].onopen?.call(sockets[0] as WebSocket, {} as Event)
+    expect(onState).toHaveBeenLastCalledWith('connected')
+    close(sockets[0], 1006)
+    expect(onState).toHaveBeenLastCalledWith('reconnecting')
+    vi.advanceTimersByTime(4999)
+    expect(signal.aborted).toBe(false)
+    expect(sockets).toHaveLength(1)
+    vi.advanceTimersByTime(1)
+    expect(signal.aborted).toBe(true)
+    expect(sockets).toHaveLength(1)
+    vi.advanceTimersByTime(1000)
+    expect(sockets).toHaveLength(2)
+    sockets[1].onopen?.call(sockets[1] as WebSocket, {} as Event)
+    resolve(false)
+    await Promise.resolve()
+    expect(onState).toHaveBeenLastCalledWith('connected')
+    expect(vi.getTimerCount()).toBe(0)
+    stop()
+  })
+  it('keeps the retry budget finite when every auth check hangs', () => {
+    const sockets: Socket[] = [], signals: AbortSignal[] = [], onState = vi.fn()
+    const stop = startLogStream({
+      url: () => 'ws://example.invalid',
+      socket: () => { const socket = mockSocket(); sockets.push(socket); return socket },
+      onLine: vi.fn(), onState,
+      canRetry: signal => { signals.push(signal); return new Promise(() => {}) },
+    })
+    vi.advanceTimersByTime(0)
+    for (let index = 0; index < 6; index++) {
+      close(sockets[index], 1006)
+      vi.advanceTimersByTime(5000)
+      vi.runOnlyPendingTimers()
+    }
+    expect(sockets).toHaveLength(6)
+    expect(signals.every(signal => signal.aborted)).toBe(true)
+    expect(onState).toHaveBeenLastCalledWith('stopped')
+    expect(vi.getTimerCount()).toBe(0)
+    stop()
   })
   it('does not retry explicit connection-limit rejection', () => {
     const socket = mockSocket(), onState = vi.fn()

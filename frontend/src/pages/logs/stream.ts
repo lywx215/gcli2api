@@ -30,7 +30,7 @@ export type StreamOptions = {
 export function startLogStream(options: StreamOptions): () => void {
   let disposed = false, current: Socket | null = null, attempts = 0
   let timer: ReturnType<typeof setTimeout> | undefined
-  const controller = new AbortController()
+  let cancelProbe: (() => void) | undefined
   const scheduleRetry = () => {
     if (disposed) return
     if (attempts >= 5) { options.onState('stopped'); return }
@@ -55,18 +55,31 @@ export function startLogStream(options: StreamOptions): () => void {
         return
       }
       if (event.code === 1006 && options.canRetry) {
-        void options.canRetry(controller.signal).then(allowed => {
-          if (disposed) return
+        options.onState('reconnecting')
+        const probeController = new AbortController()
+        let settled = false
+        const finish = (allowed: boolean) => {
+          if (disposed || settled) return
+          settled = true
+          clearTimeout(probeTimeout)
+          cancelProbe = undefined
           if (allowed) scheduleRetry()
           else options.onState('rejected')
-        }).catch(() => { if (!disposed) scheduleRetry() })
+        }
+        // A hung HTTP check must not hold the page in a stale connected state or
+        // prevent bounded reconnects. Abort transport, but also ignore promises
+        // that do not honor cancellation and settle after the deadline.
+        const probeTimeout = setTimeout(() => { finish(true); probeController.abort() }, 5000)
+        cancelProbe = () => { settled = true; clearTimeout(probeTimeout); probeController.abort() }
+        try { void options.canRetry(probeController.signal).then(finish, () => finish(true)) }
+        catch { finish(true) }
       } else scheduleRetry()
     }
   }
   timer = setTimeout(connect, 0)
   return () => {
     disposed = true
-    controller.abort()
+    cancelProbe?.()
     clearTimeout(timer)
     if (current) {
       current.onopen = current.onmessage = current.onerror = current.onclose = null

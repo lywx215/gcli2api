@@ -48,6 +48,20 @@ describe('Import adapter', () => {
     await expect(completeOAuth('http://localhost/?code=synthetic', '', new AbortController().signal)).rejects.toThrow()
     expect(requestJson).toHaveBeenCalledTimes(1)
   })
+  it.each(['queued', 'running', 'settlement_pending'])('keeps polling when an earlier page still contains %s after the server completes', async status => {
+    vi.mocked(requestJson)
+      .mockResolvedValueOnce({ job_id: 'example', items: [{ filename: 'a', status }], total: 2, complete: false, sealed: true })
+      .mockResolvedValueOnce({ job_id: 'example', items: [{ filename: 'b', status: 'success' }], total: 2, complete: true, sealed: true })
+      .mockResolvedValueOnce({ job_id: 'example', items: [{ filename: 'a', status: 'success' }, { filename: 'b', status: 'success' }], total: 2, complete: true, sealed: true })
+    const signal = new AbortController().signal
+    const mixed = await readEmailJob('example', signal)
+    expect(mixed.complete).toBe(false)
+    expect(mixed.items[0].status).toBe(status)
+    const settled = await readEmailJob('example', signal)
+    expect(settled.complete).toBe(true)
+    expect(settled.items.every(item => item.status === 'success')).toBe(true)
+    expect(vi.mocked(requestJson).mock.calls[2][1]?.query?.offset).toBe(0)
+  })
   it('rejects empty incomplete email pages', async () => {
     vi.mocked(requestJson).mockResolvedValue({ job_id: 'example', items: [], total: 1, complete: true, sealed: true })
     await expect(readEmailJob('example', new AbortController().signal)).rejects.toThrow()
