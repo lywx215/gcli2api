@@ -1,6 +1,6 @@
 # gcli2api 新 UI 完整开发方案
 
-日期：2026-10-13（Asia/Shanghai）。本方案用于已授权的新 UI 多窗口开发及根窗口集成，状态为**实现已交付、最终集成仍在收尾**。它不是部署批准，也不把设计预览、模块测试或代码存在等同于最终验收。
+日期：2026-10-13（Asia/Shanghai）。本方案用于已授权的新 UI 多窗口开发及根窗口集成，状态为**实现及本地集成验证已交付，发布门禁仍有未验证项**。它不是部署批准，也不把设计预览、模块测试或代码存在等同于最终验收。
 
 本聊天仅拥有本文件。主集成工作区为 `C:/Users/lywx2/.codex/worktrees/ui-redesign/gcli2api`，分支 `codex/ui-redesign`；共同开发基线为 `d1012` / `ebda92be2a4a5562963360bdbab2d33379e63077`。本文件的独立工作区为 `C:/Users/lywx2/.codex/worktrees/ui-development-plan/gcli2api`，分支 `codex/ui-development-plan`，创建时主分支提交为 `8b1c163dbcfffd8260a50e11c6e92d646da4a351`。只向根窗口交付本文件的提交，不将该工作区旧代码作为最终 UI 版本。
 
@@ -21,18 +21,18 @@
 
 ## 2. 当前实现与状态快照
 
-本次只读核实时主集成 HEAD 为 `040fa5d66dd390fdb2b494d40be52785106b66d8`。App 的五页真实 lazy 接线、构建检查器、README 和合同更新当时尚未提交；随后根窗口报告完成集成测试及合成浏览器检查；移动布局 `106448fb` 已集成并通过相关复验，凭证 fixture 排除修正 `e1db18cbc96e0bb529a7749e4e5dbc1ba563ea21` 已交付，根窗口正在运行更强的五页产物检查及全量复验。因此本节是有时间边界的快照，最终交付应由根窗口记录最终 SHA、工作树状态和证据，不以本文件冻结别人的在途修改。
+初次只读核实时主集成 HEAD 为 `040fa5d66dd390fdb2b494d40be52785106b66d8`，五页真实 lazy 接线等仍是未提交修改。最终证据更新时读取到主分支 HEAD `41acf286053f1f6c1357cbcbc976b779944fc6c5`；移动布局与 fixture 排除修正已合入，根窗口的 `docs/ui-redesign/DELIVERY.md` 已记录 215 项前端测试、加强后的生产隔离检查及最终 Chromium/ASGI 复验通过，根正在保存其集成源码提交。以下来源 SHA 是可追溯依据；最终交付 SHA 和工作树状态以根交付为准，本方案不声称自己重新运行这些验证。
 
 | 模块 | 已交付来源提交 | 主集成对应提交（本次核实） | 状态与剩余门禁 |
 | --- | --- | --- | --- |
-| foundation | `86027ac`、`88cfdd6`、`1d24989` | `bf0c8f7`、`963ba8b`、`c4fc2c7` | client/auth/组件/工程已合入；真实五页接线与检查器是根集成修改，待最终提交冻结 |
+| foundation | `86027ac`、`88cfdd6`、`1d24989` | `bf0c8f7`、`963ba8b`、`c4fc2c7` | client/auth/组件/工程已合入；真实五页接线与加强检查器已完成根验证，最终集成提交由根保存 |
 | backendCreds | `4e8f9e4` | `68f37a3` | 面板能力矩阵与结果真实性已合入；最终回归证据随根交付 |
 | backendAuthConfig | `ca5bf0d` | `62df56d` | OAuth 隔离与配置 False/异常修正已合入；真实外部 OAuth 未测试且不属于本次验收 |
 | deploy | `57f050b` | `010f001` | Python 托管、多阶段 Docker 与忽略规则已合入；实际 Docker 镜像未构建 |
 | workflowsPages | `a97569b`、`50128ec` | `217d475`、`8b1c163` | overview/import/settings/logs 四页已合入；邮箱分页、WS auth probe 竞态补丁已合入 |
-| credentialsPage | `7a6a70d` | `040fa5d` | 凭证页已合入；移动补丁 `106448fb` 已集成并复验；fixture 修正 `e1db18c` 已交付，待根全量复验 |
+| credentialsPage | `7a6a70d` | `040fa5d` | 凭证页及移动补丁 `106448fb` 已集成；fixture 修正 `e1db18c` → `41acf286` 已集成，根全量复验通过 |
 | design | 五张合成结构图 | 非生产源码 | 供结构评审；不作为真实 API、主题或无障碍通过证据 |
-| 本方案 | 仅 `DEVELOPMENT_PLAN.md` | 等待根窗口集成 | 本地文档检查与提交；不修改上述实现 |
+| 本方案 | 仅 `DEVELOPMENT_PLAN.md` | 等待根窗口集成 | 本地文档检查与提交；最终证据依根 DELIVERY 更新，不修改上述实现 |
 
 设计图所在目录：`C:/Users/lywx2/Documents/Codex/2026-10-13/gcli2api-ui-structure-preview/outputs/design`。最终视觉选择仍开放。
 
@@ -230,12 +230,12 @@ flowchart TD
 
 | 执行包 | 前置与可并行性 | 可审阅产出与退出条件 | 当前状态 |
 | --- | --- | --- | --- |
-| UI-P0 合同冻结 | 用户范围、基线与维护约束 | 页面入口、client/auth 签名、所有权、fixture 门禁、产物路径明确 | 已有合同；根集成更新待冻结 |
+| UI-P0 合同冻结 | 用户范围、基线与维护约束 | 页面入口、client/auth 签名、所有权、fixture 门禁、产物路径明确 | 已有合同及根集成更新，最终提交由根保存 |
 | UI-P1 工程/托管 | P0；foundation 与 deploy 配合 | 独立工程/lock、登录壳、语义 token、动态 HTML；缺产物旧服务可启动 | 已实现已集成 |
 | UI-P2 后端最小修正 | P0；两后端窗口并行 | 四存储能力、真实计数、OAuth 隔离、config False/敏感日志测试 | 已实现已集成；没有真实后端/生产矩阵承诺 |
-| UI-P3 五页业务 | P0/P1 合同；各页面可先用合成适配器 | 五页模块/失败状态/旧响应隔离；OAuth/config 真适配以 P2 为门禁 | 已实现已集成；fixture 排除修正待根最终全量复验 |
+| UI-P3 五页业务 | P0/P1 合同；各页面可先用合成适配器 | 五页模块/失败状态/旧响应隔离；OAuth/config 真适配以 P2 为门禁 | 已实现已集成；fixture 排除修正及根最终全量复验通过 |
 | UI-P4 根集成 | P1/P2/P3 来源提交与测试材料齐全 | 按后端+foundation、托管、四页、凭证页、根 lazy 接线顺序合并；冲突逐文件解决 | 已完成主要接线；待最终提交 |
-| UI-P5 兼容与可用性 | 同一候选源码和产物 | 第 12 节门禁；功能对照缺口有正确入口/说明；移动补丁复验 | 多项通过，仍有明确未验证项 |
+| UI-P5 兼容与可用性 | 同一候选源码和产物 | 第 12 节门禁；功能对照缺口有正确入口/说明；移动补丁复验 | 本地测试与最终 Chromium/ASGI 通过；Docker/跨浏览器等仍未验证 |
 | UI-P6 本地交付 | P5 证据、最终 SHA、风险清单 | 仅本地提交、交付文档、可回滚方案；版本/钩子不变 | 根窗口收尾 |
 | UI-P7 后续发布 | 用户另行明确启动并确认范围 | 镜像/生产计划、默认入口决定和发布门禁 | 未启动，不自动继续 |
 
@@ -278,7 +278,7 @@ npm --prefix frontend run check:build
 
 Vite `base='./'`、`outDir='../ui-dist'`、manifest 开启。检查器必须验证：五个 `src/pages/<name>/index.tsx` 都是 isDynamicEntry 且文件各不相同；每个 manifest entry 的 file/css/assets 在产物内真实存在；每个 imports/dynamicImports 引用存在；JS/CSS 带 hash；HTML 资源相对寻址且两个注入点存在；没有内联 bootstrap/单文件产物；生产即使设置 `VITE_UI_FIXTURES=true` 也不含 DEV fixture。浏览器还要验证实际按需加载，不能只数 JS 文件。
 
-本次产物审阅曾发现凭证 fixture 顶层合成数据虽在生产分支不执行，仍残留于 chunk；这是生产隔离检查不足，不是真实数据泄漏。修正必须同时检查公共哨兵、页面特有合成标识和 manifest/module 残留，不能只证明开关为 false。
+本次产物审阅曾发现凭证 fixture 顶层合成数据虽在生产分支不执行，仍残留于 chunk；这是生产隔离检查不足，不是真实数据泄漏。现已改为 DEV 双条件动态 import，并通过更强检查：公共哨兵、页面业务合成标识和 manifest fixture 模块均为 0。加强后的门禁曾明确拒绝反例产物，修正后通过；不能只证明开关为 false。
 
 fixture 条件严格为 `import.meta.env.DEV && import.meta.env.VITE_UI_FIXTURES === 'true'`。使用合成 example.invalid、虚构 filename 和内存状态，未知 fixture 路由失败关闭，不落回真实后端；真实 API 失败不落回合成成功。开发服务器仅 loopback，不以启动真实 `web.py` 代替隔离验证。
 
@@ -297,24 +297,24 @@ Docker ui-build 阶段执行 npm ci、typecheck、build、check:build，再将�
 
 可选 Moby patternmatcher 检查覆盖上下文规则，但它不能代替 Docker build。未来 daemon 可用后执行本地镜像实构建并验证最终镜像只有 Python 运行依赖及完整静态树；当前 daemon 不可用必须保留未验证标记。现有 Actions 触发器保持，不借此恢复发布。
 
-## 12. 测试证据、验收与尚未冻结的门禁
+## 12. 最终本地测试证据与未验证门禁
 
-本方案工作仅做只读核实和文档检查，不重复运行别人的测试、不访问真实服务。下表区分根窗口报告与本方案直接读取的代码证据。测试数量受后续补丁影响，最终值必须由根窗口对最终源码更新；各组存在重叠，禁止相加制造更大覆盖数字。
+本方案工作仅做只读核实和文档检查，不重复运行别人的测试、不访问真实服务。下表区分根窗口报告与本方案直接读取的代码证据。测试数量受后续补丁影响，最终值必须由根窗口对最终源码更新；各组存在重叠，禁止相加制造更大覆盖数字。最终结果依据本方案实际读取的主工作区 `docs/ui-redesign/DELIVERY.md` 和根窗口最终通知；这些属于主集成窗口执行的证据。
 
 | 证据 | 当前可记录结果 | 来源/限制 |
 | --- | --- | --- |
-| foundation/credentials 局部测试 | 源目录 README 曾记录 66 foundation、86 credentials；credentials 合计 152 | 只作各窗口局部历史记录；不能加到根 208/210 上，旧 placeholder 构建不算五页验收 |
-| 根完整前端 | 20 文件、初始 208 项，移动补丁后 210 项通过；typecheck、生产 build 通过 | 根窗口在本次协作中报告；fixture 修正后的全 suite 与更强检查器尚待最终报告，不能沿用此前排除结论 |
-| 根产物 | 8 个 hashed JS、1 个 CSS；五页独立 entry、完整 manifest 引用通过；业务 fixture 全量剔除门禁重新打开 | 初始公共哨兵检查漏掉凭证顶层合成 Array.from；`e1db18c` 改为 DEV 双条件动态 import，其窗口 93 项页测试/typecheck 及生产扫描 0 标记/0 fixture 模块通过；根五页更强扫描在途 |
+| foundation/credentials 局部测试 | 源目录 README 曾记录 66 foundation、86 credentials；credentials 合计 152 | 只作各窗口局部历史记录；不能加到根 215 上，旧 placeholder 构建不算五页验收 |
+| 根完整前端 | 21 文件、215 项通过；typecheck、生产 build、加强 check:build 通过 | 最终 DELIVERY 及根报告；本地 Node 24.19.0，仅合成响应 |
+| 根产物 | 8 个 hashed JS、1 个 CSS；五页独立 dynamic entry、完整 manifest/资源引用、0 fixture 模块、0 公共及业务合成数据标记通过 | 最终 DELIVERY；生产显式设置 `VITE_UI_FIXTURES=true` 同样通过；反例曾被加强门禁拒绝 |
 | Python 集成 | 两组分别 261、114 项通过，含 42 项重叠 | 根报告；不能称 375 个不同测试，不把 mocked backend 当真实四引擎生产验证 |
 | 旧面板 Node | 68 项通过 | 根报告；与某窗口先前 29 项历史记录不累加 |
-| 合成 Chromium | 五页导航、导入 partial、跨路由非敏感 settings 草稿及合成保存、详情/跨窗口登出重登、移动导航登出通过；1440/390 无横向溢出；无外部/真实 API 请求、无 pageerror | 根报告 `UI_SMOKE.json` 及截图；另报告移动 first-card 可见和折叠草稿复验通过；不扩大为全部键盘/浏览器验证 |
-| 生产产物内存 ASGI | 真实 index+五页 chunks 的 no-store/meta/CSP、MIME/immutable、index/manifest/缺资源 404、带 query 307 通过 | 根报告 `UI_HOSTING_SMOKE.json`；不启动真实 lifespan，不等同真实镜像运行 |
-| Docker 实构建 | 未验证 | daemon 不可用；Dockerfile 和上下文检查不代表镜像已构建 |
+| 合成 Chromium | 五页导航、导入 partial、跨路由非敏感 settings 草稿及合成保存、详情/跨窗口登出重登、移动导航登出通过；1440/390 无横向溢出；无外部/真实 API 请求、无 pageerror | 最终 `UI_SMOKE.json` 及截图；移动首屏第一张卡可见，折叠保留筛选草稿；最终复验通过，不扩大为全部键盘/浏览器验证 |
+| 生产产物内存 ASGI | 真实 index+五页 chunks 的 no-store/meta/CSP、MIME/immutable、index/manifest/缺资源 404、带 query 307 通过 | 最终 `UI_HOSTING_SMOKE.json` 再验通过；不启动真实 lifespan，不等同真实镜像运行 |
+| Docker 上下文/实构建 | Moby 原生规则检查 17 保留和 14 排除路径通过；完整镜像未验证 | daemon 不可用；Node 22 容器版本仅检查 engines/lockfile/接线，不把本地 Node 24 验证等同容器运行 |
 | 跨浏览器/完整可访问性 | 未冻结或未验证 | Chromium 上述场景以外，不宣称 Firefox/WebKit、全键盘、200% 缩放、屏幕阅读器通过 |
 | 真实外部服务/生产 | 未执行 | 本轮范围排除真实 OAuth、模型、数据库/凭证、生产 API 与部署，不作为本地测试的隐含步骤 |
 
-根交付时应把报告/截图的实际绝对路径、对应 SHA、环境、命令和日期集中记录在交付说明；仅有报告文件名不构成可复现定位。本文件不创建空的 DELIVERY.md，也不替根窗口写最终测试结论。
+最终报告目录已由根交付记录为 `C:/Users/lywx2/.codex/visualizations/2026/10/13/01a132fa-9639-7c50-a301-b42ba28f74ee`，包含 `UI_SMOKE.json`、`UI_HOSTING_SMOKE.json`、`ui-smoke.py`、`ui-hosting-smoke.py` 与 `runtime-*.png`。这是本机证据路径，不是可移植构建依赖。根交付继续负责绑定其最终集成 SHA；本方案不替根写最终测试结论，也不把未运行门禁补作通过。
 
 必要行为检查与关联资产：
 
