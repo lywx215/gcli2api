@@ -9,7 +9,7 @@ manager 无需配套动作（`no_counterpart_action`），不恢复取消的 MGM
 
 在包含完整 `frontend/` 源码与唯一 `package-lock.json` 的同一版本 checkout 中构建。
 使用符合 `frontend/package.json` engines 的 Node（Docker 构建阶段采用 Node 22；
-本地至少 22.12，或 manifest 接受的其他版本）和 npm。不要重新生成锁文件。
+本地 Node 22 至少 22.22.2，Node 24 至少 24.15.0，或 Node 26 及以上版本）和 npm。不要重新生成锁文件。
 从仓库根执行：
 
 ```sh

@@ -1,15 +1,19 @@
 # Docker 静态验证与后续实际门禁
 
-日期：2026-10-13（Asia/Shanghai）。**静态配置核对已记录；Docker 实际构建、镜像与容器 smoke 均未验证。**
+日期：2026-10-13（Asia/Shanghai）。**Node engines 兼容修正及 Windows 本地构建已验证；Docker 实际构建、镜像与容器 smoke 均未验证。**
 
-用户最新决定：先提交客户页面确认，确认后进入正式开发，详细测试留到正式开发阶段。
-本记录不授权继续开发、修正 engines、测试、构建或部署；下文命令仅保存为未来参考。
+用户已确认方案并正式恢复开发与开发阶段测试；本次仅收紧两处根 engines 元数据并更新构建说明。
+Docker 当前环境仍不可构建，禁止启动引擎、安装或环境绕行；Docker 命令仅供未来环境可用时参考，
+不构成当前部署、推送或生产访问授权。
 
 ## 范围与环境事实
 
-只读检查集成工作区 `C:/Users/lywx2/.codex/worktrees/ui-redesign/gcli2api`，确认其 HEAD 为
-`fe99b43a1b916f56f33d2f3b35aaf7c9eab6bbfd`，检查时工作区干净。记录在独立工作区的
-`codex/ui-static-deployment-validation` 分支编写，基于该 SHA，不修改主集成工作区。
+本轮正式基线为 `419873f42ed0b82ef1997ea25edef940342ce500`，来自 `codex/ui-redesign`。
+独立分支为 `codex/ui-formal-build-compat`，工作区为
+`C:/Users/lywx2/.codex/worktrees/ui-formal-build-compat/gcli2api`。主集成工作区仅只读确认，
+其已有未提交改动未复制、未修改。正式源码完整来自该基线，不从旧分支补共享实现。
+
+下方 Docker CLI/daemon 记录来自前轮 fe99b43 检查；本轮没有重新调用 Docker。
 
 初次 `docker version` 返回 Docker CLI 29.7.2、API 1.55、windows/amd64、context
 `desktop-linux`，daemon 连接失败原因为：
@@ -22,12 +26,12 @@ failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine
 无法构建，立即停止构建/启动/安装。已向该命令发送 Ctrl+C，返回 exit code 1、无输出。
 之后不再探测或改变 daemon 状态，不声称其最终状态已核实，也没有停止无关服务。
 
-没有执行 docker build、docker run、安装、重启、部署或 push；没有创建实际构建上下文或
+没有执行 docker build、docker run、Docker/系统安装、重启、部署或 push；没有创建实际构建上下文或
 验证容器，没有修改已有容器、Volume、真实环境、凭证或数据库。最终镜像标签/ID/digest
 **未产生**；实际容器平台、Node/npm/Python 版本**未验证**。下文 linux/amd64 是后续目标，
 不是已完成的平台证据。环境限制由用户明确告知，不能以静态检查代替实际 Docker 门禁。
 
-## 已完成证据
+## 前轮静态与局部测试证据
 
 - fe99b43 的 Dockerfile、.dockerignore、web.py、src/panel/ui.py、src/panel/root.py
   与已交付 `57f050b236ff9f583b5af36c44ef57a80685041f` 的对应 Git blob 相同。
@@ -46,38 +50,56 @@ failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine
 - 前轮 77 项 Python 与 29 项旧面板 JS 检查通过，均非此次容器内执行。完整旧模型矩阵由
   主集成聊天独立归因；本记录不替其下结论。风格调整不在本轮范围。
 
-### Node engines：待客户确认后的开发建议
+## 本轮正式构建兼容验证
 
-主集成 fe99b43 的 package 根 engines 及 lock 根 engines 仍为
-`^22.12.0 || ^24.0.0 || >=26.0.0`。锁内 @asamuzakjp/css-color、
-@asamuzakjp/dom-selector、jsdom、w3c-xmlserializer 等要求
-`^22.22.2 || ^24.15.0 || >=26.0.0`，严于现有根级下限。
-建议在客户确认后的正式开发阶段，将 package 与 lock 根 engines 同步收紧到实际交集，
-同时更新源码安装说明；不要重新解析或升级依赖。此建议当前**未集成、未验收**。
+基线 package 根 engines 及 lock 根 engines 原为 `^22.12.0 || ^24.0.0 || >=26.0.0`。
+锁内 @asamuzakjp/css-color、@asamuzakjp/dom-selector、jsdom、w3c-xmlserializer 等要求
+`^22.22.2 || ^24.15.0 || >=26.0.0`。本轮只将 `frontend/package.json` 的 engines.node
+和 `frontend/package-lock.json` 的 packages[""].engines.node 同步收紧到后者，
+并更新源码安装说明；没有重新解析依赖、升级版本或修改 integrity。
 
-收到最新停止指示前，独立分支已经修改以下三个文件；现全部保留为未提交候选草稿，
-不纳入本记录的文档提交，也不得 cherry-pick 到主 UI 分支：
+相对正式基线的 JSON 语义比较通过：恢复这两个根级字段的旧值后，两个完整 JSON 对象均与
+基线完全相等。去除 CRLF/LF 表示差异后的字节比较也通过，只有每个文件的一处 engines 替换；
+保留 checkout 原有行尾（package 57 个 CRLF，lock 4079 个 CRLF）。npm ci 后再次核对相同约束。
 
-- `frontend/package.json`：拟收紧根 engines.node。
-- `frontend/package-lock.json`：拟收紧 packages[""].engines.node。
-- `docs/UI_STATIC_DEPLOYMENT.md`：拟同步最低 Node 版本。
+本机 Windows/amd64、Node **24.19.0**、npm **11.17.0** 的实际执行结果：
 
-当时使用宿主 Node **24.19.0** 的 semver 检查通过，满足候选范围及锁文件全部 Node engines。
-但原始字节等价断言未通过，未继续归因，也未完成候选元数据的全部等价确认；不能宣称
-该候选已验证无其他差异。用户收紧流程后没有继续修改候选或新增测试。
+| 检查/命令（仓库根） | 结果 |
+| --- | --- |
+| npm bundled semver 检查本机 Node 与全部 locked Node engines | 项目范围及全部 133 条约束通过 |
+| `npm --prefix frontend ci --no-audit --no-fund` | 通过，安装 185 个包；依照锁文件安装，未执行依赖升级或漏洞审计 |
+| `npm --prefix frontend run typecheck` | 通过 |
+| `npm --prefix frontend run build` | 通过，Vite 8.3.4；2119 个模块；独立 ui-dist 产物 |
+| `npm --prefix frontend run check:build` | 通过：8 个 hash JS、1 个 hash CSS、五个独立页面、完整 manifest 引用、meta 注入点、无 DEV fixture 标记 |
 
-`node:22-bookworm-slim` 保持原样，其实际 Node 版本、digest、拉取可用性及 Linux
-原生依赖安装仍未验证。未来正式开发和实际构建应确认 Node 22 至少 22.22.2。
+本窗口不重复主窗口负责的完整前端单元测试。构建只使用源码及锁定依赖，不启动真实 Python
+lifespan，不调用模型、OAuth、凭证或生产 API；产物与 node_modules 保持忽略，不纳入提交。
+这仅证明 Windows 宿主的安装、类型检查与生产构建，不证明 Linux 原生依赖或 Docker 镜像通过。
+
+### 上轮草稿与字节断言的归因
+
+旧工作区 `C:/Users/lywx2/.codex/worktrees/ui-static-deployment/gcli2api` 的
+`codex/ui-static-deployment-validation` 分支仍保留三份未提交草稿：package、lock 及
+`docs/UI_STATIC_DEPLOYMENT.md`。本轮只读比对，没有修改、reset、删除或移动旧草稿。
+上轮字节断言把 CRLF checkout 与 LF Git blob 直接比较，因行尾表示不同失败；本轮确认旧草稿
+统一行尾后，除了原先拟定的单处根 engines 替换，其他字节无差异。正式实现仍从 419873f
+独立完成，不依赖旧草稿作为源码基线。
+
+`node:22-bookworm-slim` 保持原样。实际镜像 Node/npm 版本、digest、拉取可用性及 Linux
+依赖安装仍未验证；未来实际构建应确认 Node 22 至少 22.22.2，不把本机结果当作镜像证据。
 
 ## 后续完整构建命令（全部尚未执行）
 
-须客户确认并进入正式开发、具备可用 Docker 环境后才执行；现在不运行。不包含启动引擎或环境绕行。以下 PowerShell 从精确 commit 的
-Git archive 建立新临时目录，不复制工作树真实配置。示例固定 fe99b43 用于复现此次静态检查；
-验证最终收尾版本时，将 revision 显式替换为合入 engines 修正后的完整集成 SHA，并记录该 SHA。
+仅在之后允许实际 Docker 验证、且环境可用时执行；当前禁止运行，不包含启动引擎或环境绕行。
+以下 PowerShell 一次解析 `codex/ui-redesign` 为完整 SHA，然后固定该 SHA 创建 Git archive，
+不复制工作树真实配置。先确认主分支已集成 engines 修正，再运行；命令会检查归档 manifest
+的范围并记录完整 SHA，防止拿未集成版本代替验收。
 
 ```powershell
 $repo = 'C:/Users/lywx2/.codex/worktrees/ui-redesign/gcli2api'
-$revision = 'fe99b43a1b916f56f33d2f3b35aaf7c9eab6bbfd'
+$revision = (git -C $repo rev-parse --verify 'codex/ui-redesign^{commit}').Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve integration commit' }
+Write-Output "Frozen source revision: $revision"
 $validationRoot = Join-Path ([IO.Path]::GetTempPath()) ('gcli-ui-docker-' + [guid]::NewGuid().ToString('N'))
 $context = Join-Path $validationRoot 'context'
 New-Item -ItemType Directory -Path $context -Force | Out-Null
@@ -86,6 +108,8 @@ git -C $repo archive --format=tar --output=$archive $revision
 if ($LASTEXITCODE -ne 0) { throw 'git archive failed' }
 tar -xf $archive -C $context
 if ($LASTEXITCODE -ne 0) { throw 'archive extraction failed' }
+$archivedPackage = Get-Content -Raw (Join-Path $context 'frontend/package.json') | ConvertFrom-Json
+if ($archivedPackage.engines.node -ne '^22.22.2 || ^24.15.0 || >=26.0.0') { throw 'Engine correction is not integrated' }
 $image = 'gcli2api:ui-verify-' + $revision.Substring(0,12)
 $builderImage = 'gcli2api:ui-builder-verify-' + $revision.Substring(0,12)
 $iidFile = Join-Path $validationRoot 'image-id.txt'
