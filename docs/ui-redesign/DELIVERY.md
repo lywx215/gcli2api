@@ -1,14 +1,14 @@
-# 新 UI 首轮并行开发交付
+# 新 UI 本地交付（含模型路由）
 
-当前阶段：**页面结构已由用户确认，继续模型路由正式接入与本地交付**。2026-10-13，用户在主聊天明确“页面确认ok，请继续”。当前确认材料含已完成的五页及模型路由合成预览；本轮将模型路由接入已有 GET/PUT 接口，相关实现与验证另行记录。此前五页验证保留时点，颜色、字体及最终风格后置，Docker 与真实外部验收仍未完成，本次不部署。
+当前阶段：**页面确认后正式接入完成，本地交付通过（未部署）**。2026-10-13，用户在主聊天明确“页面确认ok，请继续”。模型路由已接入既有 GET/PUT，现为六个独立生产页面；本轮实现、前端回归、相关旧接口、生产构建和合成浏览器已完成。此前五页验证保留原时点。颜色、字体及最终风格后置，Docker、真实外部与完整浏览器/a11y矩阵仍未验证，不称生产发布就绪。
 
-2026-10-13，用户已授权并行开发及 OAuth 兼容修正。实现保存在独立 `codex/ui-redesign` 分支，基线为 `d1012` / `ebda92be2a4a5562963360bdbab2d33379e63077`。原始 checkout 的用户改动保留；本次没有发布、推送、生成面板版本号或执行 Claude 审核。
+2026-10-13，用户已授权并行开发及 OAuth 兼容修正。首轮实现在 `codex/ui-redesign`，基线为 `d1012` / `ebda92be2a4a5562963360bdbab2d33379e63077`；页面确认后的本轮实现在独立 `codex/ui-confirmed-integration`。六页产品与冻结构建源码为 `c2c7ed6457c2a152e2eb23cd2d3f35788c216ca9`；其后只作交付文档更新。原始 checkout 和原 UI 预览草稿保留；本次没有发布、推送、生成面板版本号或执行 Claude 审核。
 
 ## 独立 Review 结论与收敛
 
 此前独立 Review 的“方案质量有条件通过、本地候选交付有条件通过、生产发布就绪不通过”为当时的审阅结论。现已获得主聊天用户对当前页面材料的明确确认；该确认不代表外部客户签字、默认入口替换或生产发布批准。已提交五页实现与后续模型路由接入分别记录，不能用旧五页结果证明新增第六页已通过。颜色、字体与最终风格继续后置。
 
-Review 所引用的 `419873f` 为历史时点；本次核查的产品源码已推进至 `e27698edd1de992cfb6269d1d367961ce42baf60`。发现状态按实际提交纠正，不回退已完成修正，也不把旧失败原文改写成当时通过。
+Review 所引用的 `419873f` 为历史时点；当时核查的五页产品源码已推进至 `e27698edd1de992cfb6269d1d367961ce42baf60`。发现状态按实际提交纠正，不回退已完成修正，也不把旧失败原文改写成当时通过。
 
 | 发现 | 当前事实与处置 | 门禁结论 |
 | --- | --- | --- |
@@ -22,7 +22,7 @@ Review 所引用的 `419873f` 为历史时点；本次核查的产品源码已�
 未来发布另行启动的必要门禁包括：F01 的真实镜像构建与 Node 22 容器验证；F02 所涉兼容回归范围完整性及候选版本结果；经单独明确授权的真实 OAuth/模型等外部联调；跨浏览器、键盘、缩放与 a11y 矩阵。当前均不据本地合成结果推定完成。这里列出门禁不授权立即外部调用、部署或全仓修复，不恢复 Gemini CLI 专属维护、cancelled MGMT、管理协议改造或对 manager 的 handoff。Management schema 1.4、panel-version.txt 保持不变。
 
 
-## 实现范围
+## 首轮五页实现范围（继续保留）
 
 React + TypeScript + Vite + Tailwind CSS + shadcn/ui，五个独立功能目录及 lazy 入口：概览、Antigravity 凭证、导入、设置、日志。`App` 只装配认证、导航和加载边界；产物按页拆分，不使用单文件打包。中性外观只是占位，颜色、字体、圆角、阴影保留集中主题变量，最终风格后置。
 
@@ -47,9 +47,9 @@ React + TypeScript + Vite + Tailwind CSS + shadcn/ui，五个独立功能目录�
 
 设计聊天交付五张静态结构 PNG、独立 HTML、主题变量和规范。新增完整方案聊天单独维护 [完整开发方案](DEVELOPMENT_PLAN.md)，主聊天继续集成；[前端合同](FRONTEND_CONTRACT.md) 和 [并行边界](PARALLEL_DEVELOPMENT.md) 定义共享接口与文件所有权。
 
-## 正式开发本轮进展
+## 上一轮正式开发进展（五页）
 
-本轮从 `419873f` 启动，开发阶段测试已获用户授权。最终产品源码时点为 `e27698e`；其后仅更新文档。以下结果重新执行，历史预览与已撤回 fixture 实验不作为本轮通过结论。
+上一轮从 `419873f` 启动，开发阶段测试已获用户授权。当时五页产品源码时点为 `e27698e`；其后仅更新文档。以下结果重新执行，历史预览与已撤回 fixture 实验不作为本轮通过结论。
 
 | 收尾项 | 实际状态 |
 | --- | --- |
@@ -88,7 +88,7 @@ React + TypeScript + Vite + Tailwind CSS + shadcn/ui，五个独立功能目录�
 
 当前确认材料为 `customer-confirmation-current/index.html`、14 张合成截图及《客户页面确认表》，可转发包为 `gcli2api-ui-confirmation-20261013.zip`。材料包含 `7a1d384` 的五页候选及本地未提交模型路由合成预览；后者不计入原有 259 项前端、740 项 Python 验证结果。用户已在主聊天明确“页面确认ok，请继续”，本轮继续模型路由真实接口接入及相关本地验证。确认原包与 manifest 已保存到 `confirmed-delivery/approved-preview/`，确认来源记录在 `confirmed-delivery/page-confirmation.json`。历史 `customer-review/` 及旧 11 张截图包保留为历史资料。客户材料使用合成数据，最终颜色字体风格另行确认。
 
-本轮停止详细测试前已完成 333 项旧接口/托管组合回归。组合中发现并修正了测试的 `web` 导入缓存干扰；`test_ui_hosting.py` 隔离修正已纳入本轮 `d6905a0`，不改变产品行为。工程根 Node engines 已在本轮收紧到 `^22.22.2 || ^24.15.0 || >=26.0.0`；当前 Node 24 本机验证不能等同 Node 22 镜像已验证。
+早期停止详细测试前已完成 333 项旧接口/托管组合回归。组合中发现并修正了测试的 `web` 导入缓存干扰；`test_ui_hosting.py` 隔离修正已纳入本轮 `d6905a0`，不改变产品行为。工程根 Node engines 已在本轮收紧到 `^22.22.2 || ^24.15.0 || >=26.0.0`；当前 Node 24 本机验证不能等同 Node 22 镜像已验证。
 
 ## 页面确认后的并行执行
 
@@ -98,7 +98,20 @@ React + TypeScript + Vite + Tailwind CSS + shadcn/ui，五个独立功能目录�
 - foundation：第六页 lazy 路由、导航与设置入口、通用离页 guard、DEV fixture 接线和六页构建校验。
 - root/build：按来源提交集成，执行相关前端/旧路由回归与合成浏览器、生产构建和产物检查；最终结果绑定新的候选 SHA。
 
-所有子聊天按用户最新指定采用 `gpt-6.1-sol` / `ultra`。模型路由 UI 只复用已有双渠道合同，不改模型分派、模型适配或 Management schema/capability，不恢复 Gemini CLI 专属维护与 cancelled MGMT；旧 `/model-routing` 编辑器继续保留。当前没有新增实现通过结论，完成后更新本段及新验证证据。
+所有子聊天按用户最新指定采用 `gpt-6.1-sol` / `ultra`。模型路由 UI 只复用已有双渠道合同，不改模型分派、模型适配或 Management schema/capability，不恢复 Gemini CLI 专属维护与 cancelled MGMT；旧 `/model-routing` 编辑器继续保留。本轮实际完成：共享来源 `312ce95` / `6843ece` → 根 `bb882a8` / `c2c7ed6`；模型路由来源 `b55f178` → 根 `989f047`；设置回归目标调整为根 `d8a2ccf`。后端、模型 API、schema、panel-version 及 Docker 配置相对 `7a1d384` 零差异。
+
+| 本轮检查 | 实际结果及范围 |
+| --- | --- |
+| 完整前端 | `c2c7ed6`：338 passed，30 文件，typecheck 通过。首轮 337/338 的唯一失败来自新测试重复使用已读取的 Response；修正 mock 后全通过，首轮 JSON 保留 |
+| 相关旧接口 | 静态托管、旧模型路由编辑器和专用配置 API 共 62 passed；6 条既有弃用提示。运行时点 `1704873`，相关 Python/旧资源至 `c2c7ed6` 无变化；不与历史 740 项相加 |
+| 冻结生产构建 | Git archive `c2c7ed6`，Windows Node 24.19.0/npm 11.17.0：typecheck/build/check:build 通过，13 hashed JS + 1 CSS、六页独立 chunk；显式 `VITE_UI_FIXTURES=true` 的生产产物仍 0 合成标识 |
+| 实际产物托管 | 内存 ASGI：meta/CSP/no-store、14 个资源的 MIME/immutable、私有文件与缺资源 404、query 307；旧 `/`、`/model-routing`、`/front/common.js` 与旧路由 JS 均 200。不启动真实应用 lifespan |
+| 生产 Chromium | 1440/390 各 8 个关键检查首轮通过：按需加载、完整表保存、400 全局行号/ARIA/焦点、提交后 503 人工核对、离页取消/确认和移动焦点、登出/迟到 GET 隔离、损坏配置双确认修复。无溢出或页面错误 |
+| 请求隔离 | 28 次 loopback 假 API（8 PUT）；外部尝试/发送与真实生产请求均 0。导航到概览的另 8 次同源凭证 GET 被拦截，未抵达真实服务。浏览器旧路径只用假标记；真实旧静态路径由上方 ASGI/相关回归覆盖 |
+
+当前六页证据统一位于本聊天附件 `confirmed-delivery/`：`summary.json`、`frontend-tests.json`、`legacy-routing.xml`、`model-routing-hosting.json`、`model-routing-browser.json` 和两张 `model-routing-production-1440.png` / `-390.png`。历史 `formal-closeout/` 的五页结果保持原样。
+
+生产包为 `confirmed-delivery/six-page-c2c7ed6457c2/gcli2api-ui-dist-c2c7ed6457c2.zip`（212287 字节），SHA256 `553c9c41a5e2f10a3f7dc2315f9dfcad66b3dbbad80da0b6374ecf26f5ce3488`；manifest SHA256 `d5e7fcdbdecc8009862c84a09f0d0f8449c559674ac2c33bbf59303f295da001`。同目录有来源 tar、逐文件哈希和 BUILD_EVIDENCE/BUILD_RECORD，静态包须由匹配的 Python 版本托管，不是可直接双击的客户离线预览册。
 
 ## 未验证与后续边界
 
