@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { registerSessionCleanup, useAuth } from '@/auth';
 import { managementToken, writeFailure } from '../api';
@@ -27,11 +28,11 @@ export function ManagementToken({status,onUpdate}:{status?:TokenStatus;onUpdate:
     finally{if(e===epoch.current&&n===version.current)setPending(false);}
   }
   return <Card><CardHeader><CardTitle>Management Token</CardTitle></CardHeader><CardContent className="space-y-3">
-    <p>{!status?'状态未知':status.configured?'已配置':'未配置（Management API 关闭）'}{status?.locked?' · 环境变量锁定':''}</p>
-    <label htmlFor="management-token">新 Token（独立保存）</label><Input ref={input} id="management-token" type="password" autoComplete="new-password" value={token} aria-invalid={invalid} aria-describedby={invalid?'management-token-error':'management-token-help'} onChange={event=>{setToken(event.target.value);setInvalid(false);}} disabled={disabled}/>
-    <p id="management-token-help" className="text-xs text-muted-foreground">未提交输入只留在当前页面；环境锁定、会话变化或离开本页会清除。</p>
+    <div><Badge variant={!status||status.locked?'warning':status.configured?'success':'info'}>{!status?'状态未知':status.configured?'已配置':'未配置（Management API 关闭）'}{status?.locked?' · 环境变量锁定':''}</Badge></div>
+    <label htmlFor="management-token" className="text-sm font-medium text-foreground">新 Token（独立保存）</label><Input className="aria-invalid:border-destructive aria-invalid:focus-visible:ring-destructive" ref={input} id="management-token" type="password" autoComplete="new-password" value={token} aria-invalid={invalid} aria-describedby={invalid?'management-token-error':'management-token-help'} onChange={event=>{setToken(event.target.value);setInvalid(false);}} disabled={disabled}/>
+    <p id="management-token-help" className="text-[13px] leading-4 text-muted-foreground">未提交输入只留在当前页面；环境锁定、会话变化或离开本页会清除。</p>
     <div className="flex flex-wrap gap-2"><Button type="button" disabled={disabled||!token} onClick={()=>void act('PUT')}>保存 Token</Button><Button type="button" variant="outline" disabled={pending||!token} onClick={discardInput}>放弃 Token 输入</Button><Button type="button" variant="destructive" disabled={disabled||!status?.configured} onClick={()=>setConfirm(true)}>清除 Token</Button></div>
-    {confirm&&<div role="alert" className="space-y-2"><p>清除将关闭 Management API，依赖此 Token 的连接会失效。</p><Button variant="destructive" onClick={()=>void act('DELETE')}>确认清除</Button> <Button variant="outline" onClick={()=>setConfirm(false)}>取消</Button></div>}
-    <p id={invalid?'management-token-error':undefined} role={invalid?'alert':'status'}>{message}</p>
+    {confirm&&<div role="alert" className="space-y-2 text-sm text-destructive"><p>清除将关闭 Management API，依赖此 Token 的连接会失效。</p><Button variant="destructive" onClick={()=>void act('DELETE')}>确认清除</Button> <Button variant="outline" onClick={()=>setConfirm(false)}>取消</Button></div>}
+    <p id={invalid?'management-token-error':undefined} role={invalid?'alert':'status'} className={invalid?'text-[13px] leading-5 text-destructive':'text-sm text-info'}>{message}</p>
   </CardContent></Card>;
 }

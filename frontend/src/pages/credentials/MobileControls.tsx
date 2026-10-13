@@ -13,10 +13,10 @@ export function MobileControls({ total, selected, panels, toggle }: {
   toggle: (panel: MobilePanel) => void
 }) {
   return (
-    <section className="space-y-2 rounded-xl border bg-card p-3 md:hidden" aria-label="移动凭证工具">
-      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-        <span>当前匹配 <strong>{total ?? '未知'}</strong> 项</span>
-        <span>已选 <strong>{selected}</strong> 项</span>
+    <section className="space-y-2 rounded-xl border bg-card p-3 text-card-foreground md:hidden" aria-label="移动凭证工具">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-[13px] text-muted-foreground">
+        <span>当前匹配 <strong className="font-semibold tabular-nums text-foreground">{total ?? '未知'}</strong> 项</span>
+        <span>已选 <strong className="font-semibold tabular-nums text-foreground">{selected}</strong> 项</span>
       </div>
       <div className="grid grid-cols-3 gap-2">
         {([

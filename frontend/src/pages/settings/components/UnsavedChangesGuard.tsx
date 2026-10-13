@@ -38,7 +38,7 @@ export function UnsavedChangesGuard() {
     document.addEventListener('click', handleClick);
     return () => document.removeEventListener('click', handleClick);
   }, [dirty, authenticated, sessionEpoch]);
-  return <>{secrets && <p className="text-sm text-muted-foreground">未提交的密码、Token 或敏感地址输入不会跨页面保留；离开设置页会清除这些输入。</p>}{unconfirmed && <p role="status" className="text-sm text-muted-foreground">存在尚未确认的配置提交。普通读回不会解除提醒；可明确采用观察值或放弃草稿结束跟踪，不会自动重试。</p>}<AlertDialog open={!!pending && authenticated && pending.epoch === sessionEpoch} onOpenChange={open => { if (!open) setPending(null); }}>
+  return <>{secrets && <p className="text-[13px] leading-5 text-warning">未提交的密码、Token 或敏感地址输入不会跨页面保留；离开设置页会清除这些输入。</p>}{unconfirmed && <p role="status" className="text-[13px] leading-5 text-warning">存在尚未确认的配置提交。普通读回不会解除提醒；可明确采用观察值或放弃草稿结束跟踪，不会自动重试。</p>}<AlertDialog open={!!pending && authenticated && pending.epoch === sessionEpoch} onOpenChange={open => { if (!open) setPending(null); }}>
     <AlertDialogContent onCloseAutoFocus={event => {
       event.preventDefault();
       if(!authenticated)return;

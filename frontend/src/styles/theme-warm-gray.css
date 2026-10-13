@@ -1,0 +1,82 @@
+/* Warm-gray light sample. Tokens are centralized; dark values are reserved,
+ * and no theme class or mode switching is activated by this stylesheet. */
+:root {
+  --font-interface: "Segoe UI", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
+  --radius: 0.75rem;
+  --radius-control: 0.5rem;
+  --radius-surface: 0.75rem;
+  --background: #FAF9F5;
+  --foreground: #2D2A26;
+  --card: #F0EEE8;
+  --card-foreground: #2D2A26;
+  --popover: #FFFDF9;
+  --popover-foreground: #2D2A26;
+  --primary: #6B655D;
+  --primary-foreground: #FFFFFF;
+  --primary-hover: #5D574F;
+  --primary-active: #504A43;
+  --secondary: #E9E6DF;
+  --secondary-foreground: #2D2A26;
+  --muted: #F0EEE8;
+  --muted-foreground: #68625B;
+  --accent: #E9E6DF;
+  --accent-foreground: #2D2A26;
+  --hover: #EDEAE4;
+  --selected: #E9E6DF;
+  --control-background: #FFFDF9;
+  --border: #D5D2CB;
+  --input: #89837B;
+  --ring: #6B655D;
+  --success: #146344;
+  --success-bg: #E5F2EA;
+  --warning: #8A5700;
+  --warning-bg: #FFF2D1;
+  --destructive: #A83F32;
+  --destructive-foreground: #FFFFFF;
+  --destructive-bg: #FBE9E5;
+  --info: #5D5850;
+  --info-bg: #F0EEE8;
+  --overlay: rgb(45 42 38 / 45%);
+  --elevation-control: 0 1px 2px rgb(45 42 38 / 4%);
+  --elevation-card: 0 1px 2px rgb(45 42 38 / 5%);
+  --elevation-popover: 0 12px 32px rgb(45 42 38 / 12%), 0 2px 8px rgb(45 42 38 / 6%);
+  --elevation-selected: inset 0 -2px 0 var(--primary);
+}
+/* Existing dark extension remains opt-in. The current sample only uses :root. */
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --primary-hover: oklch(0.85 0 0);
+  --primary-active: oklch(0.78 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.72 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --hover: oklch(0.3 0 0);
+  --selected: oklch(0.269 0 0);
+  --control-background: var(--popover);
+  --border: oklch(1 0 0 / 15%);
+  --input: oklch(1 0 0 / 45%);
+  --ring: oklch(0.7 0 0);
+  --destructive: oklch(0.72 0.18 25);
+  --destructive-foreground: oklch(0.145 0 0);
+  --success: oklch(0.75 0.15 155);
+  --warning: oklch(0.8 0.15 80);
+  --info: oklch(0.75 0.13 255);
+  --success-bg: color-mix(in srgb, var(--success) 15%, var(--background));
+  --warning-bg: color-mix(in srgb, var(--warning) 15%, var(--background));
+  --destructive-bg: color-mix(in srgb, var(--destructive) 15%, var(--background));
+  --info-bg: color-mix(in srgb, var(--info) 15%, var(--background));
+  --overlay: rgb(0 0 0 / 45%);
+  --elevation-control: 0 1px 2px rgb(0 0 0 / 12%);
+  --elevation-card: 0 1px 2px rgb(0 0 0 / 15%);
+  --elevation-popover: 0 12px 32px rgb(0 0 0 / 30%), 0 2px 8px rgb(0 0 0 / 20%);
+}

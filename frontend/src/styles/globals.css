@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "./theme-warm-gray.css";
 @custom-variant dark (&:is(.dark *));
 @theme inline {
   --font-sans: var(--font-interface);
@@ -25,64 +26,32 @@
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-info: var(--info);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-}
-:root {
-  --font-interface: ui-sans-serif, system-ui, sans-serif;
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.45 0 0);
-  --accent: oklch(0.96 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.55 0.22 27);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.9 0 0);
-  --input: oklch(0.87 0 0);
-  --ring: oklch(0.6 0 0);
-  --success: oklch(0.45 0.12 155);
-  --warning: oklch(0.5 0.13 70);
-  --info: oklch(0.48 0.14 255);
-}
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.72 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.72 0.18 25);
-  --destructive-foreground: oklch(0.145 0 0);
-  --border: oklch(1 0 0 / 15%);
-  --input: oklch(1 0 0 / 20%);
-  --ring: oklch(0.7 0 0);
-  --success: oklch(0.75 0.15 155);
-  --warning: oklch(0.8 0.15 80);
-  --info: oklch(0.75 0.13 255);
+  --color-success-bg: var(--success-bg);
+  --color-warning-bg: var(--warning-bg);
+  --color-destructive-bg: var(--destructive-bg);
+  --color-info-bg: var(--info-bg);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-active: var(--primary-active);
+  --color-hover: var(--hover);
+  --color-selected: var(--selected);
+  --color-control-background: var(--control-background);
+  --color-overlay: var(--overlay);
+  --shadow-control: var(--elevation-control);
+  --shadow-card: var(--elevation-card);
+  --shadow-popover: var(--elevation-popover);
+  --shadow-selected: var(--elevation-selected);
+  --text-xs: 0.8125rem;
+  --text-sm: 0.875rem;
+  --text-lg: 1.125rem;
+  --text-2xl: 1.5rem;
+  --radius-sm: var(--radius-control);
+  --radius-md: var(--radius-control);
+  --radius-lg: var(--radius-surface);
+  --radius-xl: var(--radius-surface);
 }
 @layer base {
   * { @apply border-border; }
-  body { @apply bg-background text-foreground font-sans; margin: 0; min-width: 20rem; }
+  body { @apply bg-background text-foreground font-sans; margin: 0; min-width: 20rem; font-size: 0.875rem; line-height: 1.5rem; }
   a, button, input, select, textarea { @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2; }
   [hidden] { display: none !important; }
 }
