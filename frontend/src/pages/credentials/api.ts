@@ -1,12 +1,14 @@
 import { ApiError, requestBlob, requestJson } from '@/api/client'
 import { aggregate, CAP, listQuery, manualResult, object, parsePage, count, type Capabilities, type Filters, type Outcome } from './model'
-import { fixturePage } from './fixtures'
 export const fixtureMode = import.meta.env.DEV && import.meta.env.VITE_UI_FIXTURES === 'true'
 const mode = { mode: 'antigravity' }
 class BatchResultError extends Error {}
 export const api = {
   async list(filters: Filters, caps: Capabilities, offset: number, limit: number, signal?: AbortSignal) {
-    if (fixtureMode) return fixturePage(filters, offset, limit)
+    if (fixtureMode) {
+      const { fixturePage } = await import('./fixtures')
+      return fixturePage(filters, offset, limit)
+    }
     return parsePage(await requestJson('creds/status', { query: listQuery(filters, caps, offset, limit), signal }))
   },
   async action(names: string[], action: string, remark?: string): Promise<Outcome> {
