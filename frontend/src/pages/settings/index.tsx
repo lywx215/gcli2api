@@ -11,9 +11,9 @@ export default function SettingsPage(){
   const s=useSettings();const values=s.form.watch();const original=toDraft(s.baseline);
   const changes=fields.filter(f=>values[f.key]!==undefined&&!same(values[f.key],original[f.key]));
   const legacy=new URL(getServiceBase());legacy.hash='config';
-  return <div className="mx-auto max-w-6xl space-y-6">
+  return <div id="settings-content" tabIndex={-1} className="mx-auto max-w-6xl space-y-6">
     {fixtureMode&&<p role="status" className="rounded-md border border-border p-3">合成预览：本页所有操作仅影响内存示例，不访问后台。</p>}<header><h1 className="text-2xl font-semibold">设置</h1><p className="text-muted-foreground">Antigravity 与共享配置。只提交已修改且未被环境锁定的字段。</p></header>
-    <div className="flex flex-wrap gap-3"><Button variant="outline" disabled={s.busy||!s.auth.authenticated} onClick={()=>void s.refresh()}>重新读取并对照</Button>{s.observed&&<Button variant="outline" disabled={s.busy} onClick={s.acceptObservation}>放弃草稿并采用观察值</Button>}</div>
+    <div className="flex flex-wrap gap-3"><Button id="settings-read-config" variant="outline" disabled={s.busy||!s.auth.authenticated} onClick={()=>void s.refresh()}>重新读取并对照</Button>{s.observed&&<Button variant="outline" disabled={s.busy} onClick={s.acceptObservation}>放弃草稿并采用观察值</Button>}</div>
     <p className="text-sm text-muted-foreground">非敏感草稿只保留在当前标签页内存。切换新版页面可保留修改；刷新、关闭浏览器或前往旧页面会丢失草稿，请先处理未保存修改。</p>
     <p role="status" aria-live="polite">{s.busy?'正在处理…':s.status}</p>
     <UnsavedChangesGuard />

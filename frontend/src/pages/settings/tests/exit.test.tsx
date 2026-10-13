@@ -86,6 +86,53 @@ describe('settings exit protection',()=>{
     expect(screen.getByLabelText('面板密码')).toHaveValue('');expect(screen.getByLabelText('端口')).toHaveValue(8765);
     expect(warnsOnUnload()).toBe(true);expect(mocks.navigate).toHaveBeenCalledWith(link.href);link.remove();
   });
+  it.each(['removed','hidden','disabled'])('restores cancellation focus when the original mobile link is %s',async state=>{
+    await mount();change('面板密码','synthetic-private-input');
+    const link=document.createElement('a');link.href='#/logs';link.textContent='temporary mobile navigation';document.body.append(link);
+    act(()=>{clickLink(link);});await screen.findByRole('alertdialog');
+    if(state==='removed')link.remove();else if(state==='hidden')link.hidden=true;else link.setAttribute('aria-disabled','true');
+    fireEvent.click(screen.getByRole('button',{name:'继续编辑'}));
+    await waitFor(()=>expect(screen.getByRole('button',{name:'重新读取并对照'})).toHaveFocus());
+    expect(screen.getByLabelText('面板密码')).toHaveValue('synthetic-private-input');expect(mocks.navigate).not.toHaveBeenCalled();link.remove();
+  });
+  it.each(['unknown','partial','network'])('retains a non-secret reminder for a secret-only %s save across GET and route unmount',async outcome=>{
+    if(outcome==='network')mocks.saveConfig.mockRejectedValueOnce(new TypeError('synthetic network failure'));
+    else mocks.saveConfig.mockResolvedValueOnce({kind:outcome,acknowledged:[]});
+    const view=await mount();change('API 密码','synthetic-unconfirmed-api-secret');
+    fireEvent.click(screen.getByRole('button',{name:'保存已修改字段'}));
+    await waitFor(()=>expect(screen.getByLabelText('API 密码')).toHaveValue(''));
+    expect(mocks.auth.logout).not.toHaveBeenCalled();expect(warnsOnUnload()).toBe(true);
+    expect(document.body.textContent).not.toContain('synthetic-unconfirmed-api-secret');
+    view.unmount();expect(warnsOnUnload()).toBe(true);
+    const reads=mocks.getConfig.mock.calls.length;render(<SettingsPage/>);
+    expect(screen.getByLabelText('API 密码')).toHaveValue('');expect(mocks.getConfig).toHaveBeenCalledTimes(reads);
+    fireEvent.click(screen.getByRole('button',{name:'重新读取并对照'}));
+    await waitFor(()=>expect(screen.getByLabelText('端口')).toHaveValue(7861));
+    expect(warnsOnUnload()).toBe(true);expect(screen.getByText(/存在尚未确认的配置提交/)).toBeInTheDocument();
+    expect(mocks.saveConfig).toHaveBeenCalledTimes(1);
+    act(()=>{clickLink(screen.getByRole('link',{name:'模型路由编辑器'}));});
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent('尚未确认的提交');
+    fireEvent.click(screen.getByRole('button',{name:'继续编辑'}));
+    await waitFor(()=>expect(screen.queryByRole('alertdialog')).toBeNull());
+    fireEvent.click(screen.getByRole('button',{name:'放弃草稿并采用观察值'}));
+    expect(warnsOnUnload()).toBe(false);
+  });
+  it('clears a secret-only confirmed save but preserves an earlier unknown write after an unrelated acknowledgement',async()=>{
+    mocks.saveConfig.mockResolvedValueOnce({kind:'acknowledged',acknowledged:['api_password']});
+    await mount();change('API 密码','synthetic-confirmed-api-secret');fireEvent.click(screen.getByRole('button',{name:'保存已修改字段'}));
+    await screen.findByText('服务已确认接收保存；请重新读取对照实际值。');expect(warnsOnUnload()).toBe(false);
+    fireEvent.click(screen.getByRole('button',{name:'重新读取并对照'}));
+    await waitFor(()=>expect(screen.getByRole('button',{name:'重新读取并对照'})).toBeEnabled());
+    mocks.saveConfig.mockResolvedValueOnce({kind:'unknown',acknowledged:[]});
+    change('API 密码','synthetic-unknown-api-secret');fireEvent.click(screen.getByRole('button',{name:'保存已修改字段'}));
+    await screen.findByText('保存结果未知；请重新读取对照，勿直接重复提交。');
+    fireEvent.click(screen.getByRole('button',{name:'重新读取并对照'}));
+    await waitFor(()=>expect(screen.getByRole('button',{name:'重新读取并对照'})).toBeEnabled());
+    change('端口','8765');fireEvent.click(screen.getByRole('button',{name:'保存已修改字段'}));
+    await screen.findByText('服务已确认接收保存；请重新读取对照实际值。');expect(warnsOnUnload()).toBe(true);
+    act(()=>{clickLink(screen.getByRole('link',{name:'模型路由编辑器'}));});
+    fireEvent.click(await screen.findByRole('button',{name:'放弃并离开'}));expect(warnsOnUnload()).toBe(false);
+  });
   it('does not block opening a separate tab or modified link clicks',async()=>{
     await mount();change('面板密码','synthetic-private-input');
     const link=screen.getByRole('link',{name:'模型路由编辑器'});

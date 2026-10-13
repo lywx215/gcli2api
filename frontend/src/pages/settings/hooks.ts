@@ -4,13 +4,13 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { registerSessionCleanup, useAuth } from '@/auth';
 import { getConfig, readEngine, saveConfig, writeFailure } from './api';
 import { buildPatch, draftSchema, nonSensitive, same, secretKeys, sensitiveCarryKeys, toDraft } from './types';
-import { registerExitDiscard, setExitDirty } from './exitProtection';
+import { hasUnconfirmedSubmission, registerExitDiscard, setExitDirty } from './exitProtection';
 import type { Config, Draft, Snapshot } from './types';
 const empty:Snapshot={config:{},envLocked:[],capabilities:[]};
 // Only changed non-secret form inputs survive page unmount / authentication changes.
 let carriedDraft:Draft={};
 let carriedEvidence:{sent:Config;baseline:Config}|undefined;
-export function clearCarriedDraft(){carriedDraft={};carriedEvidence=undefined;setExitDirty('configuration',false);setExitDirty('configuration-secrets',false);}
+export function clearCarriedDraft(){carriedDraft={};carriedEvidence=undefined;setExitDirty('configuration',false);setExitDirty('configuration-secrets',false);setExitDirty('configuration-unconfirmed',false);}
 export function useSettings() {
   const auth=useAuth();
   const [snapshot,setSnapshot]=useState<Snapshot>();
@@ -20,7 +20,7 @@ export function useSettings() {
   const [engine,setEngine]=useState('未知');
   const [status,setStatus]=useState(Object.keys(carriedDraft).length?'草稿已保留；请重新读取配置后对照。':'');
   const [busy,setBusy]=useState(false);
-  const [needsRead,setNeedsRead]=useState(Object.keys(carriedDraft).length>0);
+  const [needsRead,setNeedsRead]=useState(Object.keys(carriedDraft).length>0||hasUnconfirmedSubmission());
   const form=useForm<Draft>({defaultValues:{...toDraft({}),...carriedDraft},resolver:zodResolver(draftSchema(baseline,snapshot??empty))});
   const epoch=useRef(auth.sessionEpoch); epoch.current=auth.sessionEpoch;
   const serial=useRef(0); const mounted=useRef(true); const baselineRef=useRef(baseline);baselineRef.current=baseline;
@@ -40,7 +40,7 @@ export function useSettings() {
     mounted.current=true;
     const subscription=form.watch(()=>remember());
     const unregisterDiscard=registerExitDiscard(scope=>{
-      if(scope==='all')clearCarriedDraft();
+      if(scope==='all'){++serial.current;setBusy(false);clearCarriedDraft();}
       const safeBaseline=nonSensitive(baselineRef.current);
       setBaseline(safeBaseline);baselineRef.current=safeBaseline;
       resetDraft(scope==='all'?toDraft(safeBaseline):{...toDraft({}),...nonSensitive(form.getValues())});
@@ -86,6 +86,10 @@ export function useSettings() {
     let patch:Config;
     try{patch=buildPatch(values,baseline,snapshot);}catch{setStatus('配置校验失败：请检查输入及精确嵌入 Origin。');return;}
     if(!Object.keys(patch).length){setStatus('没有可提交的修改。');return;}
+    // Keep only an independent boolean for unresolved writes, including secret-
+    // only writes whose inputs are cleared. GET cannot confirm a secret save.
+    const previousUnconfirmed=hasUnconfirmedSubmission();
+    setExitDirty('configuration-unconfirmed',true);
     const e=epoch.current,n=++serial.current;setBusy(true);setSent(nonSensitive(patch));
     carriedEvidence={sent:nonSensitive(patch),baseline:Object.fromEntries(Object.keys(nonSensitive(patch)).filter(k=>baseline[k]!==undefined).map(k=>[k,baseline[k]]))};
     const passwordChanged=Object.keys(patch).some(k=>k==='panel_password'||k==='password');
@@ -94,6 +98,7 @@ export function useSettings() {
       const text={acknowledged:'服务已确认接收保存；请重新读取对照实际值。',partial:'仅部分字段得到确认；请重新读取对照，勿直接重复提交。',rejected:'服务明确拒绝保存；草稿已保留。',unknown:'保存结果未知；请重新读取对照，勿直接重复提交。'}[result.kind];
       setStatus(text);
       setNeedsRead(result.kind!=='rejected');
+      if(result.kind==='acknowledged'||result.kind==='rejected')setExitDirty('configuration-unconfirmed',previousUnconfirmed);
       if(result.kind==='acknowledged'){
         // An acknowledgement advances the edit baseline, not an observed server
         // snapshot. Unknown/partial saves retain the original comparison evidence.
@@ -110,6 +115,8 @@ export function useSettings() {
     }catch(error){
       if(!current(e,n))return;
       const kind=writeFailure(error);setNeedsRead(kind==='unknown');
+      if(kind==='rejected')setExitDirty('configuration-unconfirmed',previousUnconfirmed);
+      else for(const key of secretKeys)form.setValue(key,'');
       setStatus(kind==='unknown'?'保存结果未知；保留草稿、提交值和原基线。请重新读取对照，不会自动重试。':'请求被拒绝，草稿已保留。');
       if(passwordChanged&&kind==='unknown'){for(const key of secretKeys)form.setValue(key,'');auth.logout();}
     }finally{if(current(e,n))setBusy(false);}

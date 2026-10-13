@@ -1,6 +1,6 @@
 // This store contains booleans only. Non-sensitive carried drafts remain owned
 // by useSettings, so refresh protection can survive an internal hash navigation.
-type Source = 'configuration' | 'configuration-secrets' | 'management-token';
+type Source = 'configuration' | 'configuration-secrets' | 'configuration-unconfirmed' | 'management-token';
 const dirty = new Set<Source>();
 const listeners = new Set<() => void>();
 const discarders = new Set<(scope: 'all' | 'secrets') => void>();
@@ -11,6 +11,7 @@ const beforeUnload = (event: BeforeUnloadEvent) => {
 };
 export const hasExitChanges = () => dirty.size > 0;
 export const hasSecretExitChanges = () => dirty.has('configuration-secrets') || dirty.has('management-token');
+export const hasUnconfirmedSubmission = () => dirty.has('configuration-unconfirmed');
 export function setExitDirty(source: Source, value: boolean) {
   const previous = dirty.has(source), wasActive = hasExitChanges();
   if (value) dirty.add(source); else dirty.delete(source);
@@ -29,7 +30,7 @@ export function registerExitDiscard(discard: (scope: 'all' | 'secrets') => void)
 }
 export function discardExitChanges(scope: 'all' | 'secrets' = 'all') {
   discarders.forEach(discard => discard(scope));
-  if (scope === 'all') setExitDirty('configuration', false);
+  if (scope === 'all') { setExitDirty('configuration', false); setExitDirty('configuration-unconfirmed', false); }
   setExitDirty('configuration-secrets', false);
   setExitDirty('management-token', false);
 }
