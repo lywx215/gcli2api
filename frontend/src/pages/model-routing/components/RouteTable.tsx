@@ -57,7 +57,7 @@ export function RouteTable({ routes, channel, issues, disabled, onChange, onRemo
     const unknownCount = Object.keys(row).filter(field => !knownFields.has(field)).length;
     const rowIssues = issuesForRow(index);
     if (!unknownCount && rowIssues.length === 0) return null;
-    return <div id={idFor(layout, index, "diagnostics")} className="space-y-1 text-sm text-destructive">
+    return <div id={idFor(layout, index, "diagnostics")} className="space-y-1 text-xs leading-5 text-destructive">
       {unknownCount > 0 && <p>本行包含 {unknownCount} 个未识别字段，现有数据已保留。请删除此行后重新添加。</p>}
       {rowIssues.map((issue, issueIndex) => <p key={issueIndex}>{issueText(issue)}{issue.related_rows.length > 0 && <span> 关联行：{affectedRows(issue).map(value => `第 ${value + 1} 行`).join("、")}。</span>}</p>)}
     </div>;
@@ -76,7 +76,7 @@ export function RouteTable({ routes, channel, issues, disabled, onChange, onRemo
     const validType = typeof row[field] === "string";
     return <div className="min-w-0 space-y-1.5">
       {layout === "mobile" && <label htmlFor={id} className="text-sm font-medium">{labels[field]}</label>}
-      <Input id={id} aria-label={`第 ${index + 1} 行${labels[field]}`} aria-invalid={!validType || fieldInvalid(issues, index, field)} aria-describedby={describedBy(row, index, field, layout)} value={validType ? row[field] as string : Object.hasOwn(row, field) ? display(row[field]) : "未提供"} readOnly={!validType} disabled={disabled} onChange={event => { if (validType) onChange(index, { [field]: event.target.value }); }} autoComplete="off" />
+      <Input id={id} className="aria-invalid:bg-destructive-bg" aria-label={`第 ${index + 1} 行${labels[field]}`} aria-invalid={!validType || fieldInvalid(issues, index, field)} aria-describedby={describedBy(row, index, field, layout)} value={validType ? row[field] as string : Object.hasOwn(row, field) ? display(row[field]) : "未提供"} readOnly={!validType} disabled={disabled} onChange={event => { if (validType) onChange(index, { [field]: event.target.value }); }} autoComplete="off" />
       {warning && <p id={idFor(layout, index, `${field}-warning`)} className="break-words text-xs text-destructive">{warning}</p>}
       {!validType && <Button type="button" size="sm" variant="outline" aria-label={`第 ${index + 1} 行${labels[field]}编辑为文本`} disabled={disabled} onClick={() => onChange(index, { [field]: "" })}>编辑为文本</Button>}
     </div>;
@@ -85,7 +85,7 @@ export function RouteTable({ routes, channel, issues, disabled, onChange, onRemo
   function enabledField(row: Record<string, unknown>, index: number, layout: Layout) {
     const warning = rawWarning(row, "enabled");
     return <div className="space-y-1.5">
-      <Switch id={idFor(layout, index, "enabled")} checked={row.enabled === true} disabled={disabled} aria-label={`第 ${index + 1} 行启用路由`} aria-invalid={Boolean(warning) || fieldInvalid(issues, index, "enabled")} aria-describedby={describedBy(row, index, "enabled", layout)} onCheckedChange={enabled => onChange(index, { enabled })} />
+      <Switch id={idFor(layout, index, "enabled")} className="aria-invalid:border-destructive aria-invalid:focus-visible:ring-destructive" checked={row.enabled === true} disabled={disabled} aria-label={`第 ${index + 1} 行启用路由`} aria-invalid={Boolean(warning) || fieldInvalid(issues, index, "enabled")} aria-describedby={describedBy(row, index, "enabled", layout)} onCheckedChange={enabled => onChange(index, { enabled })} />
       {warning && <p id={idFor(layout, index, "enabled-warning")} className="break-words text-xs text-destructive">{warning}{Object.hasOwn(row, "enabled") && <span className="block">现有值：{display(row.enabled)}</span>}</p>}
     </div>;
   }
@@ -95,14 +95,14 @@ export function RouteTable({ routes, channel, issues, disabled, onChange, onRemo
   }
 
   return <div className="space-y-5">
-    {issues.length > 0 && <div role="alert" className="space-y-1 rounded-md border border-destructive/40 p-3 text-sm text-destructive">
+    {issues.length > 0 && <div role="alert" className="space-y-1 rounded-lg border border-destructive/30 bg-destructive-bg p-3 text-sm text-destructive">
       <p>完整路由表共有 {issues.length} 个校验问题，两个渠道的草稿均已保留。</p>
       <p>Antigravity：{countForChannel("antigravity")} · Gemini CLI：{countForChannel("geminicli")} · 全局：{globalCount}</p>
       {issues.filter(issue => affectedRows(issue).length === 0).map((issue, index) => <p key={index}>{issueText(issue)}</p>)}
     </div>}
-    {activeRows.length === 0 ? <div className="rounded-md border border-dashed p-8 text-center"><p className="font-medium">该渠道暂无路由</p><p className="mt-2 text-sm text-muted-foreground">使用“新增路由”添加一条路由。</p></div> : <>
-      <div data-layout="desktop" className="hidden md:block"><Table><TableHeader><TableRow><TableHead className="w-20 whitespace-nowrap">行号</TableHead><TableHead>公开名称</TableHead><TableHead>目标名称</TableHead><TableHead className="w-36">启用</TableHead><TableHead className="w-16">操作</TableHead></TableRow></TableHeader><TableBody>{activeRows.map(({ row, index }) => <TableRow key={index}><TableCell className="whitespace-nowrap text-muted-foreground">第 {index + 1} 行</TableCell><TableCell className="min-w-0 space-y-2">{nameField(row, index, "public_name", "desktop")}{diagnostics(row, index, "desktop")}</TableCell><TableCell className="min-w-0">{nameField(row, index, "upstream_name", "desktop")}</TableCell><TableCell>{enabledField(row, index, "desktop")}</TableCell><TableCell>{removeButton(index, false)}</TableCell></TableRow>)}</TableBody></Table></div>
-      <div data-layout="mobile" className="space-y-4 md:hidden">{activeRows.map(({ row, index }) => <div key={index} className="space-y-4 rounded-md border p-4"><div className="flex items-center justify-between"><Badge variant="outline">第 {index + 1} 行</Badge>{removeButton(index, true)}</div>{nameField(row, index, "public_name", "mobile")}{nameField(row, index, "upstream_name", "mobile")}<div className="flex items-start justify-between gap-4"><label htmlFor={idFor("mobile", index, "enabled")} className="shrink-0 text-sm">启用此路由</label>{enabledField(row, index, "mobile")}</div>{diagnostics(row, index, "mobile")}</div>)}</div>
+    {activeRows.length === 0 ? <div className="rounded-lg border border-dashed bg-popover p-8 text-center"><p className="font-medium">该渠道暂无路由</p><p className="mt-2 text-xs leading-5 text-muted-foreground">使用“新增路由”添加一条路由。</p></div> : <>
+      <div data-layout="desktop" className="hidden overflow-hidden rounded-lg border bg-popover md:block"><Table><TableHeader className="bg-secondary"><TableRow><TableHead className="w-20 whitespace-nowrap text-xs">行号</TableHead><TableHead className="text-xs">公开名称</TableHead><TableHead className="text-xs">目标名称</TableHead><TableHead className="w-36 text-xs">启用</TableHead><TableHead className="w-16 text-xs">操作</TableHead></TableRow></TableHeader><TableBody>{activeRows.map(({ row, index }) => <TableRow key={index} className="hover:bg-hover"><TableCell className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">第 {index + 1} 行</TableCell><TableCell className="min-w-0 space-y-2">{nameField(row, index, "public_name", "desktop")}{diagnostics(row, index, "desktop")}</TableCell><TableCell className="min-w-0">{nameField(row, index, "upstream_name", "desktop")}</TableCell><TableCell>{enabledField(row, index, "desktop")}</TableCell><TableCell>{removeButton(index, false)}</TableCell></TableRow>)}</TableBody></Table></div>
+      <div data-layout="mobile" className="space-y-4 md:hidden">{activeRows.map(({ row, index }) => <div key={index} className="space-y-4 rounded-lg border bg-popover p-4 text-popover-foreground"><div className="flex items-center justify-between"><Badge variant="outline">第 {index + 1} 行</Badge>{removeButton(index, true)}</div>{nameField(row, index, "public_name", "mobile")}{nameField(row, index, "upstream_name", "mobile")}<div className="flex items-start justify-between gap-4"><label htmlFor={idFor("mobile", index, "enabled")} className="shrink-0 text-sm font-medium">启用此路由</label>{enabledField(row, index, "mobile")}</div>{diagnostics(row, index, "mobile")}</div>)}</div>
     </>}
   </div>;
 }

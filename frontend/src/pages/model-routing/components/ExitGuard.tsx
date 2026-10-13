@@ -74,7 +74,7 @@ export function useRoutingExitGuard(protect: boolean, discard: () => void) {
     return () => { window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('click', handleClick, true); };
   }, [protect, auth.authenticated]);
   const dialog = <AlertDialog open={pending !== null && auth.authenticated && pending.epoch === auth.sessionEpoch} onOpenChange={open => { if (!open) setPending(null); }}>
-    <AlertDialogContent onCloseAutoFocus={event => {
+    <AlertDialogContent className="rounded-lg bg-popover text-popover-foreground" onCloseAutoFocus={event => {
       event.preventDefault();
       if (!latest.current.auth.authenticated) return;
       for (const candidate of [returnFocus.current, document.getElementById('routing-read'), document.getElementById('routing-content'), document.getElementById('main-content')]) {
@@ -82,7 +82,7 @@ export function useRoutingExitGuard(protect: boolean, discard: () => void) {
         candidate.focus(); if (document.activeElement === candidate) break;
       }
     }}>
-      <AlertDialogHeader><AlertDialogTitle>{pending?.title}</AlertDialogTitle><AlertDialogDescription>{pending?.description}</AlertDialogDescription></AlertDialogHeader>
+      <AlertDialogHeader><AlertDialogTitle className="text-lg leading-6">{pending?.title}</AlertDialogTitle><AlertDialogDescription className="text-xs leading-5">{pending?.description}</AlertDialogDescription></AlertDialogHeader>
       <AlertDialogFooter><AlertDialogCancel>取消，保留草稿</AlertDialogCancel><AlertDialogAction onClick={() => {
         const action = pending; setPending(null);
         if (!action || action.epoch !== latest.current.auth.sessionEpoch || !latest.current.auth.authenticated) return;

@@ -25,49 +25,49 @@ export default function ImportPage() {
   useEffect(() => { clearSecrets(); setClientId(''); setProjectId(''); setFilename('') }, [flow.sessionEpoch, flow.authenticated])
   const tokenList = [...new Set(tokens.split(/\r?\n/).map(value => value.trim()).filter(Boolean))]
   const disabled = flow.busy || !flow.authenticated
-  return <section className="mx-auto max-w-4xl space-y-6">
-    <header><h1 className="text-2xl font-semibold">导入凭证</h1><p className="mt-2 text-muted-foreground">添加 Antigravity 账号。操作只在提交后开始，结果按每项显示。</p></header>
-    {preview && <p role="status" className="rounded-md border p-3">合成预览：不会调用后台或打开真实 OAuth。点击完成授权可查看示例结果。</p>}
-    {!flow.authenticated && <p role="status">请先登录。</p>}
+  return <section className="mx-auto max-w-4xl space-y-6 text-sm text-foreground">
+    <header><h1 className="text-2xl font-semibold text-foreground">导入凭证</h1><p className="mt-2 text-xs leading-5 text-muted-foreground">添加 Antigravity 账号。操作只在提交后开始，结果按每项显示。</p></header>
+    {preview && <p role="status" className="rounded-lg border border-border bg-info-bg p-3 text-sm text-info">合成预览：不会调用后台或打开真实 OAuth。点击完成授权可查看示例结果。</p>}
+    {!flow.authenticated && <p role="status" className="text-sm text-warning">请先登录。</p>}
     <div className="flex flex-wrap gap-2" aria-label="导入方式">
-      {(['oauth', 'files', 'tokens'] as const).map(value => <Button key={value} variant={method === value ? 'default' : 'outline'} disabled={flow.busy} aria-pressed={method === value} onClick={() => setMethod(value)}>{({ oauth: 'OAuth 授权', files: 'JSON / ZIP 文件', tokens: 'Refresh token' })[value]}</Button>)}
+      {(['oauth', 'files', 'tokens'] as const).map(value => <Button key={value} variant={method === value ? 'secondary' : 'outline'} className="aria-pressed:shadow-selected" disabled={flow.busy} aria-pressed={method === value} onClick={() => setMethod(value)}>{({ oauth: 'OAuth 授权', files: 'JSON / ZIP 文件', tokens: 'Refresh token' })[value]}</Button>)}
     </div>
     <Card><CardHeader><CardTitle>{method === 'oauth' ? 'Google OAuth 授权' : method === 'files' ? '导入凭证文件' : '通过 Refresh token 添加'}</CardTitle></CardHeader>
     <CardContent className="space-y-4">
       {method === 'oauth' && <>
-        <label className="block space-y-2"><span>项目 ID（可选，留空自动检测）</span><Input value={projectId} onChange={event => setProjectId(event.target.value)} disabled={disabled} /></label>
-        {flow.prompt && <div role="status" className="rounded-md border p-3"><p>{flow.prompt.manual ? '需要手动填写项目 ID' : '请选择项目后继续授权'}</p>{flow.prompt.projects.map(project => <Button key={project} variant="outline" className="m-1" onClick={() => setProjectId(project)}>{project}</Button>)}</div>}
+        <label className="block space-y-2"><span className="font-medium">项目 ID（可选，留空自动检测）</span><Input className="shadow-control" value={projectId} onChange={event => setProjectId(event.target.value)} disabled={disabled} /></label>
+        {flow.prompt && <div role="status" className="rounded-lg border border-warning/30 bg-warning-bg p-3 text-warning"><p>{flow.prompt.manual ? '需要手动填写项目 ID' : '请选择项目后继续授权'}</p>{flow.prompt.projects.map(project => <Button key={project} variant="outline" className="m-1" onClick={() => setProjectId(project)}>{project}</Button>)}</div>}
         <Button disabled={disabled} onClick={() => void flow.run(signal => startOAuth(projectId, signal))}>生成授权链接</Button>
-        {flow.authUrl && <p><a className="underline underline-offset-4" href={flow.authUrl} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">打开 Google 授权页面</a></p>}
-        <p className="text-sm text-muted-foreground">在授权页面完成操作后，点击完成授权。若浏览器显示无法连接本地回调地址，可粘贴完整回调 URL。</p>
-        <label className="block space-y-2"><span>回调 URL（可选，含敏感授权码）</span><Input type="password" autoComplete="off" value={callbackUrl} onChange={event => setCallbackUrl(event.target.value)} disabled={disabled} /></label>
+        {flow.authUrl && <p><a className="rounded-md text-primary underline underline-offset-4 hover:text-primary-hover" href={flow.authUrl} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">打开 Google 授权页面</a></p>}
+        <p className="text-xs leading-5 text-muted-foreground">在授权页面完成操作后，点击完成授权。若浏览器显示无法连接本地回调地址，可粘贴完整回调 URL。</p>
+        <label className="block space-y-2"><span className="font-medium">回调 URL（可选，含敏感授权码）</span><Input className="shadow-control" type="password" autoComplete="off" value={callbackUrl} onChange={event => setCallbackUrl(event.target.value)} disabled={disabled} /></label>
         <Button disabled={disabled || (!preview && !flow.authUrl && !callbackUrl)} onClick={() => void flow.run(signal => completeOAuth(callbackUrl.trim() || null, projectId.trim(), signal), clearSecrets)}>完成授权</Button>
       </>}
       {method === 'files' && <>
-        <label className="block space-y-2"><span>选择 JSON 或 ZIP（可多选）</span><Input key={fileKey} type="file" multiple accept=".json,.zip" disabled={disabled} onChange={event => setFiles(Array.from(event.target.files ?? []))} /></label>
-        <p className="text-sm text-muted-foreground">已选 {files.length} 个文件。ZIP 不递归解压；文件数量和解压预算由服务器校验。</p>
+        <label className="block space-y-2"><span className="font-medium">选择 JSON 或 ZIP（可多选）</span><Input className="shadow-control file:mr-3 file:rounded-md file:bg-secondary file:px-2 file:py-0 file:text-foreground disabled:file:text-muted-foreground" key={fileKey} type="file" multiple accept=".json,.zip" disabled={disabled} onChange={event => setFiles(Array.from(event.target.files ?? []))} /></label>
+        <p className="text-xs leading-5 text-muted-foreground">已选 {files.length} 个文件。ZIP 不递归解压；文件数量和解压预算由服务器校验。</p>
         <Button disabled={disabled || !files.length} onClick={() => void flow.run(signal => uploadFiles(files, signal), clearSecrets)}>上传并导入</Button>
       </>}
       {method === 'tokens' && <>
-        <label className="block space-y-2"><span>Refresh token（每行一个）</span><Textarea autoComplete="off" spellCheck={false} rows={5} value={tokens} onChange={event => setTokens(event.target.value)} disabled={disabled} /></label>
-        <p className="text-sm text-muted-foreground">共 {tokenList.length} 个去重后 token，每批最多 200 个；输入仅保留在本页内存中。</p>
+        <label className="block space-y-2"><span className="font-medium">Refresh token（每行一个）</span><Textarea className="shadow-control" autoComplete="off" spellCheck={false} rows={5} value={tokens} onChange={event => setTokens(event.target.value)} disabled={disabled} /></label>
+        <p className="text-xs leading-5 text-muted-foreground">共 {tokenList.length} 个去重后 token，每批最多 200 个；输入仅保留在本页内存中。</p>
         <div className="grid gap-4 sm:grid-cols-2">
-          <label className="space-y-2"><span>Client ID（可选）</span><Input value={clientId} disabled={disabled} onChange={event => setClientId(event.target.value)} /></label>
-          <label className="space-y-2"><span>Client secret（可选）</span><Input type="password" autoComplete="off" value={clientSecret} disabled={disabled} onChange={event => setClientSecret(event.target.value)} /></label>
-          <label className="space-y-2"><span>{tokenList.length > 1 ? '文件名前缀（可选）' : '文件名（可选）'}</span><Input value={filename} disabled={disabled} onChange={event => setFilename(event.target.value)} /></label>
-          {tokenList.length <= 1 && <label className="space-y-2"><span>项目 ID（可选）</span><Input value={projectId} disabled={disabled} onChange={event => setProjectId(event.target.value)} /></label>}
+          <label className="space-y-2"><span className="font-medium">Client ID（可选）</span><Input className="shadow-control" value={clientId} disabled={disabled} onChange={event => setClientId(event.target.value)} /></label>
+          <label className="space-y-2"><span className="font-medium">Client secret（可选）</span><Input className="shadow-control" type="password" autoComplete="off" value={clientSecret} disabled={disabled} onChange={event => setClientSecret(event.target.value)} /></label>
+          <label className="space-y-2"><span className="font-medium">{tokenList.length > 1 ? '文件名前缀（可选）' : '文件名（可选）'}</span><Input className="shadow-control" value={filename} disabled={disabled} onChange={event => setFilename(event.target.value)} /></label>
+          {tokenList.length <= 1 && <label className="space-y-2"><span className="font-medium">项目 ID（可选）</span><Input className="shadow-control" value={projectId} disabled={disabled} onChange={event => setProjectId(event.target.value)} /></label>}
         </div>
         <Button disabled={disabled || !tokenList.length || tokenList.length > 200} onClick={() => void flow.run(signal => importTokens({ tokens: tokenList, clientId, clientSecret, projectId, filename }, signal), clearSecrets)}>添加 {tokenList.length > 1 ? '批量凭证' : '凭证'}</Button>
       </>}
     </CardContent></Card>
-    {flow.busy && <div role="status" className="flex items-center gap-3"><p>请求处理中…</p><Button variant="outline" onClick={() => { flow.cancel(); clearSecrets() }}>停止等待</Button></div>}
-    {flow.message && <p role="status" className="rounded-md border p-3">{flow.message}</p>}
+    {flow.busy && <div role="status" className="flex items-center gap-3 text-info"><p>请求处理中…</p><Button variant="outline" onClick={() => { flow.cancel(); clearSecrets() }}>停止等待</Button></div>}
+    {flow.message && <p role="status" className="rounded-lg border border-border bg-info-bg p-3 text-sm text-info">{flow.message}</p>}
     {flow.result && <ImportResults result={flow.result} />}
     {(flow.jobId || flow.email || flow.emailMessage) && <Card><CardHeader><CardTitle>邮箱补全</CardTitle></CardHeader><CardContent className="space-y-3">
-      {flow.email ? <EmailResults snapshot={flow.email} /> : flow.jobId && <p>正在读取邮箱补全进度…</p>}
-      {flow.emailMessage && <p role="status">{flow.emailMessage}</p>}
+      {flow.email ? <EmailResults snapshot={flow.email} /> : flow.jobId && <p className="text-info">正在读取邮箱补全进度…</p>}
+      {flow.emailMessage && <p role="status" className="text-sm text-info">{flow.emailMessage}</p>}
       {flow.jobId && !flow.email?.complete && <Button variant="outline" onClick={flow.stopEmail}>停止跟踪</Button>}
     </CardContent></Card>}
-    <div className="flex flex-wrap gap-4"><a href="#/credentials" className="underline underline-offset-4">查看凭证列表</a>{!preview && <a href={legacy.href} className="underline underline-offset-4">旧 AG 面板：手动获取邮箱与高级工具</a>}</div>
+    <div className="flex flex-wrap gap-4"><a href="#/credentials" className="rounded-md text-primary underline underline-offset-4 hover:text-primary-hover">查看凭证列表</a>{!preview && <a href={legacy.href} className="rounded-md text-primary underline underline-offset-4 hover:text-primary-hover">旧 AG 面板：手动获取邮箱与高级工具</a>}</div>
   </section>
 }
