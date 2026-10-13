@@ -1,6 +1,6 @@
 # gcli2api 新 UI 完整开发方案
 
-日期：2026-10-13（Asia/Shanghai）。本方案用于已授权的新 UI 多窗口开发及根窗口集成，状态为**实现及本地集成验证已交付，发布门禁仍有未验证项**。它不是部署批准，也不把设计预览、模块测试或代码存在等同于最终验收。
+日期：2026-10-13（Asia/Shanghai）。用户最新流程为**客户先确认页面，确认后正式开发，正式开发阶段再进行详细测试**。当前暂停新增开发和测试，仅提供页面结构与流程确认稿；此前已完成实现保留为本地预览快照，已有验证仅作历史证据。配色和最终风格继续后置，不部署。下文开发计划和发布门禁仅供确认后的实施使用，不把预览或代码存在等同于最终验收。
 
 本聊天仅拥有本文件。主集成工作区为 `C:/Users/lywx2/.codex/worktrees/ui-redesign/gcli2api`，分支 `codex/ui-redesign`；共同开发基线为 `d1012` / `ebda92be2a4a5562963360bdbab2d33379e63077`。本文件的独立工作区为 `C:/Users/lywx2/.codex/worktrees/ui-development-plan/gcli2api`，分支 `codex/ui-development-plan`，创建时主分支提交为 `8b1c163dbcfffd8260a50e11c6e92d646da4a351`。只向根窗口交付本文件的提交，不将该工作区旧代码作为最终 UI 版本。
 
@@ -266,7 +266,7 @@ foundation 统一维护 background、foreground、card、muted、border、primar
 
 ### 11.2 构建与完整产物
 
-Node 仅用于构建，运行时为 Python。使用同一 checkout 的 manifest 和唯一 lockfile，Node 范围以 `frontend/package.json` engines 为准（Docker 构建阶段为 Node 22，最低 22.12）；不为本文件升级依赖。命令从仓库根执行：
+Node 仅用于构建，运行时为 Python。使用同一 checkout 的 manifest 和唯一 lockfile，Node 范围以 `frontend/package.json` engines 为准（Docker 构建阶段为 Node 22；当前工程声明最低 22.12，但锁依赖要求至少 22.22.2 / 24.15.0，声明修正列入客户确认后的待开发事项）；不为本文件升级依赖。命令从仓库根执行：
 
 ```sh
 npm --prefix frontend ci
@@ -308,7 +308,7 @@ Docker ui-build 阶段执行 npm ci、typecheck、build、check:build，再将�
 | 根产物 | 8 个 hashed JS、1 个 CSS；五页独立 dynamic entry、完整 manifest/资源引用、0 fixture 模块、0 公共及业务合成数据标记通过 | 最终 DELIVERY；生产显式设置 `VITE_UI_FIXTURES=true` 同样通过；反例曾被加强门禁拒绝 |
 | Python 集成 | 两组分别 261、114 项通过，含 42 项重叠 | 根报告；不能称 375 个不同测试，不把 mocked backend 当真实四引擎生产验证 |
 | 旧面板 Node | 68 项通过 | 根报告；与某窗口先前 29 项历史记录不累加 |
-| 旧模型 API 独立矩阵 | 282 项中 253 失败、29 通过；矩阵仍未通过，抽样已证实干净 ebda92b 同现 | 根只读审查从 ebda92b Git 对象导出干净源码，AG/OpenAI/nonstream 原例同样 503；仅补内存 routing adapter 后断言通过，证明该例 fixture 缺初始化。其余失败未整体归因，不把矩阵标通过；不恢复 GCLI/MGMT 开发 |
+| 旧模型 API 独立矩阵 | 原始 ebda92b 与 fe99b43 各 282 项均为 253 失败、29 通过；全部用例结果及失败内容指纹一致，0 差异 | 干净 Git archive、同一隔离 runner 完整对比，确认这组失败未由 UI 引入；原矩阵仍未通过，fixture 修正暂缓。见 [完整归因记录](MODEL_MATRIX_VALIDATION.md)，不恢复 GCLI/MGMT 开发 |
 | 合成 Chromium | 五页导航、导入 partial、跨路由非敏感 settings 草稿及合成保存、详情/跨窗口登出重登、移动导航登出通过；1440/390 无横向溢出；无外部/真实 API 请求、无 pageerror | 最终 `UI_SMOKE.json` 及截图；移动首屏第一张卡可见，折叠保留筛选草稿；最终复验通过，不扩大为全部键盘/浏览器验证 |
 | 生产产物内存 ASGI | 真实 index+五页 chunks 的 no-store/meta/CSP、MIME/immutable、index/manifest/缺资源 404、带 query 307 通过 | 最终 `UI_HOSTING_SMOKE.json` 再验通过；不启动真实 lifespan，不等同真实镜像运行 |
 | Docker 上下文/实构建 | Moby 原生规则检查 17 保留和 14 排除路径通过；完整镜像未验证 | daemon 不可用；Node 22 容器版本仅检查 engines/lockfile/接线，不把本地 Node 24 验证等同容器运行 |
@@ -329,7 +329,7 @@ Docker ui-build 阶段执行 npm ci、typecheck、build、check:build，再将�
 | Management | `test_management_api.py`、`test_management_openapi.py` | schema 1.4/capability/动作语义不变，无新增对端任务 |
 | 集成浏览器 | 合成登录→导入→筛选/选择→动作→设置→日志→登出；未知/partial/501/chunk404；手机/键盘 | 真五页接线、结果文案和焦点正确、fixture 无外部请求、补丁后无新回归 |
 
-最终本地验收退出条件：来源提交和根修改全部可定位；五页与共享文件 ownership 无越界；相关回归/构建/产物/浏览器证据对应最终候选；已知功能缺口有准确旧入口或限制说明；未验证门禁逐项列明；panel-version 与 hook 保持；没有真实数据/秘密进入 diff、测试或产物。未完成 Docker/跨浏览器门禁以及尚未归因的旧模型 API 矩阵失败必须随本地候选披露，不能称发布就绪。旧模型 API 抽样基线证据已更新，但整组归因仍未完成；本方案不等待核查、不修代码、不扩大维护范围。
+最终本地验收退出条件：来源提交和根修改全部可定位；五页与共享文件 ownership 无越界；相关回归/构建/产物/浏览器证据对应最终候选；已知功能缺口有准确旧入口或限制说明；未验证门禁逐项列明；panel-version 与 hook 保持；没有真实数据/秘密进入 diff、测试或产物。未完成 Docker/跨浏览器门禁以及旧模型 API 原矩阵失败必须随本地预览快照披露，不能称发布就绪。原矩阵已完成全量基线对比，全部失败未由 UI 引入；修正与详细测试暂缓，客户页面确认后再按范围实施，不扩大维护范围。
 
 ## 13. 风险、回滚与交付
 

@@ -1,5 +1,7 @@
 # 新 UI 首轮并行开发交付
 
+当前阶段：**客户页面确认**。用户最新要求先确认页面，确认后再正式开发，详细测试安排在正式开发阶段。以下实现与验证是此前已完成的本地预览快照和历史证据；暂停新增开发与测试，不将其视为客户已确认或发布就绪。配色和最终风格继续后置，不部署。
+
 2026-10-13，用户已授权并行开发及 OAuth 兼容修正。实现保存在独立 `codex/ui-redesign` 分支，基线为 `d1012` / `ebda92be2a4a5562963360bdbab2d33379e63077`。原始 checkout 的用户改动保留；本次没有发布、推送、生成面板版本号或执行 Claude 审核。
 
 ## 实现范围
@@ -36,7 +38,7 @@ React + TypeScript + Vite + Tailwind CSS + shadcn/ui，五个独立功能目录�
 | DEV fixture 隔离 | 通过：构建显式设置 `VITE_UI_FIXTURES=true`，公共 transport 与页面合成数据标识均为 0，manifest 不含 fixture 模块；反例产物曾被加强后的门禁明确拒绝，改动态导入后通过 |
 | Python 集成 A | 凭证能力、OAuth、配置、安全、Management/OpenAPI、embed、旧静态面板、Flash/timeout：261 passed |
 | Python 集成 B | UI 托管、embed、旧静态面板、Management/OpenAPI、选中工具、搜索及页大小：114 passed；与 A 重叠 42 项，不能相加为不同测试数量 |
-| 额外模型 API 矩阵 | 282 项中 253 failed / 29 passed，门禁未通过。AG/OpenAI/nonstream 抽样在干净 ebda92b Git archive 同现 503；仅补内存 routing adapter 后通过，证明该例旧 fixture 漏初始化。其余失败未整体归因，不据此恢复范围外开发 |
+| 额外模型 API 矩阵 | 原始干净 ebda92b 与 fe99b43 各 282 项均为 253 failed / 29 passed；全部 nodeid、结果、阶段和规范化失败内容指纹逐项一致，0 差异。本次 UI 改造未引入这组失败；原矩阵仍未通过，fixture 修正暂缓。完整证据见 [矩阵归因记录](MODEL_MATRIX_VALIDATION.md) |
 | 旧面板 JavaScript | state、cooldown、quota layout、Flash：68 passed |
 | 真实产物托管 | 内存 ASGI 验证真实 index/五页 JS 的 meta/CSP/no-store/MIME/immutable、私有文件与缺资源 404、307 query 通过；不启动真实应用 lifespan |
 | 合成浏览器 | 独立 Chromium：五页导航、导入部分成功、settings 草稿与合成保存、详情/storage 登出/重新登录、移动导航登出清理通过；1440/390 无横向溢出，零真实 API/外部请求和 pageerror |
@@ -46,9 +48,15 @@ React + TypeScript + Vite + Tailwind CSS + shadcn/ui，五个独立功能目录�
 
 移动布局折叠已完成，390px 首屏第一张凭证卡可见，展开/折叠保留筛选草稿的实际浏览器检查通过。生产 fixture 动态导入修正已完成，215 项完整前端测试、加强后的生产构建检查与最终 Chromium/ASGI 复验均通过。未执行的门禁不得标通过。
 
+## 页面确认阶段与待开发事项
+
+客户材料为离线预览册、11 张合成数据截图及确认表，供确认五页信息组织、操作入口与手机布局。可转发包位于本聊天本机附件目录的 `gcli2api-ui-customer-review.zip`，离线入口为 `customer-review/index.html`，说明为 `customer-review/客户确认说明.md`；这些资料只用于页面确认。先收集客户通过/需调整/待讨论意见，确认后再安排正式实现、详细测试和发布门禁。客户包不执行真实业务，最终颜色字体风格另行确认。
+
+本轮停止详细测试前已完成 333 项旧接口/托管组合回归。组合中发现并修正了测试的 `web` 导入缓存干扰；`test_ui_hosting.py` 修正保留为未提交草稿，不改变产品行为，待正式开发阶段处理。工程 Node 声明范围低于部分锁依赖要求，建议收紧到 `^22.22.2 || ^24.15.0 || >=26.0.0`，作为待开发事项，不宣称主分支已修正或 Node 22 镜像已验证。
+
 ## 未验证与后续边界
 
-- Docker daemon 未运行，实际完整镜像构建未验证；Node 22 容器版本只由 engines/lockfile 与 Dockerfile 接线检查，本地实际验证为 Node 24.19.0。
+- 用户确认当前环境无法进行 Docker 构建，实际完整镜像构建未验证；Node 22 容器版本只由 engines/lockfile 与 Dockerfile 接线检查，本地实际验证为 Node 24.19.0。静态事实、候选草稿与后续命令见 [Docker 记录](DOCKER_VALIDATION.md)。
 - 没有生产或真实 Google OAuth/模型/API/远程数据库联调；SQLite 使用临时库，远程存储使用驱动替身。不据此承诺真实远程行为全部通过。
 - 共享面板密码仍是面板 token，owner 不是独立用户身份；OAuth map 只在单进程内。配置保存没有事务、CAS 或写回强一致保证。
 - 静态结构图不能作为真实交互验证。浏览器证据来自合成路径；真实 WS 重连/OAuth 换码由隔离行为测试验证，没有生产证据。
