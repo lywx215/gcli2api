@@ -31,6 +31,7 @@ from src.router.vertex.openai import router as vertex_openai_router
 from src.router.vertex.model_list import router as vertex_model_list_router
 from src.task_manager import shutdown_all_tasks
 from src.panel import router as panel_router
+from src.panel.ui import install_ui
 from src.keeplive import keepalive_service
 from src.management import install_management_api
 from src.antigravity_import_limits import AntigravityUploadMiddleware
@@ -219,6 +220,9 @@ app.include_router(panel_router, prefix="", tags=["Panel Interface"])
 app.include_router(vertex_gemini_router, prefix="", tags=["Vertex Gemini API"])
 app.include_router(vertex_openai_router, prefix="", tags=["Vertex OpenAI API"])
 app.include_router(vertex_model_list_router, prefix="", tags=["Vertex Model List"])
+
+# Optional prebuilt UI: dynamic HTML, only its assets subtree is public.
+install_ui(app)
 
 # 静态文件路由 - 服务docs目录下的文件
 if os.path.isdir("docs"):

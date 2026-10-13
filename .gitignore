@@ -116,3 +116,10 @@ tests/
 
 参考项目/
 streamchat/
+
+# New UI: only known non-secret project configuration is allowed.
+!/frontend/tsconfig.app.json
+!/frontend/tsconfig.node.json
+!/frontend/components.json
+node_modules/
+/ui-dist/
