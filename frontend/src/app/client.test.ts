@@ -24,7 +24,7 @@ describe("service root", () => {
     document.head.innerHTML = '<meta name="gcli-service-base" content="__GCLI_SERVICE_BASE__">';
     expect(() => getServiceBase()).toThrow();
   });
-  it.each(["/creds/status", "//bad/", "https://bad/", "../creds", "a/../creds", "%2e%2e/creds", "a/%2fcreds", "%252e%252e/creds", "a?x=y", "a#x", "a//b", ""])("rejects path escape %s", path => expect(() => createServiceUrl(path)).toThrow());
+  it.each(["/creds/status", "//bad/", "https://bad/", "../creds", "a/../creds", "%2e%2e/creds", "a/%2fcreds", "a?x=y", "a#x", "a//b", "a/%", "a/%GG", ""])("rejects path escape %s", path => expect(() => createServiceUrl(path)).toThrow());
 });
 
 describe("transport", () => {
@@ -131,10 +131,30 @@ it.each([401, 403])("upstream and unclassified %s never log out the panel", asyn
 it("rejects raw/encoded backslashes and asserts service-prefix containment", () => {
   meta("/tenant/node/");
   const slash = String.fromCharCode(92);
-  for (const path of [slash + slash + "evil.example.invalid/path", "a" + slash + ".." + slash + "escape", "%5c%5cevil.example.invalid/path", "a/%5c../escape", "%2e./escape", ".%2e/escape", "a/%252fescape", "a/%255cescape"]) {
+  for (const path of [slash + slash + "evil.example.invalid/path", "a" + slash + ".." + slash + "escape", "%5c%5cevil.example.invalid/path", "a/%5c../escape", "%2e./escape", ".%2e/escape"]) {
     expect(() => createServiceUrl(path), path).toThrow();
   }
   const url = createServiceUrl("creds/download/synthetic%20file.json");
   expect(url.origin).toBe(location.origin);
   expect(url.pathname).toBe("/tenant/node/creds/download/synthetic%20file.json");
+});
+
+it.each(["rate%.json", "rate%25.json", "100%完成.json", "凭证-测试.json", "literal%2f.json", "百分百🙂.json"])("preserves a filename encoded exactly once: %s", filename => {
+  meta("/tenant/node/");
+  const encoded = encodeURIComponent(filename);
+  const url = createServiceUrl(`creds/download/${encoded}`);
+  expect(url.origin).toBe(location.origin);
+  expect(url.pathname).toBe(`/tenant/node/creds/download/${encoded}`);
+  expect(decodeURIComponent(url.pathname.split("/").at(-1)!)).toBe(filename);
+});
+it("transmits percent and Unicode filenames without a second encoding or decoding", async () => {
+  setSessionToken("synthetic-session");
+  const filename = "额度-rate%25.json";
+  vi.mocked(fetch).mockResolvedValue(new Response("synthetic download"));
+  const { blob } = await requestBlob(`creds/download/${encodeURIComponent(filename)}`, { query: { mode: "antigravity" } });
+  const url = new URL(String(vi.mocked(fetch).mock.calls[0][0]));
+  expect(decodeURIComponent(url.pathname.slice("/creds/download/".length))).toBe(filename);
+  expect(url.searchParams.get("mode")).toBe("antigravity");
+  expect(await blob.text()).toBe("synthetic download");
+  expect(fetch).toHaveBeenCalledOnce();
 });

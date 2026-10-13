@@ -28,8 +28,10 @@ export function createServiceUrl(path: string, query?: Query): URL {
   if (!path || path.startsWith("/") || path.includes("\\") || /[\?#\s:]/.test(path)) throw new Error("接口路径必须相对于服务根。");
   for (const segment of path.split("/")) {
     let decoded: string;
+    // Validate the same single decoding step used by the backend path parameter.
+    // A remaining percent is a literal filename character, not another escape to decode.
     try { decoded = decodeURIComponent(segment); } catch { throw new Error("接口路径编码无效。"); }
-    if (decoded.includes("\\") || !decoded || decoded === "." || decoded === ".." || /[\/%\x00-\x1f\x7f]/.test(decoded)) throw new Error("接口路径不能越过服务根。");
+    if (decoded.includes("\\") || !decoded || decoded === "." || decoded === ".." || /[\/\x00-\x1f\x7f]/.test(decoded)) throw new Error("接口路径不能越过服务根。");
   }
   const base = new URL(getServiceBase());
   const url = new URL(path, base);
