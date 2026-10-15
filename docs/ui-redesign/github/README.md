@@ -4,7 +4,7 @@ This branch is a frozen work-in-progress source baseline for the existing UI res
 
 ## Code and task handoff
 
-Use `codex/ui-parity-integration` as the PR base. Each independent module has its own Issue, branch and draft PR. `TASKS.json` defines exact file ownership, frozen dependencies, ordered steps and acceptance commands; `MAC_MODULES.md` and its JSON contract define module interfaces. An Issue means queued work, not running or verified work. Source/test output remains authored only by official Antigravity CLI; Codex inspects it and runs commands. Windows owns backend and final parent-page integration.
+Use `codex/ui-parity-integration` as the PR base. Each independent module has its own Issue, branch and draft PR. `TASKS.json` defines exact file ownership, frozen dependencies, ordered steps and acceptance commands; [TEST_POLICY.md](TEST_POLICY.md) supersedes older broad page-automation requirements; `MAC_MODULES.md` and its JSON contract define module interfaces. An Issue means queued work, not running or verified work. Source/test output remains authored only by official Antigravity CLI; Codex inspects it and runs commands. Windows owns backend and final parent-page integration.
 
 Mac already has a Git clone. Obtain the published integration commit and create a separate worktree rather than overwriting existing work:
 
@@ -29,7 +29,7 @@ Retries require a fresh request and current local opt-in: at most three total at
 
 ## Delivery and checks
 
-Author a coherent module and focused tests in one request. Codex inspects only the allowed files and runs the documented commands. Push module commits and open/update a draft PR to this integration branch; record actual commands and limitations. Do not mark functionality complete based on a file count or CLI summary. Windows accepts deliveries and performs parent integration, then runs the full frontend suite, production build and six-page output check once.
+Follow [TEST_POLICY.md](TEST_POLICY.md): human acceptance is primary for page appearance and flows. Author a coherent module and only necessary minimal critical regressions in one request; do not create separate test-only work. Codex checks allowed files and runs typecheck at delivery/integration boundaries. Reuse same-source results across hosts. Run a production build and six-page output check once after final integration; a full frontend suite is not the default page-confirmation gate. Run targeted checks only for changed critical behavior, changed legacy contracts or a concrete failure. Keep known failures visible. Push module commits and update the draft PR with actual results and limitations; file counts or CLI summaries do not establish customer approval.
 
 `ui-module-checks.yml` runs only coordination validation for docs-only module PRs; frontend changes additionally run typecheck and the relevant module tests. It has no Docker, deployment, model, database or credential steps. Existing Docker/version workflows do not target this integration branch. The default branch remains unchanged.
 

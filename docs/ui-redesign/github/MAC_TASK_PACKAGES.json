@@ -66,7 +66,7 @@
         "frontend/src/pages/credentials/advancedApi.ts",
         "frontend/src/pages/credentials/StatusBadges.tsx"
       ],
-      "task": "Create the complete independent LegacyModelQuota component and its focused tests in these two new files. Use the frozen readonly prop contract below and public source evidence. This is one coherent ordinary source+tests request, not a continuation of any consumed Windows request. No parent/API/shared-component edits or transport. Author files, then return a concise ordinary JSON report; coordinator runs acceptance.",
+      "task": "Create the complete independent LegacyModelQuota component and only necessary minimal critical regressions in these two new files. Use the frozen readonly prop contract below and public source evidence. This is one coherent ordinary source+tests request, not a continuation of any consumed Windows request. No parent/API/shared-component edits or transport. Author files, then return a concise ordinary JSON report; coordinator runs acceptance.",
       "interface": {
         "export": "LegacyModelQuota; export LegacyModelQuotaProps",
         "props": {
@@ -86,13 +86,16 @@
         "Remaining finite0..1, zero/one known, malformed/missing unknown; explicit false quotaInfoPresent/remainingPresent/remainingValid wins. Remaining meter, unknown neutral empty track without aria-valuenow=0; preserve tiny-positive/near-one distinctions. resetTimeRaw strict real calendar/zone/Date range; resetTime display-only. rolling168h means unknown recovery, not a weekly countdown.",
         "At most one local timer only for visible valid future nonrolling deadlines, clean up on unmount/invalid lifetime/no future deadline. Guard clicks and timer delivery with captured mounted lifetime, !busy, scope.mode===mode and isCurrent. Expiry does not imply recovery; optional saved-readback once per actual owner/deadline, coalesce cards, consume before callback, no retry after rejection. Busy may defer once while same owner remains; invalid lifetime discards.",
         "Preserve warm-gray card/ARIA style. Known remaining >=70% green #10b981, >=30% #e0aa14, lower #c65746; 6px meter, 14px radius and 15/16px spacing. Keep existing independent real 5H/week summary outside component. No raw errors, credentials, logs, persistence, quota/test/release/Preview HTTP imports.",
-        "Two focused regression groups: actual display/identity/remaining/reset/explicit exact callback with zero automatic transport; then real Core/session validation and channel ABA with bounded fake clock proving expiry-once/coalescing/busy/rejection and stale captured handlers/timers cannot use fresh owner. No big cross-product matrix, validity mocks, as-any, ts-ignore, skips or lowered assertions."
+        "Page display is primarily accepted by a human under TEST_POLICY.md. Add only the minimum critical regression for the explicit real target/current owner and stale captured callbacks/timers not acting on a new owner. Do not build display/DOM/style/snapshot or lifecycle cross-product suites, duplicate existing lower-layer coverage, mock ownership to self-prove it, or lower assertions. Functional requirements above remain unchanged."
       ],
       "commands_from_frontend": [
-        "npm run typecheck",
-        "npm test -- --maxWorkers=2 src/pages/credentials/LegacyModelQuota.test.tsx src/pages/credentials/ResultView.test.tsx"
+        "npm run typecheck"
       ],
-      "output_contract": "One JSON: summary, changed_files, verification_notes. No tasks/task_results. Author explicitly says commands not run; coordinator supplies actual logs separately."
+      "output_contract": "One JSON: summary, changed_files, verification_notes. No tasks/task_results. Author explicitly says commands not run; coordinator supplies actual logs separately.",
+      "conditional_commands_from_frontend": [
+        "npm test -- --maxWorkers=2 src/pages/credentials/LegacyModelQuota.test.tsx"
+      ],
+      "conditional_command_rule": "Run once when the changed critical behavior needs verification; reuse same-source evidence across hosts. Shared ResultView/adapter suites only when their behavior changes or a concrete failure requires them. No detailed page suite."
     },
     {
       "module": "AgQuotaEvidence",
@@ -124,7 +127,7 @@
         "frontend/src/components/ui/alert-dialog.tsx",
         "frontend/src/pages/credentials/StatusBadges.tsx"
       ],
-      "task": "Create the complete independent AgQuotaEvidence component and focused tests together in the two new files. Use the frozen receipt/props contract and actual accepted advancedApi below. Implement evidence, confirmed release and exact lifetime/ticket rules without parent/API/Core/shared changes. Ordinary complete source+tests request; no old request or temporary output reuse.",
+      "task": "Create the complete independent AgQuotaEvidence component and only necessary minimal critical regressions together in the two new files. Use the frozen receipt/props contract and actual accepted advancedApi below. Implement evidence, confirmed release and exact lifetime/ticket rules without parent/API/Core/shared changes. Ordinary complete source+tests request; no old request or temporary output reuse.",
       "interface": {
         "exports": [
           "AgQuotaEvidence",
@@ -151,13 +154,16 @@
         "Stable receipt-identity/group single-use ticket; open/cancel zero calls. Capture confirmation actor/owner/target, recheck and consume synchronously before actual adapter call. Old confirm/cancel/A->B->A/rerender/remount handlers cannot revive retired tickets or consume new receipt. Minimal weak identity bookkeeping may preserve consumed/retired tickets across remount; no copied payload cache/storage. Cancel before dispatch leaves ticket unconsumed but retires confirmation actor.",
         "Abort/retire old work on owner/validation/receipt/target loss, disable or unmount. Late completion/catch/finally cannot change fresh UI/focus/onRefresh. Sent ticket stays consumed on failure/unknown, no retry. Validate safe adapter output; release only removes abnormal blocking, never claims quota replenishment/clears model_cooldowns/other groups. Keep generation verification, local writeback, directory and protection evidence separate.",
         "Plain text, existing Button/Badge/AlertDialog accessibility/focus; no raw payload/error, real credentials, log/persistence, prop mutation, automatic test/quota/release/Preview/poll. Independent real5H/week quota summary remains outside component, never derived from model fractions/rolling168h/group state.",
-        "Two focused real-component groups: all evidence/provenance/unknown/catalog/GCLI display; release lifecycle with actual Core/session/adapter and synthetic transport: cancel0, confirm1 exact POST, duplicate/old/remounted receipt rejection, same-Scope validation ABA, late ignored-abort response inert and fresh owner/receipt still works. Preserve cooldown/other groups and raw canary exclusion. No fake ownership predicates or giant matrix."
+        "Page display is primarily accepted by a human under TEST_POLICY.md. Add only the minimum critical regression for cancel sending zero requests, one valid confirmation sending once, and stale owner/receipt/ticket or late completion not affecting fresh context. Do not build evidence-field/display/DOM/style/snapshot or lifecycle cross-product suites, duplicate lower-layer coverage, mock ownership to self-prove it, or lower assertions. Functional requirements above remain unchanged."
       ],
       "commands_from_frontend": [
-        "npm run typecheck",
-        "npm test -- --maxWorkers=2 src/pages/credentials/AgQuotaEvidence.test.tsx src/pages/credentials/advancedApi.test.ts"
+        "npm run typecheck"
       ],
-      "output_contract": "One JSON: summary, changed_files, verification_notes. No tasks/task_results. Author explicitly says commands not run; coordinator supplies actual logs separately."
+      "output_contract": "One JSON: summary, changed_files, verification_notes. No tasks/task_results. Author explicitly says commands not run; coordinator supplies actual logs separately.",
+      "conditional_commands_from_frontend": [
+        "npm test -- --maxWorkers=2 src/pages/credentials/AgQuotaEvidence.test.tsx"
+      ],
+      "conditional_command_rule": "Run once when the changed critical behavior needs verification; reuse same-source evidence across hosts. Shared ResultView/adapter suites only when their behavior changes or a concrete failure requires them. No detailed page suite."
     }
   ],
   "parallelism": {
@@ -330,5 +336,21 @@
     "ManualResult": "ResultView exports type ManualResult=ReturnType<typeof manualResult>; private remainingPercentage/recoveryTime helpers are not exported. Read semantics, do not invent imports.",
     "advanced": "Factory plus typed ConfigurePreviewResult/ReleaseQuotaGroupResult/AdvancedCredentialApi exist. Release may omit fields and only exposes cooldownUntil in quota_groups; never fabricate restricted booleans.",
     "scope": "PanelScope requires mode,channelEpoch,sessionEpoch. PanelChannelSnapshot is not a complete Scope3. Validation snapshot identity changes independently of same scope."
+  },
+  "verification_policy": {
+    "policy": "docs/ui-redesign/github/TEST_POLICY.md",
+    "page_acceptance": "primarily human; developer preview is not customer confirmation",
+    "default_full_frontend_suite": false,
+    "add_detailed_page_automation": false,
+    "default_checks": [
+      "typecheck at delivery/integration boundary",
+      "one final production build and six-page output check"
+    ],
+    "conditional_checks": [
+      "minimal changed critical ownership/confirmation/single-submit regressions",
+      "changed legacy API compatibility"
+    ],
+    "reuse_identical_source_results_across_hosts": true,
+    "running_or_consumed_requests": "do not interrupt, mutate or replay"
   }
 }

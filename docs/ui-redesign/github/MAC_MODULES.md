@@ -49,7 +49,7 @@ receipt 固定为只读对象：`{ source: 'response' | 'saved', filename, scope
 
 释放必须经过当前成功 response、blockedUnknown 且非 invalid、相同已验证 owner、精确 validation 身份及每次确认。以稳定 receipt 身份和 group 消耗一次性票据；在调用前同步消耗，保留跨重挂载的消耗/退役状态。旧确认、旧取消、receipt A→B→A、验证/渠道 ABA 均不能消耗新票据；晚到结果不能更新新 UI。释放只改异常阻断，不能清计时冷却或声称补充额度。它是 UI 策略，不是假造服务端票据。
 
-测试只需两个聚焦组：来源/显示/未知/GCLI；真实 Core+适配器+合成 transport 的确认、取消、重复、ABA、重挂载及忽略 abort 的晚到行为。不能 mock 所有权来“自证”。
+按 [TEST_POLICY.md](TEST_POLICY.md) 由人工确认页面展示；只对取消零请求、确认单次发送，以及旧 owner/票据和晚到结果隔离保留最小关键回归。不建立显示字段或生命周期的组合矩阵，不能 mock 所有权来“自证”。
 
 ## 冻结、并行与停止条件
 
@@ -64,17 +64,17 @@ receipt 固定为只读对象：`{ source: 'response' | 'saved', filename, scope
 
 遵守当前 `frontend/package.json` 的 Node 版本范围和现有 lockfile，不顺带升级依赖。安装依赖若有需要由 Mac 协调者正常准备；外部作者只写允许文件。
 
-协调者在 `frontend` 目录运行：
+以 [TEST_POLICY.md](TEST_POLICY.md) 为准。交付/集成节点执行一次类型检查，最终集成统一执行生产构建和六页产物检查。同一源码结果跨机器复用；详细页面确认主要由人工完成，不默认重复全量测试。
 
 ```sh
 npm run typecheck
-npm test -- --maxWorkers=2 src/pages/credentials/LegacyModelQuota.test.tsx src/pages/credentials/ResultView.test.tsx
-npm test -- --maxWorkers=2 src/pages/credentials/AgQuotaEvidence.test.tsx src/pages/credentials/advancedApi.test.ts
 ```
+
+只有本次关键行为修改需要时，运行本模块最小回归一次；未修改的共享 ResultView/adapter 不因模块交付自动重跑。不能为了新增用例数量额外拆任务。历史命令与历史失败继续保留记录，未执行不写通过。
 
 每个模块回传：仅允许文件的 patch/文件集、输出文件 SHA256、实际导出接口、已运行命令和退出状态、未完成事项。作者普通交付 JSON 仅 `summary/changed_files/verification_notes`；明确“文件已写、命令未运行”，不带 ordered task 结果，不冒称验收通过。无需为了交接自行提交或推送。
 
-Windows 应核对允许路径和上下文变化，再复跑上述相关检查后冻结父接线输入。模块通过仅证明组件层；真实页面、full64/P3、全套测试、build、check:build 和浏览器验收另记，不能用元数据代替功能恢复。
+Windows 核对允许路径和上下文变化，复用同一源码已有的必要检查结果后冻结父接线输入；只有父接线改变相关行为时再做针对性检查。模块通过仅证明组件层；真实页面和主要流程由人工确认，最终 build/check:build 统一记录，不能用元数据代替功能恢复。
 
 ## 后续可选 Mac 模块
 
