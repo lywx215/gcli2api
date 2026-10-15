@@ -38,7 +38,7 @@
   "packages": [
     {
       "module": "LegacyModelQuota",
-      "status": "new_source_and_test_absent_planning_only",
+      "status": "delivered_pending_windows_integration",
       "allowed_files": [
         "frontend/src/pages/credentials/LegacyModelQuota.tsx",
         "frontend/src/pages/credentials/LegacyModelQuota.test.tsx"
@@ -92,14 +92,30 @@
         "npm run typecheck"
       ],
       "output_contract": "One JSON: summary, changed_files, verification_notes. No tasks/task_results. Author explicitly says commands not run; coordinator supplies actual logs separately.",
+      "id": "mac-model-quota",
+      "host": "mac",
+      "branch": "codex/mac-model-quota",
+      "started": true,
+      "start_document": "docs/ui-redesign/github/dispatch/mac-model-quota.md",
+      "ordered_steps": [
+        "Implement the complete module against frozen interfaces",
+        "Add only necessary minimal critical regressions; page display goes to human acceptance",
+        "Inspect exports and deliver allowed files; Codex runs acceptance"
+      ],
       "conditional_commands_from_frontend": [
         "npm test -- --maxWorkers=2 src/pages/credentials/LegacyModelQuota.test.tsx"
       ],
-      "conditional_command_rule": "Run once when the changed critical behavior needs verification; reuse same-source evidence across hosts. Shared ResultView/adapter suites only when their behavior changes or a concrete failure requires them. No detailed page suite."
+      "conditional_command_rule": "Run once when the changed critical behavior needs verification; reuse same-source evidence across hosts. Shared ResultView/adapter suites only when their behavior changes or a concrete failure requires them. No detailed page suite.",
+      "ready": false,
+      "issue": 35,
+      "pr": 38,
+      "implementation_commit": "db3d7667dd6e75e17a03c5c4fce0c907da64fe33",
+      "reused_evidence": "26/26, module19 + ResultView7",
+      "action": "preserve closed-to-new-dispatch; no reimplementation or rerun solely for new contract"
     },
     {
       "module": "AgQuotaEvidence",
-      "status": "new_source_and_test_absent_planning_only",
+      "status": "delivered_pending_windows_integration",
       "allowed_files": [
         "frontend/src/pages/credentials/AgQuotaEvidence.tsx",
         "frontend/src/pages/credentials/AgQuotaEvidence.test.tsx"
@@ -160,10 +176,150 @@
         "npm run typecheck"
       ],
       "output_contract": "One JSON: summary, changed_files, verification_notes. No tasks/task_results. Author explicitly says commands not run; coordinator supplies actual logs separately.",
+      "id": "mac-quota-evidence",
+      "host": "mac",
+      "branch": "codex/mac-quota-evidence",
+      "started": true,
+      "start_document": "docs/ui-redesign/github/dispatch/mac-quota-evidence.md",
+      "ordered_steps": [
+        "Implement the complete module against frozen interfaces",
+        "Add only necessary minimal critical regressions; page display goes to human acceptance",
+        "Inspect exports and deliver allowed files; Codex runs acceptance"
+      ],
       "conditional_commands_from_frontend": [
         "npm test -- --maxWorkers=2 src/pages/credentials/AgQuotaEvidence.test.tsx"
       ],
-      "conditional_command_rule": "Run once when the changed critical behavior needs verification; reuse same-source evidence across hosts. Shared ResultView/adapter suites only when their behavior changes or a concrete failure requires them. No detailed page suite."
+      "conditional_command_rule": "Run once when the changed critical behavior needs verification; reuse same-source evidence across hosts. Shared ResultView/adapter suites only when their behavior changes or a concrete failure requires them. No detailed page suite.",
+      "ready": false,
+      "issue": 36,
+      "pr": 39,
+      "implementation_commit": "6c82af1a582065cca8e39b500e16b87c7b069d2a",
+      "reused_evidence": "89/89, module26 + advancedApi63",
+      "action": "preserve closed-to-new-dispatch; no reimplementation or rerun solely for new contract"
+    },
+    {
+      "id": "mac-import-page-20261015",
+      "module": "ImportPageIntegration",
+      "host": "mac",
+      "owner": "Mac local coordinator; Windows explicitly reserves upstream runner/API and final App/credential integration",
+      "status": "ready",
+      "ready": true,
+      "started": false,
+      "branch": "codex/mac-import-page-20261015",
+      "start_document": "docs/ui-redesign/github/dispatch/mac-import-page-20261015.md",
+      "allowed_files": [
+        "frontend/src/pages/import/hooks.ts",
+        "frontend/src/pages/import/index.tsx",
+        "frontend/src/pages/import/components.tsx",
+        "frontend/src/pages/import/hooks.test.tsx",
+        "frontend/src/pages/import/page.test.tsx"
+      ],
+      "context_files": [
+        "AGENTS.md",
+        "docs/MAINTENANCE_SCOPE.md",
+        "docs/ui-redesign/FULL_PARITY_REQUIREMENTS.md",
+        "docs/ui-redesign/P4_IMPORT_ITEM_PUBLIC_CONTRACT.json",
+        "frontend/package.json",
+        "frontend/package-lock.json",
+        "frontend/tsconfig.json",
+        "frontend/vite.config.ts",
+        "frontend/src/app/test-setup.ts",
+        "frontend/src/auth/index.ts",
+        "frontend/src/auth/AuthProvider.tsx",
+        "frontend/src/auth/session.ts",
+        "frontend/src/domain/panel.ts",
+        "frontend/src/domain/shared.ts",
+        "frontend/src/app/channels.tsx",
+        "frontend/src/app/routes.ts",
+        "frontend/src/api/client.ts",
+        "frontend/src/api/config.ts",
+        "frontend/src/pages/import/workflowRunner.ts",
+        "frontend/src/pages/import/workflowRunner.test.ts",
+        "frontend/src/pages/import/flowStore.ts",
+        "frontend/src/pages/import/flowStore.test.ts",
+        "frontend/src/pages/import/api.ts",
+        "frontend/src/pages/import/types.ts",
+        "frontend/src/pages/import/fixtures.ts",
+        "frontend/src/pages/import/api-scope.test.ts",
+        "frontend/src/pages/import/api-projection.test.ts",
+        "frontend/src/pages/import/ImportFilePicker.tsx",
+        "frontend/src/pages/import/ImportFilePicker.test.tsx",
+        "frontend/src/pages/credentials/api.ts",
+        "frontend/src/pages/credentials/model.ts",
+        "frontend/src/components/ui/button.tsx",
+        "frontend/src/components/ui/input.tsx",
+        "frontend/src/components/ui/textarea.tsx",
+        "frontend/src/components/ui/card.tsx",
+        "frontend/src/components/ui/badge.tsx",
+        "frontend/src/components/ui/alert-dialog.tsx",
+        "frontend/src/app/fixtures.ts",
+        "frontend/src/pages/model-routing/fixtures.ts",
+        "frontend/src/pages/model-routing/types.ts",
+        "frontend/src/pages/credentials/fixtures.ts"
+      ],
+      "ordered_steps": [
+        "Bind accepted real workflowRunner/store/API/Picker exports and convert hook to thin current-owner page adapter",
+        "Complete dual-channel import controls, safe receipts, independent AG email jobs and explicitly confirmed immediate export in the same page module",
+        "Adapt existing hook/page tests only where necessary to retain meaningful behavior under new wiring; preserve assertions and reuse accepted lower-layer results",
+        "Deliver only five permitted paths with hashes and ordinary summary; coordinator typechecks once and hands preview to human acceptance"
+      ],
+      "commands_from_frontend": [
+        "npm run typecheck"
+      ],
+      "conditional_commands_from_frontend": [],
+      "execution_policy": {
+        "mode": "queue_only",
+        "max_automatic_runs": 0
+      },
+      "verification": "Mac runs npm run typecheck only at delivery boundary; no suites. Baseline exit2 contains exactly one Windows-owned unused React import at CredentialBatchPanel.test.tsx:3. Mac must introduce zero new diagnostics; matching known exit2 is expected baseline failure, never green. Mac must not edit excluded Batch file. Reuse accepted existing records. Final overall typecheck/build/six-page and human confirmation remain Windows-owned.",
+      "dependency_binding": {
+        "source_snapshot_commit": "3282f5e21bc35de75e0117067d60ab1e449a2120",
+        "readonly_manifest_sha256": "a1e54aa0f47302d8ca85d94511616b09230132f1935d43a389e4176f3fc7d27a",
+        "allowed_initial_hashes": [
+          {
+            "path": "frontend/src/pages/import/hooks.ts",
+            "sha256": "7beac4d81f76ec2d79ef701b4c80996eca13f73ccd5846796cfe29b9726484e0"
+          },
+          {
+            "path": "frontend/src/pages/import/index.tsx",
+            "sha256": "bacb2d9f25be2ec5b3a0f1464f561fcdb52a323f4ade2f0332cadd865eb0a233"
+          },
+          {
+            "path": "frontend/src/pages/import/components.tsx",
+            "sha256": "f864eb194d7d05c48b42710eb196df484ceaaac03b740496f61ae2ecaa098447"
+          },
+          {
+            "path": "frontend/src/pages/import/hooks.test.tsx",
+            "sha256": "63f7a1fc0eaeae6c723304cd36a5f4d42d5196c2569319e07fb670a4177acd2b"
+          },
+          {
+            "path": "frontend/src/pages/import/page.test.tsx",
+            "sha256": "800547684eed300c1c59017e3216f9280ec008984fe8db6929779b78c9146a06"
+          }
+        ],
+        "runner_source_sha256": "e804adcac994788f1780870de66ca947571d6845b4e6dd53a2f140e243bec343",
+        "runner_test_sha256": "f9665c8ddc17f93b6380581fbfb432f822ef60d2ff09613051402fe700680edf",
+        "contract_commit_resolution": "Exact published Issue34 coordination commit; verify docs-only child of sourceS",
+        "local_mac_dispatch_ack": "not started; fresh local grant required"
+      },
+      "baseline_type_exception": {
+        "owner": "windows",
+        "file": "frontend/src/pages/credentials/CredentialBatchPanel.test.tsx",
+        "line": 3,
+        "diagnostic": "unused React import",
+        "baseline_exit_code": 2,
+        "diagnostic_count": 1,
+        "mac_may_edit": false,
+        "blocks_mac_import_readiness": false,
+        "resolution": "Windows parent request may remove only unused React type/import line; no R206 replay or resumed actor task",
+        "evidence": "Coordinator actual typecheck: exactly this one diagnostic; Mac4 and workflowRunner have no new diagnostics"
+      },
+      "source_baseline_commit": "3282f5e21bc35de75e0117067d60ab1e449a2120",
+      "source_snapshot_branch": "codex/ui-parity-mac-import-baseline-20261015",
+      "pr_base_branch": "codex/ui-parity-mac-import-baseline-20261015",
+      "readonly_manifest": "docs/ui-redesign/github/dispatch/mac-import-page-20261015.manifest.json",
+      "readonly_manifest_sha256": "a1e54aa0f47302d8ca85d94511616b09230132f1935d43a389e4176f3fc7d27a",
+      "requirements_file": "docs/ui-redesign/github/dispatch/mac-import-page-20261015.request-template.json"
     }
   ],
   "parallelism": {
@@ -183,7 +339,7 @@
   },
   "optional_followup": {
     "module": "CredentialBatchPanel",
-    "status": "not_selected_for_initial_Mac_work_no_dispatch",
+    "status": "historical_not_assigned_R206_failed_Windows_owned_do_not_replay",
     "allowed_files": [
       "frontend/src/pages/credentials/CredentialBatchPanel.tsx",
       "frontend/src/pages/credentials/CredentialBatchPanel.test.tsx"
@@ -194,10 +350,8 @@
     "advanced_tools": "AdvancedTools does not exist and is not a frozen required helper. Do not create it merely to match a plan name; single Preview can later bind existing Detail, batch Preview belongs to BatchPanel."
   },
   "handoff": [
-    "Deliver only permitted files in a reviewed patch/file set, plus SHA256 manifest, exported prop/type contract and concise implementation/remaining limits.",
-    "Coordinator on Mac runs declared type/scoped tests using the unchanged lock/config and records exact commands/exit status. Do not claim commands passed from author output. No requirement to commit/push; coordinate transfer.",
-    "Windows checks source/context hashes and allowed-only diff before applying, reruns the two component suites plus relevant adapter/ResultView tests and typecheck, then freezes actual exports for its aggregate parent requests.",
-    "Leaf acceptance is not Page/route activation or full64/P3 acceptance. Base credentials support does not wait for these optional leaf modules. Independent5H/week display remains intact."
+    "Mac runs only typecheck with zero new diagnostics against declared Windows-owned exception; no suite or Mac build.",
+    "Reuse same-source existing records. Windows owns final build/six-page and human confirmation."
   ],
   "stop_rules": [
     "New/unexpected context change or allowed path already present: stop that package, keep unrelated authorized work moving and notify coordinator.",
@@ -227,9 +381,9 @@
       "sha256": "726fb778d8269b08f8fa9a5d8537b61d064f626159743b3643945c01b8e29f44"
     },
     {
-      "path": "frontend/package.json",
+      "path": "docs/ui-redesign/P4_IMPORT_ITEM_PUBLIC_CONTRACT.json",
       "exists": true,
-      "sha256": "35d994ae11e80c46ae3402eeaf45c3182ec73de892eb2c731c1202aa9fe87985"
+      "sha256": "4e1aeb66950987e3ed316b5b29e5646ffab03a70fd76b140ea8d774c2a9c0be1"
     },
     {
       "path": "frontend/package-lock.json",
@@ -237,19 +391,89 @@
       "sha256": "e51609bf8c4d417de1d795e37013de4068b441349568f0d259fa929df7467ae6"
     },
     {
-      "path": "frontend/tsconfig.json",
+      "path": "frontend/package.json",
       "exists": true,
-      "sha256": "5a3aef9f6a5f6446408e034fe752e617ffb2e37c78f3c42339695c4eb8550b7e"
+      "sha256": "35d994ae11e80c46ae3402eeaf45c3182ec73de892eb2c731c1202aa9fe87985"
     },
     {
-      "path": "frontend/vite.config.ts",
+      "path": "frontend/src/api/client.ts",
       "exists": true,
-      "sha256": "5208b5d1ed6b699aa8f1b5dd699796ffe8b5b29df9ad87e1f0fcf88521d96f8b"
+      "sha256": "ee3d7dfac1775b55032f3c79ed90624d664778cda34c1a20b16d33e062795eb0"
+    },
+    {
+      "path": "frontend/src/api/config.ts",
+      "exists": true,
+      "sha256": "02f0894b036b3b6d7948abf45397b0f50f3eb0a6209097d8f1da193d9d4a84e0"
+    },
+    {
+      "path": "frontend/src/app/channels.tsx",
+      "exists": true,
+      "sha256": "73cc17cbbb081e9bfdf354a490602b179ab275b5c127205efb522cf91e173d2c"
+    },
+    {
+      "path": "frontend/src/app/fixtures.ts",
+      "exists": true,
+      "sha256": "36fc8c4402adda9dc992f92c3a53bd534058c759fce32f6c1e2321bbc6491135"
+    },
+    {
+      "path": "frontend/src/app/routes.ts",
+      "exists": true,
+      "sha256": "d76cd15213343cd5c6b3b71fac4b4df1b65017e98f6cb6a2d5b4d14bb8f70295"
     },
     {
       "path": "frontend/src/app/test-setup.ts",
       "exists": true,
       "sha256": "4f2cfb146a5ee9f27ff2b5f6b4137c8ce1f7f75d4f47f681f98d4ac9574f6415"
+    },
+    {
+      "path": "frontend/src/auth/AuthProvider.tsx",
+      "exists": true,
+      "sha256": "f5dfd0445f485865c4651eac696263e5312e29c88307d85991373ca9597ff8fd"
+    },
+    {
+      "path": "frontend/src/auth/index.ts",
+      "exists": true,
+      "sha256": "ce4dc7eb9f332976f363459760b706aa242f38c2d18249e83222890966bbbe38"
+    },
+    {
+      "path": "frontend/src/auth/session.ts",
+      "exists": true,
+      "sha256": "ece4b8695e6551a40c53caf703d0d57dcb5ddf39d0271b2d37546cf9a627326b"
+    },
+    {
+      "path": "frontend/src/components/ui/alert-dialog.tsx",
+      "exists": true,
+      "sha256": "7ad9a8c3667287a8ab45badb72c98b3432425642302618481cf14c4aab36e4ea"
+    },
+    {
+      "path": "frontend/src/components/ui/badge.tsx",
+      "exists": true,
+      "sha256": "bc4081078acb1ba8b704f5c4453342e0e584f52b3770fcf2c962e479e8d70b4a"
+    },
+    {
+      "path": "frontend/src/components/ui/button.tsx",
+      "exists": true,
+      "sha256": "4cd09b106629a41f1eb95992e0001eefdbaee72eaac57f80b6ad27d1ec2f7d4b"
+    },
+    {
+      "path": "frontend/src/components/ui/card.tsx",
+      "exists": true,
+      "sha256": "c1aff7e4b468450022a1c9517ed60b55506e357ac255d603ed7817fe566d3e82"
+    },
+    {
+      "path": "frontend/src/components/ui/input.tsx",
+      "exists": true,
+      "sha256": "526a1b63cd8666b5626281325dea4f544a79821abdb140e0f78f4d2210443d44"
+    },
+    {
+      "path": "frontend/src/components/ui/progress.tsx",
+      "exists": true,
+      "sha256": "7c209290100f742f80756d3baa16ffd8d4b321802f6c1bd867b23d52057901aa"
+    },
+    {
+      "path": "frontend/src/components/ui/textarea.tsx",
+      "exists": true,
+      "sha256": "1b4a32b2ac34972d82c4ccbde8d39349787779dc90deb22e91b928b2601bafb2"
     },
     {
       "path": "frontend/src/domain/panel.ts",
@@ -262,19 +486,9 @@
       "sha256": "72a56ec943325fd4d4024f379056118a6a54f208f11f9a527ebf151fbb5b7128"
     },
     {
-      "path": "frontend/src/auth/session.ts",
+      "path": "frontend/src/pages/credentials/ResultView.test.tsx",
       "exists": true,
-      "sha256": "ece4b8695e6551a40c53caf703d0d57dcb5ddf39d0271b2d37546cf9a627326b"
-    },
-    {
-      "path": "frontend/src/api/client.ts",
-      "exists": true,
-      "sha256": "ee3d7dfac1775b55032f3c79ed90624d664778cda34c1a20b16d33e062795eb0"
-    },
-    {
-      "path": "frontend/src/pages/credentials/model.ts",
-      "exists": true,
-      "sha256": "992dd12f914da64b037051b222b36a9d8a329e93b43965ab961210710465663a"
+      "sha256": "37c80679cbd5583600f410ca8a2f3ad4c4081a5fc3f87629269d57323734b862"
     },
     {
       "path": "frontend/src/pages/credentials/ResultView.tsx",
@@ -282,14 +496,9 @@
       "sha256": "2a30924306f7ef520b083fd69e018d2e91fc5fa2b88fab5828a3b46f44eed6be"
     },
     {
-      "path": "frontend/src/pages/credentials/ResultView.test.tsx",
+      "path": "frontend/src/pages/credentials/StatusBadges.tsx",
       "exists": true,
-      "sha256": "37c80679cbd5583600f410ca8a2f3ad4c4081a5fc3f87629269d57323734b862"
-    },
-    {
-      "path": "frontend/src/pages/credentials/advancedApi.ts",
-      "exists": true,
-      "sha256": "2ab54d20217718b4a8beb9d7a65cde3da79a8ed4975e02e5cf695d95908ab3b0"
+      "sha256": "4888b639feca904687f17c82419f5bf01a4dc8d8075136633068335360eba3d9"
     },
     {
       "path": "frontend/src/pages/credentials/advancedApi.test.ts",
@@ -297,9 +506,14 @@
       "sha256": "3406dce215c43ad12596cad011447b967b167e5da29e3f9a59d965b15cc588af"
     },
     {
-      "path": "frontend/src/pages/credentials/batch.ts",
+      "path": "frontend/src/pages/credentials/advancedApi.ts",
       "exists": true,
-      "sha256": "ca581f006b2c451bc472c89e0509fba459f6108b4248097699225fb52091a7a9"
+      "sha256": "2ab54d20217718b4a8beb9d7a65cde3da79a8ed4975e02e5cf695d95908ab3b0"
+    },
+    {
+      "path": "frontend/src/pages/credentials/api.ts",
+      "exists": true,
+      "sha256": "cdade2282eedd9da29e912d93484b85d7ac38d7e748baa9febd3b8f88d01ae7f"
     },
     {
       "path": "frontend/src/pages/credentials/batch.test.ts",
@@ -307,29 +521,94 @@
       "sha256": "0980614f4372208f4a2d226bcb7d40a37783364f0da994d6ad98fd5f3a33b12b"
     },
     {
-      "path": "frontend/src/components/ui/button.tsx",
+      "path": "frontend/src/pages/credentials/batch.ts",
       "exists": true,
-      "sha256": "4cd09b106629a41f1eb95992e0001eefdbaee72eaac57f80b6ad27d1ec2f7d4b"
+      "sha256": "ca581f006b2c451bc472c89e0509fba459f6108b4248097699225fb52091a7a9"
     },
     {
-      "path": "frontend/src/components/ui/badge.tsx",
+      "path": "frontend/src/pages/credentials/fixtures.ts",
       "exists": true,
-      "sha256": "bc4081078acb1ba8b704f5c4453342e0e584f52b3770fcf2c962e479e8d70b4a"
+      "sha256": "5d365a3650190414564287fa5892f0ebc5c1512cb0aeaee9bf9d934b20b3bb22"
     },
     {
-      "path": "frontend/src/components/ui/progress.tsx",
+      "path": "frontend/src/pages/credentials/model.ts",
       "exists": true,
-      "sha256": "7c209290100f742f80756d3baa16ffd8d4b321802f6c1bd867b23d52057901aa"
+      "sha256": "992dd12f914da64b037051b222b36a9d8a329e93b43965ab961210710465663a"
     },
     {
-      "path": "frontend/src/components/ui/alert-dialog.tsx",
+      "path": "frontend/src/pages/import/ImportFilePicker.test.tsx",
       "exists": true,
-      "sha256": "7ad9a8c3667287a8ab45badb72c98b3432425642302618481cf14c4aab36e4ea"
+      "sha256": "5af28e0f714c0ef5167986f2a9eab1625cd0ac38199f61e44a1779131649906d"
     },
     {
-      "path": "frontend/src/pages/credentials/StatusBadges.tsx",
+      "path": "frontend/src/pages/import/ImportFilePicker.tsx",
       "exists": true,
-      "sha256": "4888b639feca904687f17c82419f5bf01a4dc8d8075136633068335360eba3d9"
+      "sha256": "f6a6c6d085437205f7a19d40e78fe3ea4e6aa9560aa614ad44df0a5e3ff9aef6"
+    },
+    {
+      "path": "frontend/src/pages/import/api-projection.test.ts",
+      "exists": true,
+      "sha256": "69ec419c43893cd3bb0f0c8d76c8f4c33092f5888e040fe36a8e28d34368d831"
+    },
+    {
+      "path": "frontend/src/pages/import/api-scope.test.ts",
+      "exists": true,
+      "sha256": "af3b52456d55784632a678928a8dd6ba305fcb6319b82178bb28ff2d8e5080a2"
+    },
+    {
+      "path": "frontend/src/pages/import/api.ts",
+      "exists": true,
+      "sha256": "605f7adf9ca1aebf477a1ee38328572aa13ffda022481a47f05f3f78d901ff2b"
+    },
+    {
+      "path": "frontend/src/pages/import/fixtures.ts",
+      "exists": true,
+      "sha256": "2cfb5ba1f586cad447606f1d7f4b934105402046ab7c1ed113b4c199d6c5ea55"
+    },
+    {
+      "path": "frontend/src/pages/import/flowStore.test.ts",
+      "exists": true,
+      "sha256": "4aab016c2aa2cdec2c9c11c95d8b4647b4cdd2ae485f8dd883478b239a247020"
+    },
+    {
+      "path": "frontend/src/pages/import/flowStore.ts",
+      "exists": true,
+      "sha256": "a7394b78ae9ff926913ecd22a962490ca7e90234f0c972b53a9e603a11095eb1"
+    },
+    {
+      "path": "frontend/src/pages/import/types.ts",
+      "exists": true,
+      "sha256": "0952af8c99995320db527a0416d7172788131c4171ae9b3940ca4feb166b7b85"
+    },
+    {
+      "path": "frontend/src/pages/import/workflowRunner.test.ts",
+      "exists": true,
+      "sha256": "f9665c8ddc17f93b6380581fbfb432f822ef60d2ff09613051402fe700680edf"
+    },
+    {
+      "path": "frontend/src/pages/import/workflowRunner.ts",
+      "exists": true,
+      "sha256": "e804adcac994788f1780870de66ca947571d6845b4e6dd53a2f140e243bec343"
+    },
+    {
+      "path": "frontend/src/pages/model-routing/fixtures.ts",
+      "exists": true,
+      "sha256": "ae985727c4270a006a88b6920a003ae08769750a1680ab368731d2ec18c36a74"
+    },
+    {
+      "path": "frontend/src/pages/model-routing/types.ts",
+      "exists": true,
+      "sha256": "c92055de903e6e51f38dccbbdcaa008d2176ce5b90d3a42e518c6f743bc7f621"
+    },
+    {
+      "path": "frontend/tsconfig.json",
+      "exists": true,
+      "sha256": "5a3aef9f6a5f6446408e034fe752e617ffb2e37c78f3c42339695c4eb8550b7e"
+    },
+    {
+      "path": "frontend/vite.config.ts",
+      "exists": true,
+      "sha256": "5208b5d1ed6b699aa8f1b5dd699796ffe8b5b29df9ad87e1f0fcf88521d96f8b"
     }
   ],
   "actual_exports_evidence": {
@@ -352,5 +631,9 @@
     ],
     "reuse_identical_source_results_across_hosts": true,
     "running_or_consumed_requests": "do not interrupt, mutate or replay"
-  }
+  },
+  "source_baseline_commit": "3282f5e21bc35de75e0117067d60ab1e449a2120",
+  "source_snapshot_branch": "codex/ui-parity-mac-import-baseline-20261015",
+  "pr_base_branch": "codex/ui-parity-mac-import-baseline-20261015",
+  "current_dispatch_rule": "Only mac-import-page-20261015 is ready. Historical delivered packages and optional_followup are not executable assignments."
 }

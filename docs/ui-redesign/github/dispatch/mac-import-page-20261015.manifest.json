@@ -1,0 +1,255 @@
+{
+  "schema_version": 1,
+  "task_id": "mac-import-page-20261015",
+  "source_baseline_commit": "3282f5e21bc35de75e0117067d60ab1e449a2120",
+  "source_snapshot_branch": "codex/ui-parity-mac-import-baseline-20261015",
+  "readonly_files": [
+    {
+      "path": "AGENTS.md",
+      "exists": true,
+      "sha256": "0dfdc8935733895d9211dae3f83e750b384d95cf0afb04461ca3fc02fc902e70"
+    },
+    {
+      "path": "docs/MAINTENANCE_SCOPE.md",
+      "exists": true,
+      "sha256": "ddc6db0cfc872e95815242c13838ffdbbae642351fe55d14b8f10a65950b58e4"
+    },
+    {
+      "path": "docs/ui-redesign/FULL_PARITY_REQUIREMENTS.md",
+      "exists": true,
+      "sha256": "b67525f34891eb87ecbae5c5d4c9a2701b69eb98f41a7c72816c446b5f4c750a"
+    },
+    {
+      "path": "docs/ui-redesign/P4_IMPORT_ITEM_PUBLIC_CONTRACT.json",
+      "exists": true,
+      "sha256": "4e1aeb66950987e3ed316b5b29e5646ffab03a70fd76b140ea8d774c2a9c0be1"
+    },
+    {
+      "path": "frontend/package.json",
+      "exists": true,
+      "sha256": "35d994ae11e80c46ae3402eeaf45c3182ec73de892eb2c731c1202aa9fe87985"
+    },
+    {
+      "path": "frontend/package-lock.json",
+      "exists": true,
+      "sha256": "e51609bf8c4d417de1d795e37013de4068b441349568f0d259fa929df7467ae6"
+    },
+    {
+      "path": "frontend/tsconfig.json",
+      "exists": true,
+      "sha256": "5a3aef9f6a5f6446408e034fe752e617ffb2e37c78f3c42339695c4eb8550b7e"
+    },
+    {
+      "path": "frontend/vite.config.ts",
+      "exists": true,
+      "sha256": "5208b5d1ed6b699aa8f1b5dd699796ffe8b5b29df9ad87e1f0fcf88521d96f8b"
+    },
+    {
+      "path": "frontend/src/app/test-setup.ts",
+      "exists": true,
+      "sha256": "4f2cfb146a5ee9f27ff2b5f6b4137c8ce1f7f75d4f47f681f98d4ac9574f6415"
+    },
+    {
+      "path": "frontend/src/auth/index.ts",
+      "exists": true,
+      "sha256": "ce4dc7eb9f332976f363459760b706aa242f38c2d18249e83222890966bbbe38"
+    },
+    {
+      "path": "frontend/src/auth/AuthProvider.tsx",
+      "exists": true,
+      "sha256": "f5dfd0445f485865c4651eac696263e5312e29c88307d85991373ca9597ff8fd"
+    },
+    {
+      "path": "frontend/src/auth/session.ts",
+      "exists": true,
+      "sha256": "ece4b8695e6551a40c53caf703d0d57dcb5ddf39d0271b2d37546cf9a627326b"
+    },
+    {
+      "path": "frontend/src/domain/panel.ts",
+      "exists": true,
+      "sha256": "4b357fb8291ede52f814bff25276796b63c6492b152e9876cd69927ce17e6148"
+    },
+    {
+      "path": "frontend/src/domain/shared.ts",
+      "exists": true,
+      "sha256": "72a56ec943325fd4d4024f379056118a6a54f208f11f9a527ebf151fbb5b7128"
+    },
+    {
+      "path": "frontend/src/app/channels.tsx",
+      "exists": true,
+      "sha256": "73cc17cbbb081e9bfdf354a490602b179ab275b5c127205efb522cf91e173d2c"
+    },
+    {
+      "path": "frontend/src/app/routes.ts",
+      "exists": true,
+      "sha256": "d76cd15213343cd5c6b3b71fac4b4df1b65017e98f6cb6a2d5b4d14bb8f70295"
+    },
+    {
+      "path": "frontend/src/api/client.ts",
+      "exists": true,
+      "sha256": "ee3d7dfac1775b55032f3c79ed90624d664778cda34c1a20b16d33e062795eb0"
+    },
+    {
+      "path": "frontend/src/api/config.ts",
+      "exists": true,
+      "sha256": "02f0894b036b3b6d7948abf45397b0f50f3eb0a6209097d8f1da193d9d4a84e0"
+    },
+    {
+      "path": "frontend/src/pages/import/workflowRunner.ts",
+      "exists": true,
+      "sha256": "e804adcac994788f1780870de66ca947571d6845b4e6dd53a2f140e243bec343"
+    },
+    {
+      "path": "frontend/src/pages/import/workflowRunner.test.ts",
+      "exists": true,
+      "sha256": "f9665c8ddc17f93b6380581fbfb432f822ef60d2ff09613051402fe700680edf"
+    },
+    {
+      "path": "frontend/src/pages/import/flowStore.ts",
+      "exists": true,
+      "sha256": "a7394b78ae9ff926913ecd22a962490ca7e90234f0c972b53a9e603a11095eb1"
+    },
+    {
+      "path": "frontend/src/pages/import/flowStore.test.ts",
+      "exists": true,
+      "sha256": "4aab016c2aa2cdec2c9c11c95d8b4647b4cdd2ae485f8dd883478b239a247020"
+    },
+    {
+      "path": "frontend/src/pages/import/api.ts",
+      "exists": true,
+      "sha256": "605f7adf9ca1aebf477a1ee38328572aa13ffda022481a47f05f3f78d901ff2b"
+    },
+    {
+      "path": "frontend/src/pages/import/types.ts",
+      "exists": true,
+      "sha256": "0952af8c99995320db527a0416d7172788131c4171ae9b3940ca4feb166b7b85"
+    },
+    {
+      "path": "frontend/src/pages/import/fixtures.ts",
+      "exists": true,
+      "sha256": "2cfb5ba1f586cad447606f1d7f4b934105402046ab7c1ed113b4c199d6c5ea55"
+    },
+    {
+      "path": "frontend/src/pages/import/api-scope.test.ts",
+      "exists": true,
+      "sha256": "af3b52456d55784632a678928a8dd6ba305fcb6319b82178bb28ff2d8e5080a2"
+    },
+    {
+      "path": "frontend/src/pages/import/api-projection.test.ts",
+      "exists": true,
+      "sha256": "69ec419c43893cd3bb0f0c8d76c8f4c33092f5888e040fe36a8e28d34368d831"
+    },
+    {
+      "path": "frontend/src/pages/import/ImportFilePicker.tsx",
+      "exists": true,
+      "sha256": "f6a6c6d085437205f7a19d40e78fe3ea4e6aa9560aa614ad44df0a5e3ff9aef6"
+    },
+    {
+      "path": "frontend/src/pages/import/ImportFilePicker.test.tsx",
+      "exists": true,
+      "sha256": "5af28e0f714c0ef5167986f2a9eab1625cd0ac38199f61e44a1779131649906d"
+    },
+    {
+      "path": "frontend/src/pages/credentials/api.ts",
+      "exists": true,
+      "sha256": "cdade2282eedd9da29e912d93484b85d7ac38d7e748baa9febd3b8f88d01ae7f"
+    },
+    {
+      "path": "frontend/src/pages/credentials/model.ts",
+      "exists": true,
+      "sha256": "992dd12f914da64b037051b222b36a9d8a329e93b43965ab961210710465663a"
+    },
+    {
+      "path": "frontend/src/components/ui/button.tsx",
+      "exists": true,
+      "sha256": "4cd09b106629a41f1eb95992e0001eefdbaee72eaac57f80b6ad27d1ec2f7d4b"
+    },
+    {
+      "path": "frontend/src/components/ui/input.tsx",
+      "exists": true,
+      "sha256": "526a1b63cd8666b5626281325dea4f544a79821abdb140e0f78f4d2210443d44"
+    },
+    {
+      "path": "frontend/src/components/ui/textarea.tsx",
+      "exists": true,
+      "sha256": "1b4a32b2ac34972d82c4ccbde8d39349787779dc90deb22e91b928b2601bafb2"
+    },
+    {
+      "path": "frontend/src/components/ui/card.tsx",
+      "exists": true,
+      "sha256": "c1aff7e4b468450022a1c9517ed60b55506e357ac255d603ed7817fe566d3e82"
+    },
+    {
+      "path": "frontend/src/components/ui/badge.tsx",
+      "exists": true,
+      "sha256": "bc4081078acb1ba8b704f5c4453342e0e584f52b3770fcf2c962e479e8d70b4a"
+    },
+    {
+      "path": "frontend/src/components/ui/alert-dialog.tsx",
+      "exists": true,
+      "sha256": "7ad9a8c3667287a8ab45badb72c98b3432425642302618481cf14c4aab36e4ea"
+    },
+    {
+      "path": "frontend/src/app/fixtures.ts",
+      "exists": true,
+      "sha256": "36fc8c4402adda9dc992f92c3a53bd534058c759fce32f6c1e2321bbc6491135"
+    },
+    {
+      "path": "frontend/src/pages/model-routing/fixtures.ts",
+      "exists": true,
+      "sha256": "ae985727c4270a006a88b6920a003ae08769750a1680ab368731d2ec18c36a74"
+    },
+    {
+      "path": "frontend/src/pages/model-routing/types.ts",
+      "exists": true,
+      "sha256": "c92055de903e6e51f38dccbbdcaa008d2176ce5b90d3a42e518c6f743bc7f621"
+    },
+    {
+      "path": "frontend/src/pages/credentials/fixtures.ts",
+      "exists": true,
+      "sha256": "5d365a3650190414564287fa5892f0ebc5c1512cb0aeaee9bf9d934b20b3bb22"
+    }
+  ],
+  "allowed_initial_files": [
+    {
+      "path": "frontend/src/pages/import/hooks.ts",
+      "sha256": "7beac4d81f76ec2d79ef701b4c80996eca13f73ccd5846796cfe29b9726484e0"
+    },
+    {
+      "path": "frontend/src/pages/import/index.tsx",
+      "sha256": "bacb2d9f25be2ec5b3a0f1464f561fcdb52a323f4ade2f0332cadd865eb0a233"
+    },
+    {
+      "path": "frontend/src/pages/import/components.tsx",
+      "sha256": "f864eb194d7d05c48b42710eb196df484ceaaac03b740496f61ae2ecaa098447"
+    },
+    {
+      "path": "frontend/src/pages/import/hooks.test.tsx",
+      "sha256": "63f7a1fc0eaeae6c723304cd36a5f4d42d5196c2569319e07fb670a4177acd2b"
+    },
+    {
+      "path": "frontend/src/pages/import/page.test.tsx",
+      "sha256": "800547684eed300c1c59017e3216f9280ec008984fe8db6929779b78c9146a06"
+    }
+  ],
+  "windows_reserved_writes": [
+    "frontend/src/pages/credentials/index.tsx",
+    "frontend/src/pages/credentials/CredentialDetail.tsx",
+    "frontend/src/app/App.tsx",
+    "frontend/src/pages/credentials/CredentialBatchPanel.test.tsx"
+  ],
+  "write_read_conflicts": [],
+  "newline_rule": "Raw Git blob bytes are authoritative. Use core.autocrlf=false in independent Mac checkout; never silently normalize a mismatch.",
+  "baseline_type_exception": {
+    "owner": "windows",
+    "file": "frontend/src/pages/credentials/CredentialBatchPanel.test.tsx",
+    "line": 3,
+    "diagnostic": "unused React import",
+    "baseline_exit_code": 2,
+    "diagnostic_count": 1,
+    "mac_may_edit": false,
+    "blocks_mac_import_readiness": false,
+    "resolution": "Windows parent request may remove only unused React type/import line; no R206 replay or resumed actor task",
+    "evidence": "Coordinator actual typecheck: exactly this one diagnostic; Mac4 and workflowRunner have no new diagnostics"
+  }
+}

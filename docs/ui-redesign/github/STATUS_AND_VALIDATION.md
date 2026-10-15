@@ -1,53 +1,10 @@
-# Mac 接手：代码状态与验收摘要
+# Current source and verification
 
-此文件依据迁移前已确认的公开验收和最终冻结结果编写。两项后台工作均已关闭，最终结果明确为未应用任何代码；两份输入清单分别40项和14项的全部 hash 均保持不变，没有晚到交付。最终包的文件清单与基线以随包 manifest 为准。
+Published source `3282f5e21bc35de75e0117067d60ab1e449a2120`, dedicated baseline branch `codex/ui-parity-mac-import-baseline-20261015`; Windows HEAD/index/dirty source preserved. Public snapshot manifest records exact byte provenance and exclusions. No credential/database/auth state transferred.
 
-## 已确认落地的改动
-
-- 修复原十处 TypeScript 诊断，涉及凭证去重测试的六处类型断言、已保存错误展示的两处类型问题、导入 API 的未使用类型导入，以及设置 API 对 unknown 的严格收窄。四文件逆改均精确匹配修复前基线，静态审计认定这些修复未改变语义。该阶段类型检查曾通过，相关四个测试文件 96/96 通过。
-- ConsoleHandshake 组件增加受保护的 ancestorOrigins 读取回退，并固定验证对象与导航归属，在每次发送前重新检查。对应测试保留真实验证/路由边界、同步多目标循环和精确属性描述符恢复；最新八项运行测试通过。这是独立组件验收，不能代表 App 已完成挂载与激活。
-- Native 凭证页测试修正真实关闭、焦点恢复、关闭后重新打开 quota 对话框，以及异步 deferred 的等待和清理。最新36项运行测试通过。此部分修复的是交互建模，未据此宣称整页所有功能恢复。
-- 新增独立 ImportFilePicker 组件及测试：受控 File 列表、追加/拖放、按文件元数据稳定去重、移除/清空/重新选择、禁用与归属检查、卸载后旧回调失效，以及仅展示外部提供的有效进度。组件不读取文件正文、不解析、不上传；父页面和运行器集成另行完成。最新16项运行测试通过。
-
-## 最新命令验收
-
-| 检查 | 最新已确认结果 | 范围 |
-| --- | --- | --- |
-| TypeScript 全局检查 | **失败，剩1处** | `frontend/src/pages/import/ImportFilePicker.test.tsx:449` 使用 `ImportFilePickerProps` 但缺少 type import；生产组件已经导出该 interface。原十处问题与 Console 测试新增两处诊断均已清除。 |
-| 选定运行测试 | **3文件、60/60通过** | Console8、Native凭证页36、Picker16。 |
-| 静态检查 | 限定范围通过 | Console/Native测试前置修复通过；Picker源码与运行行为限定通过，仍受上述测试类型导入问题阻塞。 |
-| 后端冻结核对 | 历史26个源文件 hash 匹配 | 这是既有文件一致性证据，不是本次新增后端运行验收。 |
-| 全套测试、生产构建、浏览器 | 当前快照尚未完成 | 较早的全套755项中751通过、4失败及更早构建结果仅属历史，不可推断当前全绿。 |
-
-旧96项与最新60项属于不同选定集合，不累计为一个通过总数。完成缺失类型导入后仍须在实际最终代码快照上重跑类型检查。
-
-## 冻结结论与未完成范围
-
-BaseActivation 与 SavedErrors 功能修复两项后台工作均已关闭且未应用代码，不能称已完成或可用。不得恢复临时输出，也不得重放已消费任务。Picker 测试类型导入仍缺失；它与 BaseActivation、SavedErrors 及所有父页面接线继续由 Windows 后续任务负责。
-
-基础 GCLI 凭证 App 激活、原生路由别名与 Console 实际挂载仍待确认。现有代码与接口保留；交接不恢复已取消的统一管理项目，也不扩大为新的 Gemini CLI 专属维护。
-
-全面恢复仍未完成：额度详情与操作证据、邮箱/凭证导出与维护回执、Import 运行器及页面集成、完整已保存错误展示、Console 激活，以及必要的真实组件生命周期覆盖，须按最终快照和模块依赖逐项验收。独立组件或 API 交付不等于父页面已接线。
-
-Native 当前仍有已记录的覆盖边界，例如部分旧回调检查来自注入 props/API，而非实际内部按钮保留回调；验证对象 ABA 与存储探针后的精确重新加载次数仍待针对性验收。不得把选定测试通过扩展为这些边界已验证。
-
-## Mac 与 Windows 的工作边界
-
-Mac 仅开发两个独立叶级额度模块：LegacyModelQuota 与 AgQuotaEvidence，以及各自限定的组件测试。按随包契约实现独立 props 接口；不自行把它们挂入页面，不扩展工作范围。
-
-共享入口、App/路由、API、Auth/Core、Picker、父页面接线均由 Windows 保留。Mac 不得因看到全局类型失败而顺手补 Picker 类型导入，也不得自行修复 BaseActivation 或 SavedErrors。若独立模块发现需要共享接口变化，只记录依赖并交回 Windows 协调。
-
-1. 按随包 manifest 校验基线、源码与冻结上下文，在独立且干净的目标工作区重建快照。
-2. 仅修改两个叶级模块及其明确允许的测试；先执行模块相关检查，并区分既有全局类型失败与新诊断。
-3. Windows 完成共享修复和父页面接线后，统一重跑类型检查、完整前端测试、生产构建与构建检查，以及浏览器原生功能验收。只对有证据的范围升级检查清单。
-
-## 源码清单补充
-
-以下七项是必要源码，须纳入待审计迁移清单，不能因初始 inventory 漏列而排除：
-
-- 已修改：`docs/MAINTENANCE_SCOPE.md`、`test_antigravity_panel_api.py`、`test_panel_credential_capabilities.py`。
-- 新增：`test_panel_full_parity_status_backend.py`、`test_panel_oauth_preview_safe_increment.py`、`test_panel_quota_summary.py`、`test_panel_safe_config.py`。
-
-纳入源码清单不代表这些测试已经在 Mac 或当前冻结快照上运行通过。
-
-Docker 跳过，不部署；未执行私有数据库操作或真实外部业务调用。此交接摘要不携带本机运行会话、授权材料、私有状态、真实凭证或真实密码；不复制原运行恢复记录作为最终交接内容。
+- PR38/39 exact four files imported unchanged; existing Mac evidence26/26 and89/89 reused. Parent integration pending.
+- R204 Files, R205 Email, R207 overview, R208 runner delivered; no repeat assignment. Static known-fix inspection recorded; no fresh runtime pass claimed.
+- R206 failed CLI ERROR, zero delivery, not replayed. Batch leaf not mounted.
+- Necessary postreceive typecheck exit2, exactly TS6133 unused React at CredentialBatchPanel.test.tsx(3,1); Windows owns one-line type fix. Mac4/runner no new diagnostics. Baseline is NOT green.
+- New Mac task `mac-import-page-20261015` ready, startedfalse; five writes /41 frozen readonly. Mac typecheck only, require zero new diagnostics; do not edit excluded file to hide baseline failure.
+- Final Windows type/build/six-page and human confirmation pending. No new suites/test projects; reuse existing records. Actions disabled, Docker skipped, no deployment.

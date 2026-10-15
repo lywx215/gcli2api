@@ -1,0 +1,393 @@
+{
+  "ready": true,
+  "status": "ready_not_started_queue_only",
+  "task": "Mac next independent whole ImportPage module: implement complete dual-channel runner/Picker/receipt/export/job wiring in exactly five existing files. Existing tests receive necessary interface/type adaptations only; no added test matrix or suite execution.",
+  "allowed_files": [
+    "frontend/src/pages/import/hooks.ts",
+    "frontend/src/pages/import/index.tsx",
+    "frontend/src/pages/import/components.tsx",
+    "frontend/src/pages/import/hooks.test.tsx",
+    "frontend/src/pages/import/page.test.tsx"
+  ],
+  "context_files": [
+    "AGENTS.md",
+    "docs/MAINTENANCE_SCOPE.md",
+    "docs/ui-redesign/FULL_PARITY_REQUIREMENTS.md",
+    "docs/ui-redesign/P4_IMPORT_ITEM_PUBLIC_CONTRACT.json",
+    "frontend/package.json",
+    "frontend/package-lock.json",
+    "frontend/tsconfig.json",
+    "frontend/vite.config.ts",
+    "frontend/src/app/test-setup.ts",
+    "frontend/src/auth/index.ts",
+    "frontend/src/auth/AuthProvider.tsx",
+    "frontend/src/auth/session.ts",
+    "frontend/src/domain/panel.ts",
+    "frontend/src/domain/shared.ts",
+    "frontend/src/app/channels.tsx",
+    "frontend/src/app/routes.ts",
+    "frontend/src/api/client.ts",
+    "frontend/src/api/config.ts",
+    "frontend/src/pages/import/workflowRunner.ts",
+    "frontend/src/pages/import/workflowRunner.test.ts",
+    "frontend/src/pages/import/flowStore.ts",
+    "frontend/src/pages/import/flowStore.test.ts",
+    "frontend/src/pages/import/api.ts",
+    "frontend/src/pages/import/types.ts",
+    "frontend/src/pages/import/fixtures.ts",
+    "frontend/src/pages/import/api-scope.test.ts",
+    "frontend/src/pages/import/api-projection.test.ts",
+    "frontend/src/pages/import/ImportFilePicker.tsx",
+    "frontend/src/pages/import/ImportFilePicker.test.tsx",
+    "frontend/src/pages/credentials/api.ts",
+    "frontend/src/pages/credentials/model.ts",
+    "frontend/src/components/ui/button.tsx",
+    "frontend/src/components/ui/input.tsx",
+    "frontend/src/components/ui/textarea.tsx",
+    "frontend/src/components/ui/card.tsx",
+    "frontend/src/components/ui/badge.tsx",
+    "frontend/src/components/ui/alert-dialog.tsx",
+    "frontend/src/app/fixtures.ts",
+    "frontend/src/pages/model-routing/fixtures.ts",
+    "frontend/src/pages/model-routing/types.ts",
+    "frontend/src/pages/credentials/fixtures.ts"
+  ],
+  "timeout_seconds": 1200,
+  "routing": {
+    "assigned_work": "Only not-yet-started ImportPage parent module",
+    "not_reassigned": [
+      "FilesDialog",
+      "EmailMaintenance",
+      "CredentialBatchPanel",
+      "Overview",
+      "workflowRunner"
+    ],
+    "Windows_reserved": [
+      "credentials/index.tsx",
+      "credentials/CredentialDetail.tsx",
+      "App activation",
+      "backend final integration"
+    ],
+    "Mac_forbidden": "App, credential parents, all delivered leafs including four Mac source/test files, workflowRunner, import/credentials APIs, flowStore, Core/session/shared UI, package/lock/config, backend; explicitly frontend/src/pages/credentials/CredentialBatchPanel.test.tsx and any R206 actor correction work"
+  },
+  "baseline_binding": {
+    "ready": true,
+    "source_baseline_commit": "3282f5e21bc35de75e0117067d60ab1e449a2120",
+    "source_snapshot_branch": "codex/ui-parity-mac-import-baseline-20261015",
+    "pr_base_branch": "codex/ui-parity-mac-import-baseline-20261015",
+    "contract_commit_resolution": "Exact immutable coordination commit published in Issue34; this contract is in its docs-only child of source_baseline_commit.",
+    "readonly_manifest": "docs/ui-redesign/github/dispatch/mac-import-page-20261015.manifest.json",
+    "readonly_manifest_sha256": "a1e54aa0f47302d8ca85d94511616b09230132f1935d43a389e4176f3fc7d27a",
+    "five_allowed_source_sha256": [
+      {
+        "path": "frontend/src/pages/import/hooks.ts",
+        "sha256": "7beac4d81f76ec2d79ef701b4c80996eca13f73ccd5846796cfe29b9726484e0"
+      },
+      {
+        "path": "frontend/src/pages/import/index.tsx",
+        "sha256": "bacb2d9f25be2ec5b3a0f1464f561fcdb52a323f4ade2f0332cadd865eb0a233"
+      },
+      {
+        "path": "frontend/src/pages/import/components.tsx",
+        "sha256": "f864eb194d7d05c48b42710eb196df484ceaaac03b740496f61ae2ecaa098447"
+      },
+      {
+        "path": "frontend/src/pages/import/hooks.test.tsx",
+        "sha256": "63f7a1fc0eaeae6c723304cd36a5f4d42d5196c2569319e07fb670a4177acd2b"
+      },
+      {
+        "path": "frontend/src/pages/import/page.test.tsx",
+        "sha256": "800547684eed300c1c59017e3216f9280ec008984fe8db6929779b78c9146a06"
+      }
+    ],
+    "readonly_dependency_sha256": [
+      {
+        "path": "AGENTS.md",
+        "exists": true,
+        "sha256": "0dfdc8935733895d9211dae3f83e750b384d95cf0afb04461ca3fc02fc902e70"
+      },
+      {
+        "path": "docs/MAINTENANCE_SCOPE.md",
+        "exists": true,
+        "sha256": "ddc6db0cfc872e95815242c13838ffdbbae642351fe55d14b8f10a65950b58e4"
+      },
+      {
+        "path": "docs/ui-redesign/FULL_PARITY_REQUIREMENTS.md",
+        "exists": true,
+        "sha256": "b67525f34891eb87ecbae5c5d4c9a2701b69eb98f41a7c72816c446b5f4c750a"
+      },
+      {
+        "path": "docs/ui-redesign/P4_IMPORT_ITEM_PUBLIC_CONTRACT.json",
+        "exists": true,
+        "sha256": "4e1aeb66950987e3ed316b5b29e5646ffab03a70fd76b140ea8d774c2a9c0be1"
+      },
+      {
+        "path": "frontend/package.json",
+        "exists": true,
+        "sha256": "35d994ae11e80c46ae3402eeaf45c3182ec73de892eb2c731c1202aa9fe87985"
+      },
+      {
+        "path": "frontend/package-lock.json",
+        "exists": true,
+        "sha256": "e51609bf8c4d417de1d795e37013de4068b441349568f0d259fa929df7467ae6"
+      },
+      {
+        "path": "frontend/tsconfig.json",
+        "exists": true,
+        "sha256": "5a3aef9f6a5f6446408e034fe752e617ffb2e37c78f3c42339695c4eb8550b7e"
+      },
+      {
+        "path": "frontend/vite.config.ts",
+        "exists": true,
+        "sha256": "5208b5d1ed6b699aa8f1b5dd699796ffe8b5b29df9ad87e1f0fcf88521d96f8b"
+      },
+      {
+        "path": "frontend/src/app/test-setup.ts",
+        "exists": true,
+        "sha256": "4f2cfb146a5ee9f27ff2b5f6b4137c8ce1f7f75d4f47f681f98d4ac9574f6415"
+      },
+      {
+        "path": "frontend/src/auth/index.ts",
+        "exists": true,
+        "sha256": "ce4dc7eb9f332976f363459760b706aa242f38c2d18249e83222890966bbbe38"
+      },
+      {
+        "path": "frontend/src/auth/AuthProvider.tsx",
+        "exists": true,
+        "sha256": "f5dfd0445f485865c4651eac696263e5312e29c88307d85991373ca9597ff8fd"
+      },
+      {
+        "path": "frontend/src/auth/session.ts",
+        "exists": true,
+        "sha256": "ece4b8695e6551a40c53caf703d0d57dcb5ddf39d0271b2d37546cf9a627326b"
+      },
+      {
+        "path": "frontend/src/domain/panel.ts",
+        "exists": true,
+        "sha256": "4b357fb8291ede52f814bff25276796b63c6492b152e9876cd69927ce17e6148"
+      },
+      {
+        "path": "frontend/src/domain/shared.ts",
+        "exists": true,
+        "sha256": "72a56ec943325fd4d4024f379056118a6a54f208f11f9a527ebf151fbb5b7128"
+      },
+      {
+        "path": "frontend/src/app/channels.tsx",
+        "exists": true,
+        "sha256": "73cc17cbbb081e9bfdf354a490602b179ab275b5c127205efb522cf91e173d2c"
+      },
+      {
+        "path": "frontend/src/app/routes.ts",
+        "exists": true,
+        "sha256": "d76cd15213343cd5c6b3b71fac4b4df1b65017e98f6cb6a2d5b4d14bb8f70295"
+      },
+      {
+        "path": "frontend/src/api/client.ts",
+        "exists": true,
+        "sha256": "ee3d7dfac1775b55032f3c79ed90624d664778cda34c1a20b16d33e062795eb0"
+      },
+      {
+        "path": "frontend/src/api/config.ts",
+        "exists": true,
+        "sha256": "02f0894b036b3b6d7948abf45397b0f50f3eb0a6209097d8f1da193d9d4a84e0"
+      },
+      {
+        "path": "frontend/src/pages/import/workflowRunner.ts",
+        "exists": true,
+        "sha256": "e804adcac994788f1780870de66ca947571d6845b4e6dd53a2f140e243bec343"
+      },
+      {
+        "path": "frontend/src/pages/import/workflowRunner.test.ts",
+        "exists": true,
+        "sha256": "f9665c8ddc17f93b6380581fbfb432f822ef60d2ff09613051402fe700680edf"
+      },
+      {
+        "path": "frontend/src/pages/import/flowStore.ts",
+        "exists": true,
+        "sha256": "a7394b78ae9ff926913ecd22a962490ca7e90234f0c972b53a9e603a11095eb1"
+      },
+      {
+        "path": "frontend/src/pages/import/flowStore.test.ts",
+        "exists": true,
+        "sha256": "4aab016c2aa2cdec2c9c11c95d8b4647b4cdd2ae485f8dd883478b239a247020"
+      },
+      {
+        "path": "frontend/src/pages/import/api.ts",
+        "exists": true,
+        "sha256": "605f7adf9ca1aebf477a1ee38328572aa13ffda022481a47f05f3f78d901ff2b"
+      },
+      {
+        "path": "frontend/src/pages/import/types.ts",
+        "exists": true,
+        "sha256": "0952af8c99995320db527a0416d7172788131c4171ae9b3940ca4feb166b7b85"
+      },
+      {
+        "path": "frontend/src/pages/import/fixtures.ts",
+        "exists": true,
+        "sha256": "2cfb5ba1f586cad447606f1d7f4b934105402046ab7c1ed113b4c199d6c5ea55"
+      },
+      {
+        "path": "frontend/src/pages/import/api-scope.test.ts",
+        "exists": true,
+        "sha256": "af3b52456d55784632a678928a8dd6ba305fcb6319b82178bb28ff2d8e5080a2"
+      },
+      {
+        "path": "frontend/src/pages/import/api-projection.test.ts",
+        "exists": true,
+        "sha256": "69ec419c43893cd3bb0f0c8d76c8f4c33092f5888e040fe36a8e28d34368d831"
+      },
+      {
+        "path": "frontend/src/pages/import/ImportFilePicker.tsx",
+        "exists": true,
+        "sha256": "f6a6c6d085437205f7a19d40e78fe3ea4e6aa9560aa614ad44df0a5e3ff9aef6"
+      },
+      {
+        "path": "frontend/src/pages/import/ImportFilePicker.test.tsx",
+        "exists": true,
+        "sha256": "5af28e0f714c0ef5167986f2a9eab1625cd0ac38199f61e44a1779131649906d"
+      },
+      {
+        "path": "frontend/src/pages/credentials/api.ts",
+        "exists": true,
+        "sha256": "cdade2282eedd9da29e912d93484b85d7ac38d7e748baa9febd3b8f88d01ae7f"
+      },
+      {
+        "path": "frontend/src/pages/credentials/model.ts",
+        "exists": true,
+        "sha256": "992dd12f914da64b037051b222b36a9d8a329e93b43965ab961210710465663a"
+      },
+      {
+        "path": "frontend/src/components/ui/button.tsx",
+        "exists": true,
+        "sha256": "4cd09b106629a41f1eb95992e0001eefdbaee72eaac57f80b6ad27d1ec2f7d4b"
+      },
+      {
+        "path": "frontend/src/components/ui/input.tsx",
+        "exists": true,
+        "sha256": "526a1b63cd8666b5626281325dea4f544a79821abdb140e0f78f4d2210443d44"
+      },
+      {
+        "path": "frontend/src/components/ui/textarea.tsx",
+        "exists": true,
+        "sha256": "1b4a32b2ac34972d82c4ccbde8d39349787779dc90deb22e91b928b2601bafb2"
+      },
+      {
+        "path": "frontend/src/components/ui/card.tsx",
+        "exists": true,
+        "sha256": "c1aff7e4b468450022a1c9517ed60b55506e357ac255d603ed7817fe566d3e82"
+      },
+      {
+        "path": "frontend/src/components/ui/badge.tsx",
+        "exists": true,
+        "sha256": "bc4081078acb1ba8b704f5c4453342e0e584f52b3770fcf2c962e479e8d70b4a"
+      },
+      {
+        "path": "frontend/src/components/ui/alert-dialog.tsx",
+        "exists": true,
+        "sha256": "7ad9a8c3667287a8ab45badb72c98b3432425642302618481cf14c4aab36e4ea"
+      },
+      {
+        "path": "frontend/src/app/fixtures.ts",
+        "exists": true,
+        "sha256": "36fc8c4402adda9dc992f92c3a53bd534058c759fce32f6c1e2321bbc6491135"
+      },
+      {
+        "path": "frontend/src/pages/model-routing/fixtures.ts",
+        "exists": true,
+        "sha256": "ae985727c4270a006a88b6920a003ae08769750a1680ab368731d2ec18c36a74"
+      },
+      {
+        "path": "frontend/src/pages/model-routing/types.ts",
+        "exists": true,
+        "sha256": "c92055de903e6e51f38dccbbdcaa008d2176ce5b90d3a42e518c6f743bc7f621"
+      },
+      {
+        "path": "frontend/src/pages/credentials/fixtures.ts",
+        "exists": true,
+        "sha256": "5d365a3650190414564287fa5892f0ebc5c1512cb0aeaee9bf9d934b20b3bb22"
+      }
+    ],
+    "R208_actual_delivery_evidence": "Actual delivery + known source fix inspection; no new runtime suite claimed",
+    "workflowRunner_source_sha256": "e804adcac994788f1780870de66ca947571d6845b4e6dd53a2f140e243bec343",
+    "workflowRunner_test_sha256": "f9665c8ddc17f93b6380581fbfb432f822ef60d2ff09613051402fe700680edf",
+    "baseline_typecheck": {
+      "owner": "windows",
+      "file": "frontend/src/pages/credentials/CredentialBatchPanel.test.tsx",
+      "line": 3,
+      "diagnostic": "unused React import",
+      "baseline_exit_code": 2,
+      "diagnostic_count": 1,
+      "mac_may_edit": false,
+      "blocks_mac_import_readiness": false,
+      "resolution": "Windows parent request may remove only unused React type/import line; no R206 replay or resumed actor task",
+      "evidence": "Coordinator actual typecheck: exactly this one diagnostic; Mac4 and workflowRunner have no new diagnostics"
+    }
+  },
+  "observed_actual_interfaces": {
+    "runner_signatures": [
+      "getImportWorkflowSnapshot(): ImportWorkflowSnapshot",
+      "subscribeImportWorkflow(listener: () => void): () => void",
+      "startWorkflowOAuth(owner: ImportFlowOwner, projectId: string): boolean",
+      "completeWorkflowOAuth(owner: ImportFlowOwner, callbackUrl: string | null, projectId: string): boolean",
+      "uploadWorkflowFiles(owner: ImportFlowOwner, files: readonly File[]): boolean",
+      "importWorkflowTokens(owner: ImportFlowOwner, input: Readonly<TokenInput>): boolean",
+      "cancelWorkflowOperation(owner: ImportFlowOwner): boolean",
+      "stopWorkflowEmailJob(owner: ImportFlowOwner, jobId: string): boolean",
+      "resumeWorkflowEmailJob(owner: ImportFlowOwner, jobId: string): boolean",
+      "clearFinishedWorkflowEmailJobs(owner: ImportFlowOwner): boolean"
+    ],
+    "snapshot": "Readonly<{owner: ImportFlowOwner|null; validation: SessionValidationSnapshot|null; revision:number; busy:boolean; operation:ImportWorkflowOperation|null; result:ImportWorkflowReadonly<ImportResult>|null; prompt:ImportWorkflowReadonly<ProjectPrompt>|null; authUrl:string; message:string; emailJobs:readonly ImportWorkflowEmailJob[]; emailWarning:string}>",
+    "email_job": "Readonly<{jobId:string; status:tracking|stopped|complete|expired|unavailable; snapshot:ImportWorkflowReadonly<EmailSnapshot>|null; message:string}>",
+    "picker": "ImportFilePicker({files:readonly File[],onFilesChange:(files:readonly File[])=>void,disabled?:boolean,isCurrent:()=>boolean,progress?:ImportProgress|null})",
+    "credentials_export": "createCredentialApi(mode,scope).downloadOne(filename,signal?) / download(names:string[],signal?); accepted existing public API, no new API dependency",
+    "status": "Actual existing exports inspected; rebind final R208 source at ready gate, no requirement to invent/wait for another API."
+  },
+  "requirements": [
+    "Whole ImportPage module once: implement the hook, page and presentation components together using the accepted shared React-free workflowRunner and real ImportFilePicker/API. Replace per-page generic run(action), mutation AbortController and polling with a thin useSyncExternalStore-style subscription and guarded explicit delegates. No duplicate runner/store/scheduler or new APIs.",
+    "Use actual canonical ImportFlowOwner and exact validation reference from runner snapshot. Capture a stable page-mount/lifetime actor, canonical owner, exact validation in handlers. Compare identity and current real Core/session before actions/local updates; old handlers may never adopt latest owner. A true owner/session/channel/validation loss retires drafts/handlers. Route-only unmount unsubscribes and retires page handlers/forms but MUST NOT cancel/reset runner mutation or independent jobs. Same-owner remount sees existing pending/safe result with zero repeated POST.",
+    "Explicit OAuth-start, OAuth-complete, files, tokens, cancel and per-job controls call only actual runner exports. Boolean return is admission, not outcome. No automatic OAuth/popup/import retry, project-prompt submit, pending-secret queue or teardown reset. Project choice changes local form until a second explicit completion action. Preserve current OAuth link and optional callback flow; show operation effects honestly.",
+    "Declare frozen readonly supportedPanelModes for antigravity/geminicli after wiring both. Use actual channel/Core/provider, mode-aware headings/help/legacy hash and panelRouteHref for credentials navigation. GCLI cannot call default AG wrappers or AG email endpoints. No ConsoleHandshake/App/routes activation changes; Windows owns final App activation.",
+    "Tokens/clientSecret/callbackUrl/code/File references remain page-local memory. Copy a command then clear submitted secrets/files immediately when runner accepts it; also clear on explicit cancel, actual owner/validation loss and unmount. Cleanup must retire ref-backed drafts without post-unmount setState. Clear client/project/filename drafts on owner change. No logs, local/session storage, raw credential display or global draft cache. Rejected admission must not claim success or silently queue.",
+    "Render actual ImportFilePicker with readonly files/onFilesChange, disabled, stable captured isCurrent, progress=null. It already supplies append/dedup/remove/clear/drop. Copy selected files at runner boundary, clear accepted selections. No fabricated percentage from busy/time/file count; runner exposes no byte progress.",
+    "Render runner-projected safe result only: outcome, item label/status, warnings, supported optional own project/tier/tier-detection metadata and nullable OAuth receipt fields. Use actual readonly types; no casts inventing mutable schemas, arbitrary raw payload spreads or Error.message. ItemReceipt has project_id/subscription_tier/tier_raw_id/tier_raw_name/tier_detected_at/tier_detection_status; it has no filename. OAuthReceipt additionally has success/mode/filename/nullable project+tier/auto_detected_project. Label is not export identity. Do not fetch creds/detail to enrich receipt UI.",
+    "AG emailJobs remain independent ordered panels keyed by true jobId with status/snapshot/message, tracking Stop, explicit GET-only Resume for stopped/unavailable and clear finished complete/expired. New primary import must not clear/stop older jobs, and old job completion cannot overwrite primary receipt. Render emailWarning. GCLI shows no AG grouped job controls or requests. Runner alone owns timers/dedup/capacity. Stopping one job cannot cancel siblings/primary mutation. Stop waiting is not rollback; explain already sent operations may save.",
+    "UI-COMP-036 immediate sensitive credential export stays included. Eligible immutable filenames come ONLY from current safe result.confirmedFilenames, nonempty unique strict basenames count<=100; never derive from row labels/upload names/project/counts or repair/truncate mappings. Partial result exports only separately confirmed subset. Missing/invalid/oversize mapping disables with an honest reason, never all-channel fallback. Export remains usable as an explicit action without credential JSON rendering.",
+    "First export click opens a controlled existing AlertDialog capturing page lifetime, canonical owner, exact validation and exact receipt/filename identity. Show channel/confirmed names/count and that complete credential files are downloaded. Cancel0; confirm at most1. Receipt replacement/new primary import/owner loss/unmount invalidates old confirmation. Unrelated email-job snapshot revision must NOT invalidate or retarget the same receipt. No mutable latest-owner fallback. Disable during primary mutation or local export.",
+    "Export uses readonly accepted createCredentialApi(owner.mode, copied Scope3): one name downloadOne(name, signal),2..100 download([...names], signal). No downloadAll, creds/detail, model/OAuth or re-import. Export controller is page-local and aborts on its own invalidation/unmount; this must not abort persistent runner mutation/jobs. Guard before and after await and before URL creation/click. Keep Blob/URLs only in that local actor, no parse/JSON/state/runner/storage/clipboard. Safe confirmed basename for JSON, fixed mode ZIP label, never server Content-Disposition paths. Remove anchor even if click throws; revoke all URLs through bounded tracked timer and idempotent cleanup. Late ignored-abort results cause no URL/click/status. UI says generated/started, not saved-to-disk proof. Display actual selected/missing header counts with null unknown; failed/404 export does not erase/replay import.",
+    "Preserve established layout/styles/accessibility and existing protections. No new suite, detailed regression matrix, specialty tests or broad test refactor. Allowed hooks.test.tsx/page.test.tsx changes are ONLY necessary existing public-interface/type adaptations for replaced generic run, actual readonly runner/Picker props and deliberate independent-job semantics; keep relevant existing safety assertions, no skips/ts-ignore/always-current Core mocks. Do not create new scenarios or extend coverage. Mac runs only npm run typecheck, no tests/suites/build/browser/real API/model/DB/auth. Windows final coordinator handles necessary final build and six-page integration checks; human confirms pages. Typecheck may retain exactly the root-frozen known out-of-scope TS6133 diagnostic; report nonzero result honestly and require no NEW diagnostics from your five-file changes. Do not repair CredentialBatchPanel.test.tsx or any R206 actor issue. If root supplies a newer green baseline, no diagnostic is tolerated."
+  ],
+  "pre_dispatch_gates": [
+    "Verify the exact Issue34 coordination commit and source ancestor, full readonly and allowed-initial manifests, and disjoint ownership before dispatch.",
+    "Use a new real local Mac human authorization in the current project/session. Queue-only metadata never starts a model.",
+    "Submit this entire five-file module as one complete request through the installed shared hook. No consumed request replay, original two Mac module redo, R206 redo or temp recovery.",
+    "The sole known Windows-owned baseline TS6133 is permitted; zero new diagnostics required. No suite/build/browser/live service calls on Mac."
+  ],
+  "author_commands": [
+    "npm run typecheck"
+  ],
+  "prohibited_verification": [
+    "test suites or targeted tests",
+    "new detailed tests/matrix/specialty audit",
+    "build or check:build on Mac",
+    "browser/live OAuth/model/API/DB/auth operations"
+  ],
+  "final_acceptance_owner": "Windows root: final necessary type/build/six-page integration checks; human visual confirmation. Reuse existing Mac/Windows leaf acceptance without repeated suites.",
+  "acceptance": "Deliver the whole module once within five allowed files against the supplied frozen baseline. Keep all explicit-action, stable-owner, route-persistence, safe-receipt and sensitive-export requirements above. Adapt existing test interfaces/types only where needed; add no detailed tests or regression matrix. Mac author runs only npm run typecheck and reports actual result. No suites/build; no other source writes. Return ordinary JSON summary/changed_files/verification_notes, stating tests intentionally not run under user instruction. Do not use tasks/task_results. Report a true missing accepted interface instead of changing readonly dependencies. Root performs final integration and human page confirmation. BASELINE EXCEPTION: root postreceive typecheck is exit2, exactly TS6133 unused React at credentials/CredentialBatchPanel.test.tsx(3,1). This is Windows-owned and outside both allowed/context sets. Do not edit it or repeat R206 corrections. Mac reports exact typecheck result and proves no additional diagnostics relative to frozen baseline; never says typecheck PASS when this diagnostic remains. Global green is not the readiness gate for this independent module. Windows handles the one-line fix in its own official CLI request. The immutable source and full context hashes are now bound in baseline_binding; ready=true does not mean started or accepted.",
+  "validation_of_draft": {
+    "allowed_count": 5,
+    "context_count": 41,
+    "intersection": [],
+    "all_context_paths_exist_in_current_W": true,
+    "runtime_acceptance_claimed": false,
+    "batch_test_in_allowed_or_context": false
+  },
+  "known_out_of_scope_exceptions": [
+    {
+      "request": "R206",
+      "status": "failed_CLI_ERROR_no_structured_output_no_delivery",
+      "not_to_do": "No temp recovery, no original request replay, no Mac repetition of actor correction.",
+      "type_only_Windows_followup": "Windows official CLI parent integration may remove unused React import in CredentialBatchPanel.test.tsx as a one-line type fix; Mac cannot write that file.",
+      "impact_on_ImportPage": "Not an allowed/context file or true ImportPage dependency; does not block independent package after frozen baseline supplied."
+    }
+  ]
+}
