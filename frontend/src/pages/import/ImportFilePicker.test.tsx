@@ -7,6 +7,7 @@ import {
   isValidProgress,
   appendAndDeduplicateFiles,
   getFileTupleKey,
+  type ImportFilePickerProps,
 } from "./ImportFilePicker";
 
 function getReactHandler(

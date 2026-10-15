@@ -1,8 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { usePanelChannel } from '@/app/channels'
-import { getSessionSnapshot, getSessionValidationSnapshot } from '@/auth/session'
+import {
+  getSessionSnapshot,
+  getSessionValidationSnapshot,
+  registerSessionCleanup,
+  subscribeSessionValidation,
+  type SessionValidationSnapshot,
+} from '@/auth/session'
 import { getPanelChannelSnapshot, registerChannelCleanup, type PanelMode } from '@/domain/panel'
 import { StatisticsTables, displayCount, displayRate } from './StatisticsTables'
 import { useOverview } from './useOverview'
@@ -52,6 +58,13 @@ type ClipboardOwner = {
   readonly mode: PanelMode
   readonly channelEpoch: number
   readonly sessionEpoch: number
+  readonly validation: SessionValidationSnapshot
+}
+
+type FallbackItem = {
+  readonly id: string
+  readonly url: string
+  readonly owner: ClipboardOwner
 }
 
 function getLiveVerifiedOwner(): ClipboardOwner | null {
@@ -71,6 +84,7 @@ function getLiveVerifiedOwner(): ClipboardOwner | null {
     mode: channel.mode,
     channelEpoch: channel.channelEpoch,
     sessionEpoch: session.sessionEpoch,
+    validation,
   })
 }
 
@@ -84,6 +98,7 @@ function isClipboardOwnerCurrent(owner: ClipboardOwner | null): boolean {
     owner.mode === channel.mode &&
     owner.channelEpoch === channel.channelEpoch &&
     owner.sessionEpoch === session.sessionEpoch &&
+    owner.validation === validation &&
     validation.sessionEpoch === session.sessionEpoch &&
     validation.status === 'verified' &&
     session.token !== null
@@ -93,28 +108,49 @@ function isClipboardOwnerCurrent(owner: ClipboardOwner | null): boolean {
 export default function OverviewPage() {
   const { mode, channelEpoch } = usePanelChannel()
   const { data, loading, refresh, nodeData, nodeLoading, refreshNode } = useOverview(mode)
+  const validation = useSyncExternalStore(
+    subscribeSessionValidation,
+    getSessionValidationSnapshot,
+    getSessionValidationSnapshot
+  )
 
   const channelLabel = mode === 'geminicli' ? 'Gemini CLI' : 'Antigravity'
   const apiAddresses = useMemo(() => getOverviewApiAddresses(mode), [mode])
 
   const [copyStatus, setCopyStatus] = useState<{ id: string; text: string } | null>(null)
+  const [fallback, setFallback] = useState<FallbackItem | null>(null)
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isMountedRef = useRef<boolean>(true)
 
-  const liveOwner = getLiveVerifiedOwner()
   const capturedOwner = useMemo<ClipboardOwner | null>(() => {
+    const live = getLiveVerifiedOwner()
     if (
-      !liveOwner ||
-      liveOwner.mode !== mode ||
-      liveOwner.channelEpoch !== channelEpoch
+      !live ||
+      live.mode !== mode ||
+      live.channelEpoch !== channelEpoch
     ) {
       return null
     }
-    return liveOwner
-  }, [mode, channelEpoch, liveOwner?.mode, liveOwner?.channelEpoch, liveOwner?.sessionEpoch])
+    return live
+  }, [mode, channelEpoch, validation])
+
+  const activeFallback = useMemo(() => {
+    if (!fallback) return null
+    if (!capturedOwner || !isClipboardOwnerCurrent(fallback.owner)) return null
+    if (
+      fallback.owner.mode !== capturedOwner.mode ||
+      fallback.owner.channelEpoch !== capturedOwner.channelEpoch ||
+      fallback.owner.sessionEpoch !== capturedOwner.sessionEpoch ||
+      fallback.owner.validation !== capturedOwner.validation
+    ) {
+      return null
+    }
+    return fallback
+  }, [fallback, capturedOwner])
 
   useEffect(() => {
     setCopyStatus(null)
+    setFallback(null)
     if (copyTimerRef.current) {
       clearTimeout(copyTimerRef.current)
       copyTimerRef.current = null
@@ -123,22 +159,64 @@ export default function OverviewPage() {
 
   useEffect(() => {
     isMountedRef.current = true
-    const unregister = registerChannelCleanup(() => {
+    const unregisterChannel = registerChannelCleanup(() => {
       if (copyTimerRef.current) {
         clearTimeout(copyTimerRef.current)
         copyTimerRef.current = null
       }
       if (isMountedRef.current) {
         setCopyStatus(null)
+        setFallback(null)
       }
     })
     return () => {
       isMountedRef.current = false
-      unregister()
+      unregisterChannel()
       if (copyTimerRef.current) {
         clearTimeout(copyTimerRef.current)
         copyTimerRef.current = null
       }
+    }
+  }, [])
+
+  useEffect(() => {
+    const unregisterSession = registerSessionCleanup(() => {
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current)
+        copyTimerRef.current = null
+      }
+      if (isMountedRef.current) {
+        setCopyStatus(null)
+        setFallback(null)
+      }
+    })
+    return () => {
+      unregisterSession()
+    }
+  }, [])
+
+  useEffect(() => {
+    const unregisterValidation = subscribeSessionValidation(() => {
+      const currentValidation = getSessionValidationSnapshot()
+      const currentSession = getSessionSnapshot()
+      const isVerified =
+        currentValidation.sessionEpoch === currentSession.sessionEpoch &&
+        currentValidation.status === 'verified' &&
+        currentSession.token !== null
+
+      if (!isVerified) {
+        if (copyTimerRef.current) {
+          clearTimeout(copyTimerRef.current)
+          copyTimerRef.current = null
+        }
+        if (isMountedRef.current) {
+          setCopyStatus(null)
+          setFallback(null)
+        }
+      }
+    })
+    return () => {
+      unregisterValidation()
     }
   }, [])
 
@@ -152,14 +230,17 @@ export default function OverviewPage() {
         return
       }
 
+      const executionOwner = capturedOwner
+
       if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
-        if (!isMountedRef.current || !isClipboardOwnerCurrent(capturedOwner)) {
+        if (!isMountedRef.current || !isClipboardOwnerCurrent(executionOwner)) {
           return
         }
+        setFallback({ id, url, owner: executionOwner })
         setCopyStatus({ id, text: '复制失败' })
         if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
         copyTimerRef.current = setTimeout(() => {
-          if (!isMountedRef.current || !isClipboardOwnerCurrent(capturedOwner)) {
+          if (!isMountedRef.current || !isClipboardOwnerCurrent(executionOwner)) {
             return
           }
           setCopyStatus(null)
@@ -168,36 +249,54 @@ export default function OverviewPage() {
         return
       }
 
-      navigator.clipboard.writeText(url).then(
-        () => {
-          if (!isMountedRef.current || !isClipboardOwnerCurrent(capturedOwner)) {
-            return
-          }
-          setCopyStatus({ id, text: '已复制' })
-          if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
-          copyTimerRef.current = setTimeout(() => {
-            if (!isMountedRef.current || !isClipboardOwnerCurrent(capturedOwner)) {
+      try {
+        navigator.clipboard.writeText(url).then(
+          () => {
+            if (!isMountedRef.current || !isClipboardOwnerCurrent(executionOwner)) {
               return
             }
-            setCopyStatus(null)
-            copyTimerRef.current = null
-          }, 2000)
-        },
-        () => {
-          if (!isMountedRef.current || !isClipboardOwnerCurrent(capturedOwner)) {
-            return
-          }
-          setCopyStatus({ id, text: '复制失败' })
-          if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
-          copyTimerRef.current = setTimeout(() => {
-            if (!isMountedRef.current || !isClipboardOwnerCurrent(capturedOwner)) {
+            setFallback(null)
+            setCopyStatus({ id, text: '已复制' })
+            if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+            copyTimerRef.current = setTimeout(() => {
+              if (!isMountedRef.current || !isClipboardOwnerCurrent(executionOwner)) {
+                return
+              }
+              setCopyStatus(null)
+              copyTimerRef.current = null
+            }, 2000)
+          },
+          () => {
+            if (!isMountedRef.current || !isClipboardOwnerCurrent(executionOwner)) {
               return
             }
-            setCopyStatus(null)
-            copyTimerRef.current = null
-          }, 2000)
+            setFallback({ id, url, owner: executionOwner })
+            setCopyStatus({ id, text: '复制失败' })
+            if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+            copyTimerRef.current = setTimeout(() => {
+              if (!isMountedRef.current || !isClipboardOwnerCurrent(executionOwner)) {
+                return
+              }
+              setCopyStatus(null)
+              copyTimerRef.current = null
+            }, 2000)
+          }
+        )
+      } catch {
+        if (!isMountedRef.current || !isClipboardOwnerCurrent(executionOwner)) {
+          return
         }
-      )
+        setFallback({ id, url, owner: executionOwner })
+        setCopyStatus({ id, text: '复制失败' })
+        if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+        copyTimerRef.current = setTimeout(() => {
+          if (!isMountedRef.current || !isClipboardOwnerCurrent(executionOwner)) {
+            return
+          }
+          setCopyStatus(null)
+          copyTimerRef.current = null
+        }, 2000)
+      }
     },
     [capturedOwner]
   )
@@ -371,6 +470,30 @@ export default function OverviewPage() {
               ) : (
                 <p className="text-[13px] text-muted-foreground">代码助手端点不可用</p>
               )}
+              {isValidSafeUrl(nodeData?.codeAssistEndpoint?.value ?? '') &&
+                activeFallback?.id === 'code-assist' && (
+                  <div className="mt-2 space-y-1 border-t border-border/60 pt-2">
+                    <label
+                      htmlFor="manual-copy-code-assist"
+                      className="block text-xs font-medium text-foreground"
+                    >
+                      代码助手端点（手动复制）
+                    </label>
+                    <input
+                      id="manual-copy-code-assist"
+                      type="text"
+                      readOnly
+                      value={activeFallback.url}
+                      onFocus={(e) => e.currentTarget.select()}
+                      onClick={(e) => e.currentTarget.select()}
+                      className="w-full rounded border border-input bg-background px-2.5 py-1 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      aria-label="代码助手端点（手动复制）"
+                    />
+                    <p className="text-[12px] text-muted-foreground">
+                      剪贴板不可用，请全选上方端点并手动复制。
+                    </p>
+                  </div>
+                )}
             </div>
           </CardContent>
         </Card>
@@ -382,7 +505,16 @@ export default function OverviewPage() {
               根据当前通道模式提供兼容的 API 基础端点
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
+            <div className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground space-y-1.5">
+              <p className="font-medium text-foreground">使用说明</p>
+              <ul className="list-disc pl-4 space-y-1">
+                <li>选择当前通道模式并选用客户端兼容的协议（OpenAI、Claude 或 Gemini）。</li>
+                <li>复制下方展示的完整基础地址（保留服务根路径前缀），填入客户端的 API 基础地址（Base URL）配置。</li>
+                <li>在客户端配置对应的 API 认证凭据，并选用该服务实际支持的模型。</li>
+              </ul>
+            </div>
+
             {apiAddresses.issue ? (
               <p role="status" className="text-[13px] text-muted-foreground">{apiAddresses.issue}</p>
             ) : !apiAddresses.value || apiAddresses.value.length === 0 ? (
@@ -391,40 +523,66 @@ export default function OverviewPage() {
               <div className="space-y-3">
                 {apiAddresses.value.map(item => {
                   const isValid = isValidSafeUrl(item.url)
+                  const isFallbackActive = isValid && activeFallback?.id === item.id
                   return (
                     <div
                       key={item.id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border p-3"
+                      className="rounded-lg border border-border p-3 space-y-2"
                     >
-                      <div className="min-w-0">
-                        <p className="text-[13px] font-medium text-foreground">{item.label}</p>
-                        <code className="break-all text-xs text-muted-foreground">{item.url}</code>
-                      </div>
-                      {isValid && (
-                        <div className="flex items-center gap-2 shrink-0">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleCopy(item.id, item.url)}
-                            aria-label={`复制 ${item.label} 服务地址`}
-                          >
-                            复制
-                          </Button>
-                          <Button asChild variant="outline" size="sm">
-                            <a
-                              href={item.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              aria-label={`打开 ${item.label} 服务地址`}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-[13px] font-medium text-foreground">{item.label}</p>
+                          <code className="break-all text-xs text-muted-foreground">{item.url}</code>
+                        </div>
+                        {isValid && (
+                          <div className="flex items-center gap-2 shrink-0">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleCopy(item.id, item.url)}
+                              aria-label={`复制 ${item.label} 服务地址`}
                             >
-                              打开
-                            </a>
-                          </Button>
-                          {copyStatus?.id === item.id && (
-                            <span role="status" className="text-[13px] text-muted-foreground">
-                              {copyStatus.text}
-                            </span>
-                          )}
+                              复制
+                            </Button>
+                            <Button asChild variant="outline" size="sm">
+                              <a
+                                href={item.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                aria-label={`打开 ${item.label} 服务地址`}
+                              >
+                                打开
+                              </a>
+                            </Button>
+                            {copyStatus?.id === item.id && (
+                              <span role="status" className="text-[13px] text-muted-foreground">
+                                {copyStatus.text}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      {isFallbackActive && (
+                        <div className="space-y-1 border-t border-border/60 pt-2">
+                          <label
+                            htmlFor={`manual-copy-${item.id}`}
+                            className="block text-xs font-medium text-foreground"
+                          >
+                            {item.label} 服务地址（手动复制）
+                          </label>
+                          <input
+                            id={`manual-copy-${item.id}`}
+                            type="text"
+                            readOnly
+                            value={activeFallback.url}
+                            onFocus={(e) => e.currentTarget.select()}
+                            onClick={(e) => e.currentTarget.select()}
+                            className="w-full rounded border border-input bg-background px-2.5 py-1 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            aria-label={`${item.label} 服务地址（手动复制）`}
+                          />
+                          <p className="text-[12px] text-muted-foreground">
+                            剪贴板不可用，请全选上方地址并手动复制。
+                          </p>
                         </div>
                       )}
                     </div>

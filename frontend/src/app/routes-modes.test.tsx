@@ -488,3 +488,161 @@ it("retains focus-anchor and obsolete-event compatibility", async () => {
   releaseGuard();
   unlisten();
 });
+
+it("legacy startup alias #manage establishes credentials+GCLI first snapshot before observers and canonicalizes URL", async () => {
+  const { routes, panel } = await loadRouterSuite("/ui/#manage", {
+    unrelatedState: "preserved",
+    panelRoute: "settings",
+    panelMode: "antigravity",
+    panelHash: "#/settings",
+  });
+
+  // Snapshot immediately before any observer
+  const snapshot = routes.getAcceptedPanelRouteSnapshot();
+  expect(snapshot.route).toBe("credentials");
+  expect(snapshot.mode).toBe("geminicli");
+  expect(snapshot.navigationEpoch).toBe(1);
+  expect(Object.isFrozen(snapshot)).toBe(true);
+
+  // Core channel store matches
+  const coreSnapshot = panel.getPanelChannelSnapshot();
+  expect(coreSnapshot.mode).toBe("geminicli");
+  expect(coreSnapshot.channelEpoch).toBe(1);
+
+  // URL canonicalized
+  expect(window.location.hash).toBe("#/credentials?channel=geminicli");
+
+  // History state labeled, unrelated state preserved, conflicting mode not inherited
+  expect(window.history.state).toEqual({
+    unrelatedState: "preserved",
+    panelRoute: "credentials",
+    panelMode: "geminicli",
+    panelHash: "#/credentials?channel=geminicli",
+  });
+});
+
+it("legacy startup alias #antigravity-manage establishes credentials+AG without advancing epochs and canonicalizes URL", async () => {
+  const { routes, panel } = await loadRouterSuite("/ui/#antigravity-manage", {
+    foo: "survivor",
+    panelRoute: "logs",
+  });
+
+  const snapshot = routes.getAcceptedPanelRouteSnapshot();
+  expect(snapshot.route).toBe("credentials");
+  expect(snapshot.mode).toBe("antigravity");
+  expect(snapshot.navigationEpoch).toBe(0);
+  expect(Object.isFrozen(snapshot)).toBe(true);
+
+  // Core channel store untouched
+  const coreSnapshot = panel.getPanelChannelSnapshot();
+  expect(coreSnapshot.mode).toBe("antigravity");
+  expect(coreSnapshot.channelEpoch).toBe(0);
+
+  // URL canonicalized
+  expect(window.location.hash).toBe("#/credentials");
+
+  // History state labeled without advancing epochs
+  expect(window.history.state).toEqual({
+    foo: "survivor",
+    panelRoute: "credentials",
+    panelMode: "antigravity",
+    panelHash: "#/credentials",
+  });
+});
+
+it("legacy aliases with optional slashes and query params fix mode regardless of query content", async () => {
+  // Slash normalization and query param override
+  const gcli = await loadRouterSuite("/ui/#/manage/?channel=antigravity&foo=bar");
+  expect(gcli.routes.getAcceptedPanelRouteSnapshot().route).toBe("credentials");
+  expect(gcli.routes.getAcceptedPanelRouteSnapshot().mode).toBe("geminicli");
+  expect(window.location.hash).toBe("#/credentials?channel=geminicli");
+
+  const ag = await loadRouterSuite("/ui/#/antigravity-manage/?channel=geminicli&bar=baz");
+  expect(ag.routes.getAcceptedPanelRouteSnapshot().route).toBe("credentials");
+  expect(ag.routes.getAcceptedPanelRouteSnapshot().mode).toBe("antigravity");
+  expect(window.location.hash).toBe("#/credentials");
+});
+
+it("runtime navigation to legacy aliases supports guards, cancellation, retry, and back-forward", async () => {
+  const { routes, panel } = await loadRouterSuite("/ui/#/overview");
+  trackRelease(routes.subscribeAcceptedPanelRoute(() => {}));
+  expect(routes.getAcceptedPanelRouteSnapshot().route).toBe("overview");
+  expect(routes.getAcceptedPanelRouteSnapshot().mode).toBe("antigravity");
+
+  let capturedAttempt: RouteNavigation | null = null;
+  const unguard = trackRelease(
+    routes.registerRouteGuard(attempt => {
+      capturedAttempt = attempt;
+      return false; // Cancel
+    })
+  );
+
+  // Runtime navigation via hash change to #manage
+  act(() => {
+    window.history.pushState(null, "", "#manage");
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+
+  expect(capturedAttempt).not.toBeNull();
+  expect(capturedAttempt!.from).toBe("overview");
+  expect(capturedAttempt!.to).toBe("credentials");
+  expect(capturedAttempt!.fromMode).toBe("antigravity");
+  expect(capturedAttempt!.toMode).toBe("geminicli");
+  expect(capturedAttempt!.href).toContain("#/credentials?channel=geminicli");
+
+  // Cancellation keeps snapshot and epochs unchanged, reverts URL
+  expect(routes.getAcceptedPanelRouteSnapshot().route).toBe("overview");
+  expect(routes.getAcceptedPanelRouteSnapshot().mode).toBe("antigravity");
+  expect(routes.getAcceptedPanelRouteSnapshot().navigationEpoch).toBe(0);
+  expect(panel.getPanelChannelSnapshot().channelEpoch).toBe(0);
+  expect(window.location.hash).toBe("#/overview");
+
+  // Retry commits once
+  act(() => {
+    capturedAttempt!.retry();
+  });
+  expect(routes.getAcceptedPanelRouteSnapshot().route).toBe("credentials");
+  expect(routes.getAcceptedPanelRouteSnapshot().mode).toBe("geminicli");
+  expect(routes.getAcceptedPanelRouteSnapshot().navigationEpoch).toBe(1);
+  expect(panel.getPanelChannelSnapshot().mode).toBe("geminicli");
+  expect(panel.getPanelChannelSnapshot().channelEpoch).toBe(1);
+  expect(window.location.hash).toBe("#/credentials?channel=geminicli");
+
+  // Calling retry again is inert
+  act(() => {
+    capturedAttempt!.retry();
+  });
+  expect(routes.getAcceptedPanelRouteSnapshot().navigationEpoch).toBe(1);
+
+  // Unregister guard and navigate to #antigravity-manage
+  unguard();
+  act(() => {
+    window.history.pushState(window.history.state, "", "#antigravity-manage");
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+  expect(routes.getAcceptedPanelRouteSnapshot().route).toBe("credentials");
+  expect(routes.getAcceptedPanelRouteSnapshot().mode).toBe("antigravity");
+  expect(routes.getAcceptedPanelRouteSnapshot().navigationEpoch).toBe(2);
+  expect(panel.getPanelChannelSnapshot().mode).toBe("antigravity");
+  expect(panel.getPanelChannelSnapshot().channelEpoch).toBe(2);
+  expect(window.location.hash).toBe("#/credentials");
+
+  // History back/forward coherence
+  act(() => {
+    window.history.back();
+  });
+  await waitFor(() => {
+    expect(routes.getAcceptedPanelRouteSnapshot().route).toBe("credentials");
+    expect(routes.getAcceptedPanelRouteSnapshot().mode).toBe("geminicli");
+  });
+  expect(panel.getPanelChannelSnapshot().mode).toBe("geminicli");
+
+  act(() => {
+    window.history.forward();
+  });
+  await waitFor(() => {
+    expect(routes.getAcceptedPanelRouteSnapshot().route).toBe("credentials");
+    expect(routes.getAcceptedPanelRouteSnapshot().mode).toBe("antigravity");
+  });
+  expect(panel.getPanelChannelSnapshot().mode).toBe("antigravity");
+});

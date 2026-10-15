@@ -2,7 +2,7 @@
   "document": "P2 foundation shared interface draft",
   "status": "draft_for_root_review_and_official_cli_authoring_not_frozen",
   "created_local": "2026-10-14",
-  "worktree": ".",
+  "worktree": "C:/Users/lywx2/.codex/worktrees/ui-full-parity/gcli2api",
   "base_sha": "239bc48aab1d4db4f80e1197eb94e5ee7ae2c691",
   "human_scope": "授权反重力开发：样板确认，继续全部前端恢复",
   "authoring_boundary": "This artifact is a coordinator-owned specification. All frontend and frontend-test implementations must be authored by official Antigravity CLI through the shared dispatcher. No implementation or CLI invocation has occurred in this preparation.",
@@ -264,3 +264,4 @@
     ]
   }
 }
+

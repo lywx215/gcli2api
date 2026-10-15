@@ -1,7 +1,7 @@
 {
   "schema_version": "p2-panel-backend-contract-evidence-1.0",
   "frozen_local_date": "2026-10-14",
-  "worktree": ".",
+  "worktree": "C:\\Users\\lywx2\\.codex\\worktrees\\ui-full-parity\\gcli2api",
   "base_sha": "239bc48aab1d4db4f80e1197eb94e5ee7ae2c691",
   "scope": "Original64 dual-channel legacy panel restoration only; cancelledMGMT remains cancelled; no management/v1/schema/data migration or manager change; no_counterpart_action.",
   "proof_limits": {
@@ -1809,7 +1809,7 @@
   },
   "incremental_checks": {
     "status": "passed",
-    "command": "windows-local-evidence/python.exe -m pytest test_panel_oauth_preview_safe_increment.py test_oauth_flow_isolation.py test_panel_credential_capabilities.py -q",
+    "command": "G:/code/gemini30/gcli2api/.venv/Scripts/python.exe -m pytest test_panel_oauth_preview_safe_increment.py test_oauth_flow_isolation.py test_panel_credential_capabilities.py -q",
     "passed": 149,
     "new_tests": 30,
     "warnings": 5,

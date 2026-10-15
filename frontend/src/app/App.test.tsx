@@ -31,9 +31,12 @@ it("shows safe login failures without echoing the payload", async () => {
   expect(screen.queryByText("synthetic-private-detail")).not.toBeInTheDocument();
   expect(screen.getByLabelText("面板密码")).toHaveValue("");
 });
-it("unknown hashes fall back to overview", () => {
+it("unknown hashes fall back to overview while legacy aliases map to credentials", () => {
   expect(routeFromHash("#/does-not-exist")).toBe("overview");
-  expect(routeFromHash("#manage")).toBe("overview");
+  expect(routeFromHash("#manage")).toBe("credentials");
+  expect(routeFromHash("#/manage")).toBe("credentials");
+  expect(routeFromHash("#antigravity-manage")).toBe("credentials");
+  expect(routeFromHash("#/antigravity-manage")).toBe("credentials");
 });
 
 it("closes the portalled navigation on cross-tab logout and leaves login operable", async () => {
@@ -322,9 +325,9 @@ describe("GCLI negative parameter handling and placeholder boundaries", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("maintains zero credential and import page loads for GCLI placeholders while retaining auth hidden inert semantics", async () => {
+  it("maintains zero import page loads for GCLI placeholder while retaining auth hidden inert semantics", async () => {
     vi.resetModules();
-    window.location.hash = "#/credentials?channel=geminicli";
+    window.location.hash = "#/import?channel=geminicli";
 
     // Spies track module evaluations (mock factory invocations)
     const credentialLoaderSpy = vi.fn();
@@ -341,7 +344,6 @@ describe("GCLI negative parameter handling and placeholder boundaries", () => {
 
     const { default: ScopedApp } = await import("./App");
     const { setSessionToken: scopedSetSessionToken } = await import("@/auth/session");
-    const { navigatePanel: scopedNavigatePanel } = await import("./routes");
 
     render(<ScopedApp />);
 
@@ -357,20 +359,9 @@ describe("GCLI negative parameter handling and placeholder boundaries", () => {
       scopedSetSessionToken("synthetic-verified-gcli", false);
     });
 
-    // GCLI placeholder for credentials rendered without loading credentials page
-    await screen.findByRole("region", { name: "当前渠道暂不支持" });
-    expect(screen.getByRole("heading", { level: 1, name: "当前渠道暂未支持" })).toBeInTheDocument();
-    expect(credentialLoaderSpy).not.toHaveBeenCalled();
-    expect(importLoaderSpy).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
-
-    // Navigate to import route in GCLI mode
-    act(() => {
-      scopedNavigatePanel("import", "geminicli");
-    });
-
     // GCLI placeholder for import rendered without loading import page
     await screen.findByRole("region", { name: "当前渠道暂不支持" });
+    expect(screen.getByRole("heading", { level: 1, name: "当前渠道暂未支持" })).toBeInTheDocument();
     expect(credentialLoaderSpy).not.toHaveBeenCalled();
     expect(importLoaderSpy).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
@@ -389,6 +380,271 @@ describe("GCLI negative parameter handling and placeholder boundaries", () => {
     expect(credentialLoaderSpy).not.toHaveBeenCalled();
     expect(importLoaderSpy).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("GCLI credentials lifecycle and activation", () => {
+  afterEach(() => {
+    vi.doUnmock("@/pages/overview");
+    vi.doUnmock("@/pages/credentials");
+    vi.doUnmock("@/pages/import");
+    vi.resetModules();
+    vi.restoreAllMocks();
+    window.location.hash = "";
+  });
+
+  it("mounts GCLI credentials when discovery and lazy rendering share one import under observation spies", async () => {
+    vi.resetModules();
+    window.location.hash = "#/credentials?channel=geminicli";
+
+    const actualCredentials = await vi.importActual<typeof import("@/pages/credentials")>("@/pages/credentials");
+    const credentialsModuleEvaluationSpy = vi.fn();
+    const credentialsRenderSpy = vi.fn((...args: any[]) => (actualCredentials.default as any)(...args));
+
+    vi.doMock("@/pages/credentials", () => {
+      credentialsModuleEvaluationSpy();
+      return {
+        ...actualCredentials,
+        default: credentialsRenderSpy,
+        supportedPanelModes: actualCredentials.supportedPanelModes,
+      };
+    });
+
+    const { default: ScopedApp } = await import("./App");
+    const { setSessionToken: scopedSetSessionToken } = await import("@/auth/session");
+    const { getPanelChannelSnapshot } = await import("@/domain/panel");
+
+    render(<ScopedApp />);
+
+    // Zero pre-verification module evaluation, transport, and ready
+    expect(credentialsModuleEvaluationSpy).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("面板密码")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 1, name: "Gemini CLI 凭证" })).not.toBeInTheDocument();
+
+    // Verify session in GCLI mode wrapped in act
+    act(() => {
+      scopedSetSessionToken("synthetic-verified-gcli", false);
+    });
+
+    // Real page evidence: heading in Gemini CLI mode
+    const heading = await screen.findByRole("heading", { level: 1, name: "Gemini CLI 凭证" });
+    expect(heading).toBeInTheDocument();
+
+    // Real default wrapper spy plus real channel state agree
+    expect(credentialsRenderSpy).toHaveBeenCalled();
+    expect(getPanelChannelSnapshot().mode).toBe("geminicli");
+
+    // Discovery and lazy rendering share one single import / module evaluation
+    expect(credentialsModuleEvaluationSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("defers credentials resolution across logout without obsolete-owner mount, then reuses module cache for fresh verified owner", async () => {
+    vi.resetModules();
+    window.location.hash = "#/credentials?channel=geminicli";
+
+    const actualCredentials = await vi.importActual<typeof import("@/pages/credentials")>("@/pages/credentials");
+    const credentialsModuleEvaluationSpy = vi.fn();
+    const credentialsRenderSpy = vi.fn((...args: any[]) => (actualCredentials.default as any)(...args));
+
+    let importFactoryResolve!: () => void;
+    const importFactoryCalled = new Promise<void>((resolve) => {
+      importFactoryResolve = resolve;
+    });
+
+    let resolveCredentialsDeferred!: (mod: typeof actualCredentials) => void;
+    const credentialsPromise = new Promise<typeof actualCredentials>((resolve) => {
+      resolveCredentialsDeferred = resolve;
+    });
+
+    vi.doMock("@/pages/credentials", () => {
+      credentialsModuleEvaluationSpy();
+      importFactoryResolve();
+      return credentialsPromise;
+    });
+
+    const { default: ScopedApp } = await import("./App");
+    const { setSessionToken: scopedSetSessionToken, getSessionSnapshot: scopedGetSessionSnapshot } = await import("@/auth/session");
+
+    // Start with verified owner 1
+    act(() => {
+      scopedSetSessionToken("synthetic-verified-owner1", false);
+    });
+    const { rerender } = render(<ScopedApp />);
+
+    // Explicit lifecycle barrier: await deferred import factory before asserting it has been called
+    await importFactoryCalled;
+    expect(credentialsModuleEvaluationSpy).toHaveBeenCalledTimes(1);
+    expect(credentialsRenderSpy).not.toHaveBeenCalled();
+    expect(screen.getByRole("status", { name: "正在加载页面" })).toBeInTheDocument();
+
+    // Defer resolution across logout
+    act(() => {
+      scopedSetSessionToken(null, false);
+    });
+    await screen.findByLabelText("面板密码");
+    expect(scopedGetSessionSnapshot().token).toBeNull();
+
+    // Resolve deferred module while anonymous
+    resolveCredentialsDeferred({
+      ...actualCredentials,
+      default: credentialsRenderSpy,
+      supportedPanelModes: actualCredentials.supportedPanelModes,
+    });
+    await act(async () => {
+      await credentialsPromise;
+    });
+
+    await act(async () => {
+      rerender(<ScopedApp />);
+    });
+
+    // Zero obsolete-owner mount
+    expect(credentialsRenderSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { level: 1, name: "Gemini CLI 凭证" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("面板密码")).toBeInTheDocument();
+
+    // Fresh verified owner arrives and reuses module cache
+    act(() => {
+      scopedSetSessionToken("synthetic-verified-owner2", false);
+    });
+    const freshHeading = await screen.findByRole("heading", { level: 1, name: "Gemini CLI 凭证" });
+    expect(freshHeading).toBeInTheDocument();
+    expect(credentialsRenderSpy).toHaveBeenCalled();
+    expect(credentialsModuleEvaluationSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps credentials unsupported when supportedPanelModes is missing or malformed while loader counts remain zero for other pages", async () => {
+    vi.resetModules();
+    window.location.hash = "#/credentials?channel=geminicli";
+
+    const actualCredentials = await vi.importActual<typeof import("@/pages/credentials")>("@/pages/credentials");
+    const credentialsRenderSpy = vi.fn((...args: any[]) => (actualCredentials.default as any)(...args));
+    const importLoaderSpy = vi.fn();
+
+    vi.doMock("@/pages/import", () => {
+      importLoaderSpy();
+      return { default: () => <div data-testid="import-page">Import</div> };
+    });
+
+    // 1. Missing declaration: supportedPanelModes is undefined
+    vi.doMock("@/pages/credentials", () => ({
+      ...actualCredentials,
+      default: credentialsRenderSpy,
+      supportedPanelModes: undefined,
+    }));
+
+    const { default: ScopedAppMissing } = await import("./App");
+    const { setSessionToken: scopedSetSessionToken } = await import("@/auth/session");
+
+    act(() => {
+      scopedSetSessionToken("synthetic-verified-missing", false);
+    });
+    const { unmount: unmountMissing } = render(<ScopedAppMissing />);
+
+    await screen.findByRole("region", { name: "当前渠道暂不支持" });
+    expect(screen.getByRole("heading", { level: 1, name: "当前渠道暂未支持" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "前往旧版管理面板" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("#manage")
+    );
+    expect(credentialsRenderSpy).not.toHaveBeenCalled();
+    expect(importLoaderSpy).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    unmountMissing();
+
+    // 2. Non-array declaration: supportedPanelModes is a non-array string
+    vi.resetModules();
+    vi.doMock("@/pages/import", () => {
+      importLoaderSpy();
+      return { default: () => <div data-testid="import-page">Import</div> };
+    });
+    vi.doMock("@/pages/credentials", () => ({
+      ...actualCredentials,
+      default: credentialsRenderSpy,
+      supportedPanelModes: "geminicli",
+    }));
+
+    const { default: ScopedAppNonArray } = await import("./App");
+    const { setSessionToken: scopedSetSessionToken2 } = await import("@/auth/session");
+
+    act(() => {
+      scopedSetSessionToken2("synthetic-verified-nonarray", false);
+    });
+    const { unmount: unmountNonArray } = render(<ScopedAppNonArray />);
+
+    await screen.findByRole("region", { name: "当前渠道暂不支持" });
+    expect(screen.getByRole("heading", { level: 1, name: "当前渠道暂未支持" })).toBeInTheDocument();
+    expect(credentialsRenderSpy).not.toHaveBeenCalled();
+    expect(importLoaderSpy).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    unmountNonArray();
+
+    // 3. Malformed array: contains an invalid entry
+    vi.resetModules();
+    vi.doMock("@/pages/import", () => {
+      importLoaderSpy();
+      return { default: () => <div data-testid="import-page">Import</div> };
+    });
+    vi.doMock("@/pages/credentials", () => ({
+      ...actualCredentials,
+      default: credentialsRenderSpy,
+      supportedPanelModes: ["geminicli", "not-a-valid-mode"],
+    }));
+
+    const { default: ScopedAppMixed } = await import("./App");
+    const { setSessionToken: scopedSetSessionToken3 } = await import("@/auth/session");
+
+    act(() => {
+      scopedSetSessionToken3("synthetic-verified-mixed", false);
+    });
+    render(<ScopedAppMixed />);
+
+    await screen.findByRole("region", { name: "当前渠道暂不支持" });
+    expect(screen.getByRole("heading", { level: 1, name: "当前渠道暂未支持" })).toBeInTheDocument();
+    expect(credentialsRenderSpy).not.toHaveBeenCalled();
+    expect(importLoaderSpy).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("legacy startup aliases #manage and #antigravity-manage canonicalize and render real verified credentials", async () => {
+    // 1. #manage canonicalizes to credentials+geminicli
+    vi.resetModules();
+    window.location.hash = "#manage";
+
+    const { default: ScopedApp1 } = await import("./App");
+    const { setSessionToken: scopedSetSessionToken1 } = await import("@/auth/session");
+
+    render(<ScopedApp1 />);
+
+    // Zero pre-verification loads
+    expect(screen.getByLabelText("面板密码")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+
+    act(() => {
+      scopedSetSessionToken1("synthetic-verified-manage", false);
+    });
+
+    const gcliHeading = await screen.findByRole("heading", { level: 1, name: "Gemini CLI 凭证" });
+    expect(gcliHeading).toBeInTheDocument();
+    expect(window.location.hash).toBe("#/credentials?channel=geminicli");
+
+    // 2. #antigravity-manage canonicalizes to credentials+antigravity
+    vi.resetModules();
+    window.location.hash = "#antigravity-manage";
+
+    const { default: ScopedApp2 } = await import("./App");
+    const { setSessionToken: scopedSetSessionToken2 } = await import("@/auth/session");
+
+    render(<ScopedApp2 />);
+
+    act(() => {
+      scopedSetSessionToken2("synthetic-verified-ag", false);
+    });
+
+    const agHeading = await screen.findByRole("heading", { level: 1, name: "Antigravity 凭证" });
+    expect(agHeading).toBeInTheDocument();
+    expect(window.location.hash).toBe("#/credentials");
   });
 });
 

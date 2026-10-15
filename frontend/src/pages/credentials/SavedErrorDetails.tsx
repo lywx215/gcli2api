@@ -25,17 +25,36 @@ const SENSITIVE_NORMALIZED_KEYS = new Set([
   'credentials',
 ]);
 
+function hasMalformedPercentEncoding(str: string): boolean {
+  try {
+    decodeURIComponent(str);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function partiallyDecode(str: string): string {
+  return str.replace(/%([0-9a-fA-F]{2})/g, (_, hex) => {
+    const code = parseInt(hex, 16);
+    return String.fromCharCode(code);
+  });
+}
+
 function normalizeKey(key: string): string {
   let decoded = key;
   try {
     decoded = decodeURIComponent(key);
   } catch {
-    // Keep raw key if decoding fails
+    decoded = partiallyDecode(key);
   }
   return decoded.toLowerCase().replace(/[-_\s]/g, '');
 }
 
 function isSensitiveKey(key: string): boolean {
+  if (hasMalformedPercentEncoding(key)) {
+    return true;
+  }
   const norm = normalizeKey(key);
   if (SENSITIVE_NORMALIZED_KEYS.has(norm)) {
     return true;
@@ -46,7 +65,9 @@ function isSensitiveKey(key: string): boolean {
     norm.includes('secret') ||
     norm.includes('privatekey') ||
     norm.includes('credential') ||
-    norm.includes('authorization')
+    norm.includes('authorization') ||
+    norm.includes('cookie') ||
+    norm.includes('apikey')
   ) {
     return true;
   }
@@ -54,14 +75,17 @@ function isSensitiveKey(key: string): boolean {
 }
 
 function isSensitiveQueryKey(rawKey: string): boolean {
+  if (hasMalformedPercentEncoding(rawKey)) {
+    return true;
+  }
   let decoded = rawKey;
   try {
     decoded = decodeURIComponent(rawKey);
   } catch {
-    // Keep raw key if decoding fails
+    decoded = partiallyDecode(rawKey);
   }
   const norm = decoded.toLowerCase().replace(/[-_\s]/g, '');
-  if (norm === 'key' || norm === 'code' || norm === 'state' || norm === 'auth' || norm === 'token') {
+  if (norm === 'key' || norm === 'code' || norm === 'state' || norm === 'auth' || norm === 'token' || norm === 'sig' || norm === 'signature') {
     return true;
   }
   if (
@@ -71,12 +95,45 @@ function isSensitiveQueryKey(rawKey: string): boolean {
     norm.endsWith('auth') ||
     norm.endsWith('key') ||
     norm.startsWith('key') ||
-    norm === 'sig' ||
     norm.includes('signature')
   ) {
     return true;
   }
   return false;
+}
+
+function sanitizeHash(hash: string): string {
+  const content = hash.replace(/^#/, '');
+  if (!content) return '';
+
+  let prefix = '';
+  let queryLike = content;
+  const qIdx = content.indexOf('?');
+  if (qIdx !== -1) {
+    prefix = '%5BREDACTED%5D?';
+    queryLike = content.slice(qIdx + 1);
+  }
+
+  const delimiter = queryLike.includes('&') ? '&' : (queryLike.includes(';') ? ';' : '&');
+  const parts = queryLike.split(/[&;]/);
+  const sanitizedParts: string[] = [];
+
+  for (const part of parts) {
+    const eqIdx = part.indexOf('=');
+    if (eqIdx !== -1) {
+      const k = part.slice(0, eqIdx);
+      const v = part.slice(eqIdx + 1);
+      if (hasMalformedPercentEncoding(k) || isSensitiveQueryKey(k) || isSensitiveKey(k)) {
+        sanitizedParts.push(`${k}=%5BREDACTED%5D`);
+      } else {
+        sanitizedParts.push(`${k}=${v}`);
+      }
+    } else {
+      sanitizedParts.push('%5BREDACTED%5D');
+    }
+  }
+
+  return `#${prefix}${sanitizedParts.join(delimiter)}`;
 }
 
 export function sanitizeUrl(rawUrl: string): { sanitizedUrl: string; isValidHttp: boolean } {
@@ -96,7 +153,7 @@ export function sanitizeUrl(rawUrl: string): { sanitizedUrl: string; isValidHttp
       const entries = Array.from(params.entries());
       const newParams = new URLSearchParams();
       for (const [k, v] of entries) {
-        if (isSensitiveQueryKey(k)) {
+        if (hasMalformedPercentEncoding(k) || isSensitiveQueryKey(k) || isSensitiveKey(k)) {
           newParams.append(k, '[REDACTED]');
         } else {
           newParams.append(k, v);
@@ -106,27 +163,9 @@ export function sanitizeUrl(rawUrl: string): { sanitizedUrl: string; isValidHttp
       parsed.search = searchStr ? `?${searchStr}` : '';
     }
 
-    // Sanitize fragment key-values; redact opaque fragments
+    // Sanitize fragment key-values; conservatively redact opaque/ambiguous fragments
     if (parsed.hash) {
-      const hashContent = parsed.hash.replace(/^#/, '');
-      if (!hashContent) {
-        parsed.hash = '';
-      } else if (hashContent.includes('=')) {
-        const parts = hashContent.split('&');
-        const sanitizedParts = parts.map((part) => {
-          const eqIdx = part.indexOf('=');
-          if (eqIdx === -1) return part;
-          const k = part.slice(0, eqIdx);
-          const v = part.slice(eqIdx + 1);
-          if (isSensitiveQueryKey(k)) {
-            return `${k}=%5BREDACTED%5D`;
-          }
-          return `${k}=${v}`;
-        });
-        parsed.hash = `#${sanitizedParts.join('&')}`;
-      } else {
-        parsed.hash = '#%5BREDACTED%5D';
-      }
+      parsed.hash = sanitizeHash(parsed.hash);
     }
 
     const sanitized = parsed.toString();
@@ -135,11 +174,24 @@ export function sanitizeUrl(rawUrl: string): { sanitizedUrl: string; isValidHttp
   } catch {
     // Never display rejected credential-bearing URL raw
     let fallback = rawUrl;
-    fallback = fallback.replace(/\/\/[^/\s:@]+(?::[^/\s:@]+)?@/g, '//');
+    // Strip complete userinfo from authority (including multicolon credentials)
+    fallback = fallback.replace(/(\/\/[^\/\s?#]*)@/g, '//');
+
+    // If authority still contains '@' before path/query/hash, redact authority
+    const schemeMatch = /^https?:\/\//i.exec(fallback);
+    if (schemeMatch) {
+      const rest = fallback.slice(schemeMatch[0].length);
+      const authEnd = rest.search(/[\/\?#]/);
+      const authority = authEnd === -1 ? rest : rest.slice(0, authEnd);
+      if (authority.includes('@')) {
+        fallback = `${schemeMatch[0]}[REDACTED]${authEnd === -1 ? '' : rest.slice(authEnd)}`;
+      }
+    }
+
     fallback = fallback.replace(
-      /([?&])([^=&\s]+)=([^&\s#]*)/g,
+      /([?&])([^=&\s#]+)=([^&\s#]*)/g,
       (match, p1, p2) => {
-        if (isSensitiveQueryKey(p2)) {
+        if (hasMalformedPercentEncoding(p2) || isSensitiveQueryKey(p2) || isSensitiveKey(p2)) {
           return `${p1}${p2}=%5BREDACTED%5D`;
         }
         return match;
@@ -147,27 +199,315 @@ export function sanitizeUrl(rawUrl: string): { sanitizedUrl: string; isValidHttp
     );
     if (fallback.includes('#')) {
       const hashIdx = fallback.indexOf('#');
-      const hashVal = fallback.slice(hashIdx + 1);
-      if (hashVal && !hashVal.includes('=')) {
-        fallback = `${fallback.slice(0, hashIdx)}#%5BREDACTED%5D`;
-      }
+      const basePart = fallback.slice(0, hashIdx);
+      const hashPart = fallback.slice(hashIdx);
+      fallback = `${basePart}${sanitizeHash(hashPart)}`;
     }
     return { sanitizedUrl: fallback, isValidHttp: false };
   }
 }
 
-function redactAssignmentMatch(prefix: string, value: string): string {
-  const trimmedVal = value.trim();
-  if (trimmedVal.startsWith('"') && trimmedVal.endsWith('"') && trimmedVal.length >= 2) {
-    return `${prefix}"[REDACTED]"`;
+function redactSensitiveAssignments(text: string): string {
+  // Use [^\S\r\n]* instead of \s* to prevent consuming newlines
+  const prefixRegex = /(?:^|[\s,;{(])(["']?)(?:access[\s_-]?token|refresh[\s_-]?token|id[\s_-]?token|management[\s_-]?token|api[\s_-]?password|panel[\s_-]?password|password|client[\s_-]?secret|proxy[\s_-]?authorization|authorization|set[\s_-]?cookie|cookie|api[\s_-]?key|private[\s_-]?key|credentials?|token)\1[^\S\r\n]*[:=][^\S\r\n]*/gi;
+
+  let result = '';
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = prefixRegex.exec(text)) !== null) {
+    const matchStart = match.index;
+    const prefix = match[0];
+    const valStart = matchStart + prefix.length;
+
+    result += text.slice(lastIndex, valStart);
+
+    if (valStart >= text.length) {
+      lastIndex = valStart;
+      break;
+    }
+
+    const rawValChar = text[valStart];
+    let actualStart = valStart;
+
+    // Empty assignment guard: if followed immediately by newline or carriage return,
+    // check whether the next line contains a quoted/container/spaced secret or is a safe empty assignment boundary.
+    if (rawValChar === '\r' || rawValChar === '\n') {
+      let nextContentIdx = actualStart;
+      if (text[nextContentIdx] === '\r' && text[nextContentIdx + 1] === '\n') {
+        nextContentIdx += 2;
+      } else {
+        nextContentIdx += 1;
+      }
+      while (nextContentIdx < text.length && (text[nextContentIdx] === ' ' || text[nextContentIdx] === '\t')) {
+        nextContentIdx++;
+      }
+
+      const nextLineStr = text.slice(nextContentIdx);
+      const isBlankOrEof = nextContentIdx >= text.length || text[nextContentIdx] === '\r' || text[nextContentIdx] === '\n';
+      const isBoundaryMarker = /^(?:===|---|###)/.test(nextLineStr);
+      const isIndependentKeyOrHeader = /^[A-Za-z0-9_.-]+(?:[^\S\r\n]+[A-Za-z0-9_.-]+)*[^\S\r\n]*[:=]/.test(nextLineStr);
+
+      if (isBlankOrEof || isBoundaryMarker || isIndependentKeyOrHeader) {
+        lastIndex = valStart;
+        prefixRegex.lastIndex = Math.max(valStart, match.index + 1);
+        continue;
+      }
+
+      actualStart = nextContentIdx;
+    }
+
+    if (actualStart > valStart) {
+      result += text.slice(valStart, actualStart);
+    }
+
+    const firstChar = text[actualStart];
+    let valEnd = actualStart;
+    let redacted = '[REDACTED]';
+
+    if (firstChar === '"' || firstChar === "'") {
+      const quote = firstChar;
+      let idx = actualStart + 1;
+      let closed = false;
+      while (idx < text.length) {
+        if (text[idx] === '\\') {
+          idx += 2;
+          continue;
+        }
+        if (text[idx] === quote) {
+          idx++;
+          closed = true;
+          break;
+        }
+        idx++;
+      }
+      if (!closed) {
+        // Unclosed quoted value fails closed to end
+        valEnd = text.length;
+      } else {
+        valEnd = idx;
+      }
+      redacted = quote === '"' ? '"[REDACTED]"' : "'[REDACTED]'";
+    } else if (firstChar === '{' || firstChar === '[') {
+      const stack: string[] = [firstChar];
+      let idx = actualStart + 1;
+      let malformed = false;
+      const MAX_CONTAINER_DEPTH = 32;
+
+      while (idx < text.length && stack.length > 0) {
+        const c = text[idx];
+        if (c === '"' || c === "'") {
+          const q = c;
+          idx++;
+          let strClosed = false;
+          while (idx < text.length) {
+            if (text[idx] === '\\') {
+              idx += 2;
+              continue;
+            }
+            if (text[idx] === q) {
+              idx++;
+              strClosed = true;
+              break;
+            }
+            idx++;
+          }
+          if (!strClosed) {
+            // Unclosed inner string in container fails closed
+            malformed = true;
+            break;
+          }
+          continue;
+        }
+        if (c === '{' || c === '[') {
+          if (stack.length >= MAX_CONTAINER_DEPTH) {
+            malformed = true;
+            break;
+          }
+          stack.push(c);
+          idx++;
+          continue;
+        }
+        if (c === '}' || c === ']') {
+          const top = stack[stack.length - 1];
+          if ((top === '{' && c === '}') || (top === '[' && c === ']')) {
+            stack.pop();
+            idx++;
+            if (stack.length === 0) {
+              break;
+            }
+            continue;
+          } else {
+            // Mismatched closing bracket/brace
+            malformed = true;
+            break;
+          }
+        }
+        idx++;
+      }
+
+      if (malformed || stack.length > 0) {
+        // Conservative remainder masking for malformed/unclosed container
+        valEnd = text.length;
+      } else {
+        valEnd = idx;
+      }
+      redacted = '[REDACTED]';
+    } else {
+      const remaining = text.slice(actualStart);
+      const bearerMatch = /^Bearer\s+/i.exec(remaining);
+      if (bearerMatch) {
+        let idx = actualStart + bearerMatch[0].length;
+        if (idx < text.length && (text[idx] === '"' || text[idx] === "'")) {
+          const q = text[idx];
+          idx++;
+          let closed = false;
+          while (idx < text.length) {
+            if (text[idx] === '\\') {
+              idx += 2;
+              continue;
+            }
+            if (text[idx] === q) {
+              idx++;
+              closed = true;
+              break;
+            }
+            idx++;
+          }
+          if (!closed) {
+            valEnd = text.length;
+          } else {
+            valEnd = idx;
+          }
+        } else {
+          while (idx < text.length && !/[\r\n,;})\]]/.test(text[idx])) {
+            idx++;
+          }
+          valEnd = idx;
+        }
+        redacted = 'Bearer [REDACTED]';
+      } else {
+        let idx = actualStart;
+        // Redact unquoted sensitive assignment until newline or structural delimiter
+        while (idx < text.length && !/[\r\n,;})\]]/.test(text[idx])) {
+          idx++;
+        }
+        valEnd = idx;
+        redacted = '[REDACTED]';
+      }
+    }
+
+    result += redacted;
+    lastIndex = valEnd;
+    if (valEnd >= text.length) {
+      break;
+    }
+    prefixRegex.lastIndex = Math.max(valEnd, match.index + 1);
   }
-  if (trimmedVal.startsWith("'") && trimmedVal.endsWith("'") && trimmedVal.length >= 2) {
-    return `${prefix}'[REDACTED]'`;
+
+  result += text.slice(lastIndex);
+  return result;
+}
+
+function redactHeaderLines(text: string): string {
+  const headerPrefixRegex = /(?:^|[\r\n])[^\S\r\n]*(?:set[\s_-]?cookie|cookie|proxy[\s_-]?authorization|authorization)[^\S\r\n]*[:=][^\S\r\n]*/gi;
+  let result = '';
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = headerPrefixRegex.exec(text)) !== null) {
+    const matchStart = match.index;
+    const prefix = match[0];
+    const valStart = matchStart + prefix.length;
+
+    result += text.slice(lastIndex, valStart);
+
+    if (valStart >= text.length) {
+      lastIndex = valStart;
+      break;
+    }
+
+    let actualStart = valStart;
+    if (text[actualStart] === '\r' || text[actualStart] === '\n') {
+      let nextContentIdx = actualStart;
+      if (text[nextContentIdx] === '\r' && text[nextContentIdx + 1] === '\n') {
+        nextContentIdx += 2;
+      } else {
+        nextContentIdx += 1;
+      }
+      while (nextContentIdx < text.length && (text[nextContentIdx] === ' ' || text[nextContentIdx] === '\t')) {
+        nextContentIdx++;
+      }
+
+      const nextLineStr = text.slice(nextContentIdx);
+      const isBlankOrEof = nextContentIdx >= text.length || text[nextContentIdx] === '\r' || text[nextContentIdx] === '\n';
+      const isBoundaryMarker = /^(?:===|---|###)/.test(nextLineStr);
+      const isIndependentKeyOrHeader = /^[A-Za-z0-9_.-]+(?:[^\S\r\n]+[A-Za-z0-9_.-]+)*[^\S\r\n]*[:=]/.test(nextLineStr);
+
+      if (isBlankOrEof || isBoundaryMarker || isIndependentKeyOrHeader) {
+        lastIndex = actualStart;
+        headerPrefixRegex.lastIndex = Math.max(actualStart, match.index + 1);
+        continue;
+      }
+
+      actualStart = nextContentIdx;
+    }
+
+    if (actualStart > valStart) {
+      result += text.slice(valStart, actualStart);
+    }
+
+    const remaining = text.slice(actualStart);
+    const bearerMatch = /^Bearer\s+/i.exec(remaining);
+    const isBearer = !!bearerMatch;
+    const valContentStart = bearerMatch ? actualStart + bearerMatch[0].length : actualStart;
+
+    if (valContentStart >= text.length) {
+      result += isBearer ? 'Bearer [REDACTED]' : '[REDACTED]';
+      lastIndex = text.length;
+      break;
+    }
+
+    const firstChar = text[valContentStart];
+    let valEnd = valContentStart;
+
+    if (firstChar === '"' || firstChar === "'") {
+      const quote = firstChar;
+      let idx = valContentStart + 1;
+      let closed = false;
+      while (idx < text.length) {
+        if (text[idx] === '\\') {
+          idx += 2;
+          continue;
+        }
+        if (text[idx] === quote) {
+          idx++;
+          closed = true;
+          break;
+        }
+        idx++;
+      }
+      if (!closed) {
+        valEnd = text.length;
+      } else {
+        valEnd = idx;
+      }
+    } else {
+      let idx = valContentStart;
+      while (idx < text.length && text[idx] !== '\r' && text[idx] !== '\n') {
+        idx++;
+      }
+      valEnd = idx;
+    }
+
+    result += isBearer ? 'Bearer [REDACTED]' : '[REDACTED]';
+    lastIndex = valEnd;
+
+    headerPrefixRegex.lastIndex = Math.max(valEnd, match.index + 1);
   }
-  if (/^Bearer\b/i.test(trimmedVal)) {
-    return `${prefix}Bearer [REDACTED]`;
-  }
-  return `${prefix}[REDACTED]`;
+
+  result += text.slice(lastIndex);
+  return result;
 }
 
 export function sanitizePlainText(input: string): string {
@@ -175,17 +515,14 @@ export function sanitizePlainText(input: string): string {
 
   let text = input;
 
-  // 1. Redact PEM private key blocks
-  text = text.replace(/-----BEGIN[A-Z0-9_\s-]+KEY-----[\s\S]*?-----END[A-Z0-9_\s-]+KEY-----/gi, '[REDACTED]');
+  // 1. Redact PEM private key blocks (both closed and unclosed)
+  text = text.replace(
+    /-----BEGIN[A-Z0-9_\s-]+KEY-----(?:[\s\S]*?-----END[A-Z0-9_\s-]+KEY-----|[\s\S]*$)/gi,
+    '[REDACTED]'
+  );
 
   // 2. Redact full cookie and authorization header lines
-  text = text.replace(/((?:^|[\r\n])\s*(?:set[\\s_-]?cookie|cookie)\s*[:=]\s*)[^\r\n]+/gi, '$1[REDACTED]');
-  text = text.replace(/((?:^|[\r\n])\s*(?:proxy[\\s_-]?authorization|authorization)\s*[:=]\s*)(?:Bearer\s+[^\r\n]+|[^\r\n]+)/gi, (match, prefix) => {
-    if (/Bearer\b/i.test(match)) {
-      return `${prefix}Bearer [REDACTED]`;
-    }
-    return `${prefix}[REDACTED]`;
-  });
+  text = redactHeaderLines(text);
 
   // 3. Redact URLs in text
   text = text.replace(/(https?:\/\/[^\s"'<>\\]+)/gi, (matched) => {
@@ -210,53 +547,44 @@ export function sanitizePlainText(input: string): string {
     '$1[REDACTED]'
   );
 
-  // 5. Redact sensitive assignments and headers (case, camel, hyphen, underscore variants)
-  const assignmentPattern = new RegExp(
-    '(' +
-      '(?:^|[\\s,;{(])' +
-      '["\']?' +
-      '(?:' +
-        'access[\\s_-]?token|' +
-        'refresh[\\s_-]?token|' +
-        'id[\\s_-]?token|' +
-        'management[\\s_-]?token|' +
-        'api[\\s_-]?password|' +
-        'panel[\\s_-]?password|' +
-        'password|' +
-        'client[\\s_-]?secret|' +
-        'proxy[\\s_-]?authorization|' +
-        'authorization|' +
-        'set[\\s_-]?cookie|' +
-        'cookie|' +
-        'api[\\s_-]?key|' +
-        'private[\\s_-]?key|' +
-        'credentials?|' +
-        'token' +
-      ')' +
-      '["\']?' +
-      '\\s*[:=]\\s*' +
-    ')' +
-    '(' +
-      '\\{[^}]*\\}|' +
-      '\\[[^\\]]*\\]|' +
-      '"[^"\\r\\n]*"|' +
-      '\'[^\'\\r\\n]*\'|' +
-      '[^\\s,;)}\\r\\n][^,;)}\\r\\n]*' +
-    ')',
-    'gi'
-  );
-
-  text = text.replace(assignmentPattern, (_match, prefix, val) => {
-    return redactAssignmentMatch(prefix, val);
-  });
+  // 5. Redact sensitive assignments with bounded safe scanning
+  text = redactSensitiveAssignments(text);
 
   return text;
 }
 
-function sanitizeJsonValue(key: string | null, value: unknown): unknown {
+const MAX_JSON_DEPTH = 8;
+const MAX_JSON_NODES = 500;
+
+function getUniqueKey(targetObj: Record<string, unknown>, baseKey: string): string {
+  if (!Object.prototype.hasOwnProperty.call(targetObj, baseKey)) {
+    return baseKey;
+  }
+  let index = 1;
+  while (Object.prototype.hasOwnProperty.call(targetObj, `${baseKey}_${index}`)) {
+    index++;
+  }
+  return `${baseKey}_${index}`;
+}
+
+function sanitizeJsonValue(
+  key: string | null,
+  value: unknown,
+  depth: number,
+  nodeCounter: { count: number }
+): unknown {
+  nodeCounter.count++;
+  if (nodeCounter.count > MAX_JSON_NODES) {
+    return '[NODE_LIMIT_EXCEEDED]';
+  }
+
+  if (depth > MAX_JSON_DEPTH) {
+    return '[DEPTH_EXCEEDED]';
+  }
+
   if (key !== null) {
     const norm = normalizeKey(key);
-    if (norm === 'credential' || norm === 'credentials' || isSensitiveKey(key)) {
+    if (norm === 'credential' || norm === 'credentials' || isSensitiveKey(key) || key === '__proto__') {
       return '[REDACTED]';
     }
   }
@@ -265,30 +593,82 @@ function sanitizeJsonValue(key: string | null, value: unknown): unknown {
     return value;
   }
 
-  if (Array.isArray(value)) {
-    return value.map((item) => sanitizeJsonValue(null, item));
-  }
-
-  if (typeof value === 'object') {
-    const result: Record<string, unknown> = {};
-    for (const k of Object.keys(value)) {
-      if (Object.prototype.hasOwnProperty.call(value, k)) {
-        const normK = normalizeKey(k);
-        if (normK === 'credential' || normK === 'credentials' || isSensitiveKey(k)) {
-          result[k] = '[REDACTED]';
-        } else {
-          result[k] = sanitizeJsonValue(k, (value as Record<string, unknown>)[k]);
-        }
-      }
-    }
-    return result;
+  if (typeof value === 'boolean' || typeof value === 'number') {
+    return value;
   }
 
   if (typeof value === 'string') {
     return sanitizePlainText(value);
   }
 
-  return value;
+  if (Array.isArray(value)) {
+    const result: unknown[] = [];
+    for (let i = 0; i < value.length; i++) {
+      if (nodeCounter.count >= MAX_JSON_NODES) {
+        result.push('[NODE_LIMIT_EXCEEDED]');
+        break;
+      }
+      result.push(sanitizeJsonValue(null, value[i], depth + 1, nodeCounter));
+    }
+    return result;
+  }
+
+  if (typeof value === 'object') {
+    const result = Object.create(null) as Record<string, unknown>;
+    const keys = Object.getOwnPropertyNames(value);
+
+    for (const rawKey of keys) {
+      if (nodeCounter.count >= MAX_JSON_NODES) {
+        const markerKey = getUniqueKey(result, '[NODE_LIMIT_EXCEEDED]');
+        Object.defineProperty(result, markerKey, {
+          value: '[NODE_LIMIT_EXCEEDED]',
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+        break;
+      }
+
+      const desc = Object.getOwnPropertyDescriptor(value, rawKey);
+      if (!desc || desc.get || desc.set || !('value' in desc)) {
+        continue;
+      }
+
+      const val = desc.value;
+      const isKeySensitive =
+        rawKey === '__proto__' ||
+        rawKey === 'constructor' ||
+        rawKey === 'prototype' ||
+        isSensitiveKey(rawKey);
+
+      let safeKey: string;
+      if (isKeySensitive) {
+        safeKey = '[REDACTED]';
+      } else {
+        safeKey = sanitizePlainText(rawKey);
+      }
+
+      safeKey = getUniqueKey(result, safeKey);
+
+      let sanitizedChild: unknown;
+      if (isKeySensitive) {
+        nodeCounter.count++;
+        sanitizedChild = '[REDACTED]';
+      } else {
+        sanitizedChild = sanitizeJsonValue(rawKey, val, depth + 1, nodeCounter);
+      }
+
+      Object.defineProperty(result, safeKey, {
+        value: sanitizedChild,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+    return result;
+  }
+
+  return '[REDACTED]';
 }
 
 export function sanitizeBody(rawBody: string): string {
@@ -296,7 +676,7 @@ export function sanitizeBody(rawBody: string): string {
   if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
     try {
       const parsed = JSON.parse(trimmed);
-      const sanitized = sanitizeJsonValue(null, parsed);
+      const sanitized = sanitizeJsonValue(null, parsed, 0, { count: 0 });
       return JSON.stringify(sanitized, null, 2);
     } catch {
       // If parsing fails, fall back to plain text sanitization
@@ -368,6 +748,19 @@ function renderSanitizedContent(text: string): React.ReactNode[] {
   return nodes;
 }
 
+function getOwnDataProperty(obj: unknown, key: string): unknown {
+  if (obj === null || typeof obj !== 'object') return undefined;
+  try {
+    const desc = Object.getOwnPropertyDescriptor(obj, key);
+    if (desc && !desc.get && !desc.set && Object.prototype.hasOwnProperty.call(desc, 'value')) {
+      return desc.value;
+    }
+  } catch {
+    // Keep undefined on error
+  }
+  return undefined;
+}
+
 type BodyStatus = 'valid' | 'empty_string' | 'missing_body' | 'malformed_body' | 'missing_map';
 
 interface ProcessedErrorEntry {
@@ -388,27 +781,34 @@ export function SavedErrorDetails({ data }: Readonly<{ data: Readonly<RecordValu
     );
   }
 
-  // Read only own fields
-  const filename = typeof data.filename === 'string' && data.filename.trim() ? sanitizeLabel(data.filename.trim()) : null;
+  // Read only own fields using property descriptors to avoid invoking accessors
+  const rawFilename = getOwnDataProperty(data, 'filename');
+  const filename = typeof rawFilename === 'string' && rawFilename.trim() ? sanitizeLabel(rawFilename.trim()) : null;
 
   // HTTP200 may additionally contain error. Own top-level error means incomplete/unavailable with fixed explanation, never raw error text
-  const hasTopLevelError = typeof data.error === 'string' && data.error.trim().length > 0;
+  const rawError = getOwnDataProperty(data, 'error');
+  const hasTopLevelError = rawError !== undefined && rawError !== null && (typeof rawError !== 'string' || rawError.trim().length > 0);
 
-  const rawCodes = Array.isArray(data.error_codes) ? data.error_codes : null;
-  const hasMessagesMap = data.error_messages !== null && typeof data.error_messages === 'object' && !Array.isArray(data.error_messages);
-  const rawMessages = hasMessagesMap ? (data.error_messages as Record<string, unknown>) : null;
+  const rawCodesVal = getOwnDataProperty(data, 'error_codes');
+  const rawCodes = Array.isArray(rawCodesVal) ? rawCodesVal : null;
 
-  const hasClassificationsMap = data.error_classifications !== null && typeof data.error_classifications === 'object' && !Array.isArray(data.error_classifications);
-  const rawClassifications = hasClassificationsMap ? (data.error_classifications as Record<string, unknown>) : null;
+  const rawMessagesVal = getOwnDataProperty(data, 'error_messages');
+  const hasMessagesMap = rawMessagesVal !== null && typeof rawMessagesVal === 'object' && !Array.isArray(rawMessagesVal);
+  const rawMessages = hasMessagesMap ? (rawMessagesVal as Record<string, unknown>) : null;
+
+  const rawClassificationsVal = getOwnDataProperty(data, 'error_classifications');
+  const hasClassificationsMap = rawClassificationsVal !== null && typeof rawClassificationsVal === 'object' && !Array.isArray(rawClassificationsVal);
+  const rawClassifications = hasClassificationsMap ? (rawClassificationsVal as Record<string, unknown>) : null;
 
   // Preserve code order/dedup and append own message keys absent from codes; do not stringify objects or invent code0/classification
   const orderedCodes: string[] = [];
   const seenCodes = new Set<string>();
 
   if (rawCodes) {
-    for (const c of rawCodes) {
-      if (typeof c === 'string' || typeof c === 'number') {
-        const sc = String(c).trim();
+    for (let i = 0; i < rawCodes.length; i++) {
+      const codeVal = getOwnDataProperty(rawCodes, String(i));
+      if (typeof codeVal === 'string' || typeof codeVal === 'number') {
+        const sc = String(codeVal).trim();
         if (sc !== '' && !seenCodes.has(sc)) {
           seenCodes.add(sc);
           orderedCodes.push(sc);
@@ -418,8 +818,10 @@ export function SavedErrorDetails({ data }: Readonly<{ data: Readonly<RecordValu
   }
 
   if (rawMessages) {
-    for (const k of Object.keys(rawMessages)) {
-      if (Object.prototype.hasOwnProperty.call(rawMessages, k)) {
+    const ownKeys = Object.getOwnPropertyNames(rawMessages);
+    for (const k of ownKeys) {
+      const msgVal = getOwnDataProperty(rawMessages, k);
+      if (msgVal !== undefined) {
         const sk = String(k).trim();
         if (sk !== '' && !seenCodes.has(sk)) {
           seenCodes.add(sk);
@@ -430,19 +832,26 @@ export function SavedErrorDetails({ data }: Readonly<{ data: Readonly<RecordValu
   }
 
   // Explicit empty history means no saved entries, never healthy
-  const isExplicitEmpty = rawCodes !== null && rawCodes.length === 0 && (!rawMessages || Object.keys(rawMessages).length === 0);
+  const ownMessageKeysCount = rawMessages ? Object.getOwnPropertyNames(rawMessages).filter((k) => getOwnDataProperty(rawMessages, k) !== undefined).length : 0;
+  const isExplicitEmpty = rawCodes !== null && rawCodes.length === 0 && (!rawMessages || ownMessageKeysCount === 0);
   const isUnavailable = !rawCodes && !rawMessages && orderedCodes.length === 0;
 
   const entries: ProcessedErrorEntry[] = orderedCodes.map((code) => {
-    const sanitizedCode = sanitizeLabel(code);
+    let sanitizedCode = sanitizeLabel(code);
+    if (isSensitiveKey(code)) {
+      sanitizedCode = '[REDACTED]';
+    }
 
     let classification: string | null = null;
-    if (rawClassifications && Object.prototype.hasOwnProperty.call(rawClassifications, code)) {
-      const val = rawClassifications[code];
-      if (typeof val === 'string') {
-        classification = sanitizeLabel(val);
-      } else if (val !== undefined && val !== null) {
-        classification = '分类格式异常';
+    if (rawClassifications) {
+      const classDesc = Object.getOwnPropertyDescriptor(rawClassifications, code);
+      if (classDesc && !classDesc.get && !classDesc.set && 'value' in classDesc) {
+        const val = classDesc.value;
+        if (typeof val === 'string') {
+          classification = sanitizeLabel(val);
+        } else if (val !== undefined && val !== null) {
+          classification = '分类格式异常';
+        }
       }
     }
 
@@ -451,20 +860,23 @@ export function SavedErrorDetails({ data }: Readonly<{ data: Readonly<RecordValu
 
     if (!rawMessages) {
       bodyStatus = 'missing_map';
-    } else if (!Object.prototype.hasOwnProperty.call(rawMessages, code)) {
-      bodyStatus = 'missing_body';
     } else {
-      const val = rawMessages[code];
-      if (typeof val === 'string') {
-        if (val === '') {
-          bodyStatus = 'empty_string';
-        } else {
-          bodyStatus = 'valid';
-          sanitizedBody = sanitizeBody(val);
-        }
+      const msgDesc = Object.getOwnPropertyDescriptor(rawMessages, code);
+      if (!msgDesc || msgDesc.get || msgDesc.set || !('value' in msgDesc)) {
+        bodyStatus = 'missing_body';
       } else {
-        // do not stringify objects
-        bodyStatus = 'malformed_body';
+        const val = msgDesc.value;
+        if (typeof val === 'string') {
+          if (val === '') {
+            bodyStatus = 'empty_string';
+          } else {
+            bodyStatus = 'valid';
+            sanitizedBody = sanitizeBody(val);
+          }
+        } else {
+          // do not stringify objects
+          bodyStatus = 'malformed_body';
+        }
       }
     }
 

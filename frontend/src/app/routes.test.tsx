@@ -15,13 +15,58 @@ function changeHash(hash: string) {
 beforeEach(() => window.history.replaceState(null, "", "/ui/#/model-routing"));
 afterEach(() => { for (const release of releases) release(); releases.clear(); });
 
-it("recognizes the sixth production route and keeps legacy/unknown hash fallback", () => {
+it("recognizes the sixth production route and recognizes legacy aliases while keeping unknown hash fallback", () => {
   vi.stubEnv("DEV", false);
   expect(routes).toHaveLength(6);
   expect(routeFromHash("#/model-routing")).toBe("model-routing");
   expect(routeFromHash("#model-routing")).toBe("model-routing");
-  expect(routeFromHash("#manage")).toBe("overview");
+  expect(routeFromHash("#manage")).toBe("credentials");
+  expect(routeFromHash("#/manage")).toBe("credentials");
+  expect(routeFromHash("#manage/")).toBe("credentials");
+  expect(routeFromHash("#antigravity-manage")).toBe("credentials");
+  expect(routeFromHash("#/antigravity-manage")).toBe("credentials");
+  expect(routeFromHash("#antigravity-manage/")).toBe("credentials");
   expect(routeFromHash("#/unknown")).toBe("overview");
+});
+
+it("legacy hash aliases #manage and #antigravity-manage undergo guard verification and retry to canonical URLs", async () => {
+  function Harness() {
+    const route = useRoute();
+    return <p role="status">{route}</p>;
+  }
+  render(<Harness />);
+  const attempts: RouteNavigation[] = [];
+  guard(attempt => {
+    attempts.push(attempt);
+    return false;
+  });
+
+  // #manage navigation
+  act(() => changeHash("#manage"));
+  expect(attempts).toHaveLength(1);
+  expect(attempts[0].to).toBe("credentials");
+  expect(attempts[0].toMode).toBe("geminicli");
+  expect(attempts[0].href).toContain("#/credentials?channel=geminicli");
+  expect(screen.getByRole("status")).toHaveTextContent("model-routing");
+  expect(location.hash).toBe("#/model-routing");
+
+  // Retry #manage commits to canonical URL
+  act(() => attempts[0].retry());
+  expect(screen.getByRole("status")).toHaveTextContent("credentials");
+  expect(location.hash).toBe("#/credentials?channel=geminicli");
+
+  // #antigravity-manage navigation
+  act(() => changeHash("#antigravity-manage"));
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1].to).toBe("credentials");
+  expect(attempts[1].toMode).toBe("antigravity");
+  expect(attempts[1].href).toContain("#/credentials");
+  expect(screen.getByRole("status")).toHaveTextContent("credentials");
+
+  // Retry #antigravity-manage commits to canonical AG URL
+  act(() => attempts[1].retry());
+  expect(screen.getByRole("status")).toHaveTextContent("credentials");
+  expect(location.hash).toBe("#/credentials");
 });
 it("a real hash link holds the page on cancel and retries once on confirmation", async () => {
   function Harness() { const route = useRoute(); return <><p role="status">{route}</p><a href="#/logs">日志</a></>; }

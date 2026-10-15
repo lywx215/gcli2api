@@ -1,10 +1,12 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthProvider } from '@/auth'
 import { setSessionToken, getSessionSnapshot, __setSessionValidationStatus } from '@/auth/session'
 import { PanelChannelProvider } from '@/app/channels'
+import { navigatePanel } from '@/app/routes'
+import { CONSOLE_READY_PAYLOAD } from '@/app/ConsoleHandshake'
 import { __commitPanelChannel } from '@/domain/panel'
-import CredentialsPage from './index'
+import CredentialsPage, { supportedPanelModes } from './index'
 import { CAP, CAP_BY_MODE } from './model'
 
 let lastDetailProps: any = null
@@ -944,5 +946,197 @@ describe('credential workspace components', () => {
     })
     await waitFor(() => expect(quotaSummaryCalls.length).toBeGreaterThan(0))
     expect(quotaSummaryCalls[0]).toContain('synthetic-1.json')
+  })
+})
+
+describe('CredentialsPage supportedPanelModes declaration', () => {
+  it('declares frozen readonly supportedPanelModes for dual-channel credentials activation', () => {
+    expect(supportedPanelModes).toEqual(['antigravity', 'geminicli'])
+    expect(Object.isFrozen(supportedPanelModes)).toBe(true)
+  })
+})
+
+describe('ConsoleHandshake integration in real verified CredentialsPage', () => {
+  let originalParentDesc: PropertyDescriptor | undefined
+  let originalReferrerDesc: PropertyDescriptor | undefined
+  let originalAncestorOriginsDesc: PropertyDescriptor | undefined
+  let mockPostMessage: ReturnType<typeof vi.fn>
+
+  function setMetaPolicy(policyContent: string | null) {
+    document.querySelectorAll('meta[name="gcli-embed-policy"]').forEach(el => el.remove())
+    if (policyContent !== null) {
+      const meta = document.createElement('meta')
+      meta.setAttribute('name', 'gcli-embed-policy')
+      meta.setAttribute('content', policyContent)
+      document.head.appendChild(meta)
+    }
+  }
+
+  beforeEach(() => {
+    originalParentDesc = Object.getOwnPropertyDescriptor(window, 'parent')
+    originalReferrerDesc = Object.getOwnPropertyDescriptor(document, 'referrer')
+    originalAncestorOriginsDesc = Object.getOwnPropertyDescriptor(window.location, 'ancestorOrigins')
+
+    mockPostMessage = vi.fn()
+    Object.defineProperty(window, 'parent', {
+      configurable: true,
+      writable: true,
+      value: { postMessage: mockPostMessage },
+    })
+
+    setMetaPolicy(JSON.stringify({ mode: 'exact', origins: ['https://console.example.com'] }))
+    Object.defineProperty(document, 'referrer', {
+      configurable: true,
+      writable: true,
+      value: 'https://console.example.com',
+    })
+  })
+
+  afterEach(() => {
+    if (originalParentDesc !== undefined) {
+      Object.defineProperty(window, 'parent', originalParentDesc)
+    } else {
+      delete (window as unknown as Record<string, unknown>).parent
+    }
+
+    if (originalReferrerDesc !== undefined) {
+      Object.defineProperty(document, 'referrer', originalReferrerDesc)
+    } else {
+      delete (document as unknown as Record<string, unknown>).referrer
+    }
+
+    if (originalAncestorOriginsDesc !== undefined) {
+      Object.defineProperty(window.location, 'ancestorOrigins', originalAncestorOriginsDesc)
+    } else {
+      delete (window.location as unknown as Record<string, unknown>).ancestorOrigins
+    }
+
+    setMetaPolicy(null)
+    act(() => {
+      navigatePanel('credentials', 'antigravity')
+    })
+  })
+
+  it('proves one exact ready payload emitted only for mounted verified GCLI credentials', async () => {
+    act(() => {
+      navigatePanel('credentials', 'geminicli')
+    })
+    setSessionToken('synthetic-handshake-token')
+
+    setup(1, undefined, undefined, 'geminicli')
+    await loaded()
+
+    expect(mockPostMessage).toHaveBeenCalledTimes(1)
+    expect(mockPostMessage).toHaveBeenCalledWith(CONSOLE_READY_PAYLOAD, 'https://console.example.com')
+  })
+
+  it('zero ready messages for unverified, anonymous, or Antigravity mode', async () => {
+    // 1. Antigravity mode
+    act(() => {
+      navigatePanel('credentials', 'antigravity')
+    })
+    setSessionToken('synthetic-ag-token')
+    setup(1, undefined, undefined, 'antigravity')
+    await loaded()
+    expect(mockPostMessage).not.toHaveBeenCalled()
+
+    // 2. Unverified session in GCLI mode
+    act(() => {
+      expect(
+        __setSessionValidationStatus(getSessionSnapshot().sessionEpoch, 'unavailable')
+      ).toBe(true)
+      navigatePanel('credentials', 'geminicli')
+    })
+    expect(screen.getByText('请登录后查看凭证。')).toBeInTheDocument()
+    expect(mockPostMessage).not.toHaveBeenCalled()
+
+    // 3. Anonymous in GCLI mode
+    act(() => {
+      setSessionToken(null)
+    })
+    expect(screen.getByText('请登录后查看凭证。')).toBeInTheDocument()
+    expect(mockPostMessage).not.toHaveBeenCalled()
+  })
+
+  it('same activation rerender emits no duplicate ready message', async () => {
+    act(() => {
+      navigatePanel('credentials', 'geminicli')
+    })
+    setSessionToken('synthetic-rerender-token')
+
+    setup(1, undefined, undefined, 'geminicli')
+    await loaded()
+
+    expect(mockPostMessage).toHaveBeenCalledTimes(1)
+
+    // Switch view mode from table to cards (triggers re-render of CredentialWorkspace)
+    fireEvent.click(screen.getByRole('radio', { name: '额度卡片' }))
+    expect(await screen.findByRole('radio', { name: '额度卡片', checked: true })).toBeInTheDocument()
+
+    // Zero duplicate ready messages
+    expect(mockPostMessage).toHaveBeenCalledTimes(1)
+
+    // Switch view mode back to table
+    fireEvent.click(screen.getByRole('radio', { name: '表格' }))
+    expect(await screen.findByRole('radio', { name: '表格', checked: true })).toBeInTheDocument()
+
+    // Still exactly 1
+    expect(mockPostMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('same-session validation loss and reverify emits ready once for fresh activation', async () => {
+    act(() => {
+      navigatePanel('credentials', 'geminicli')
+    })
+    setSessionToken('synthetic-reverify-token')
+
+    setup(1, undefined, undefined, 'geminicli')
+    await loaded()
+    expect(mockPostMessage).toHaveBeenCalledTimes(1)
+
+    // Same-session validation loss: workspace unmounts
+    act(() => {
+      expect(
+        __setSessionValidationStatus(getSessionSnapshot().sessionEpoch, 'unavailable')
+      ).toBe(true)
+    })
+    expect(screen.getByText('请登录后查看凭证。')).toBeInTheDocument()
+    expect(mockPostMessage).toHaveBeenCalledTimes(1)
+
+    // Same-session reverify: workspace remounts with fresh validation incarnation
+    act(() => {
+      expect(
+        __setSessionValidationStatus(getSessionSnapshot().sessionEpoch, 'verified')
+      ).toBe(true)
+    })
+    await loaded()
+
+    // Exactly one new message for fresh verified activation
+    expect(mockPostMessage).toHaveBeenCalledTimes(2)
+  })
+
+  it('channel ABA (geminicli -> antigravity -> geminicli) emits ready once per fresh GCLI activation', async () => {
+    act(() => {
+      navigatePanel('credentials', 'geminicli')
+    })
+    setSessionToken('synthetic-aba-token')
+
+    setup(1, undefined, undefined, 'geminicli')
+    await loaded()
+    expect(mockPostMessage).toHaveBeenCalledTimes(1)
+
+    // Switch channel to Antigravity
+    act(() => {
+      navigatePanel('credentials', 'antigravity')
+    })
+    await screen.findByRole('heading', { level: 1, name: 'Antigravity 凭证' })
+    expect(mockPostMessage).toHaveBeenCalledTimes(1) // No new message
+
+    // Switch channel back to Gemini CLI (channel ABA)
+    act(() => {
+      navigatePanel('credentials', 'geminicli')
+    })
+    await screen.findByRole('heading', { level: 1, name: 'Gemini CLI 凭证' })
+    expect(mockPostMessage).toHaveBeenCalledTimes(2) // Fresh activation emits once
   })
 })

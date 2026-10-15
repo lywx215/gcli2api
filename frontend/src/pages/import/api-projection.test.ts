@@ -1517,6 +1517,48 @@ describe('Regression Group 3: Own, null, malformed, prototype and secret canarie
   })
 
   it('strips secret canaries from receipt and leaves only explicitly permitted fields', () => {
+    const cleanSuccessRow = {
+      status: 'success',
+      filename: 'secure.json',
+      project_id: 'valid-project',
+      subscription_tier: 'tier-valid',
+      refresh_token: 'CANARY_REFRESH_TOKEN_DO_NOT_LEAK',
+      client_secret: 'CANARY_CLIENT_SECRET_DO_NOT_LEAK',
+      access_token: 'CANARY_ACCESS_TOKEN_DO_NOT_LEAK',
+      token_preview: 'CANARY_TOKEN_PREVIEW_DO_NOT_LEAK',
+      callback_url: 'https://oauth.example.invalid/callback',
+      file_path: '/etc/credentials/secret.json',
+      message: 'CANARY_RAW_MESSAGE',
+      detail: 'CANARY_RAW_DETAIL',
+      payload: { leak: 'CANARY_PAYLOAD' },
+      arbitrary_extra_property: { secret: true },
+    }
+
+    const result = normalizeResult({ results: [cleanSuccessRow] })
+
+    expect(result.outcome).toBe('success')
+    expect(result.items[0].status).toBe('success')
+    expect(result.items[0].receipt).toEqual({
+      project_id: 'valid-project',
+      subscription_tier: 'tier-valid',
+    })
+    expect(Object.keys(result.items[0].receipt!).sort()).toEqual(['project_id', 'subscription_tier'].sort())
+    expect(result.confirmedFilenames).toEqual(['secure.json'])
+
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain('CANARY_REFRESH_TOKEN_DO_NOT_LEAK')
+    expect(serialized).not.toContain('CANARY_CLIENT_SECRET_DO_NOT_LEAK')
+    expect(serialized).not.toContain('CANARY_ACCESS_TOKEN_DO_NOT_LEAK')
+    expect(serialized).not.toContain('CANARY_TOKEN_PREVIEW_DO_NOT_LEAK')
+    expect(serialized).not.toContain('https://oauth.example.invalid/callback')
+    expect(serialized).not.toContain('/etc/credentials/secret.json')
+    expect(serialized).not.toContain('CANARY_RAW_MESSAGE')
+    expect(serialized).not.toContain('CANARY_RAW_DETAIL')
+    expect(serialized).not.toContain('CANARY_PAYLOAD')
+    expect(serialized).not.toContain('arbitrary_extra_property')
+  })
+
+  it('contradictory success-with-error row is treated as unknown without leaking receipt or canaries', () => {
     const poisonedRow = {
       status: 'success',
       filename: 'secure.json',
@@ -1538,12 +1580,10 @@ describe('Regression Group 3: Own, null, malformed, prototype and secret canarie
 
     const result = normalizeResult({ results: [poisonedRow] })
 
-    expect(result.outcome).toBe('success')
-    expect(result.items[0].receipt).toEqual({
-      project_id: 'valid-project',
-      subscription_tier: 'tier-valid',
-    })
-    expect(Object.keys(result.items[0].receipt!).sort()).toEqual(['project_id', 'subscription_tier'].sort())
+    expect(result.outcome).toBe('unknown')
+    expect(result.items[0].status).toBe('unknown')
+    expect(result.items[0].receipt).toBeUndefined()
+    expect(result.confirmedFilenames).toBeUndefined()
 
     const serialized = JSON.stringify(result)
     expect(serialized).not.toContain('CANARY_REFRESH_TOKEN_DO_NOT_LEAK')

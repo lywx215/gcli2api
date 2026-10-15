@@ -5,7 +5,7 @@
   "scope": "Correct two frozen config-save descriptions for the currently authorized legacy panel restoration. Existing implementation and legacy acknowledgment behavior are unchanged; cancelled MGMT remains cancelled.",
   "source_artifact": {
     "relative_path": "docs/ui-redesign/P2_BACKEND_CONTRACT_EVIDENCE.json",
-    "public_snapshot_path": "external-evidence/full-parity-execution/P2_BACKEND_CONTRACT_EVIDENCE.json",
+    "public_snapshot_path": "C:/Users/lywx2/.codex/visualizations/2026/10/13/01a132fa-9639-7c50-a301-b42ba28f74ee/full-parity-execution/P2_BACKEND_CONTRACT_EVIDENCE.json",
     "public_snapshot_sha256": "f785e54bbad4f0aa6496ea108d297d9256b50bb31979c4da5d877675b18962b7",
     "original_modified": false
   },
@@ -44,7 +44,7 @@
     "src/panel/config_routes.py": "6f697bd754035923d2c97caaef02a7ddbae06f9032c2da9d421292618f9217ce"
   },
   "prior_ack_assessment": {
-    "path": "external-evidence/full-parity-execution/P2_CONFIG_WRITE_ACK_ASSESSMENT.md",
+    "path": "C:/Users/lywx2/.codex/visualizations/2026/10/13/01a132fa-9639-7c50-a301-b42ba28f74ee/full-parity-execution/P2_CONFIG_WRITE_ACK_ASSESSMENT.md",
     "sha256": "2e0ebea068bd59a7cd88f169c5296764c9aad81d697a23b88f6cba71393422ed",
     "synthetic_test_files": [
       "test_panel_safe_config.py",

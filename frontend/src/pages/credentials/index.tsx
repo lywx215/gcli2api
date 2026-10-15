@@ -7,11 +7,14 @@ import {
   subscribeSessionValidation,
 } from '@/auth/session'
 import { usePanelChannel } from '@/app/channels'
+import { ConsoleHandshake } from '@/app/ConsoleHandshake'
 import {
   isPanelScopeCurrent,
   type PanelMode,
   type PanelScope,
 } from '@/domain/panel'
+
+export const supportedPanelModes: readonly PanelMode[] = Object.freeze(['antigravity', 'geminicli'] as const)
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -417,6 +420,7 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
       aria-label={mode === 'geminicli' ? 'Gemini CLI 凭证' : 'Antigravity 凭证'}
       aria-busy={busy || c.loading}
     >
+      <ConsoleHandshake active={mode === 'geminicli'} />
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 ref={listTitle} tabIndex={-1} className="text-2xl font-semibold">

@@ -16,15 +16,15 @@ import { PanelChannelProvider, usePanelChannel } from "./channels";
 import { LoadBoundary } from "./LoadBoundary";
 import { useRoute, type RouteId } from "./routes";
 
-type OverviewModule = {
+type PageModule = {
   default: ComponentType<any>;
   supportedPanelModes?: unknown;
 };
 
-let overviewModulePromise: Promise<OverviewModule> | null = null;
-let resolvedOverviewModule: OverviewModule | null = null;
+let overviewModulePromise: Promise<PageModule> | null = null;
+let resolvedOverviewModule: PageModule | null = null;
 
-function loadOverview(): Promise<OverviewModule> {
+function loadOverview(): Promise<PageModule> {
   if (!overviewModulePromise) {
     overviewModulePromise = import("@/pages/overview")
       .then(mod => {
@@ -40,9 +40,28 @@ function loadOverview(): Promise<OverviewModule> {
   return overviewModulePromise;
 }
 
+let credentialsModulePromise: Promise<PageModule> | null = null;
+let resolvedCredentialsModule: PageModule | null = null;
+
+function loadCredentials(): Promise<PageModule> {
+  if (!credentialsModulePromise) {
+    credentialsModulePromise = import("@/pages/credentials")
+      .then(mod => {
+        resolvedCredentialsModule = mod;
+        return mod;
+      })
+      .catch(err => {
+        credentialsModulePromise = null;
+        resolvedCredentialsModule = null;
+        throw err;
+      });
+  }
+  return credentialsModulePromise;
+}
+
 const pages = {
   overview: lazy(loadOverview),
-  credentials: lazy(() => import("@/pages/credentials")),
+  credentials: lazy(loadCredentials),
   import: lazy(() => import("@/pages/import")),
   settings: lazy(() => import("@/pages/settings")),
   logs: lazy(() => import("@/pages/logs")),
@@ -59,7 +78,7 @@ function isWellFormedPanelModeArray(value: unknown): value is readonly PanelMode
   return Array.isArray(value) && value.every(isPanelMode);
 }
 
-function checkOverviewSupport(mod: unknown, mode: PanelMode): boolean {
+function checkModuleSupport(mod: unknown, mode: PanelMode): boolean {
   if (mode === "antigravity") {
     return true;
   }
@@ -143,6 +162,12 @@ function SessionContent() {
     error?: unknown;
   } | null>(null);
 
+  const [credentialsDiscovery, setCredentialsDiscovery] = useState<{
+    ownerKey: string;
+    status: "loading" | "supported" | "unsupported" | "error";
+    error?: unknown;
+  } | null>(null);
+
   useEffect(() => {
     if (!authenticated || route !== "overview") {
       return;
@@ -163,7 +188,7 @@ function SessionContent() {
           if (currentActiveKey !== activationOwnerKey) {
             return prev;
           }
-          const supported = checkOverviewSupport(mod, mode);
+          const supported = checkModuleSupport(mod, mode);
           return {
             ownerKey: activationOwnerKey,
             status: supported ? "supported" : "unsupported",
@@ -173,6 +198,53 @@ function SessionContent() {
       .catch(err => {
         if (cancelled) return;
         setOverviewDiscovery(prev => {
+          const currentActiveKey = `${route}:${mode}:${sessionEpoch}`;
+          if (currentActiveKey !== activationOwnerKey) {
+            return prev;
+          }
+          return {
+            ownerKey: activationOwnerKey,
+            status: "error",
+            error: err,
+          };
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authenticated, route, mode, sessionEpoch]);
+
+  useEffect(() => {
+    if (!authenticated || route !== "credentials") {
+      return;
+    }
+
+    const activationOwnerKey = `${route}:${mode}:${sessionEpoch}`;
+
+    if (resolvedCredentialsModule) {
+      return;
+    }
+
+    let cancelled = false;
+    loadCredentials()
+      .then(mod => {
+        if (cancelled) return;
+        setCredentialsDiscovery(prev => {
+          const currentActiveKey = `${route}:${mode}:${sessionEpoch}`;
+          if (currentActiveKey !== activationOwnerKey) {
+            return prev;
+          }
+          const supported = checkModuleSupport(mod, mode);
+          return {
+            ownerKey: activationOwnerKey,
+            status: supported ? "supported" : "unsupported",
+          };
+        });
+      })
+      .catch(err => {
+        if (cancelled) return;
+        setCredentialsDiscovery(prev => {
           const currentActiveKey = `${route}:${mode}:${sessionEpoch}`;
           if (currentActiveKey !== activationOwnerKey) {
             return prev;
@@ -200,7 +272,27 @@ function SessionContent() {
       ) {
         content = authenticated ? <DiscoveryError error={overviewDiscovery.error} /> : null;
       } else if (resolvedOverviewModule !== null) {
-        if (checkOverviewSupport(resolvedOverviewModule, "geminicli")) {
+        if (checkModuleSupport(resolvedOverviewModule, "geminicli")) {
+          content = authenticated ? (
+            <Suspense fallback={PAGE_LOADING_FALLBACK}>
+              {Page && <Page />}
+            </Suspense>
+          ) : null;
+        } else {
+          content = <GcliUnsupportedPlaceholder />;
+        }
+      } else {
+        content = authenticated ? PAGE_LOADING_FALLBACK : null;
+      }
+    } else if (activeRoute === "credentials") {
+      if (
+        credentialsDiscovery !== null &&
+        credentialsDiscovery.ownerKey === boundaryKey &&
+        credentialsDiscovery.status === "error"
+      ) {
+        content = authenticated ? <DiscoveryError error={credentialsDiscovery.error} /> : null;
+      } else if (resolvedCredentialsModule !== null) {
+        if (checkModuleSupport(resolvedCredentialsModule, "geminicli")) {
           content = authenticated ? (
             <Suspense fallback={PAGE_LOADING_FALLBACK}>
               {Page && <Page />}

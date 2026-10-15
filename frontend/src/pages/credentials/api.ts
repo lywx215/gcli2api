@@ -353,48 +353,92 @@ export function createCredentialApi(mode: PanelMode, ownerScope?: PanelScope) {
           throw new Error('刷新邮箱响应格式无效')
         }
 
-        let results: RefreshEmailResultItem[] = []
-        if ('results' in d) {
-          if (!hasOwn('results') || !Array.isArray(d.results)) {
+        if (!hasOwn('results') || !Array.isArray(d.results)) {
+          throw new Error('刷新邮箱响应格式无效')
+        }
+
+        if (d.results.length !== totalCount) {
+          throw new Error('刷新邮箱响应格式无效')
+        }
+
+        let actualSuccessCount = 0
+        let actualSkippedCount = 0
+        let actualFailedCount = 0
+        const results: RefreshEmailResultItem[] = []
+
+        for (const item of d.results) {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) {
             throw new Error('刷新邮箱响应格式无效')
           }
-          results = d.results.map(item => {
-            if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          const itemObj = item as Record<string, unknown>
+          const itemHasOwn = (k: string) => Object.prototype.hasOwnProperty.call(itemObj, k)
+          if (
+            !itemHasOwn('filename') ||
+            typeof itemObj.filename !== 'string' ||
+            itemObj.filename.length === 0
+          ) {
+            throw new Error('刷新邮箱响应格式无效')
+          }
+          if (
+            !itemHasOwn('success') ||
+            typeof itemObj.success !== 'boolean'
+          ) {
+            throw new Error('刷新邮箱响应格式无效')
+          }
+
+          let itemSkipped = false
+          if ('skipped' in itemObj) {
+            if (!itemHasOwn('skipped') || typeof itemObj.skipped !== 'boolean') {
               throw new Error('刷新邮箱响应格式无效')
             }
-            const itemObj = item as Record<string, unknown>
-            const itemHasOwn = (k: string) => Object.prototype.hasOwnProperty.call(itemObj, k)
-            if (
-              !itemHasOwn('filename') ||
-              typeof itemObj.filename !== 'string' ||
-              itemObj.filename.length === 0
-            ) {
+            itemSkipped = itemObj.skipped
+          }
+
+          if (!itemObj.success && itemSkipped) {
+            throw new Error('刷新邮箱响应格式无效')
+          }
+
+          if (!itemHasOwn('user_email')) {
+            throw new Error('刷新邮箱响应格式无效')
+          }
+
+          if (itemObj.success) {
+            if (typeof itemObj.user_email !== 'string' || itemObj.user_email.length === 0) {
               throw new Error('刷新邮箱响应格式无效')
             }
-            if (
-              !itemHasOwn('success') ||
-              typeof itemObj.success !== 'boolean'
-            ) {
+          } else {
+            if (itemObj.user_email !== null) {
               throw new Error('刷新邮箱响应格式无效')
             }
-            const itemSkipped = itemHasOwn('skipped')
-              ? Boolean(itemObj.skipped)
-              : false
-            const itemEmail =
-              itemHasOwn('user_email') && typeof itemObj.user_email === 'string'
-                ? itemObj.user_email
-                : null
-            return {
-              filename: itemObj.filename,
-              user_email: itemEmail,
-              email: itemEmail,
-              success: itemObj.success,
-              skipped: itemSkipped,
-            }
+          }
+
+          if (itemSkipped) {
+            actualSkippedCount++
+          } else if (itemObj.success) {
+            actualSuccessCount++
+          } else {
+            actualFailedCount++
+          }
+
+          const itemEmail = itemObj.user_email as string | null
+          results.push({
+            filename: itemObj.filename,
+            user_email: itemEmail,
+            email: itemEmail,
+            success: itemObj.success,
+            skipped: itemSkipped,
           })
         }
 
         const failed = totalCount - successCount - skippedCount
+
+        if (
+          actualSuccessCount !== successCount ||
+          actualSkippedCount !== skippedCount ||
+          actualFailedCount !== failed
+        ) {
+          throw new Error('刷新邮箱响应格式无效')
+        }
 
         const projected: RefreshAllEmailsResult = {
           success_count: successCount,
@@ -524,16 +568,13 @@ export function createCredentialApi(mode: PanelMode, ownerScope?: PanelScope) {
           throw new Error('凭证去重响应格式无效')
         }
 
-        let errorCount = 0
-        if ('delete_errors' in d) {
-          if (!hasOwn('delete_errors') || !Array.isArray(d.delete_errors)) {
-            throw new Error('凭证去重响应格式无效')
-          }
-          if (d.delete_errors.some(e => typeof e !== 'string')) {
-            throw new Error('凭证去重响应格式无效')
-          }
-          errorCount = d.delete_errors.length
+        if (!hasOwn('delete_errors') || !Array.isArray(d.delete_errors)) {
+          throw new Error('凭证去重响应格式无效')
         }
+        if (d.delete_errors.some(e => typeof e !== 'string')) {
+          throw new Error('凭证去重响应格式无效')
+        }
+        const errorCount = d.delete_errors.length
 
         const outcome: 'success' | 'partial' | 'failed' =
           errorCount > 0

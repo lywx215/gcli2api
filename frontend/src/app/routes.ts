@@ -20,7 +20,11 @@ export const routes = [
 export type RouteId = (typeof routes)[number]["id"];
 
 export function routeFromHash(hash: string): RouteId {
-  const id = hash.replace(/^#\/?/, "").split("?")[0];
+  const raw = hash.replace(/^#\/?/, "").split("?")[0];
+  const id = raw.endsWith("/") ? raw.slice(0, -1) : raw;
+  if (id === "manage" || id === "antigravity-manage") {
+    return "credentials";
+  }
   return routes.find(route => route.id === id)?.id ?? "overview";
 }
 
@@ -65,19 +69,30 @@ function parseFragment(hash: string): { route: RouteId; explicitChannel?: PanelM
   const pathPart = queryIndex === -1 ? raw : raw.slice(0, queryIndex);
   const queryPart = queryIndex === -1 ? "" : raw.slice(queryIndex + 1);
 
-  const routeCandidate = pathPart.replace(/^\/+/, "");
-  const route = routes.find(r => r.id === routeCandidate)?.id ?? "overview";
+  const cleaned = pathPart.replace(/^\/+/, "");
+  const routeCandidate = cleaned.endsWith("/") ? cleaned.slice(0, -1) : cleaned;
 
+  let route: RouteId;
   let explicitChannel: PanelMode | undefined = undefined;
-  if (queryPart) {
-    const params = new URLSearchParams(queryPart);
-    if (params.has("channel")) {
-      const values = params.getAll("channel");
-      if (values.length === 1 && values[0] === "geminicli") {
-        explicitChannel = "geminicli";
-      } else {
-        // Exact "antigravity", or duplicate, or invalid all select safe "antigravity"
-        explicitChannel = "antigravity";
+
+  if (routeCandidate === "manage") {
+    route = "credentials";
+    explicitChannel = "geminicli";
+  } else if (routeCandidate === "antigravity-manage") {
+    route = "credentials";
+    explicitChannel = "antigravity";
+  } else {
+    route = routes.find(r => r.id === routeCandidate)?.id ?? "overview";
+    if (queryPart) {
+      const params = new URLSearchParams(queryPart);
+      if (params.has("channel")) {
+        const values = params.getAll("channel");
+        if (values.length === 1 && values[0] === "geminicli") {
+          explicitChannel = "geminicli";
+        } else {
+          // Exact "antigravity", or duplicate, or invalid all select safe "antigravity"
+          explicitChannel = "antigravity";
+        }
       }
     }
   }

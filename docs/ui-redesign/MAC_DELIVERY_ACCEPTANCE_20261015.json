@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "purpose": "Receive only Mac implementation commits; official Antigravity CLI owns required credentials Page/Detail binding, preserve latest Windows code.",
+  "implementation_commits": [
+    "db3d7667dd6e75e17a03c5c4fce0c907da64fe33",
+    "6c82af1a582065cca8e39b500e16b87c7b069d2a"
+  ],
+  "files": [
+    {
+      "path": "frontend/src/pages/credentials/LegacyModelQuota.tsx",
+      "commit": "db3d7667dd6e75e17a03c5c4fce0c907da64fe33",
+      "sha256": "95185f7651b84e96ce7ae3304938e25ef60fa95a2a7a7ed678e9bad80d5fff23"
+    },
+    {
+      "path": "frontend/src/pages/credentials/LegacyModelQuota.test.tsx",
+      "commit": "db3d7667dd6e75e17a03c5c4fce0c907da64fe33",
+      "sha256": "6efd3fcb7acb437b59343d20842b91e8bd8215619202324d6fb619d270056c15"
+    },
+    {
+      "path": "frontend/src/pages/credentials/AgQuotaEvidence.tsx",
+      "commit": "6c82af1a582065cca8e39b500e16b87c7b069d2a",
+      "sha256": "f178a312148cd8d7fecc2f08c65c0523d7fec3b9d185593c0b05301556eea121"
+    },
+    {
+      "path": "frontend/src/pages/credentials/AgQuotaEvidence.test.tsx",
+      "commit": "6c82af1a582065cca8e39b500e16b87c7b069d2a",
+      "sha256": "2cba9ac3749158aac7ad452a46cd5dab31315069b721d070f873ce747ef229c6"
+    }
+  ],
+  "source_receive": {
+    "exact_four_files": true,
+    "existing_windows_files_overwritten": 0,
+    "head_and_index_preserved": true,
+    "PR_docs_not_imported": true
+  },
+  "reused_mac_validation": [
+    {
+      "pr": 38,
+      "url": "https://github.com/lywx215/gcli2api/pull/38",
+      "tests": "26/26",
+      "module_tests": 19,
+      "shared_ResultView_tests": 7
+    },
+    {
+      "pr": 39,
+      "url": "https://github.com/lywx215/gcli2api/pull/39",
+      "tests": "89/89",
+      "module_tests": 26,
+      "shared_advancedApi_tests": 63
+    }
+  ],
+  "mac_old_typecheck": "Only existing ImportFilePickerProps import diagnostic; Windows R190 already fixed it. Do not repeat Mac suites.",
+  "frozen_dependencies": {
+    "count": 25,
+    "matched_against_Mac_handoff": true,
+    "do_not_modify": true
+  },
+  "frontend_binding": {
+    "author": "official Antigravity CLI via existing shared hook",
+    "allowed_files": [
+      "frontend/src/pages/credentials/index.tsx",
+      "frontend/src/pages/credentials/CredentialDetail.tsx",
+      "frontend/src/pages/credentials/CredentialBatchPanel.test.tsx"
+    ],
+    "Mac_source_files_immutable": true,
+    "LegacyModelQuota": "Keep canonical stable scope/isCurrent identity; models from actual manual result; explicit actual target test; expiry saved-state-only readback.",
+    "AgQuotaEvidence": "Stable receipt created only at actual settle, captures exact validation/scope/result; saved display-only; never restamp old response or upgrade it after owner change.",
+    "real_5H_weekly_summary": "Keep independent existing summary; no fabricated conversion from old model quota.",
+    "one_line_type_exception": {
+      "path": "frontend/src/pages/credentials/CredentialBatchPanel.test.tsx",
+      "only_allowed_change": "Delete the existing unused import React from 'react'; line3. No other test/body/assertion/source change and no test run.",
+      "reason": "Coordinator current typecheck exit2 has this sole unused React diagnostic; necessary Windows final build correction. Not a Mac ImportPage readonly dependency."
+    },
+    "windows_ready_leaf_binding": [
+      "FilesDialog",
+      "EmailMaintenance",
+      "SavedErrorDetails"
+    ],
+    "batch_exclusion": {
+      "request": "R206",
+      "actual_result": "failed CLI ERROR; no outputs; no delivered correction",
+      "known_source_defects_unfixed": [
+        "stale admission handler",
+        "old Stop forwarding"
+      ],
+      "mount_CredentialBatchPanel": false,
+      "modify_CredentialBatchPanel_source": false,
+      "required_preservation": "Keep existing parent batchQuota implementation/state/controls/Stop and existing bulk actions. The test import deletion does not accept the Batch leaf."
+    }
+  },
+  "checks": {
+    "required": [
+      "necessary frontend typecheck",
+      "one final production build",
+      "six independent page artifacts"
+    ],
+    "page_confirmation": "human confirmation pending; preview is not accepted",
+    "new_test_projects_or_full_suites": false,
+    "Docker": "skipped",
+    "deployment": false,
+    "repeat_Mac_or_runner_suites": false,
+    "baseline_type_exception": "Only CredentialBatchPanel.test.tsx:3 unused React remains per coordinator. Publicly declared Windows-owned exception may accompany the independent Mac ImportPage baseline; do not claim typecheck PASS until actual necessary command succeeds."
+  },
+  "backend": "No new backend change required by these two modules; preserve existing legacy routes and runtime semantics. No credentials/database/authentication-state transfer."
+}
