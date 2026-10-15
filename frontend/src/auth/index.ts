@@ -1,2 +1,13 @@
 export { AuthProvider, useAuth } from "./AuthProvider";
-export { registerSessionCleanup } from "./session";
+export {
+  registerSessionCleanup,
+  getSessionSnapshot,
+  subscribeSession,
+  getSessionValidationSnapshot,
+  subscribeSessionValidation,
+  type SessionSnapshot,
+  type SessionValidationSnapshot,
+  type SessionValidationStatus,
+  type SessionTokenOptions,
+} from "./session";
+

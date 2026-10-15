@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, createServiceUrl, getServiceBase, requestBlob, requestJson } from "@/api/client";
 import { getSessionSnapshot, registerSessionCleanup, setSessionToken } from "@/auth/session";
+import {
+  capturePanelScope,
+  __commitPanelChannel,
+  __invalidatePanelChannel,
+  type PanelScope,
+} from "@/domain/panel";
 const meta = (value: string) => { document.querySelector<HTMLMetaElement>('meta[name="gcli-service-base"]')!.content = value; };
 const deferred = () => { let resolve!: (value: Response) => void; const promise = new Promise<Response>(done => { resolve = done; }); return { resolve, promise }; };
 
@@ -157,4 +163,230 @@ it("transmits percent and Unicode filenames without a second encoding or decodin
   expect(url.searchParams.get("mode")).toBe("antigravity");
   expect(await blob.text()).toBe("synthetic download");
   expect(fetch).toHaveBeenCalledOnce();
+});
+
+describe("panel scope and channel fencing", () => {
+  it("supports valid AG and GCLI scopes and guarantees captured scope immutability", async () => {
+    setSessionToken("synthetic-session");
+    __commitPanelChannel("antigravity");
+    const agScope = capturePanelScope(getSessionSnapshot().sessionEpoch);
+    vi.mocked(fetch).mockResolvedValue(Response.json({ mode: "ag" }));
+    const agResult = await requestJson("creds/status", { scope: agScope });
+    expect(agResult).toEqual({ mode: "ag" });
+
+    __commitPanelChannel("geminicli");
+    const gcliScope = capturePanelScope(getSessionSnapshot().sessionEpoch);
+    vi.mocked(fetch).mockResolvedValue(Response.json({ mode: "gcli" }));
+    const gcliResult = await requestJson("creds/status", { scope: gcliScope });
+    expect(gcliResult).toEqual({ mode: "gcli" });
+
+    // Immutability: caller mutating the passed scope object after request creation does not retarget request
+    const mutableScope = { ...capturePanelScope(getSessionSnapshot().sessionEpoch) };
+    const pending = deferred();
+    vi.mocked(fetch).mockReturnValue(pending.promise);
+    const promise = requestJson("creds/status", { scope: mutableScope });
+    (mutableScope as { mode: string }).mode = "antigravity";
+    (mutableScope as { channelEpoch: number }).channelEpoch = 999;
+    pending.resolve(Response.json({ ok: true }));
+    await expect(promise).resolves.toEqual({ ok: true });
+  });
+
+  it("rejects stale scope before send with AbortError and zero transport", async () => {
+    setSessionToken("synthetic-session");
+    __commitPanelChannel("antigravity");
+    const staleScope: PanelScope = {
+      mode: "antigravity",
+      channelEpoch: 999,
+      sessionEpoch: getSessionSnapshot().sessionEpoch,
+    };
+    await expect(requestJson("creds/status", { scope: staleScope })).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("aborts in-flight scoped request when channel switch occurs while pending", async () => {
+    setSessionToken("synthetic-session");
+    __commitPanelChannel("antigravity");
+    const scope = capturePanelScope(getSessionSnapshot().sessionEpoch);
+    const pending = deferred();
+    vi.mocked(fetch).mockReturnValue(pending.promise);
+    const promise = requestJson("creds/status", { scope });
+    __commitPanelChannel("geminicli");
+    pending.resolve(Response.json({ ok: true }));
+    await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("fences delayed response headers when channel changes", async () => {
+    setSessionToken("synthetic-session");
+    __commitPanelChannel("antigravity");
+    const scope = capturePanelScope(getSessionSnapshot().sessionEpoch);
+    const pending = deferred();
+    vi.mocked(fetch).mockReturnValue(pending.promise);
+    const promise = requestJson("creds/status", { scope });
+    __commitPanelChannel("geminicli");
+    pending.resolve(Response.json({ items: [] }));
+    await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("fences delayed success body when channel changes", async () => {
+    setSessionToken("synthetic-session");
+    __commitPanelChannel("antigravity");
+    const scope = capturePanelScope(getSessionSnapshot().sessionEpoch);
+    const response = new Response();
+    let finishBody!: (value: unknown) => void;
+    response.json = () => new Promise(resolve => { finishBody = resolve; });
+    vi.mocked(fetch).mockResolvedValue(response);
+    const promise = requestJson("creds/status", { scope });
+    await vi.waitFor(() => expect(finishBody).toBeTypeOf("function"));
+    __commitPanelChannel("geminicli");
+    finishBody({ ok: true });
+    await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("fences delayed error body when channel changes and preserves session", async () => {
+    setSessionToken("preserve-token");
+    __commitPanelChannel("antigravity");
+    const scope = capturePanelScope(getSessionSnapshot().sessionEpoch);
+    const response = new Response(null, { status: 401 });
+    let finishText!: (value: string) => void;
+    response.text = () => new Promise(resolve => { finishText = resolve; });
+    vi.mocked(fetch).mockResolvedValue(response);
+    const promise = requestJson("creds/status", { scope });
+    await vi.waitFor(() => expect(finishText).toBeTypeOf("function"));
+    __commitPanelChannel("geminicli");
+    finishText(JSON.stringify({ detail: "密码错误" }));
+    await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+    expect(getSessionSnapshot().token).toBe("preserve-token");
+  });
+
+  it("fences requests when transport ignores AbortSignal", async () => {
+    setSessionToken("synthetic-session");
+    __commitPanelChannel("antigravity");
+    const scope = capturePanelScope(getSessionSnapshot().sessionEpoch);
+    const controller = new AbortController();
+    const pending = deferred();
+    vi.mocked(fetch).mockReturnValue(pending.promise);
+    const promise = requestJson("creds/status", { scope, signal: controller.signal });
+    controller.abort();
+    pending.resolve(Response.json({ ignoredAbort: true }));
+    await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("prevents stale old-channel 401 payload from logging out current session on new channel", async () => {
+    setSessionToken("current-valid-token");
+    __commitPanelChannel("antigravity");
+    const oldChannelScope = capturePanelScope(getSessionSnapshot().sessionEpoch);
+    const pending = deferred();
+    vi.mocked(fetch).mockReturnValue(pending.promise);
+    const request = requestJson("creds/status", { scope: oldChannelScope });
+    __commitPanelChannel("geminicli");
+    pending.resolve(Response.json({ detail: "密码错误" }, { status: 401 }));
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+    expect(getSessionSnapshot().token).toBe("current-valid-token");
+  });
+
+  it("prevents stale old-session 401 payload from erasing a newer login", async () => {
+    setSessionToken("first-login-token");
+    const pending = deferred();
+    vi.mocked(fetch).mockReturnValue(pending.promise);
+    const request = requestJson("creds/status");
+    setSessionToken("second-login-token");
+    pending.resolve(Response.json({ detail: "密码错误" }, { status: 401 }));
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+    expect(getSessionSnapshot().token).toBe("second-login-token");
+  });
+
+  it("allows unscoped requests to survive channel switch", async () => {
+    setSessionToken("stable-session");
+    __commitPanelChannel("antigravity");
+    const pending = deferred();
+    vi.mocked(fetch).mockReturnValue(pending.promise);
+    const request = requestJson("version/info");
+    __commitPanelChannel("geminicli");
+    pending.resolve(Response.json({ version: "1.0.0" }));
+    expect(await request).toEqual({ version: "1.0.0" });
+  });
+
+  it("rejects query, JSON body and FormData mode conflicts before transport without rewrites", async () => {
+    setSessionToken("synthetic-session");
+    __commitPanelChannel("antigravity");
+    const scope = capturePanelScope(getSessionSnapshot().sessionEpoch);
+
+    // Query mismatch
+    await expect(requestJson("creds/status", { scope, query: { mode: "geminicli" } })).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+
+    // JSON body mismatch
+    await expect(requestJson("creds/action", { scope, method: "POST", body: { mode: "geminicli" } })).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+
+    // FormData mode mismatch
+    const fdMismatch = new FormData();
+    fdMismatch.append("mode", "geminicli");
+    await expect(requestJson("creds/upload", { scope, method: "POST", body: fdMismatch })).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+
+    // FormData duplicate-conflicting
+    const fdDuplicate = new FormData();
+    fdDuplicate.append("mode", "antigravity");
+    fdDuplicate.append("mode", "geminicli");
+    await expect(requestJson("creds/upload", { scope, method: "POST", body: fdDuplicate })).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+
+    // FormData non-string
+    const fdNonString = new FormData();
+    fdNonString.append("mode", new Blob(["antigravity"]));
+    await expect(requestJson("creds/upload", { scope, method: "POST", body: fdNonString })).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+
+    // Undefined optional query/body fields remain omitted and pass
+    vi.mocked(fetch).mockImplementation(async () => Response.json({ ok: true }));
+    await expect(requestJson("creds/status", { scope, query: { mode: undefined } })).resolves.toEqual({ ok: true });
+    await expect(requestJson("creds/action", { scope, method: "POST", body: { mode: undefined, action: "test" } })).resolves.toEqual({ ok: true });
+
+    // Matching query passes
+    await expect(requestJson("creds/status", { scope, query: { mode: "antigravity" } })).resolves.toEqual({ ok: true });
+
+    // Matching JSON body passes
+    await expect(requestJson("creds/action", { scope, method: "POST", body: { mode: "antigravity" } })).resolves.toEqual({ ok: true });
+
+    // Matching FormData mode passes and preserves FormData content and boundary
+    vi.mocked(fetch).mockClear();
+    vi.mocked(fetch).mockImplementation(async () => Response.json({ uploaded: true }));
+    const fdValid = new FormData();
+    fdValid.append("mode", "antigravity");
+    fdValid.append("file", new Blob(["sample"]), "sample.txt");
+    await expect(requestJson("creds/upload", { scope, method: "POST", body: fdValid })).resolves.toEqual({ uploaded: true });
+    const init = vi.mocked(fetch).mock.calls[0][1];
+    expect(init?.body).toBe(fdValid);
+    expect(new Headers(init?.headers).has("Content-Type")).toBe(false);
+  });
+});
+
+describe("exact local authentication matcher", () => {
+  it.each([401, 403])("invalidates session on exact fourth string panel_authentication_required with %s", async status => {
+    setSessionToken("target-token");
+    vi.mocked(fetch).mockResolvedValue(Response.json({ detail: "panel_authentication_required" }, { status }));
+    await expect(requestJson("creds/status")).rejects.toMatchObject({ status });
+    expect(getSessionSnapshot().token).toBeNull();
+  });
+
+  it("never invalidates session on extra-field, business or arbitrary detail payloads", async () => {
+    setSessionToken("protected-token");
+    const epoch = getSessionSnapshot().sessionEpoch;
+
+    // Extra field alongside exact panel string
+    vi.mocked(fetch).mockResolvedValue(Response.json({ detail: "panel_authentication_required", extra: "forbidden" }, { status: 401 }));
+    await expect(requestJson("creds/status")).rejects.toMatchObject({ status: 401 });
+    expect(getSessionSnapshot()).toEqual({ token: "protected-token", sessionEpoch: epoch });
+
+    // Business failure object
+    vi.mocked(fetch).mockResolvedValue(Response.json({ filename: "key.json", status_code: 401, step: "validate", error: "denied" }, { status: 401 }));
+    await expect(requestJson("creds/status")).rejects.toMatchObject({ status: 401 });
+    expect(getSessionSnapshot()).toEqual({ token: "protected-token", sessionEpoch: epoch });
+
+    // Arbitrary detail
+    vi.mocked(fetch).mockResolvedValue(Response.json({ detail: "unrecognized detail string" }, { status: 401 }));
+    await expect(requestJson("creds/status")).rejects.toMatchObject({ status: 401 });
+    expect(getSessionSnapshot()).toEqual({ token: "protected-token", sessionEpoch: epoch });
+  });
 });

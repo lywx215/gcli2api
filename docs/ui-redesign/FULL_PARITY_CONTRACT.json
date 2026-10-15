@@ -1,0 +1,76 @@
+{
+  "base_sha": "239bc48aab1d4db4f80e1197eb94e5ee7ae2c691",
+  "channels": [
+    "antigravity",
+    "geminicli"
+  ],
+  "quota_summary": {
+    "method": "GET",
+    "path": "creds/quota-summary/{filename}",
+    "query": {
+      "mode": "antigravity|geminicli"
+    },
+    "capabilities": {
+      "antigravity": "antigravity.quota.summary",
+      "geminicli": "geminicli.quota.summary"
+    },
+    "fields": {
+      "status": "available|partial|unsupported|unknown|error",
+      "source": "antigravity_quota_summary|geminicli_retrieve_user_quota",
+      "captured_at": "ISO UTC|null",
+      "upstream_status": "integer|null",
+      "reason": "stable code|null",
+      "groups": [
+        {
+          "group_id": "string",
+          "display_name": "string",
+          "description": "string|null",
+          "buckets": [
+            {
+              "bucket_id": "string",
+              "display_name": "string",
+              "raw_window": "string|null",
+              "window": "5h|weekly|daily|monthly|unknown",
+              "remaining_fraction": "finite 0..1|null",
+              "reset_at": "ISO UTC|null"
+            }
+          ]
+        }
+      ]
+    },
+    "semantics": [
+      "Summary is display-only; it never settles cooldown, protection, access or usage statistics.",
+      "Panel authentication 401 is distinct from Google upstream_status 401.",
+      "Local missing credential is HTTP404 reason credential_not_found; unknown route is not the same.",
+      "403 is a permission error, not permanent unsupported capability.",
+      "Only explicit window metadata identifies 5h or weekly; never infer from resetTime or rolling168h.",
+      "Missing window or fraction is not zero and not full. Never duplicate one ratio into two windows.",
+      "Old quota/test/verify-project APIs remain independent. Do not call them automatically as fallback."
+    ]
+  },
+  "identity": "(mode, filename)",
+  "frontend_author": "Official Antigravity CLI only, through the existing shared hook.py dispatcher",
+  "backend_author": "Codex",
+  "sensitive_views": "Explicit confirmation every time; fetch legacy panel endpoint only after confirmation; clear on close/channel change/logout; no persistent cache.",
+  "reference": {
+    "repo": "router-for-me/Cli-Proxy-API-Management-Center",
+    "commit": "390718ecfec90b674fed474862e497522273e129"
+  },
+  "phases": [
+    "P0 contract",
+    "P1 quota visual sample and customer confirmation",
+    "P2 full native parity",
+    "P3 formal validation",
+    "P4 local delivery"
+  ],
+  "safe_config": {
+    "method": "GET",
+    "path": "config/get",
+    "query": {
+      "include_secrets": "boolean; default true for legacy"
+    },
+    "safe_false": "config excludes api_password,panel_password,password; top-level secret_fields={key:{configured:bool}}; no-store",
+    "reveal_true": "legacy unchanged; request only after per-open confirmation",
+    "frontend_binding": "pending Antigravity CLI"
+  }
+}

@@ -1,0 +1,72 @@
+name: UI module checks
+
+on:
+  pull_request:
+    branches: [codex/ui-parity-integration]
+    paths:
+      - frontend/**
+      - docs/ui-redesign/github/**
+      - review/shared-distribution/**
+      - scripts/check_ui_collaboration.py
+      - scripts/test_check_ui_collaboration.py
+      - .github/workflows/ui-module-checks.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-module-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      frontend_changed: ${{ steps.scope.outputs.frontend_changed }}
+      module_tests: ${{ steps.scope.outputs.module_tests }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify module ownership and frozen inputs
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BRANCH: ${{ github.head_ref }}
+        run: python scripts/check_ui_collaboration.py --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$PR_BRANCH"
+      - name: Check collaboration guardrails
+        run: python -m unittest discover -s scripts -p test_check_ui_collaboration.py
+
+  frontend:
+    needs: scope
+    if: needs.scope.outputs.frontend_changed == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.2'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Run related module regressions
+        if: needs.scope.outputs.module_tests == 'true'
+        env:
+          PR_BRANCH: ${{ github.head_ref }}
+        run: python ../scripts/check_ui_collaboration.py --branch "$PR_BRANCH" --run-module-tests

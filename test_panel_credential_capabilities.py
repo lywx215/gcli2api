@@ -158,15 +158,23 @@ async def test_batch_true_false_exception_and_partial_response_shape(panel, acti
     assert panel.clear.await_count == (successes if "credit" in action else 0)
 
 
-async def test_legacy_mode_does_not_gain_panel_capability_gate(panel):
+async def test_unknown_geminicli_legacy_requests_remain_compatible_with_additive_capabilities(panel):
     backend(panel, "unknown")
     response = await panel.client.get("/creds/status", params={"mode": "geminicli", "status_filter": "permanent_disabled", "remark_filter": "blue"})
-    assert response.status_code == 200 and "panel_capabilities" not in response.json()
-    assert "permanent_disabled" not in response.json()["items"][0]
-    panel.adapter.get_backend_info.reset_mock()
+    assert response.status_code == 200
+    data = response.json()
+    assert {"items", "total", "offset", "limit", "has_more", "stats"} <= data.keys()
+    assert data["mode"] == "geminicli"
+    assert data["items"][0]["filename"] == "synthetic.json"
+    assert data["items"][0]["disabled"] is True
+    assert data["items"][0]["permanent_disabled"] is True
+    assert "geminicli.quota.summary" in data["panel_capabilities"]
+    assert "geminicli.credentials.permanent_disabled" not in data["panel_capabilities"]
+    assert "geminicli.credentials.remark" not in data["panel_capabilities"]
     response = await panel.client.post("/creds/action", json={"filename": "synthetic.json", "action": "permanent_disable"})
     assert response.status_code == 200
-    panel.adapter.get_backend_info.assert_not_awaited()
+    panel.manager.update_credential_state.assert_awaited_once_with(
+        "synthetic.json", {"disabled": True, "permanent_disabled": True}, mode="geminicli")
 
 
 @pytest.mark.parametrize("engine", ["sqlite", "postgresql"])

@@ -1,0 +1,15 @@
+{
+  "scope": "Restore existing native UI parity004/046 only; cancelledMGMT009/010/012 remaincancelled; no manager/protocol/backend/capabilitychanges, externalcalls, privateDB orcredentials. Metadataonly.",
+  "004": {
+    "legacy": "front/common.js145-204 parses meta gcli-embed-policy; only authenticated active manage tab inside iframe emits exactly {type:gcli2api.console.ready,version:1,tab:manage}. No auth/config/businessdata. Exact origins canonicalhttps; ancestorOrigins[0]/referrer matching origin preferred, otherwise each exact allowlistedtarget; any_https uses * under serverCSP; disabled/malformed no message.",
+    "bootstrap": "src/panel/ui.py65-93 serves /ui/ with CSP fromactualpolicy and htmlescaped mode/origins metadata; missingbuild/placeholders returns503. frontend/index.html meta is passive, no sender. root.py oldroute equivalent. HTTP CSP remains backend-owned.",
+    "native_gap": "routes.ts routeFromHash andparseFragment do notrecognize manage, unknown=>overview; App.tsx194-217 stillGCLIcredentialsplaceholder. Component alone cannot mark004restored orsend readiness fromplaceholder/Suspense/error.",
+    "integration_contract": "Independent ConsoleHandshake({active:boolean}) underrealAuth/PanelProvider. active defaultsfalse, true only after actualcredentials content committed. Internally verify liveacceptedroute credentials+modegeminicli, realverified sessionidentity/tokenpresent, matchingCorechannel. Later acceptedGCLIPage+App/routesmountscope must add #manage alias through existingrouter before ready; no aliascode incomponent andno routeforcing."
+  },
+  "046": {
+    "backend": "config_routes.py230-240 returns security.embed_policy {source,locked,valid}; source environment/storage/default. Effective mode/origins are config.gcli_embed_mode/config.gcli_embed_allowed_origins; ENVsource lockedtrue. embed_policy.py98-123 invalid policy returns disabled,validfalse; valid disabled is distinct.",
+    "projection_gap": "readSafeConfig preserves security but settings/api.readSnapshot currently projects only node_management_token; Snapshot hasnoembedstatus. NativeSettingsTools already receives snapshot fromPage, so no index/hook modificationneeded.",
+    "projection": "Add optional readonly embedPolicy toSnapshot, ownproperties only source enumenvironment|storage|default elseunknown/absent, locked booleanelseunknown, valid booleanelseunknown. Do notcoerce missingvalidtrue ormissingsourcedefault. Dropunknown/rawfields. Safe ordinaryconfigGET remains include_secrets:false; confirmedpasswords path untouched.",
+    "render": "NativeSettingsTools readonly status fromsnapshot.embedPolicy insideexistingverifiedview. sourcefriendlylabel, validfalseexplicitfailclosed,validtrueexplicitvalid,missing/malformedunknown; lockstatus separateactualbool; neverinfer source/valid fromeditablemode/origins, draft, ENVkey ortoken. Noedit/transport/newsave/action; existingENVlocks/dirty/migration/reveal unchanged."
+  }
+}

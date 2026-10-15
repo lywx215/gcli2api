@@ -1,0 +1,9 @@
+{
+  "source": "Actual routes.ts exports inspected after request 38; this is a public interface contract, not replacement implementation.",
+  "route_ids": ["overview", "credentials", "import", "settings", "logs", "model-routing"],
+  "AcceptedPanelRouteSnapshot": "readonly route:RouteId; readonly mode:PanelMode; readonly navigationEpoch:number",
+  "RouteNavigation": "from:RouteId; to:RouteId; href:string; retry():void; optional fromMode?:PanelMode; optional toMode?:PanelMode",
+  "functions": ["routeFromHash(hash:string):RouteId", "panelRouteHref(route:RouteId,mode:PanelMode):string", "navigatePanel(route:RouteId,mode?:PanelMode):void", "getAcceptedPanelRouteSnapshot():AcceptedPanelRouteSnapshot", "subscribeAcceptedPanelRoute(listener:()=>void):()=>void", "registerRouteGuard(guard:(attempt:RouteNavigation)=>boolean):()=>void", "useRoute():RouteId"],
+  "mode": "PanelMode is antigravity|geminicli; actual panel/session sources remain read-only context.",
+  "split": "Production worker changes only idle URL reconciliation and preserves every public export/type. Test worker repairs only existing invalid type annotations, superseded retry-reference capture and missing focus subscription; it does not change behavior expectations or read counterpart source body. Root runs actual combined typecheck and old/new route suites after delivery. No stubs or fake stores."
+}

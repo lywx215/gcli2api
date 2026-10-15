@@ -1,0 +1,25 @@
+name: UI restoration module
+description: Queue a complete Windows or Mac module without starting an agent
+title: "[UI] "
+body:
+  - type: textarea
+    id: scope
+    attributes:
+      label: Module and execution host
+      description: Include base SHA, owner, allowed files, readonly dependencies and 2–5 ordered steps.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance and delivery
+      description: Observable behavior, targeted commands, dependencies, PR branch and known baseline failures.
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Execution boundary
+      options:
+        - label: Queue only; no automatic model runs, deployment, Docker, private credentials or database operations.
+          required: true

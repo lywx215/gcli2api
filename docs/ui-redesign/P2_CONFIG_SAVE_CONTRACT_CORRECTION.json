@@ -1,0 +1,77 @@
+{
+  "schema_version": "p2-config-save-contract-correction-1.0",
+  "date_local": "2026-10-14",
+  "kind": "independent_static_evidence_supplement",
+  "scope": "Correct two frozen config-save descriptions for the currently authorized legacy panel restoration. Existing implementation and legacy acknowledgment behavior are unchanged; cancelled MGMT remains cancelled.",
+  "source_artifact": {
+    "relative_path": "docs/ui-redesign/P2_BACKEND_CONTRACT_EVIDENCE.json",
+    "public_snapshot_path": "external-evidence/full-parity-execution/P2_BACKEND_CONTRACT_EVIDENCE.json",
+    "public_snapshot_sha256": "f785e54bbad4f0aa6496ea108d297d9256b50bb31979c4da5d877675b18962b7",
+    "original_modified": false
+  },
+  "corrections": [
+    {
+      "json_pointer": "/sections/config/response/save_HTTP200/saved_config",
+      "original_phrase": "accepted nonsecret nonlocked keys",
+      "correct_claim": "saved_config contains this request's successfully written, unlocked, non-reserved keys and their accepted or validation-normalized submitted values. Successfully submitted api_password, panel_password and password values are included under the existing legacy contract. It does not read or populate previously stored passwords or unrelated configuration."
+    },
+    {
+      "json_pointer": "/sections/config/behavior/1",
+      "original_phrase": "Save strips sensitive response keys and ignores environment-locked keys under existing rules; no blanket config object echo in UI. Use service-base metadata for URLs; do not include frontend route prefixes in model API bases.",
+      "correct_claim": "POST /config/save excludes environment-locked keys and the reserved node_management_token_hash/model_routing keys from its successful saved_config response. The three password configuration keys are not members of this reserved set and successful values submitted in this request remain part of saved_config. The frontend compares submitted values for exact acknowledgment, returns only acknowledged key names, and must not retain or display the raw response. Service-base URL rules remain unchanged."
+    }
+  ],
+  "authoritative_current_facts": {
+    "ordinary_get": "The delivered readSafeConfig transport explicitly uses GET /config/get?include_secrets=false for ordinary configuration and startup validation. This GET omits api_password/panel_password/password values, exposes configured flags, and has Cache-Control: no-store. It does not prove or imply password stripping in POST /config/save.",
+    "confirmed_password_reveal": "GET /config/get defaults to include_secrets=true for legacy compatibility. The new UI may use true only after explicit confirmation for that opening and must clear transient plaintext on close/channel/session changes.",
+    "save_input": "POST /config/save receives {config:patch}. saved_config is derived solely from request.config after existing validation and successful writes; there is no old stored-password lookup to populate the acknowledgment.",
+    "save_success": "Each unlocked key's storage_adapter.set_config result is checked before a successful response is returned. Successful api_password/panel_password/password-only or mixed saves retain exact submitted-value acknowledgment.",
+    "save_false_or_exception": "A false write result or exception stops the sequential batch, attempts runtime reconciliation, and returns HTTP 500 with an ambiguous partial-save outcome. It does not return the successful saved_config envelope; some writes may already have committed, so do not retry automatically.",
+    "locked_and_reserved": "Environment-locked keys are skipped and omitted. Reserved node_management_token_hash/model_routing keys, including relevant equivalent backend spellings, are rejected before writes through their existing dedicated-interface rules.",
+    "frontend_ack": "The existing readSave compares each submitted key against saved_config and returns only {kind,acknowledged:string[]}. It does not use a human-readable success message or retain password values from the response.",
+    "compatibility_decision": "No backend acknowledgment change or new API is required by this finding. Do not strip the legacy saved_config password acknowledgment, introduce a new acknowledgment field, or classify this request-value echo as a required security fix. The separate safe ordinary GET protection remains valid."
+  },
+  "source_references": [
+    "src/panel/config_routes.py:24",
+    "src/panel/config_routes.py:142",
+    "src/panel/config_routes.py:243",
+    "src/panel/config_routes.py:258",
+    "src/panel/config_routes.py:440",
+    "src/panel/config_routes.py:465",
+    "frontend/src/pages/settings/api.ts:74"
+  ],
+  "source_sha256_at_static_inspection": {
+    "src/panel/config_routes.py": "6f697bd754035923d2c97caaef02a7ddbae06f9032c2da9d421292618f9217ce"
+  },
+  "prior_ack_assessment": {
+    "path": "external-evidence/full-parity-execution/P2_CONFIG_WRITE_ACK_ASSESSMENT.md",
+    "sha256": "2e0ebea068bd59a7cd88f169c5296764c9aad81d697a23b88f6cba71393422ed",
+    "synthetic_test_files": [
+      "test_panel_safe_config.py",
+      "test_panel_config_save_failures.py"
+    ],
+    "recorded_passed": 15,
+    "recorded_exit_code": 0,
+    "tests_rerun_by_this_supplement": false,
+    "backend_source_changes": 0
+  },
+  "other_audit_findings": {
+    "reference": "P2_BACKEND_REMAINING_AUDIT.md",
+    "gcli_ignored_false_results": "Existing non-blocking persistence-result finding; not implemented and no implementation commitment.",
+    "migration_ignored_false_results": "Existing non-blocking migration-result finding; no changes to migration execution, database or legacy counts and no implementation commitment.",
+    "required_new_api_identified_for_current_frontend_plan": false
+  },
+  "performed": [
+    "Read existing public acknowledgment assessment and current source facts",
+    "Read exact frozen phrases and JSON pointers",
+    "Create this independent supplement without changing the frozen source artifact"
+  ],
+  "not_performed": [
+    "Backend or frontend source edits",
+    "Frozen evidence replacement or in-place correction",
+    "CLI/probe/model/API/credential/database operation",
+    "Test execution or rerun",
+    "Deployment or database/migration change"
+  ],
+  "counterpart_action": "no_counterpart_action"
+}

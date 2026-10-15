@@ -1,0 +1,1859 @@
+{
+  "schema_version": "p2-panel-backend-contract-evidence-1.0",
+  "frozen_local_date": "2026-10-14",
+  "worktree": ".",
+  "base_sha": "239bc48aab1d4db4f80e1197eb94e5ee7ae2c691",
+  "scope": "Original64 dual-channel legacy panel restoration only; cancelledMGMT remains cancelled; no management/v1/schema/data migration or manager change; no_counterpart_action.",
+  "proof_limits": {
+    "original_items": 64,
+    "deduplicated_method_paths": 45,
+    "AST_found": 45,
+    "AST_missing": [],
+    "meaning": "Route existence/mount scan ONLY, not complete frontend parity or all response compatibility. No live data/DB/network/OAuth/model/production requests.",
+    "unknown_rule": "Uninspected optional provider/backend/config fields are unknown and must not be invented; page edits keep relevant source contexts for such fields."
+  },
+  "global_contract": {
+    "base": "Use injected gcli-service-base/root_path for every HTTP/blob/OAuth/WS URL; paths here are node-relative. Never prepend UI route path or an AG API prefix to shared panel routes.",
+    "identity": "(mode,filename), plus sessionEpoch/channelEpoch/detailEpoch for request/state isolation; no modal/query/job content across auth or channel changes.",
+    "authentication": "HTTP Bearer panel password via verify_panel_token for listed HTTP except /auth/login and public /version/info; WS uses query token.",
+    "panel_auth_failure": "Existing authenticatedHTTP401 detail=密码错误; newsummary missingBearer401 detail=panel_authentication_required; old HTTPBearer missing header may403. Generic outer401 alone is insufficient on explicit upstream operations.",
+    "upstream_auth_failure": "Old GCLI test/Preview can return Google401 as outerHTTP401 with success:false/filename/status_code orstep. AG manual response_source/upstream_status and newsummary DTO upstream_status differentiate. Such errors never clear panel session.",
+    "http_success": "200 may businesssuccess:false,partialfailure,localpending or unsupported stats fallback. Preserve actualsuccess/status_code/upstream_status/state_update and unknowns independently.",
+    "privacy": "CredentialJSON/errors/password reveal confirmation everyopening; exports explicitaction; no persistent sensitive caches/logs/URL/postMessage. Raw errorbody never used ordinary safe views.",
+    "manual_only": "Import/OAuth/RT/verify/test/Preview/legacyquota/emailfetch/dedup/storage switch only explicit useraction; fixture gate DEV&&VITE_UI_FIXTURES dynamically imports synthetic fixtures and sends zero real requests.",
+    "cancellation": "Abort stale reads, stop unlaunchedbatchitems; never claim launched external work rolledback. Clear transient authURL/callbackcode/RT/plaintext on close/logout/mode replacement."
+  },
+  "endpoints": [
+    {
+      "method": "DELETE",
+      "path": "/config/management-token",
+      "source": "src/panel/config_routes.py:524",
+      "function": "clear_management_token",
+      "mode_rule": "shared/no mode",
+      "contract_section": "management_token",
+      "original_item_ids": [
+        "UI-COMP-044"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/config/get",
+      "source": "src/panel/config_routes.py:142",
+      "function": "get_config",
+      "mode_rule": "shared/no mode",
+      "contract_section": "config",
+      "original_item_ids": [
+        "UI-COMP-002",
+        "UI-COMP-004",
+        "UI-COMP-041",
+        "UI-COMP-042",
+        "UI-COMP-043",
+        "UI-COMP-044",
+        "UI-COMP-046",
+        "UI-SUPP-005",
+        "UI-SUPP-008"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/config/model-routing",
+      "source": "src/model_routing/settings_routes.py:56",
+      "function": "get_model_routing",
+      "mode_rule": "shared/no mode",
+      "contract_section": "model_routing",
+      "original_item_ids": [
+        "UI-COMP-051"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/config/storage-engine",
+      "source": "src/panel/config_routes.py:539",
+      "function": "get_storage_engine",
+      "mode_rule": "shared/no mode",
+      "contract_section": "storage",
+      "original_item_ids": [
+        "UI-COMP-047"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/config/system-status",
+      "source": "src/panel/config_routes.py:89",
+      "function": "get_system_status",
+      "mode_rule": "shared/no mode",
+      "contract_section": "system_status",
+      "original_item_ids": [
+        "UI-COMP-048"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/creds/detail/{filename}",
+      "source": "src/panel/creds.py:1372",
+      "function": "get_cred_detail",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "detail",
+      "original_item_ids": [
+        "UI-COMP-032"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/creds/download-all",
+      "source": "src/panel/creds.py:1784",
+      "function": "download_all_creds",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "exports",
+      "original_item_ids": [
+        "UI-COMP-031"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/creds/download/{filename}",
+      "source": "src/panel/creds.py:1700",
+      "function": "download_cred_file",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "exports",
+      "original_item_ids": [
+        "UI-COMP-031",
+        "UI-COMP-036"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/creds/email-enrichment/{job_id}",
+      "source": "src/panel/creds.py:1324",
+      "function": "email_enrichment_progress",
+      "mode_rule": "shared/no mode",
+      "contract_section": "email_job",
+      "original_item_ids": [
+        "UI-COMP-028",
+        "UI-COMP-040"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/creds/errors/{filename}",
+      "source": "src/panel/creds.py:1855",
+      "function": "get_credential_errors",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "errors",
+      "original_item_ids": [
+        "UI-COMP-033"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/creds/quota-summary/{filename}",
+      "source": "src/panel/quota_summary.py:155",
+      "function": "get_quota_summary",
+      "mode_rule": "query; default antigravity",
+      "contract_section": "quota_summary",
+      "original_item_ids": [
+        "UI-COMP-012",
+        "UI-COMP-013",
+        "UI-COMP-014",
+        "UI-COMP-015",
+        "UI-SUPP-009",
+        "UI-SUPP-010"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/creds/quota/{filename}",
+      "source": "src/panel/creds.py:1902",
+      "function": "get_credential_quota",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "legacy_quota",
+      "original_item_ids": [
+        "UI-COMP-012",
+        "UI-COMP-013",
+        "UI-COMP-014",
+        "UI-COMP-015",
+        "UI-COMP-017",
+        "UI-COMP-020"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/creds/stats-recent",
+      "source": "src/panel/creds.py:3535",
+      "function": "get_recent_daily_stats",
+      "mode_rule": "query optional; omitted aggregates modes",
+      "contract_section": "statistics",
+      "original_item_ids": [
+        "UI-COMP-005"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/creds/stats-today",
+      "source": "src/panel/creds.py:3504",
+      "function": "get_today_stats",
+      "mode_rule": "query optional; omitted aggregates modes",
+      "contract_section": "statistics",
+      "original_item_ids": [
+        "UI-COMP-005",
+        "UI-COMP-006"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/creds/stats-today-by-model",
+      "source": "src/panel/creds.py:3565",
+      "function": "get_today_stats_by_model",
+      "mode_rule": "query optional; omitted aggregates modes",
+      "contract_section": "statistics",
+      "original_item_ids": [
+        "UI-COMP-005",
+        "UI-COMP-006"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/creds/status",
+      "source": "src/panel/creds.py:1268",
+      "function": "get_creds_status",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "credential_status",
+      "original_item_ids": [
+        "UI-COMP-008",
+        "UI-COMP-011",
+        "UI-COMP-017",
+        "UI-COMP-019",
+        "UI-COMP-020",
+        "UI-COMP-021",
+        "UI-COMP-022",
+        "UI-COMP-023",
+        "UI-COMP-034",
+        "UI-COMP-052",
+        "UI-SUPP-001",
+        "UI-SUPP-003",
+        "UI-SUPP-004",
+        "UI-SUPP-007"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/logs/download",
+      "source": "src/panel/logs.py:62",
+      "function": "download_logs",
+      "mode_rule": "shared/no mode",
+      "contract_section": "logs",
+      "original_item_ids": [
+        "UI-COMP-049"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "GET",
+      "path": "/version/info",
+      "source": "src/panel/version.py:17",
+      "function": "get_version_info",
+      "mode_rule": "shared/no mode",
+      "contract_section": "version",
+      "original_item_ids": [
+        "UI-SUPP-006"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/callback",
+      "source": "src/panel/auth.py:141",
+      "function": "auth_callback",
+      "mode_rule": "JSON body; default geminicli",
+      "contract_section": "oauth_callback",
+      "original_item_ids": [
+        "UI-COMP-035",
+        "UI-COMP-036",
+        "UI-COMP-037",
+        "UI-SUPP-002"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/callback-url",
+      "source": "src/panel/auth.py:191",
+      "function": "auth_callback_url",
+      "mode_rule": "JSON body; default geminicli",
+      "contract_section": "oauth_callback",
+      "original_item_ids": [
+        "UI-COMP-035",
+        "UI-COMP-036",
+        "UI-COMP-037",
+        "UI-SUPP-002"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/login",
+      "source": "src/panel/auth.py:91",
+      "function": "login",
+      "mode_rule": "shared/no mode",
+      "contract_section": "login",
+      "original_item_ids": [
+        "UI-COMP-001"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/start",
+      "source": "src/panel/auth.py:107",
+      "function": "start_auth",
+      "mode_rule": "JSON body; default geminicli",
+      "contract_section": "oauth_start",
+      "original_item_ids": [
+        "UI-COMP-035",
+        "UI-COMP-037",
+        "UI-SUPP-002"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/config/save",
+      "source": "src/panel/config_routes.py:258",
+      "function": "save_config",
+      "mode_rule": "shared/no mode",
+      "contract_section": "config",
+      "original_item_ids": [
+        "UI-COMP-041",
+        "UI-COMP-042",
+        "UI-COMP-043",
+        "UI-COMP-046",
+        "UI-SUPP-005"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/config/storage-engine/preview",
+      "source": "src/panel/config_routes.py:638",
+      "function": "preview_migration",
+      "mode_rule": "shared/no mode",
+      "contract_section": "storage",
+      "original_item_ids": [
+        "UI-COMP-047"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/config/storage-engine/switch",
+      "source": "src/panel/config_routes.py:664",
+      "function": "switch_storage_engine",
+      "mode_rule": "shared/no mode",
+      "contract_section": "storage",
+      "original_item_ids": [
+        "UI-COMP-047"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/creds/action",
+      "source": "src/panel/creds.py:1438",
+      "function": "creds_action",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "credential_mutations",
+      "original_item_ids": [
+        "UI-COMP-009",
+        "UI-COMP-010",
+        "UI-COMP-018"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/creds/batch-action",
+      "source": "src/panel/creds.py:1565",
+      "function": "creds_batch_action",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "credential_mutations",
+      "original_item_ids": [
+        "UI-COMP-009",
+        "UI-COMP-010"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/creds/batch-refresh-cooldown",
+      "source": "src/panel/creds.py:2186",
+      "function": "batch_refresh_cooldown",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "legacy_quota",
+      "original_item_ids": [
+        "UI-COMP-027",
+        "UI-SUPP-011"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/creds/batch-test",
+      "source": "src/panel/creds.py:3072",
+      "function": "batch_test_credentials",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "test",
+      "original_item_ids": [
+        "UI-COMP-026",
+        "UI-SUPP-011"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/creds/configure-preview/{filename}",
+      "source": "src/panel/creds.py:2410",
+      "function": "configure_preview_channel",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "preview",
+      "original_item_ids": [
+        "UI-SUPP-003",
+        "UI-SUPP-011"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/creds/copy-emails",
+      "source": "src/panel/creds.py:1819",
+      "function": "copy_selected_emails",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "selected_tools",
+      "original_item_ids": [
+        "UI-COMP-030"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/creds/deduplicate-by-email",
+      "source": "src/panel/creds.py:1770",
+      "function": "deduplicate_credentials_by_email",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "email_dedup",
+      "original_item_ids": [
+        "UI-COMP-029"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/creds/download-selected",
+      "source": "src/panel/creds.py:1803",
+      "function": "download_selected_creds",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "selected_tools",
+      "original_item_ids": [
+        "UI-COMP-031"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/creds/fetch-email/{filename}",
+      "source": "src/panel/creds.py:1739",
+      "function": "fetch_user_email",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "email_fetch",
+      "original_item_ids": [
+        "UI-COMP-028",
+        "UI-COMP-040"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/creds/refresh-all-emails",
+      "source": "src/panel/creds.py:1756",
+      "function": "refresh_all_user_emails",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "email_fetch",
+      "original_item_ids": [
+        "UI-COMP-028",
+        "UI-COMP-040"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/creds/remark/{filename}",
+      "source": "src/panel/creds.py:1335",
+      "function": "update_cred_remark",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "credential_mutations",
+      "original_item_ids": [
+        "UI-COMP-010"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/creds/test/{filename}",
+      "source": "src/panel/creds.py:3062",
+      "function": "test_credential",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "test",
+      "original_item_ids": [
+        "UI-COMP-016",
+        "UI-COMP-026",
+        "UI-SUPP-011"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/creds/upload",
+      "source": "src/panel/creds.py:1251",
+      "function": "upload_credentials",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "file_import",
+      "original_item_ids": [
+        "UI-COMP-039",
+        "UI-SUPP-002"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/creds/upload-by-refresh-token",
+      "source": "src/panel/creds.py:3192",
+      "function": "upload_credentials_by_refresh_token",
+      "mode_rule": "JSON body; default geminicli",
+      "contract_section": "refresh_token_import",
+      "original_item_ids": [
+        "UI-COMP-038",
+        "UI-SUPP-002"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/creds/upload-by-refresh-token-batch",
+      "source": "src/panel/creds.py:3256",
+      "function": "upload_credentials_by_refresh_token_batch",
+      "mode_rule": "JSON body; default geminicli",
+      "contract_section": "refresh_token_import",
+      "original_item_ids": [
+        "UI-COMP-038",
+        "UI-SUPP-002"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/creds/verify-project/{filename}",
+      "source": "src/panel/creds.py:1835",
+      "function": "verify_credential_project",
+      "mode_rule": "query; default geminicli",
+      "contract_section": "verification",
+      "original_item_ids": [
+        "UI-COMP-024",
+        "UI-COMP-025",
+        "UI-SUPP-011"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "POST",
+      "path": "/logs/clear",
+      "source": "src/panel/logs.py:27",
+      "function": "clear_logs",
+      "mode_rule": "shared/no mode",
+      "contract_section": "logs",
+      "original_item_ids": [
+        "UI-COMP-049"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "PUT",
+      "path": "/config/management-token",
+      "source": "src/panel/config_routes.py:501",
+      "function": "set_management_token",
+      "mode_rule": "shared/no mode",
+      "contract_section": "management_token",
+      "original_item_ids": [
+        "UI-COMP-044"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "PUT",
+      "path": "/config/model-routing",
+      "source": "src/model_routing/settings_routes.py:68",
+      "function": "put_model_routing",
+      "mode_rule": "shared/no mode",
+      "contract_section": "model_routing",
+      "original_item_ids": [
+        "UI-COMP-051"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    },
+    {
+      "method": "WS",
+      "path": "/logs/stream",
+      "source": "src/panel/logs.py:98",
+      "function": "websocket_logs",
+      "mode_rule": "shared/no mode",
+      "contract_section": "logs",
+      "original_item_ids": [
+        "UI-COMP-049",
+        "UI-COMP-050"
+      ],
+      "checklist_modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "shape_evidence": "static-read: see contract_section; unverified details explicitly unknown"
+    }
+  ],
+  "sections": {
+    "login": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "body": {
+          "password": "string"
+        }
+      },
+      "response": {
+        "HTTP200": {
+          "token": "submitted panel password",
+          "message": "string"
+        }
+      },
+      "behavior": [
+        "No success boolean. Wrong panel password is HTTP401 detail=密码错误. No mode; shared panel session. Never persist/log token in evidence."
+      ],
+      "source_evidence": [
+        "src/panel/auth.py:91"
+      ]
+    },
+    "oauth_start": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "body": {
+          "project_id": "optional string|null",
+          "mode": "optional geminicli|antigravity; default geminicli"
+        }
+      },
+      "response": {
+        "HTTP200": {
+          "auth_url": "string sensitive transient authorization URL",
+          "state": "string transient ownership state",
+          "auto_project_detection": "boolean",
+          "detected_project_id": "string|null"
+        }
+      },
+      "behavior": [
+        "Only explicit user action starts OAuth. Existing service owns session, mode, one-shot callback and locks; new response clipping does not change these. No Google/OAuth request was executed for this evidence."
+      ],
+      "source_evidence": [
+        "src/panel/auth.py:107",
+        "src/auth.py:276"
+      ]
+    },
+    "oauth_callback": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "body": {
+          "project_id": "optional string|null",
+          "mode": "optional geminicli|antigravity; default geminicli",
+          "include_credentials": "boolean default true; new UI must explicitly false",
+          "callback_url": "required only callback-url; http/https URL"
+        }
+      },
+      "response": {
+        "legacy_HTTP200": {
+          "credentials": "full credential object sensitive",
+          "file_path": "string",
+          "message": "string",
+          "auto_detected_project": "boolean",
+          "geminicli_extra": [
+            "subscription_tier",
+            "tier_raw_id",
+            "tier_raw_name",
+            "tier_detected_at",
+            "tier_detection_status"
+          ],
+          "antigravity_extra": [
+            "email_enrichment",
+            "warnings"
+          ]
+        },
+        "safe_HTTP200": {
+          "success": true,
+          "mode": "geminicli|antigravity",
+          "filename": "basename string",
+          "project_id": "string|null",
+          "subscription_tier": "string|null",
+          "message": "fixed local string",
+          "auto_detected_project": "boolean",
+          "geminicli_extra": {
+            "tier_raw_id": "string|null",
+            "tier_raw_name": "string|null",
+            "tier_detected_at": "integer|null",
+            "tier_detection_status": "string|null"
+          },
+          "antigravity_extra": {
+            "email_enrichment": "see email_receipt",
+            "warnings": "only fixed local warning list"
+          }
+        },
+        "HTTP400": [
+          "{error,requires_manual_project_id:true}",
+          "{error,requires_project_selection:true,available_projects:[{project_id,name,projectNumber}]}",
+          "{detail}"
+        ],
+        "HTTP500": "{detail}; generic operation failure"
+      },
+      "behavior": [
+        "include_credentials=false success has Cache-Control:no-store, no credentials/file_path/arbitrary extra fields. Default/true response precisely preserves legacy fields. Failure-navigation responses unchanged; do not display arbitrary legacy error text.",
+        "Actual AG OAuth flow result lacks subscription_tier; safe field is null, never guess pro/free. GCLI tier detected_at is Unix integer or null.",
+        "This is frozen/implemented, not newchange_pending. Capabilities are per-mode oauth.safe_response on /creds/status, independent of storage backend.",
+        "callback-url passes user_session=panel token; callback passes session token positionally. Do not reorder flow state or start a new flow for a project selection retry.",
+        "Existing /auth/status/{project_id}?mode=... (outside original45) returns status not_found|pending|completed, optional state/created_at; never store state across auth sessions."
+      ],
+      "source_evidence": [
+        "src/models.py:361",
+        "src/models.py:367",
+        "src/panel/auth.py:40",
+        "src/panel/auth.py:141",
+        "src/panel/auth.py:191",
+        "src/auth.py:852"
+      ]
+    },
+    "file_import": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "multipart": {
+          "files": "repeated UploadFile; JSON or ZIP"
+        },
+        "query": {
+          "mode": "geminicli|antigravity; default geminicli"
+        }
+      },
+      "response": {
+        "geminicli_HTTP200": {
+          "uploaded_count": "integer",
+          "total_count": "integer",
+          "results": "[{filename,status:success|error,message,optional project_id/subscription_tier/tier_raw_id/tier_raw_name/tier_detected_at/tier_detection_status}]",
+          "message": "string"
+        },
+        "antigravity_HTTP200_or_400": {
+          "uploaded_count": "integer",
+          "total_count": "integer",
+          "failed_count": "integer",
+          "results": "[{filename,status:success|error,message,error_code?}]",
+          "email_enrichment": "email_receipt",
+          "warnings": "string[] fixed local service warnings",
+          "message": "string",
+          "detail": "only all-failed"
+        },
+        "validation_failure": "HTTP400/413 structured or legacy detail; exact AG limit reason codes unknown here"
+      },
+      "behavior": [
+        "GCLI max100 uploaded files before ZIP expansion, batches1000 expanded records; saved JSON triggers existing Tier detection/token refresh calls with semaphore5. AG has separate bounded importer and receipt-based email tasks. These explicit import calls can make Google requests; fixture preview must never call them.",
+        "GCLI all-failed HTTP400 returns detail, unlike AG all-failed per-item structured response. Do not assume both have failed_count or email job. Filename gets basename normalization."
+      ],
+      "source_evidence": [
+        "src/panel/creds.py:368",
+        "src/panel/creds.py:1251",
+        "src/panel/antigravity_import.py:177"
+      ]
+    },
+    "refresh_token_import": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "single_body": {
+          "refresh_token": "required string secret input",
+          "client_id": "optional string",
+          "client_secret": "optional string secret input",
+          "project_id": "optional string",
+          "custom_filename": "optional basename without .json",
+          "mode": "optional geminicli|antigravity; default geminicli"
+        },
+        "batch_body": {
+          "refresh_tokens": "required string[]; de-duplicate/trim nonempty then max200",
+          "client_id": "optional string",
+          "client_secret": "optional string",
+          "filename_prefix": "optional string",
+          "mode": "optional geminicli|antigravity; default geminicli"
+        }
+      },
+      "response": {
+        "single_HTTP200": {
+          "success": true,
+          "filename": "string",
+          "project_id": "string|null",
+          "subscription_tier": "string|null",
+          "mode": "string",
+          "message": "string",
+          "AG_only": [
+            "warnings",
+            "email_enrichment"
+          ]
+        },
+        "batch_HTTP200": {
+          "success_count": "integer",
+          "failure_count": "integer",
+          "total_count": "integer",
+          "results": "[{index,success,filename?,project_id?,subscription_tier?,error?,error_code?,warnings?,refresh_token_preview}]",
+          "message": "string",
+          "AG_only": [
+            "email_enrichment",
+            "warnings"
+          ]
+        },
+        "errors": "HTTP400 detail or AG structured error; HTTP500; no response guarantee for raw tier diagnostics"
+      },
+      "behavior": [
+        "mode is BODY, never query-only. Batch does not accept project_id. Concurrency5. Import exchanges RT, discovers project/Tier and persists credential; only explicit authorization action.",
+        "refresh_token_preview is redacted on AG; GCLI legacy may expose parts or entire short token. Treat it as sensitive: discard rather than display/cache or persist; label results by index/filename.",
+        "GCLI RT top-level single wrapper does not expose tier_raw fields even if inner helper has them. Do not invent them."
+      ],
+      "source_evidence": [
+        "src/models.py:393",
+        "src/models.py:402",
+        "src/panel/creds.py:3199",
+        "src/panel/creds.py:3263"
+      ]
+    },
+    "email_receipt": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {},
+      "response": {
+        "shape": {
+          "job_id": "32 lowercase hex string|null",
+          "accepted": "integer",
+          "skipped": "integer",
+          "status_url": "relative /creds/email-enrichment/{job_id}|null"
+        }
+      },
+      "behavior": [
+        "Only AG import/OAuth/RT actual receipts create jobs. Unsupported service returns null job_id and fixed warnings; do not infer a job. Receipt metadata is safe session-scoped state; no credentials/RT/OAuth URL in flow store."
+      ],
+      "source_evidence": [
+        "src/antigravity_email_enrichment.py:69"
+      ]
+    },
+    "email_job": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "path": {
+          "job_id": "actual received opaque ID"
+        },
+        "query": {
+          "offset": "integer>=0 default0",
+          "limit": "1..200 default100"
+        }
+      },
+      "response": {
+        "HTTP200": {
+          "job_id": "string",
+          "sealed": "boolean",
+          "complete": "boolean",
+          "counts": "record of item statuses to counts",
+          "total": "integer",
+          "items": "[{filename,status,reason,user_email? only success}]"
+        },
+        "HTTP404": "{detail}; unknown, expired, process restarted",
+        "HTTP400": "invalid pagination"
+      },
+      "behavior": [
+        "No mode parameter: endpoint is AG receipt job status. Scope polling by originating mode/session and actual job ID; never poll guessed GCLI jobs. HTTP cancel stops waiting, not persisted work. Statuses include queued/running/settlement_pending/success/failed/skipped; nonterminal terminal-TTL semantics remain service-owned."
+      ],
+      "source_evidence": [
+        "src/panel/creds.py:1324",
+        "src/antigravity_email_enrichment.py:222",
+        "src/antigravity_email_enrichment.py:36"
+      ]
+    },
+    "email_fetch": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "query": {
+          "mode": "geminicli|antigravity default geminicli"
+        },
+        "body": "none"
+      },
+      "response": {
+        "single_HTTP200_or_400": {
+          "filename": "string",
+          "user_email": "string|null",
+          "message": "string"
+        },
+        "all_HTTP200": {
+          "success_count": "integer",
+          "total_count": "integer",
+          "skipped_count": "integer",
+          "results": "[{filename,user_email,success,skipped?,error?}]",
+          "message": "string"
+        }
+      },
+      "behavior": [
+        "Both modes synchronous. get_or_fetch_user_email is cache-first; no force parameter. Refresh-all skips saved email and fetches missing email only; never use it as passive polling/display.",
+        "Single invalid filename/missing credential404; absent fetched email400. These explicit manual actions may refresh tokens/Google, not status/search/copy-emails."
+      ],
+      "source_evidence": [
+        "src/panel/creds.py:902",
+        "src/panel/creds.py:936"
+      ]
+    },
+    "email_dedup": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "query": {
+          "mode": "geminicli|antigravity default geminicli"
+        },
+        "body": "none"
+      },
+      "response": {
+        "HTTP200": {
+          "deleted_count": "integer",
+          "kept_count": "integer",
+          "total_count": "integer",
+          "unique_emails_count": "integer",
+          "no_email_count": "integer",
+          "duplicate_groups": "[{email,kept_file,deleted_files,duplicate_count}]",
+          "delete_errors": "string[]",
+          "message": "string"
+        },
+        "HTTP500": "{deleted_count:0,kept_count:0,total_count:0,message}; failure not empty success"
+      },
+      "behavior": [
+        "Destructive action requires UI confirmation. Groups already-saved email; no-email retained; exact backend semantics determine case/order. Inspected SQLite uses exact saved string and ORDER BY filename, keeps first file. Other backends ordering/case equivalence unknown here. Per-delete failure remains delete_errors; do not claim all duplicates removed from overall200."
+      ],
+      "source_evidence": [
+        "src/panel/creds.py:1004",
+        "src/storage/sqlite_manager.py:2258"
+      ]
+    },
+    "selected_tools": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "body": {
+          "filenames": "required string[] min1 max100; strict JSON basenames max255, dedup preserving order"
+        },
+        "query": {
+          "mode": "geminicli|antigravity default geminicli"
+        }
+      },
+      "response": {
+        "copy_HTTP200": {
+          "emails": "case-insensitively deduplicated saved emails string[]",
+          "matched_count": "integer",
+          "missing_count": "integer",
+          "requested_count": "integer",
+          "missing": "up to50 [{filename,reason:not_found|state_unavailable|email_unavailable}]"
+        },
+        "zip_HTTP200": "application/zip; Content-Disposition attachment; X-Selected-Count and X-Missing-Count strings",
+        "zip_HTTP404": "all selected missing or unreadable",
+        "HTTP400": "unsafe name/empty list; model length errors422"
+      },
+      "behavior": [
+        "copy-emails reads saved states only and never Google/full credential body; clipboard fallback is local UI behavior.",
+        "Selected ZIP contains full credential JSON; read only after explicit export action and do not retain Blob after download. Partial ZIP200 must report header counts."
+      ],
+      "source_evidence": [
+        "src/models.py:389",
+        "src/panel/creds.py:781",
+        "src/panel/creds.py:852",
+        "src/panel/creds.py:804"
+      ]
+    },
+    "exports": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "path": {
+          "filename": "required for single"
+        },
+        "query": {
+          "mode": "geminicli|antigravity default geminicli"
+        }
+      },
+      "response": {
+        "single_HTTP200": "application/json full credential JSON; Content-Disposition attachment filename",
+        "all_HTTP200": "application/zip full credentials; attachment credentials.zip or antigravity_credentials.zip",
+        "HTTP404": "invalid single suffix or missing single/all filenames"
+      },
+      "behavior": [
+        "All-ZIP scans all credentials of requested mode, not current filters/selection; failed reads silently skipped and no selected count headers. No all-export maximum declared here. Never parse export as safe summary or preload on list/render."
+      ],
+      "source_evidence": [
+        "src/panel/creds.py:1700",
+        "src/panel/creds.py:739"
+      ]
+    },
+    "detail": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "path": {
+          "filename": "JSON filename"
+        },
+        "query": {
+          "mode": "geminicli|antigravity default geminicli"
+        }
+      },
+      "response": {
+        "HTTP200": {
+          "filename": "basename",
+          "backend_type": "string",
+          "status": "credential state object",
+          "content": "FULL credential JSON sensitive",
+          "user_email": "string|null",
+          "model_cooldowns": "record",
+          "GCLI": "preview boolean legacy fallback true",
+          "AG": "enable_credit boolean legacy fallback false",
+          "file_backend_optional": [
+            "size",
+            "modified_time"
+          ]
+        },
+        "HTTP400": "invalid suffix",
+        "HTTP404": "not found"
+      },
+      "behavior": [
+        "Requires same panel Bearer authentication; server has no per-open confirmation parameter. Frontend must confirm each opening, THEN GET detail, clear plaintext on close/channel/session change, never cache in localStorage/sessionStorage/general query cache.",
+        "status fallback can fabricate disabled=false/current last_success when storage state unavailable in legacy endpoint; do not turn missing health into healthy. This endpoint is sensitive content, separate from safe /status."
+      ],
+      "source_evidence": [
+        "src/panel/creds.py:1372"
+      ]
+    },
+    "credential_status": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "query": {
+          "mode": "geminicli|antigravity default geminicli",
+          "offset": "integer>=0 default0",
+          "limit": "10|20|25|50|100|200|500|1000 default50",
+          "status_filter": "all|enabled|disabled|permanent_disabled",
+          "error_code_filter": "all|none|numeric code|403_tos_violation|403_subscription_required|403_other",
+          "cooldown_filter": "all|in_cooldown|no_cooldown|pro_no_cooldown|flash_no_cooldown; AG adds any_restricted|gemini_restricted|claude_gpt_restricted|gemini_unrestricted|claude_gpt_unrestricted|all_unrestricted",
+          "preview_filter": "all|preview|no_preview (effective GCLI only)",
+          "tier_filter": "all|free|pro|ultra; GCLI adds code_assist_standard|code_assist_enterprise|unknown",
+          "remark_filter": "__all__ default, empty matches unremarked, text max64",
+          "search": "trimmed literal max255; filename+already-saved email",
+          "model_access_filter": "all|supported|unavailable|unknown AG only",
+          "model_access_tier": "any|all_tiers|low|medium|high compatibility field",
+          "model_access_family": "claude-opus-5-5(default)|claude-opus-4-6 AG only"
+        }
+      },
+      "response": {
+        "HTTP200": {
+          "mode": "string",
+          "items": "credential_row",
+          "total": "filtered integer",
+          "offset": "integer",
+          "limit": "integer",
+          "has_more": "boolean",
+          "stats": "GLOBAL counts, backend-dependent additional fields",
+          "panel_capabilities": "string[]",
+          "AG_only": "model_access_summary"
+        },
+        "HTTP400": "invalid query/channel-only filter",
+        "HTTP501": "{detail,error_code:capability_unavailable,capability}",
+        "AG_bounded_local": "503 queue/config/concurrent changes;504 deadline"
+      },
+      "behavior": [
+        "Search is passive, saved metadata only; no email enrichment/token refresh/full JSON. GCLI numeric input remains normal substring; AG numeric input exact leading window-ID prefix behavior is unchanged.",
+        "GCLI search declared only actual safe-reader flag+method; unsupported adapters501. SQLite/PostgreSQL permanent+remark; Mongo remark only; MySQL neither. Unknown GCLI adapter retains old writes/filter semantics but does not declare those capabilities. AG existing gates remain strict. No GCLI credit capability added.",
+        "Missing GCLI health/permanent metadata stays null. Legacy tier default GCLI unknown/AGpro and preview/credit fallback fields are retained; do not manufacture quota/health interpretations from defaults.",
+        "New response capabilities added in this round: geminicli.oauth.safe_response,antigravity.oauth.safe_response,geminicli.preview.state_update; both quota.summary capabilities represent DTO endpoints, not specific account windows."
+      ],
+      "source_evidence": [
+        "src/panel/creds.py:562",
+        "src/panel/creds.py:1268",
+        "src/panel/credential_capabilities.py:39"
+      ]
+    },
+    "credential_row": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {},
+      "response": {
+        "common": {
+          "filename": "string",
+          "user_email": "string|null",
+          "disabled": "boolean legacy",
+          "error_codes": "array",
+          "error_classifications": "record",
+          "last_success": "timestamp|null",
+          "backend_type": "string",
+          "model_cooldowns": "model->Unix deadline record",
+          "tier": "string",
+          "success_count": "number",
+          "failure_count": "number",
+          "cycle_stats": "see cycle_stats",
+          "last_cycle_stats": "see cycle_stats",
+          "remark": "string"
+        },
+        "GCLI_extra": {
+          "preview": "boolean legacy",
+          "tier_raw_id": "string|null",
+          "tier_raw_name": "string|null",
+          "tier_detected_at": "integer|null",
+          "health_status": "string|null",
+          "quarantine_reason": "string|null",
+          "probe_stage": "string|null",
+          "next_probe_at": "timestamp|null",
+          "last_health_check_at": "timestamp|null",
+          "health_check_started_at": "timestamp|null",
+          "health_state_version": "integer|null",
+          "permanent_disabled": "boolean|null"
+        },
+        "AG_extra": [
+          "email_enrichment_status?",
+          "email_enrichment_reason?",
+          "permanent_disabled",
+          "enable_credit",
+          "model_access_state",
+          "model_access_families?",
+          "quota_groups?",
+          "quota_state_invalid?"
+        ]
+      },
+      "behavior": [
+        "Read-only safe summary; raw errors are exposed only via separate errors endpoint. Backend optional groups/families only when observed supported; absence is unknown."
+      ],
+      "source_evidence": [
+        "src/panel/creds.py:562"
+      ]
+    },
+    "cycle_stats": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {},
+      "response": {
+        "current": "{pro:number,flash:number,other:number,total:number,started_at?:Unix,updated_at?:Unix}",
+        "last": "same plus ended_at?:Unix,cooldown_family?:string; flat numeric counts"
+      },
+      "behavior": [
+        "Not nested per-family count objects. Current cycle retains other families when one family closes. Metadata may be missing/empty; unknown display must not generate fictitious history. AG backend may add group details; uninspected detail shape unknown."
+      ],
+      "source_evidence": [
+        "src/storage/sqlite_manager.py:2690"
+      ]
+    },
+    "credential_mutations": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "single_body": {
+          "filename": "string",
+          "action": "enable|disable|permanent_disable|delete|enable_credit|disable_credit|release_quota_group",
+          "group": "only release_quota_group: claude-gpt-shared|gemini-shared"
+        },
+        "batch_body": {
+          "filenames": "string[]",
+          "action": "enable|disable|permanent_disable|delete|enable_credit|disable_credit"
+        },
+        "query": {
+          "mode": "geminicli|antigravity default geminicli"
+        },
+        "remark_body": {
+          "remark": "trimmed string max64"
+        }
+      },
+      "response": {
+        "single_HTTP200": "{message}; release group adds success and returned group state",
+        "batch_HTTP200": {
+          "success_count": "integer",
+          "total_count": "integer",
+          "errors": "string[] individual failures",
+          "message": "string"
+        },
+        "remark_HTTP200": {
+          "message": "string",
+          "filename": "basename",
+          "remark": "string"
+        },
+        "HTTP400": "invalid action/name/group/mode; remark long",
+        "HTTP404": "missing credential",
+        "HTTP501": "unsupported capability",
+        "HTTP500": "persist failure"
+      },
+      "behavior": [
+        "No new write gates for OAuth/Preview response capability declarations. Known GCLI MySQL permanent/remark unsupported501, Mongo permanent501; unknown GCLI adapters preserve old requests. AG existing hard capability gates unchanged.",
+        "Credit onlyAG; existing GCLI mode400/individual batcherror semantics remain unchanged, without additional capability gate. New UI must not offer GCLI credit capability. release_quota_group onlyAG and does not clear timed cooldown; normal enable or credit cannot release protection.",
+        "Permanent-disable/delete/dedup UI confirmation required; no assume successful persistence from partial batch200."
+      ],
+      "source_evidence": [
+        "src/panel/creds.py:1438",
+        "src/panel/creds.py:1565",
+        "src/panel/creds.py:1335",
+        "src/panel/credential_capabilities.py:59"
+      ]
+    },
+    "errors": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "path": {
+          "filename": "JSON filename"
+        },
+        "query": {
+          "mode": "geminicli|antigravity default geminicli"
+        }
+      },
+      "response": {
+        "HTTP200": {
+          "filename": "string",
+          "error_codes": "array",
+          "error_messages": "code->raw saved message object; legacy missing may []",
+          "error_classifications": "record",
+          "error?": "legacy backend error string"
+        },
+        "HTTP501": "backend getter unavailable",
+        "HTTP400": "invalid suffix"
+      },
+      "behavior": [
+        "Saved error body may contain sensitive/untrusted upstream text. Per-open confirm before requesting/displaying raw error body; safe classification views may use summary error_classifications without this endpoint. SQLite missing credential returns empty error arrays200, so empty is not proof credential exists."
+      ],
+      "source_evidence": [
+        "src/panel/creds.py:1855",
+        "src/storage/sqlite_manager.py:2405"
+      ]
+    },
+    "verification": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "path": {
+          "filename": "JSON filename"
+        },
+        "query": {
+          "mode": "geminicli|antigravity default geminicli"
+        },
+        "body": "none"
+      },
+      "response": {
+        "GCLI_HTTP200": {
+          "success": true,
+          "filename": "string",
+          "project_id": "string",
+          "subscription_tier": "string",
+          "tier_raw_id": "string|null",
+          "tier_raw_name": "string|null",
+          "tier_detected_at": "integer|null",
+          "tier_detection_status": "string",
+          "message": "string"
+        },
+        "GCLI_HTTP400": "{success:false,filename,message}",
+        "AG_HTTP200_or_failure": {
+          "filename": "string",
+          "success": "boolean",
+          "project_id": "string|null",
+          "subscription_tier": "string|null",
+          "credit_amount": "number|null",
+          "upstream_status": "integer|null",
+          "response_source": "google|local",
+          "phase": "string",
+          "phases": "phase events",
+          "state_update": "project applied|failed with reason",
+          "message": "fixed safe text",
+          "status_code": "failure optional"
+        }
+      },
+      "behavior": [
+        "Explicit Google operation with potential token refresh/projectAPI enable/discovery. GCLI legacy successful verification clears errors and enables credential/preview; AG project save deliberately leaves disabled state unchanged. No batch-verify endpoint: old UI per-file fanout with bounded concurrency and pending-only cancellation. Do not fake GCLI state_update fields."
+      ],
+      "source_evidence": [
+        "src/panel/creds.py:1835",
+        "src/panel/creds.py:1091",
+        "src/panel/antigravity_manual.py:337"
+      ]
+    },
+    "preview": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "path": {
+          "filename": "JSON filename"
+        },
+        "query": {
+          "mode": "geminicli only; default geminicli"
+        },
+        "body": "none"
+      },
+      "response": {
+        "HTTP200": {
+          "success": true,
+          "filename": "string",
+          "preview": true,
+          "message": "legacy string",
+          "setting_id": "optional string only new binding",
+          "binding_id": "optional string only new binding",
+          "state_update": {
+            "preview": "{status:applied}|{status:failed,reason:state_update_failed}"
+          }
+        },
+        "upstream_failed": "outer upstream HTTP status; {success:false,filename,preview:false,message,error raw,step:create_setting|create_binding}",
+        "AG_HTTP400": "unsupported mode detail"
+      },
+      "behavior": [
+        "Frozen/implemented new response field; applied only adapter return exactly true. Existing upstream success fields retained even local write false; new UI must check state_update.preview and re-read state rather than assume success means saved.",
+        "Enable/configure only; no disablePreview route/capability. Binding409 counts already-configured success; local persistence still checked. No batch endpoint: per-file fanout; external requests and local write can survive UI cancel. Upstream401 is not panel logout."
+      ],
+      "source_evidence": [
+        "src/panel/creds.py:2410",
+        "src/panel/credential_capabilities.py:39"
+      ]
+    },
+    "test": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "path": {
+          "filename": "JSON filename"
+        },
+        "query": {
+          "mode": "geminicli|antigravity default geminicli",
+          "model": "optional selected model on SINGLE only"
+        },
+        "batch_body": {
+          "filenames": "string[]; no model field"
+        }
+      },
+      "response": {
+        "GCLI_single": "{success,status_code,message,filename,error?,classification?,health?}; actual outer upstream200|429 etc, smart429 branches can outer200/status_code429",
+        "AG_single": "{success,status_code,filename,upstream_status,response_source,phase?,phases?,state_update?,verified_reply?,expected_reply?,model_reply?,model_access_state?,model_access_families?,model_access_update?,error?,message?}",
+        "batch_HTTP200": {
+          "success_count": "integer",
+          "failure_count": "integer",
+          "total_count": "integer",
+          "results": "AG preserves item response; GCLI [{filename,success,status_code,message,error?}]",
+          "message": "string"
+        }
+      },
+      "behavior": [
+        "Explicit generateContent call/token refresh/state/statistics effects. GCLI no chosen model does legacy default test then Preview probe; chosen model skips secondprobe. AG strict chosen-model expectedreply is 测试成功; mismatch424,429not verified.",
+        "GCLI legacy HTTP429 may success=true for credential validity, not successful generation. Batch GCLI uses outer200 AND body.success. UI must label rate limit using actual status_code and must not invent call_succeeded/verified_reply/state_update.",
+        "Batch-test model body is silently ignored by schema: custom chosenmodel batch must call single?model=... per-file with bounded concurrency. Existing native batch stop can stop pending items, not rollback already launched operations.",
+        "Outer upstream401/403 is possible, payload has success/status_code/filename. Never display raw error or assume any outer401 means panel auth."
+      ],
+      "source_evidence": [
+        "src/models.py:385",
+        "src/panel/creds.py:2670",
+        "src/panel/creds.py:3062",
+        "src/panel/creds.py:3072",
+        "src/panel/antigravity_manual.py:133"
+      ]
+    },
+    "legacy_quota": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "path": {
+          "filename": "JSON filename"
+        },
+        "query": {
+          "mode": "geminicli|antigravity default geminicli"
+        },
+        "batch_body": {
+          "filenames": "string[]"
+        }
+      },
+      "response": {
+        "GCLI_single_HTTP200": "{success,filename,mode,models:model-id->legacy_model_quota}; SMART failure may also outer200 {success:false,health,error}",
+        "AG_single": "{success,filename,status_code,upstream_status,response_source,phase,phases,models?,observation?,state_update,cleared,added,quota_groups?,quota_group_states?,model_cooldowns?,model_access_state?,model_access_families?,model_access_update?,error_code?,started?}",
+        "legacy_model_quota": "GCLI {remaining,resetTime,resetTimeRaw,displayName,rawModelId,testModel,remainingAmount?,tokenType?}; AG {remaining:null|number,quotaInfoPresent,remainingPresent,remainingValid,resetTime,resetTimeRaw,rolling168h,+model-description fields}",
+        "batch_HTTP200": "{success_count,failure_count,total_count,cleared_total,added_total,affected_creds,affected_creds_cleared,affected_creds_added,results,message,AG model_access_summary?}",
+        "batch_GCLI_item": "{filename,success,family_has_quota:{pro,flash},cleared,skipped_no_quota,skipped_unknown,added_cooldown,cooldown_skipped_active,model_count} or {filename,success:false,error}",
+        "batch_AG_item": "quota manual item plus bounded scheduling and persistence metadata; exact optional fields depend on phase"
+      },
+      "behavior": [
+        "This old API may refresh OAuth, perform Google request, sync timedcooldown/protection/access and update health. Preserve operation entry separately from display-only new summary; no automatic fallback.",
+        "GCLI old remaining missing upstream fraction is legacy-coerced0; absence cannot be distinguished from true zero in this old DTO. Do not use old result to construct trustworthy newsummary windows. AG rolling168h protection is not automatically a weekly plan limit.",
+        "Batch explicit operation semaphore5 (GCLI SMART2); AG bounded batch can return partial/local errors/pending write. HTTP cancel does not prove no mutation. No state_update should be fabricated for GCLI."
+      ],
+      "source_evidence": [
+        "src/panel/creds.py:1902",
+        "src/panel/creds.py:2186",
+        "src/panel/creds.py:2159",
+        "src/panel/antigravity_manual.py:245",
+        "src/api/geminicli.py:1059",
+        "src/api/antigravity.py:1296"
+      ]
+    },
+    "quota_summary": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "path": {
+          "filename": "strict JSON basename"
+        },
+        "query": {
+          "mode": "antigravity|geminicli; default antigravity differs from old quota"
+        }
+      },
+      "response": {
+        "DTO": "Exact quota_summary.fields in docs/ui-redesign/FULL_PARITY_CONTRACT.json; status/source/captured_at/upstream_status/reason/groups only",
+        "local_HTTP400": "reason invalid_filename|invalid_credential",
+        "local_HTTP404": "reason credential_not_found",
+        "local_HTTP409": "reason credential_changed",
+        "local_HTTP503_504": "safe queue/budget/deadline reason",
+        "upstream_HTTP200_outer": "DTO status error|unsupported etc and upstream_status401/403/429/5xx; no panel logout"
+      },
+      "behavior": [
+        "Fetch only explicit open/refresh; scoped mode+filename+session+detail epoch+capability; abort stale and clear auth. Display-only; no cooldown/admission/protection/statistics settlement. A necessary OAuth refresh may occur under existing channel identity fencing.",
+        "Only explicit upstream window identifiers establish5h orweekly; null fractions/windows stay unknown, no fabricatedzero/full/duplicated5hweekly. No old API fallback. Exact normalization contract is authoritative."
+      ],
+      "source_evidence": [
+        "src/panel/quota_summary.py:155",
+        "src/panel/quota_summary.py:72"
+      ]
+    },
+    "statistics": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "query": {
+          "mode": "optional geminicli|antigravity; omitted combines both",
+          "days": "recent only integer default7; backend clamp1..90"
+        }
+      },
+      "response": {
+        "today_SQLite": "{date,mode? OR by_mode:{mode:{success_count,failure_count,total_count}},success_count,failure_count,total_count,metric,since,description}",
+        "recent_SQLite": "{days,items:[{date,success_count,failure_count,total_count}],metric,since,description}",
+        "model_SQLite": "{date,mode,by_family:{family:{success,failure,total,rpm}},totals:{success,failure,total,rpm},metric,since,description}",
+        "unsupported": "legacy zero counts or empty items plus note/description; not proof of truezero",
+        "other_storage_exact_shape": "unknown beyond compatible wrapper forwarding; no database queried"
+      },
+      "behavior": [
+        "Daily date is Beijing local day; metadata identifies logical completed clientrequests. Counts and current RPM may include in-memory buffers. Missing/error/unsupported must display unavailable instead of factualzero; legacy fields remain unchanged."
+      ],
+      "source_evidence": [
+        "src/panel/creds.py:3504",
+        "src/panel/creds.py:3535",
+        "src/panel/creds.py:3565",
+        "src/storage/sqlite_manager.py:2951",
+        "src/storage/sqlite_manager.py:3022",
+        "src/storage/sqlite_manager.py:3067"
+      ]
+    },
+    "config": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "get_query": {
+          "include_secrets": "bool defaulttrue legacy; ordinary UI explicitlyfalse"
+        },
+        "save_body": {
+          "config": "dict of known settings only; exact accepted key rules remain config_routes implementation"
+        }
+      },
+      "response": {
+        "safe_get_HTTP200": {
+          "config": "effective settings, excludes api_password,panel_password,password",
+          "capabilities": "existing AG flash_non_stream/native_timeout strings, no separate safe_config capability",
+          "env_locked": "string[]",
+          "secret_fields": "{api_password:{configured:bool},panel_password:{configured:bool},password:{configured:bool}}",
+          "security": "{node_management_token:{configured,source,locked},embed_policy:{source,locked,valid}}"
+        },
+        "save_HTTP200": {
+          "message": "string",
+          "saved_config": "accepted nonsecret nonlocked keys",
+          "smart_429": "service status object"
+        },
+        "save_failure": "validation400/409 or persist/runtime reconcile500; partial config may already be saved; reread safe config",
+        "exact_setting_type_catalog": "unknown in this compact evidence; route-specific pages must retain relevant config field source/context"
+      },
+      "behavior": [
+        "Shared node configuration, not mode query. Cache-Control:no-store both safe/default; defaulttrue may contain passwords and requires per-opening confirmation. No manager token/digest values returned.",
+        "Save strips sensitive response keys and ignores environment-locked keys under existing rules; no blanket config object echo in UI. Use service-base metadata for URLs; do not include frontend route prefixes in model API bases."
+      ],
+      "source_evidence": [
+        "src/panel/config_routes.py:142",
+        "src/panel/config_routes.py:258"
+      ]
+    },
+    "management_token": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "put_body": {
+          "token": "32..512 string, no leading/trailing whitespace"
+        },
+        "delete_body": "none"
+      },
+      "response": {
+        "HTTP200": "{message,status:{configured:boolean,source:environment|storage|none,locked:boolean}}",
+        "HTTP409": "environment managed",
+        "HTTP400_422": "invalid input",
+        "HTTP500": "persistence failure"
+      },
+      "behavior": [
+        "Existing old-panel write-only config feature only; no MGMT restart/new management action/schema. Cannot read token/digest. Plain input in transient local component only; clear after request and do not log."
+      ],
+      "source_evidence": [
+        "src/panel/config_routes.py:501",
+        "src/panel/config_routes.py:524",
+        "src/management/auth.py:53"
+      ]
+    },
+    "storage": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "preview_body": "{} required JSON; body currently unused",
+        "switch_body": {
+          "target_engine": "sqlite|mysql",
+          "migrate_data": "boolean defaulttrue",
+          "server_name": "optional string, required for mysql if env absent"
+        }
+      },
+      "response": {
+        "get_HTTP200": "{current_engine,mysql_available,mysql_configured,server_name,servers:[{name,url,status}]}",
+        "preview_HTTP200": "{source_engine,data:{gcli_credentials,antigravity_credentials,config,total}}",
+        "switch_HTTP200": "{message,engine,migration:null|{gcli_credentials:{total,migrated,errors},antigravity_credentials:{total,migrated,errors},config:{total,migrated,errors},total_migrated}}",
+        "HTTP400": "invalid target or missing MySQL settings",
+        "HTTP500": "init/migration/switch failure"
+      },
+      "behavior": [
+        "Shared node engine. UI explicit highimpact confirmation; this task did not invoke migration or DB. Only SQLite<->MySQL supported for switch; current engine can be other backend. No all-engine switching promise.",
+        "Migration per-item errors partial; legacy migrated_count may count writes without checking return booleans, so overall success is not proof every item persisted. Get engine avoids forced initialization; optional MySQL servers listing is weak metadata and may empty."
+      ],
+      "source_evidence": [
+        "src/panel/config_routes.py:539",
+        "src/panel/config_routes.py:638",
+        "src/panel/config_routes.py:664",
+        "src/panel/config_routes.py:746"
+      ]
+    },
+    "system_status": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {},
+      "response": {
+        "HTTP200": "{redis:{enabled,server_name?,memory_used_mb?,pools?:{geminicli_avail,geminicli_preview,antigravity_avail},total_keys?,note?,error?},smart_429:service.status()}",
+        "smart_429_exact_fields": "unknown here; retain relevant service status source for settings page"
+      },
+      "behavior": [
+        "Shared node Redis cache summary scoped server_name; memory is serverRedis memory, pools/keys scopedprefix. Missing/disabled fields do not mean zero; errorstrings are legacy backenddiagnostics and must not reveal to ordinary UI. No modeparameter or write."
+      ],
+      "source_evidence": [
+        "src/panel/config_routes.py:89"
+      ]
+    },
+    "model_routing": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "put_body": "{routes:[{channel:geminicli|antigravity,public_name:string,upstream_name:string,enabled:boolean}]}",
+        "get_query": "none"
+      },
+      "response": {
+        "HTTP200": "{routes,supported_channels,capabilities:[model.routing.aliases,model.identity.public],policy_digest,validation:{channel:{valid,issues:[{channel,row,field,reason,related_rows,message fixed}]}}",
+        "HTTP400": "{error:{code:MODEL_ROUTING_VALIDATION_FAILED,message,issues}}",
+        "HTTP503": "{error:{code:MODEL_ROUTING_UNAVAILABLE,message}}"
+      },
+      "behavior": [
+        "Shared complete table, each row has channel; no modequery. PUT replaces validated table atomically; do not send only active channel and accidentally dropother. Full validation grammar/target proof rules unknown here; retain types/store/compiler relevant contexts before page edit."
+      ],
+      "source_evidence": [
+        "src/model_routing/settings_routes.py:56",
+        "src/model_routing/settings_routes.py:68",
+        "src/model_routing/settings_routes.py:38",
+        "src/model_routing/store.py:158"
+      ]
+    },
+    "logs": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "WS_query": {
+          "token": "panel password transient; existing legacy contract"
+        },
+        "HTTP": "Bearer panel authentication, no mode"
+      },
+      "response": {
+        "stream": "WS text lines; initial last50 then changes",
+        "download": "text/plain attachment gcli2api_logs_<timestamp>.txt;404 absent/empty",
+        "clear_HTTP200": "{message}",
+        "WS_auth": "close403 missing/invalid token;1011 authenticationerror"
+      },
+      "behavior": [
+        "Shared node logs independent ofmode. Existing query auth is unavoidable for browserWS; do not echo URL/token into UI/reports/storage. Close/unsubscribe on logout/sessionchange/unmount; never read real logs for fixturepreview. Clearing node logfile is explicit confirmed action."
+      ],
+      "source_evidence": [
+        "src/panel/logs.py:98",
+        "src/panel/logs.py:62",
+        "src/panel/logs.py:27"
+      ]
+    },
+    "version": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {
+        "query": {
+          "check_update": "bool defaultfalse; update checks disabled"
+        }
+      },
+      "response": {
+        "HTTP200_success": "{success:true,version,full_hash,message,date,display_version,source_ref,commit_date}",
+        "unknown": "{success:false,error}",
+        "check_update_true": "check_update:false,update_error:更新检查已停用"
+      },
+      "behavior": [
+        "Public node endpoint with no panel authentication/no mode; Cache-Control:no-store. Version is display only, not capability inference. No automatic external update request."
+      ],
+      "source_evidence": [
+        "src/panel/version.py:17"
+      ]
+    },
+    "console_policy": {
+      "verification": "static_source_read; only incremental_checks explicitly listed below were executed this turn",
+      "request": {},
+      "response": {
+        "injected_meta": "gcli-embed-policy HTML-escaped JSON {mode:any_https|exact|disabled,origins:string[]} and gcli-service-base trusted ASGI root_path",
+        "ready_message": {
+          "type": "gcli2api.console.ready",
+          "version": 1,
+          "tab": "manage"
+        }
+      },
+      "behavior": [
+        "Server CSP frame-ancestors https: OR exact origins OR none must match policy. Canonical exact HTTPS origins only: no wildcard/userinfo/path/query/fragment/duplicates/noncanonical ports. Invalid config fails closed. Origin env override locks embedpolicy.",
+        "Only logged-in active GCLI manage console in iframe signals readiness; exact validated parent origin target, any_https * only with server HTTPS ancestor CSP. No token/loginstatus/credentials/config in postMessage. Legacy/#manage must remain truthful native GCLI destination; no cancelledMGMT/newmanager work."
+      ],
+      "source_evidence": [
+        "src/panel/ui.py:47",
+        "src/embed_policy.py:98"
+      ]
+    }
+  },
+  "incremental_checks": {
+    "status": "passed",
+    "command": "windows-local-evidence/python.exe -m pytest test_panel_oauth_preview_safe_increment.py test_oauth_flow_isolation.py test_panel_credential_capabilities.py -q",
+    "passed": 149,
+    "new_tests": 30,
+    "warnings": 5,
+    "seconds": 3.5,
+    "warnings_kind": "existing Pydantic class Config deprecation",
+    "extra": [
+      "scoped git diff --check passed",
+      "compileall authorized4src+newtest passed"
+    ],
+    "prior_backend_matrices": "191/240/23/4 not repeated"
+  },
+  "new_changes": {
+    "oauth_safe_response": "frozen_implemented_tested",
+    "preview_state_update": "frozen_implemented_tested",
+    "documentation": "docs/ui-redesign/P2_BACKEND_INCREMENTS.md"
+  },
+  "source_sha256": {
+    "docs/ui-redesign/P2_BACKEND_INCREMENTS.md": "e59c0a230e4d078cab06e4c1ac3a301b13f843bea129a7872c3239bdf3cd790f",
+    "src/antigravity_email_enrichment.py": "799c097e66dabb5afecc7e112ffc4ee048c35b06a5c33ea1e4a95d47ca427b62",
+    "src/api/antigravity.py": "af281fdbed3e55feb6f91c71cea793a1b6fbf8790347f58a269fbe8c2da385e7",
+    "src/api/geminicli.py": "550ce8c5cb232494c2996b48b6b8eee739ce157c92a635c515fed73572451928",
+    "src/auth.py": "53b3807c110a014dea6bbf0bea6cdc5f0c474055797cb24d8bd3e7fc48be2774",
+    "src/embed_policy.py": "b66bd176d4ef76e48bf879f3bc0352358292b9f687356d370eeff79847d96d26",
+    "src/management/auth.py": "dc3dac940fa028d1c62c28df7cae43733eb44a5998eda77539d6beddf9805803",
+    "src/model_routing/settings_routes.py": "2cb028795e5550ef98fc1679f3327e6d840ea969092bbae4e456da18934dd359",
+    "src/model_routing/store.py": "a47db48b5bd632dc8cbcbedf2a7901bd6959fc0546cc113957ff85b5a2490b9e",
+    "src/models.py": "91b03210b0b272b0c4c9e2f3c0baa7243c67975b5c3508896d131831679cd852",
+    "src/panel/__init__.py": "ebc5b368219c37320af335cfc2ce487e4df5c36883efdcfc07ac740972e31454",
+    "src/panel/antigravity_import.py": "8bde9c22064e7f82f730d51b97c77ab44f29b224f2e2d65c976077b5a59cb251",
+    "src/panel/antigravity_manual.py": "7a6b452ce9e8106cc4f5b6b5e7c8862699e889546bf60043cc12ab83038c424a",
+    "src/panel/auth.py": "3f8b8e6cc70d65828f11325660934005b0a6b5810a197829e5877dc95190c8fb",
+    "src/panel/config_routes.py": "6f697bd754035923d2c97caaef02a7ddbae06f9032c2da9d421292618f9217ce",
+    "src/panel/credential_capabilities.py": "4393bf999aeb9e6ee170ba1da4a1e257bfc18d3abd31ec8a88ef0d6f98dc7e97",
+    "src/panel/creds.py": "2f6056f3d802776809a54eb379b691d8800cdc455f442c599d8fb90977dc7ec8",
+    "src/panel/logs.py": "eff66dd402a3fdebf554e0811c5f53ea94532693bfaa4147a995456857dac968",
+    "src/panel/quota_summary.py": "13f686eb568f897d521b9d4b7cb26c6be1565e5e51954d384a8ff27ff7cac3ba",
+    "src/panel/quota_summary_models.py": "18e0a2b9088f1672488232e6b069711e3102eca1d95e2502da803e6fe4dbf621",
+    "src/panel/quota_summary_normalize.py": "6ad9f3ba7692e968177b4b8a7b0c2563cb7484a36a4647f5297fba1bd1426fdc",
+    "src/panel/root.py": "74faced62f7386c05af1bdf42aaf4a58bfe88cfcd14fb4dc298618e003260148",
+    "src/panel/ui.py": "fefe56bff0b065657f51d551e3fb913721b0e5b2fbc6f4a632f200bd815b0410",
+    "src/panel/utils.py": "f8dd077815311d89ccd6886080ccdb7d3e1d359134a9ed4e80df2cddd2c9f572",
+    "src/panel/version.py": "0b9b5d20df5744679fd1f8105fa9fe387bf013c816fc7f7259477218d88443e4",
+    "src/storage/sqlite_manager.py": "91d577b9542c174e57eed3d9e53d00a74da1976487c8f11351bdb7fc2b252297",
+    "src/utils.py": "e8790a7d89c189b0796e7fe12d8e89e055fe4c4a65528b9f65ff2ed60f8cf7db",
+    "web.py": "d78193c7ed4d9f7d0b778275bdfb1ecfe14ec6e3ef13d1c0ac5e5b56b2625ff6"
+  }
+}

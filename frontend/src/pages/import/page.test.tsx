@@ -25,19 +25,33 @@ describe('Import page interactions', () => {
   })
 
   it('keeps a manual-project 400 in the flow and continues only after a second click', async () => {
-    vi.mocked(requestJson).mockResolvedValueOnce({ auth_url: 'https://accounts.google.com/o/oauth2/auth?state=synthetic' })
+    vi.mocked(requestJson)
+      .mockResolvedValueOnce({ auth_url: 'https://accounts.google.com/o/oauth2/auth?state=synthetic' })
+      .mockResolvedValueOnce({ panel_capabilities: ['antigravity.oauth.safe_response'] })
       .mockRejectedValueOnce(new ApiError(400, { requires_manual_project_id: true }))
-      .mockResolvedValueOnce({ file_path: 'example.json', credentials: { secret: 'synthetic-hidden' } })
+      .mockResolvedValueOnce({ panel_capabilities: ['antigravity.oauth.safe_response'] })
+      .mockResolvedValueOnce({
+        success: true,
+        mode: 'antigravity',
+        filename: 'example.json',
+        project_id: 'project-example',
+        subscription_tier: null,
+        auto_detected_project: false,
+        credentials: { secret: 'synthetic-hidden' },
+      })
     render(<ImportPage />)
     fireEvent.click(screen.getByRole('button', { name: '生成授权链接' }))
     await screen.findByRole('link', { name: '打开 Google 授权页面' })
     fireEvent.click(screen.getByRole('button', { name: '完成授权' }))
     await screen.findByText('需要手动填写项目 ID')
     fireEvent.change(screen.getByLabelText('项目 ID（可选，留空自动检测）'), { target: { value: 'project-example' } })
-    expect(requestJson).toHaveBeenCalledTimes(2)
+    expect(requestJson).toHaveBeenCalledTimes(3)
     fireEvent.click(screen.getByRole('button', { name: '完成授权' }))
     await screen.findByText('全部成功')
-    expect(vi.mocked(requestJson).mock.calls[2]).toMatchObject(['auth/callback', { body: { mode: 'antigravity', project_id: 'project-example' } }])
+    expect(vi.mocked(requestJson).mock.calls[4]).toMatchObject([
+      'auth/callback',
+      { body: { mode: 'antigravity', project_id: 'project-example', include_credentials: false } },
+    ])
     expect(document.body.textContent).not.toContain('synthetic-hidden')
   })
 
@@ -66,17 +80,37 @@ describe('Import page interactions', () => {
   it('ignores an old email response after a new explicit import begins', async () => {
     let resolveEmail!: (value: unknown) => void
     const oldEmail = new Promise(resolve => { resolveEmail = resolve })
-    vi.mocked(requestJson).mockResolvedValueOnce({ file_path: 'example.json', email_enrichment: { job_id: 'old-job' } })
+    const inventedJobId = '0123456789abcdef0123456789abcdef'
+    vi.mocked(requestJson)
+      .mockResolvedValueOnce({ panel_capabilities: ['antigravity.oauth.safe_response'] })
+      .mockResolvedValueOnce({
+        success: true,
+        mode: 'antigravity',
+        filename: 'example.json',
+        project_id: null,
+        subscription_tier: null,
+        auto_detected_project: false,
+        email_enrichment: { job_id: inventedJobId },
+      })
       .mockReturnValueOnce(oldEmail)
       .mockResolvedValueOnce({ auth_url: 'https://accounts.google.com/o/oauth2/auth?state=next' })
     render(<ImportPage />)
     fireEvent.change(screen.getByLabelText('回调 URL（可选，含敏感授权码）'), { target: { value: 'http://localhost/?code=synthetic' } })
     fireEvent.click(screen.getByRole('button', { name: '完成授权' }))
-    await waitFor(() => expect(requestJson).toHaveBeenCalledTimes(2))
-    const oldSignal = vi.mocked(requestJson).mock.calls[1][1]?.signal
+    await waitFor(() => expect(requestJson).toHaveBeenCalledTimes(3))
+    const oldSignal = vi.mocked(requestJson).mock.calls[2][1]?.signal
     fireEvent.click(screen.getByRole('button', { name: '生成授权链接' }))
     await screen.findByRole('link', { name: '打开 Google 授权页面' })
-    await act(async () => { resolveEmail({ job_id: 'old-job', items: [{ filename: 'old.json', status: 'success', user_email: 'old@example.invalid' }], total: 1, complete: true, sealed: true }); await oldEmail })
+    await act(async () => {
+      resolveEmail({
+        job_id: inventedJobId,
+        items: [{ filename: 'old.json', status: 'success', user_email: 'old@example.invalid' }],
+        total: 1,
+        complete: true,
+        sealed: true,
+      })
+      await oldEmail
+    })
     expect(oldSignal?.aborted).toBe(true)
     expect(screen.queryByText('old@example.invalid')).toBeNull()
     expect(screen.queryByText('邮箱补全')).toBeNull()

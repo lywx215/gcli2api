@@ -25,9 +25,9 @@ Antigravity及其必要的共享基础设施继续作为改善范围；共享代
 4. `docs/multi-repo/GCLI2API_CODEX_GUIDE.md`
 5. `docs/multi-repo/AUTOMATED_HANDOFF.md`
 
-## Claude Review 入口
+## Claude / Antigravity Review 与子开发入口
 
-- 本项目已通过 `.codex/review.json` 接入本机共享 Claude review Hook；使用方法见
+- 本项目已通过 `.codex/review.json` 接入本机共享 Claude / Antigravity Hook；使用方法见
   `review/CLAUDE_REVIEW_WORKFLOW.md`。不得另建一套审核脚本或复用历史任务的审核提示词。
 - 默认不审核。只有用户明确发送 `请 Claude 审核：<本次任务说明>`、
   `启用 Claude 审核：<本次任务说明>` 或 `/claude-review <本次任务说明>` 才启动。
@@ -37,6 +37,19 @@ Antigravity及其必要的共享基础设施继续作为改善范围；共享代
 - 审核以本次任务的文件为依据，不要求提交或推送Git；实际发布、凭证或数据修改仍按用户授权执行。
 - Codex 开发与验证任务使用 GPT-6 Astra（`gpt-6-astra`）；Claude 审核由实际 Claude 执行，
   不用 Codex 模型冒充 Claude 审核结论。
+- 反重力审核只有客户明确发送 `请反重力审核：<本次任务说明>`、
+  `启用反重力审核：<本次任务说明>` 或 `/antigravity-review <本次任务说明>` 才启动。
+  方案与代码审核累计最多自动执行3次尝试，第4次之前须客户发送 `继续反重力审核` 确认。
+- 反重力子开发只有客户明确发送 `授权反重力开发：<本次任务说明>`、
+  `请反重力开发：<本次任务说明>` 或 `/antigravity-develop <本次任务说明>` 才授权。
+  Codex 根据本次授权生成指定文件、上下文和验收要求，再由共享 Hook 派发；审核与子开发分别授权。
+- 审核和子开发状态按本项目路径及当前Codex会话隔离；方案使用Hook提供的
+  `.codex/review-plans/<session-hash>.md`。不得沿用其他窗口的方案或授权ID。
+- 子开发请求必须包含 `AGENTS.md`、`docs/MAINTENANCE_SCOPE.md` 及本次需求依据作为上下文；
+  涉及统一管理历史时，还应包含 `docs/delivery/MGMT-009-development-termination.md`。
+  审核环境适配和普通节点任务不恢复已取消MGMT工作项或未明确授权的Gemini CLI维护。
+- 官方CLI在临时文件副本中执行；共享交付器检查指定文件范围、授权有效性和原文件并发变化。
+  Codex 检查交付并执行项目验收测试；外部角色的文件修改不能替代实际测试通过的证据。
 
 ## 必须遵守
 

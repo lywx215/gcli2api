@@ -361,12 +361,14 @@ class AuthStartRequest(BaseModel):
 class AuthCallbackRequest(BaseModel):
     project_id: Optional[str] = None  # 现在是可选的
     mode: Optional[str] = "geminicli"  # 凭证模式: geminicli 或 antigravity
+    include_credentials: bool = True  # Legacy defaults to the complete response.
 
 
 class AuthCallbackUrlRequest(BaseModel):
     callback_url: str  # OAuth回调完整URL
     project_id: Optional[str] = None  # 可选的项目ID
     mode: Optional[str] = "geminicli"  # 凭证模式: geminicli 或 antigravity
+    include_credentials: bool = True  # Use False for ordinary panel progress.
 
 
 class CredFileActionRequest(BaseModel):

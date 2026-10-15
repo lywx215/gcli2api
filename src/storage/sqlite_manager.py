@@ -47,6 +47,7 @@ from src.antigravity_quota import (
 
 
 class SQLiteManager(AntigravityQuotaMixin):
+    SUPPORTS_PANEL_CREDENTIAL_SEARCH = True
     QUOTA_ENGINE = 'sqlite'
     SUPPORTS_QUOTA_GROUP_FILTER = True
     """SQLite 数据库管理器"""
@@ -1718,13 +1719,13 @@ class SQLiteManager(AntigravityQuotaMixin):
                     "tier_raw_id": row[15],
                     "tier_raw_name": row[16],
                     "tier_detected_at": row[17],
-                    "health_status": row[18] or "healthy",
+                    "health_status": row[18] or None,
                     "quarantine_reason": row[19],
-                    "probe_stage": row[20] or 0,
+                    "probe_stage": row[20],
                     "next_probe_at": row[21],
                     "last_health_check_at": row[22],
                     "health_check_started_at": row[23],
-                    "health_state_version": row[24] or 0,
+                    "health_state_version": row[24],
                     "preview": bool(row[7]) if row[7] is not None else True,
                 }
             )
@@ -2150,13 +2151,13 @@ class SQLiteManager(AntigravityQuotaMixin):
                             summary["tier_raw_id"] = row[15] if len(row) > 15 else None
                             summary["tier_raw_name"] = row[16] if len(row) > 16 else None
                             summary["tier_detected_at"] = row[17] if len(row) > 17 else None
-                            summary["health_status"] = (row[18] or "healthy") if len(row) > 18 else "healthy"
+                            summary["health_status"] = (row[18] or None) if len(row) > 18 else None
                             summary["quarantine_reason"] = row[19] if len(row) > 19 else None
-                            summary["probe_stage"] = (row[20] or 0) if len(row) > 20 else 0
+                            summary["probe_stage"] = row[20] if len(row) > 20 else None
                             summary["next_probe_at"] = row[21] if len(row) > 21 else None
                             summary["last_health_check_at"] = row[22] if len(row) > 22 else None
                             summary["health_check_started_at"] = row[23] if len(row) > 23 else None
-                            summary["health_state_version"] = (row[24] or 0) if len(row) > 24 else 0
+                            summary["health_state_version"] = row[24] if len(row) > 24 else None
 
                         if mode != "geminicli":
                             summary["enable_credit"] = bool(row[8]) if row[8] is not None else False

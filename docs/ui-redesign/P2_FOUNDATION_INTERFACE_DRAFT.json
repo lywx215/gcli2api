@@ -1,0 +1,266 @@
+{
+  "document": "P2 foundation shared interface draft",
+  "status": "draft_for_root_review_and_official_cli_authoring_not_frozen",
+  "created_local": "2026-10-14",
+  "worktree": ".",
+  "base_sha": "239bc48aab1d4db4f80e1197eb94e5ee7ae2c691",
+  "human_scope": "授权反重力开发：样板确认，继续全部前端恢复",
+  "authoring_boundary": "This artifact is a coordinator-owned specification. All frontend and frontend-test implementations must be authored by official Antigravity CLI through the shared dispatcher. No implementation or CLI invocation has occurred in this preparation.",
+  "gate": "P1 customer visual sample is confirmed by the latest human instruction. Foundation delivery, P2 feature integration and P3 formal validation remain separate gates.",
+  "checklist_ids": [
+    "UI-COMP-001",
+    "UI-COMP-002",
+    "UI-COMP-003",
+    "UI-COMP-004",
+    "UI-SUPP-012"
+  ],
+  "source_facts": [
+    "Current generic client already separates exact panel auth failures from upstream/business 401/403, uses injected same-origin service base, encodes each filename once and rejects redirects. Preserve these guarantees.",
+    "Current SessionSnapshot is exactly {token,sessionEpoch}; several existing tests compare that shape. Retain it and put validation state in a separate session-owned snapshot.",
+    "Current routes are six independent lazy pages; useRoute returns a RouteId and registerRouteGuard accepts RouteNavigation. Keep those APIs additive-compatible.",
+    "Current credentials/import/overview modules still bind Antigravity. A global GCLI selection must not render those modules as GCLI or permit their AG actions.",
+    "The existing root fixture dispatcher supports registerFixtureHandler and a model-routing-only lazy fixture adapter. Preserve both APIs and prevent real-backend fallback.",
+    "Current config/get?include_secrets=false returns config without api_password/panel_password/password plus secret_fields configured flags, capabilities, env_locked and security metadata.",
+    "Server already injects gcli-embed-policy {mode,origins} and matching CSP into /ui. Malformed/missing/uninjected metadata must disable ready messages."
+  ],
+  "modules": {
+    "frontend/src/domain/panel.ts": {
+      "purpose": "React-free mode, request-scope, cleanup and metadata-only mutation-event contracts. No page imports or credential data cache.",
+      "public_types": {
+        "PanelMode": "'antigravity' | 'geminicli'",
+        "PanelChannelSnapshot": "{ readonly mode: PanelMode; readonly channelEpoch: number }",
+        "PanelScope": "{ readonly mode: PanelMode; readonly channelEpoch: number; readonly sessionEpoch: number }",
+        "CredentialChange": "{ readonly mode: PanelMode; readonly sessionEpoch: number; readonly filenames?: readonly string[] }"
+      },
+      "public_exports": [
+        "PANEL_MODES: readonly PanelMode[]",
+        "isPanelMode(value: unknown): value is PanelMode",
+        "credentialIdentityKey(mode: PanelMode, filename: string): string",
+        "getPanelChannelSnapshot(): PanelChannelSnapshot",
+        "subscribePanelChannel(listener: () => void): () => void",
+        "registerChannelCleanup(cleanup: () => void): () => void",
+        "capturePanelScope(sessionEpoch: number): PanelScope",
+        "isPanelScopeCurrent(scope: PanelScope, currentSessionEpoch: number): boolean",
+        "notifyCredentialChange(change: CredentialChange): void",
+        "subscribeCredentialChanges(listener: (change: CredentialChange) => void): () => void"
+      ],
+      "rules": [
+        "Identity uses a collision-safe tuple serialization, not filename-only or delimiter concatenation.",
+        "Default mode is antigravity. Mode and epoch live only in memory or the explicit nonsensitive URL fragment; do not introduce a new browser-storage key.",
+        "Committed channel changes advance channelEpoch once, call channel cleanup synchronously before publishing the new snapshot, and notify subscribers. No-op selection does not advance it.",
+        "Session cleanup advances channelEpoch and disposes channel work; harmless mode selection may remain. Do not force logout into navigation guards or reset page-owned settings drafts.",
+        "The route module may use narrowly documented internal channel commit/invalidation exports, but feature pages use usePanelChannel/changeMode rather than bypassing guarded navigation.",
+        "CredentialChange contains only mode, epoch and copied deduplicated filenames, with a 5000-name bound and no persisted event history. Never include token, JSON, password, callback/auth URL, raw result/error, job payload or source objects. Publish only after an acknowledged mutation; page owners retain unknown-result handling.",
+        "Listeners are session-scoped or explicitly filtered by the captured epoch/mode. Observer exceptions must not interrupt other listeners or a completed server operation."
+      ]
+    },
+    "frontend/src/app/channels.tsx": {
+      "public_exports": [
+        "PanelChannelProvider({children}: {children: React.ReactNode})",
+        "usePanelChannel(): { mode: PanelMode; channelEpoch: number; changeMode(mode: PanelMode): void }"
+      ],
+      "rules": [
+        "Wrap the six-page shell below AuthProvider without altering AuthProvider's external placement.",
+        "changeMode delegates to guarded navigatePanel for the current route and never submits network requests.",
+        "Use the React-free channel snapshot; do not duplicate a second mode store.",
+        "Provider and hook dispose subscriptions, avoid StrictMode double invalidation, and clear pending transition effects after session changes.",
+        "The global selector is relevant to overview/credentials/import only; settings/logs are shared and model-routing retains its own full-table channel editor."
+      ]
+    },
+    "frontend/src/app/routes.ts": {
+      "preserved_exports": [
+        "routes with the existing six IDs",
+        "RouteId",
+        "routeFromHash(hash: string): RouteId",
+        "RouteNavigation existing from/to/href/retry fields",
+        "registerRouteGuard",
+        "useRoute(): RouteId"
+      ],
+      "additive_exports": [
+        "panelRouteHref(route: RouteId, mode: PanelMode): string",
+        "navigatePanel(route: RouteId, mode?: PanelMode): void"
+      ],
+      "extended_navigation_fields": [
+        "fromMode: PanelMode",
+        "toMode: PanelMode"
+      ],
+      "fragment_contract": {
+        "antigravity": "#/credentials",
+        "geminicli": "#/credentials?channel=geminicli",
+        "rules": [
+          "Existing plain hashes, including #model-routing, remain recognized. AG canonical links retain #/<route> so existing navigation tests and links remain compatible.",
+          "Parse channel as a strict enum in the hash query. Unknown channel safely normalizes to antigravity; unknown route still falls back to overview. Do not reinterpret legacy #manage as a new UI credential route.",
+          "Channel changes are guarded even on the same route. Held confirmations are invalidated by later route/channel attempts, unregistration, unmount or session changes; retry is one-use only.",
+          "Commit the accepted route and mode together after all guards approve. Browser back/forward restores both. Rejected changes restore the prior URL and leave channel epoch/work intact.",
+          "Changing route with a plain internal link preserves the currently accepted channel unless that URL explicitly selects a channel; do not silently switch GCLI to AG.",
+          "#main-content remains a focus-only anchor. Do not modify document path/search/origin or bypass page-owned secret-exit protection."
+        ]
+      }
+    },
+    "frontend/src/api/client.ts": {
+      "preserved_exports": [
+        "ApiError",
+        "RequestOptions",
+        "Query",
+        "getServiceBase",
+        "createServiceUrl",
+        "requestJson",
+        "requestBlob",
+        "BlobResult"
+      ],
+      "additive_options": "RequestOptions.scope?: PanelScope",
+      "rules": [
+        "Unscoped existing calls retain their behavior; no automatic mode insertion or extra requests.",
+        "For scoped requests, verify mode/channelEpoch/sessionEpoch before sending, after receiving headers and after reading body; register channel cleanup abort, retain session cleanup abort, and fence late completions even when fetch ignores abort.",
+        "If an explicit query.mode or JSON body.mode is present and differs from scope.mode, reject before transport. Do not decide where mode belongs for callers, rewrite FormData or serialize scope in headers/query/body.",
+        "The exact existing panel-auth payload matcher is preserved. Google/upstream 401/403, quota DTO provenance or a generic forbidden response do not erase the panel session.",
+        "Keep redirect:error, cache:no-store, origin/prefix containment, one-time filename encoding and write-no-retry behavior.",
+        "Existing AUTH_STORAGE_KEY behavior remains; no credential/password persistence or new credential bearer scheme."
+      ]
+    },
+    "frontend/src/api/config.ts": {
+      "public_types": {
+        "SafeConfigResponse": "{config: Record<string, unknown>; capabilities: string[]; env_locked: string[]; security: Record<string, unknown>; secret_fields: Record<'api_password'|'panel_password'|'password', {configured:boolean}>}"
+      },
+      "public_exports": [
+        "readSafeConfig(signal?: AbortSignal): Promise<SafeConfigResponse>"
+      ],
+      "rules": [
+        "Always GET config/get with query {include_secrets:false}. Reject unsafe/malformed responses using fixed safe text; never return or retain one of the three password keys in config.",
+        "Do not import settings/types or other feature modules. The settings owner later performs its own field-specific normalization.",
+        "No reveal helper or plaintext read in foundation. Future settings owner performs a separate explicit-confirmation request with include_secrets:true.",
+        "Prevalidation consumes only successful shape validation and discards the full config response instead of storing it in AuthProvider/global cache."
+      ]
+    },
+    "frontend/src/auth/session.ts and frontend/src/auth/AuthProvider.tsx": {
+      "preserved_exports": [
+        "AUTH_STORAGE_KEY",
+        "SessionSnapshot exactly {token:string|null,sessionEpoch:number}",
+        "getSessionSnapshot",
+        "subscribeSession",
+        "registerSessionCleanup",
+        "setSessionToken(token,persist?)",
+        "invalidateSession",
+        "syncSessionFromStorage",
+        "AuthProvider",
+        "useAuth"
+      ],
+      "additive_auth_fields": {
+        "validationStatus": "'anonymous' | 'pending' | 'verified' | 'unavailable'",
+        "retryValidation": "() => void"
+      },
+      "validation_rules": [
+        "Cache restore on real application startup and genuine cross-tab token replacement require exactly one safe config prevalidation for the current epoch before authenticated becomes true and page effects mount.",
+        "A successful auth/login proves the just-issued token; avoid a redundant config request after direct login. Existing explicit setSessionToken(token,persist?) usage remains compatible; a narrowly documented optional third argument may mark restored tokens as requiring validation.",
+        "Keep validation provenance/state in a separate session-owned snapshot, not extra keys on getSessionSnapshot. Provide deterministic cleanup and StrictMode deduplication without exposing tokens to validation messages.",
+        "Success validates only the current epoch without incrementing sessionEpoch. Exact panel 401/403 clears only that captured epoch. Network/5xx/invalid-shape outcome is unavailable, not a fabricated logout or authenticated success; expose manual retry or fresh login.",
+        "Late prevalidation completion cannot authenticate a later login or invalidate a newer session. Logout, token replacement, provider unmount and superseding login abort/fence it.",
+        "App shows safe pending/unavailable feedback and does not render active page effects before verification. Login form must remain usable after transient prevalidation failure.",
+        "Shared session cleanup, cross-tab storage fallback and stale login attempt handling remain compatible."
+      ]
+    },
+    "frontend/src/app/App.tsx": {
+      "page_module_contract": "Feature pages may later add export const supportedPanelModes: readonly PanelMode[] = ['antigravity','geminicli']; the default export stays unchanged.",
+      "rules": [
+        "Keep six separate lazy imports and the existing settings nonsecret-draft behavior. Do not key the whole authenticated app on channel mode or remount shared settings/logs merely for channel changes.",
+        "overview/credentials/import are channel-sensitive. Missing/invalid supportedPanelModes declaration means antigravity-only. On selected GCLI, show a fixed neutral not-yet-bound placeholder and do not mount that unbound AG page or invoke its requests.",
+        "settings/logs/model-routing are shared scope; the route's mode must not overwrite model-routing's full-table channel editor.",
+        "The module support declaration is validated as a mode array; it is an additive module contract. Downstream A/B can enable their own page without editing App/shared files.",
+        "The displayed Header must clearly distinguish a pending channel-bound page from a functioning GCLI page. Retain old-panel fallback links with correct service base and legacy hashes.",
+        "Only after an authenticated verified, actually supported GCLI credential page has committed under Suspense may the shared ready bridge emit the legacy message. AG page and fallback placeholder do not emit it.",
+        "Do not read complete credentials, alter P1 quota card/style/hook/wiring, add GCLI controls inside credentials, or mark page functionality delivered in foundation."
+      ]
+    },
+    "frontend/src/app/consoleReady.ts": {
+      "public_exports": [
+        "readEmbedPolicy(): {mode:'any_https'|'exact'|'disabled';origins:readonly string[]}",
+        "notifyConsoleReady(scope: PanelScope): void"
+      ],
+      "ready_payload": {
+        "type": "gcli2api.console.ready",
+        "version": 1,
+        "tab": "manage"
+      },
+      "rules": [
+        "Read only server-injected gcli-embed-policy. Missing, unresolved placeholder, malformed JSON, invalid mode or invalid/noncanonical exact allowlist fail closed to disabled.",
+        "Require matching current session/channel scope, verified panel authentication, mode geminicli, accepted credentials route, actual supported page commit and parent!=self.",
+        "Preserve current policy: any_https uses targetOrigin '*' for this nonsecret message only and relies on injected server CSP. Exact uses verified ancestor/referrer allowlist match, or only explicit canonical allowlisted targetOrigins when the parent origin is hidden.",
+        "No token, credential, password, API URL, state/code or extra payload fields; no token-dependent parent-origin guessing; never change CSP or the backend policy.",
+        "Deduplicate within current route/channel/session activation, do not poll, and invalidate readiness after replacement/logout. Do not emit from AG, login, lazy fallback or unbound GCLI placeholder."
+      ]
+    },
+    "frontend/src/app/fixtures.ts": {
+      "preserved_exports": [
+        "registerFixtureHandler(handler): () => void",
+        "fixtureFetch(url,init): Promise<Response>"
+      ],
+      "rules": [
+        "Keep module-local fixture registration plus the existing model-routing adapter. Do not import other feature pages eagerly.",
+        "Add only safe foundation config/get?include_secrets=false synthetic behavior needed by prevalidation, with invented values/example.invalid and configured flags but no plaintext passwords or realistic credential data.",
+        "Unknown/unhandled routes still return fixed 501 without falling through to fetch. Non-DEV or fixture-disabled transport is never synthetic.",
+        "No generic new credential or model response in foundation; A/B owners define their own handlers/fixtures inside their directories.",
+        "Abort and stale-scope fencing also applies to fixture responses."
+      ]
+    }
+  },
+  "ownership_after_freeze": {
+    "foundation_shared_write": [
+      "frontend/src/domain/panel.ts",
+      "frontend/src/domain/panel.test.ts",
+      "frontend/src/app/channels.tsx",
+      "frontend/src/app/channels.test.tsx",
+      "frontend/src/app/consoleReady.ts",
+      "frontend/src/app/consoleReady.test.ts",
+      "frontend/src/app/routes.ts",
+      "frontend/src/app/routes.test.tsx",
+      "frontend/src/app/App.tsx",
+      "frontend/src/app/App.test.tsx",
+      "frontend/src/app/fixtures.ts",
+      "frontend/src/app/fixture-routing.test.ts",
+      "frontend/src/app/client.test.ts",
+      "frontend/src/api/client.ts",
+      "frontend/src/api/config.ts",
+      "frontend/src/api/config.test.ts",
+      "frontend/src/auth/session.ts",
+      "frontend/src/auth/AuthProvider.tsx",
+      "frontend/src/auth/AuthProvider.test.tsx",
+      "frontend/src/auth/index.ts",
+      "frontend/src/components/layout/Header.tsx",
+      "frontend/src/components/layout/Sidebar.tsx"
+    ],
+    "worker_a": {
+      "write": "frontend/src/pages/credentials/** including frontend tests",
+      "ids": "UI-COMP-008..034,052 + UI-SUPP-001,003,004,007,009,010,011",
+      "uses": "PanelMode/usePanelChannel/scoped RequestOptions, page supportedPanelModes declaration, credential metadata event listener, immutable P1 style/summary contracts"
+    },
+    "worker_b": {
+      "write": "one sequential task at a time in frontend/src/pages/import/**, overview/**, settings/**, logs/**, model-routing/** including their frontend tests",
+      "ids": "UI-COMP-005..007,035..051 + UI-SUPP-002,005,006,008",
+      "uses": "Same frozen public contracts; no reading A's live write scope"
+    },
+    "isolation": [
+      "At most two official CLI requests in one shared dispatcher batch.",
+      "No write/write or write/context overlap, including aliases and parent/child paths. Shared immutable context is allowed.",
+      "Do not read another live worker's output via context omission or runtime tools. Dependent tasks wait for accepted delivery then receive a new immutable snapshot.",
+      "Freeze actual exported interfaces only after official CLI delivery and root targeted acceptance. This draft itself is not proof of a delivered interface.",
+      "Any later shared contract change runs serially before dependent page requests resume."
+    ]
+  },
+  "acceptance_boundary": {
+    "foundation_targeted": [
+      "TypeScript typecheck",
+      "Only meaningful foundation/auth/client/config/channel/route/embed/fixture tests authored by official CLI",
+      "Synthetic navigation/prefix and existing AG page-boundary compatibility checks; no private data/service call",
+      "No P1 visual rework, dependency upgrade, single-file build or source outside allowed_files"
+    ],
+    "pending_p3": "Full frontend suite, production build, independent six-entry/chunk checks, full 64-item/channel evidence and real permitted integration are separate P3 gates; selected backend synthetic passes do not promote them.",
+    "excluded": [
+      "cancelled MGMT work",
+      "new model adaptation",
+      "Vertex management",
+      "real OAuth/model/quota generation",
+      "credential/database mutation",
+      "Docker/deployment/commit/push"
+    ]
+  }
+}

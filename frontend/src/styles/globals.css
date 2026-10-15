@@ -51,7 +51,7 @@
 }
 @layer base {
   * { @apply border-border; }
-  body { @apply bg-background text-foreground font-sans; margin: 0; min-width: 20rem; font-size: 0.875rem; line-height: 1.5rem; }
+  body { @apply bg-background text-foreground font-sans; margin: 0; min-width: min(100%, 20rem); font-size: 0.875rem; line-height: 1.5rem; }
   a, button, input, select, textarea { @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2; }
   [hidden] { display: none !important; }
 }

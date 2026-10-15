@@ -1,0 +1,25 @@
+{
+  "purpose": "Normative public interface for two independent source-only increments; not a counterpart implementation snapshot.",
+  "model_owner": "frontend/src/pages/credentials/model.ts",
+  "api_owner": "frontend/src/pages/credentials/api.ts",
+  "mode": "PanelMode from domain/panel = antigravity|geminicli",
+  "preserve": {
+    "CAP": {"search":"antigravity.credentials.search","group":"antigravity.cooldown.group_filter","family":"antigravity.model_access.family_filter","permanent":"antigravity.credentials.permanent_disabled","remark":"antigravity.credentials.remark","credit":"antigravity.credentials.credit_mode"},
+    "RecordValue": "Record<string,unknown>",
+    "Capabilities": "Set<string>",
+    "Credential": "extends RecordValue with filename:string",
+    "CredentialPage": "{items:Credential[];total:number;hasMore:boolean;caps:Capabilities;stats:RecordValue;familySummary:RecordValue}",
+    "Filters": "existing required search,status,error,tier,group,family,access,remark:string; optional preview?:string,cooldown?:string",
+    "Outcome": "{kind:success|partial|rejected|unknown;succeeded:number|null;failed:number|null;total:number;message:string}",
+    "helpers": ["object(unknown):RecordValue","count(unknown):number|null","aggregate(unknown,expected:number):Outcome","manualResult(unknown,httpStatus?:number):{data:RecordValue;success:boolean;httpStatus:number;upstreamStatus:number|null;verifiedReply:boolean|null;updates:{name:string;status:string}[]}"]
+  },
+  "changed_model_public_exports": {
+    "CAP_BY_MODE": "readonly per-PanelMode partial mapping of keyof CAP strings; AG=CAP; GCLI only search/permanent/remark with geminicli.credentials.* equivalents",
+    "supportedFilters": "(filters:Filters,caps:Capabilities,mode?:PanelMode):Filters, defaultAG",
+    "listQuery": "(filters:Filters,caps:Capabilities,offset:number,limit:number,mode?:PanelMode):Query, defaultAG",
+    "parsePage": "(raw:unknown,mode?:PanelMode):CredentialPage, defaultAG, explicit response.mode mismatch rejected, absent accepted"
+  },
+  "unchanged_bodies": "This model increment changes only mode-aware filters/query and explicit parsePage-mode validation. No deep-normalization rewrite; existing scalar/row/result/helper semantics remain compatible. Deep safe projections and new regression tests follow separately.",
+  "api_public_exports": "createCredentialApi(mode:PanelMode,ownerScope?:PanelScope); type CredentialApi=ReturnType<typeof createCredentialApi>; api=createCredentialApi('antigravity') unscoped; existing API methods/signatures retained",
+  "opaque_rules": "Workers do not read counterpart write paths/bodies from live roots, old copies or other temp copies. They consume this exact public interface. If another implementation detail is necessary, report it and serialize that work; do not guess or bypass context hashes. Root runs actual combined typecheck and existing compatibility tests after both deliveries. This contract is not full A1/native/P3 acceptance."
+}

@@ -1,0 +1,60 @@
+{
+  "commit": "390718ecfec90b674fed474862e497522273e129",
+  "files": [
+    {
+      "source": "LICENSE",
+      "file": "docs/ui-redesign/reference/cliproxy-quota/LICENSE",
+      "sha256": "48fc0d19e5d0918e7e2a7df2deed33b167d9aad1aebb07891a32a8e6f71f80ee"
+    },
+    {
+      "source": "src/styles/themes.scss",
+      "file": "docs/ui-redesign/reference/cliproxy-quota/src__styles__themes.scss",
+      "sha256": "de201778bd298e0f5962361a502b06df89167e92c10de2f393207cdfba55fc7e"
+    },
+    {
+      "source": "src/features/quota/components/QuotaCard.tsx",
+      "file": "docs/ui-redesign/reference/cliproxy-quota/src__features__quota__components__QuotaCard.tsx",
+      "sha256": "7623c7da8b008aeb6240b4ae05c6982ad7c5ca505da106c6fc3017fe7a210f5d"
+    },
+    {
+      "source": "src/features/quota/components/QuotaCard.module.scss",
+      "file": "docs/ui-redesign/reference/cliproxy-quota/src__features__quota__components__QuotaCard.module.scss",
+      "sha256": "a19c1ec7fd1cb575aaebd39f53727e5d3f899720a53ddbe48cef78acd54c25aa"
+    },
+    {
+      "source": "src/features/quota/components/QuotaBody.module.scss",
+      "file": "docs/ui-redesign/reference/cliproxy-quota/src__features__quota__components__QuotaBody.module.scss",
+      "sha256": "85f87058f2f40430889506be44fdc7feeb8ebba160c39abe29e0ce9fd4926059"
+    },
+    {
+      "source": "src/features/quota/components/QuotaMeter.tsx",
+      "file": "docs/ui-redesign/reference/cliproxy-quota/src__features__quota__components__QuotaMeter.tsx",
+      "sha256": "798726511461e94fb673d9649f2a7cb8c056d79496fbeb33e78bc7acbadd8a3e"
+    },
+    {
+      "source": "src/features/quota/providers/antigravity/AntigravityQuotaBody.tsx",
+      "file": "docs/ui-redesign/reference/cliproxy-quota/src__features__quota__providers__antigravity__AntigravityQuotaBody.tsx",
+      "sha256": "5a8149b3a873ea8c76bf0854f911c01686efc3addd570ecf900faebd69c53936"
+    },
+    {
+      "source": "src/features/quota/providers/antigravity/data.ts",
+      "file": "docs/ui-redesign/reference/cliproxy-quota/src__features__quota__providers__antigravity__data.ts",
+      "sha256": "b24ce6af4b1778804bba7f10c6cdc3961d04fd3a56cec32b8b699f4977a63907"
+    },
+    {
+      "source": "src/features/quota/QuotaPage.module.scss",
+      "file": "docs/ui-redesign/reference/cliproxy-quota/src__features__quota__QuotaPage.module.scss",
+      "sha256": "e9070e3336f15d2724d3b85a36bfbff57eb11b848028e6612349e436f278652b"
+    },
+    {
+      "source": "src/utils/quota/builders.ts",
+      "file": "docs/ui-redesign/reference/cliproxy-quota/src__utils__quota__builders.ts",
+      "sha256": "fa408eea9d44ecf755bf5dd714b2af874634d2f0b477e621d9af97bbb2f5ee60"
+    },
+    {
+      "source": "src/utils/quota/parsers.ts",
+      "file": "docs/ui-redesign/reference/cliproxy-quota/src__utils__quota__parsers.ts",
+      "sha256": "c147b68f5bd03be106a30642fdf6d882bd81b532585c6286aa98e169ceb2e88f"
+    }
+  ]
+}

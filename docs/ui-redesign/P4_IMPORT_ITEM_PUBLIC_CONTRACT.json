@@ -1,0 +1,71 @@
+{
+  "status": "public source-only contract; no live business/storage verification",
+  "scope": "N6 existing OAuth/RT/JSON/ZIP response metadata; no credentials, request secrets, database reads, new backend or MGMT work.",
+  "endpoints": [
+    {
+      "operation": "Single RT import",
+      "method": "POST",
+      "path": "creds/upload-by-refresh-token",
+      "modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "public_success_fields": {
+        "success": "true",
+        "filename": "string",
+        "project_id": "string|null",
+        "subscription_tier": "string|null",
+        "mode": "requested channel",
+        "antigravity_only": "email_enrichment and warnings"
+      },
+      "not_public_here": [
+        "tier_raw_id",
+        "tier_raw_name",
+        "tier_detected_at",
+        "tier_detection_status"
+      ],
+      "evidence": "src/panel/creds.py:3231-3240; helper has additional tier metadata at3476-3485 but route does NOT return it",
+      "current_projection": "normalizeResult retains only controlled filename label/status, outcome/warning count/confirmedFilenames and AG jobId; project/tier are lost."
+    },
+    {
+      "operation": "Batch RT import",
+      "method": "POST",
+      "path": "creds/upload-by-refresh-token-batch",
+      "modes": [
+        "antigravity",
+        "geminicli"
+      ],
+      "public_response": "success_count/failure_count/total_count and results; per-row index, success, filename, project_id, subscription_tier; AG top-level email_enrichment/warnings. Batch has no hand-entered project_id.",
+      "excluded_even_if_legacy_returns": "refresh_token_preview, arbitrary error/message/detail and every credential/token/client secret are never safe receipt fields. GCLI token preview may contain token material and must stay stripped.",
+      "not_returned": "No per-row tier_raw_* / detected_at / detection_status in this route, although internal helper computes them.",
+      "current_projection": "Same project/tier loss. Aggregate counts used to detect contradiction, not copied as unvalidated certainty.",
+      "evidence": "src/panel/creds.py:3295-3339"
+    },
+    {
+      "operation": "JSON/ZIP upload",
+      "method": "POST",
+      "path": "creds/upload?mode=<channel>",
+      "body": "Existing multipart files plus mode; no content inspection needed for receipt.",
+      "geminicli": "results success rows contain filename/status/message, project_id, subscription_tier, tier_raw_id, tier_raw_name, tier_detected_at, tier_detection_status; top-level uploaded_count/total_count/results. Unavailable detection may preserve old tier state, not fresh detection proof.",
+      "antigravity": "results rows contain filename/status/message or error_code; top-level uploaded_count/failed_count/total_count/results/email_enrichment/warnings. No project_id or subscription_tier in AG upload response.",
+      "current_projection": "Controlled labels/status/count-consistency/outcome/confirmed filenames/AG jobID preserved; GCLI public project and tier metadata lost. AG missing metadata must remain unknown, not inferred from uploaded JSON or file name.",
+      "evidence": [
+        "src/panel/creds.py:368-375,441-463,511-521",
+        "src/panel/antigravity_import.py:193-216"
+      ]
+    }
+  ],
+  "normalization_evidence": {
+    "types": "frontend/src/pages/import/types.ts ImportItem has only label/status; OAuthReceipt has safe explicit metadata",
+    "api": "projectSafeOAuthCompletion preserves OAuth fields; normalizeResult maps each item to {label,status}; aggregate contradiction and confirmed filename rules remain important",
+    "tests": "api-projection.test.ts403 onward checks secret stripping;657 onward safe OAuth;780 onward GCLI OAuth tier fields. These are existing source assertions, not tests run in this audit."
+  },
+  "minimal_followup": "Add optional per-item safe public metadata for successful RT rows and GCLI file rows only when supplied by response. Preserve prior item shape when absent. Do not expand OAuth API shape, polling, runner or UI in this adapter increment. Caller/runner snapshot binding must later preserve the added whitelist after actual runner acceptance.",
+  "security_rules": [
+    "Only own explicitly named primitive fields; absent/null/malformed values unknown, never infer zero/tier/success.",
+    "No RT/token previews/raw credentials/file_path/arbitrary message/error/cause/payload or secret inputs in receipt, logs, fixtures, global/local/session storage.",
+    "Safe public metadata supplements truthful success/partial/unknown status and does not grant confirmed filenames or export permission on contradictory results.",
+    "Actual AG tier null and AG file metadata absence remain unknown; no backend feature invention."
+  ],
+  "important_absence": "AG OAuth current backend returns no top-level tier; AG files return no project/tier; RT routes return no tier_raw diagnostics. Never infer from uploaded JSON/input or helper internals."
+}

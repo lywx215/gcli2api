@@ -2,6 +2,9 @@
 认证路由模块 - 处理 /auth/* 相关的HTTP请求
 """
 
+import os
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
@@ -32,6 +35,52 @@ def _oauth_subscription_fields(result: dict, mode: str) -> dict:
         "tier_detected_at": result.get("tier_detected_at"),
         "tier_detection_status": result.get("tier_detection_status"),
     }
+
+
+def _oauth_success_fields(result: dict, mode: str, message: str, include_credentials: bool) -> dict:
+    if include_credentials:
+        return {
+            "credentials": result["credentials"],
+            "file_path": result["file_path"],
+            "message": message,
+            "auto_detected_project": result.get("auto_detected_project", False),
+            **_oauth_subscription_fields(result, mode),
+        }
+
+    # Only explicitly named scalar metadata may leave the ordinary progress path.
+    credential = result.get("credentials")
+    credential = credential if isinstance(credential, dict) else {}
+    text = lambda value: value if isinstance(value, str) else None
+    content = {
+        "success": True,
+        "mode": mode,
+        "filename": os.path.basename(result["file_path"]),
+        "project_id": text(credential.get("project_id")),
+        "subscription_tier": text(result.get("subscription_tier")),
+        "message": message,
+        "auto_detected_project": result.get("auto_detected_project") is True,
+    }
+    if mode == "geminicli":
+        for key in ("tier_raw_id", "tier_raw_name", "tier_detection_status"):
+            content[key] = text(result.get(key))
+        detected_at = result.get("tier_detected_at")
+        content["tier_detected_at"] = detected_at if type(detected_at) is int else None
+    elif mode == "antigravity":
+        receipt = result.get("email_enrichment")
+        if isinstance(receipt, dict):
+            job_id = receipt.get("job_id")
+            job_id = job_id if isinstance(job_id, str) and re.fullmatch(r"[0-9a-f]{32}", job_id) else None
+            count = lambda key: receipt.get(key) if type(receipt.get(key)) is int and receipt[key] >= 0 else 0
+            content["email_enrichment"] = {
+                "job_id": job_id, "accepted": count("accepted"), "skipped": count("skipped"),
+                "status_url": f"/creds/email-enrichment/{job_id}" if job_id else None,
+            }
+        else:
+            content["email_enrichment"] = None
+        # This warning is local and fixed; arbitrary upstream text is never copied.
+        from src.antigravity_email_enrichment import WARNING
+        content["warnings"] = [WARNING] if WARNING in (result.get("warnings") or []) else []
+    return content
 
 
 # 创建路由器
@@ -105,13 +154,10 @@ async def auth_callback(request: AuthCallbackRequest, token: str = Depends(verif
         if result["success"]:
             # 单项目认证成功
             return JSONResponse(
-                content={
-                    "credentials": result["credentials"],
-                    "file_path": result["file_path"],
-                    "message": "认证成功，凭证已保存",
-                    "auto_detected_project": result.get("auto_detected_project", False),
-                    **_oauth_subscription_fields(result, request.mode),
-                }
+                content=_oauth_success_fields(
+                    result, request.mode, "认证成功，凭证已保存", request.include_credentials
+                ),
+                headers={} if request.include_credentials else {"Cache-Control": "no-store"},
             )
         else:
             # 如果需要手动项目ID或项目选择，在响应中标明
@@ -157,13 +203,10 @@ async def auth_callback_url(request: AuthCallbackUrlRequest, token: str = Depend
         if result["success"]:
             # 单项目认证成功
             return JSONResponse(
-                content={
-                    "credentials": result["credentials"],
-                    "file_path": result["file_path"],
-                    "message": "从回调URL认证成功，凭证已保存",
-                    "auto_detected_project": result.get("auto_detected_project", False),
-                    **_oauth_subscription_fields(result, request.mode),
-                }
+                content=_oauth_success_fields(
+                    result, request.mode, "从回调URL认证成功，凭证已保存", request.include_credentials
+                ),
+                headers={} if request.include_credentials else {"Cache-Control": "no-store"},
             )
         else:
             # 处理各种错误情况

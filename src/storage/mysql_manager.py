@@ -53,6 +53,7 @@ from src.storage.antigravity_quota import AntigravityQuotaMixin
 
 
 class MySQLManager(AntigravityQuotaMixin):
+    SUPPORTS_PANEL_CREDENTIAL_SEARCH = True
     SUPPORTS_QUOTA_GROUP_FILTER = True
     QUOTA_ENGINE = 'mysql'
     """MySQL 数据库管理器"""
@@ -1641,13 +1642,13 @@ class MySQLManager(AntigravityQuotaMixin):
                             summary["tier_raw_id"] = row[9]
                             summary["tier_raw_name"] = row[10]
                             summary["tier_detected_at"] = row[11]
-                            summary["health_status"] = row[12] or "healthy"
+                            summary["health_status"] = row[12] or None
                             summary["quarantine_reason"] = row[13]
-                            summary["probe_stage"] = row[14] or 0
+                            summary["probe_stage"] = row[14]
                             summary["next_probe_at"] = row[15]
                             summary["last_health_check_at"] = row[16]
                             summary["health_check_started_at"] = row[17]
-                            summary["health_state_version"] = row[18] or 0
+                            summary["health_state_version"] = row[18]
                         else:
                             summary["tier"] = row[7] if row[7] is not None else "pro"
 

@@ -1,0 +1,334 @@
+{
+  "format": "portable planning packages; not an authorization or dispatch request",
+  "status": "pending_Mac_baseline_and_explicit_local_human_authorization",
+  "observed_date": "2026-10-15",
+  "paths": "All source/context paths are repository-relative. Transfer current source snapshot and docs; do not infer current work from a historical branch name or commit alone.",
+  "synthetic_backend": {
+    "status": "stopped_excluded",
+    "written": false,
+    "started": false,
+    "note": "Only public-source inspection occurred. No synthetic_ui_backend.py was authored; no server/process/network fixture was started. Do not resume it as part of Mac modules."
+  },
+  "ownership": {
+    "mac": [
+      "LegacyModelQuota source+test",
+      "AgQuotaEvidence source+test"
+    ],
+    "windows": [
+      "Base credentials activation/aliases/Console",
+      "Credential maintenance API receipt repair",
+      "Files/Email source+tests",
+      "Import runner/integration",
+      "Aggregate Detail/Page binding",
+      "All App/routes/index/Detail/API/shared-component edits"
+    ]
+  },
+  "boundary": [
+    "Frontend source and tests must be authored through officially installed Antigravity agy development and approved scoped delivery; Codex coordinates, inspects and runs acceptance. Backend tasks belong to Codex; these modules require no backend changes.",
+    "Windows external development authorization was closed. Mac needs its own explicit human development grant in the local project/session and current approved shared workflow; do not transfer authorization data, hook state, CLI storage, tokens, temporary copies or consumed requests.",
+    "This artifact does not authorize review calls, extra models, retries, commits/pushes/deployment, real endpoint/model/OAuth requests, private files/DB or cancelled MGMT work.",
+    "Do not install a new custom runner or guess a Windows command path on Mac. Verify the local official agy and sanctioned dispatcher workflow independently before any human-authorized dispatch."
+  ],
+  "freeze_process": [
+    "Verify all context hashes below against the transferred snapshot (shasum -a 256 works on Mac). Verify four priority allowed paths are still absent. Hash mismatch or new existing file means stop/refreeze against coordinated accepted source, not overwrite.",
+    "Read mandatory instruction/requirements and actual direct dependencies. Freeze the listed public props before parallel execution; do not add props/exports that require parent changes without coordinating.",
+    "Reserve model.ts/ResultView.tsx/advancedApi.ts/Core/session/client/shared UI/test setup as readonly across hosts until Mac delivery. Windows may continue read-only consumers and independent files; ResultView diagnostic writer must wait or explicitly rebase Mac context.",
+    "No package may write index.tsx, CredentialDetail.tsx, App.tsx, routes, any API, Core, styles/shared components, package/lock/config, or another module test."
+  ],
+  "packages": [
+    {
+      "module": "LegacyModelQuota",
+      "status": "new_source_and_test_absent_planning_only",
+      "allowed_files": [
+        "frontend/src/pages/credentials/LegacyModelQuota.tsx",
+        "frontend/src/pages/credentials/LegacyModelQuota.test.tsx"
+      ],
+      "context_files": [
+        "AGENTS.md",
+        "docs/MAINTENANCE_SCOPE.md",
+        "docs/ui-redesign/FULL_PARITY_REQUIREMENTS.md",
+        "docs/ui-redesign/P4_CREDENTIAL_PREVIEW_RELEASE_PUBLIC_CONTRACT.json",
+        "frontend/package.json",
+        "frontend/tsconfig.json",
+        "frontend/vite.config.ts",
+        "frontend/src/app/test-setup.ts",
+        "frontend/src/domain/panel.ts",
+        "frontend/src/domain/shared.ts",
+        "frontend/src/auth/session.ts",
+        "frontend/src/pages/credentials/model.ts",
+        "frontend/src/pages/credentials/ResultView.tsx",
+        "frontend/src/pages/credentials/ResultView.test.tsx",
+        "frontend/src/components/ui/button.tsx",
+        "frontend/src/components/ui/badge.tsx",
+        "frontend/src/components/ui/progress.tsx",
+        "frontend/src/pages/credentials/advancedApi.test.ts",
+        "frontend/src/api/client.ts",
+        "frontend/src/pages/credentials/advancedApi.ts",
+        "frontend/src/pages/credentials/StatusBadges.tsx"
+      ],
+      "task": "Create the complete independent LegacyModelQuota component and its focused tests in these two new files. Use the frozen readonly prop contract below and public source evidence. This is one coherent ordinary source+tests request, not a continuation of any consumed Windows request. No parent/API/shared-component edits or transport. Author files, then return a concise ordinary JSON report; coordinator runs acceptance.",
+      "interface": {
+        "export": "LegacyModelQuota; export LegacyModelQuotaProps",
+        "props": {
+          "models": "Readonly<Record<string, unknown>> — only current owned manualResult.data.models",
+          "mode": "PanelMode",
+          "busy": "boolean",
+          "scope": "Readonly<PanelScope> — actual three fields mode/channelEpoch/sessionEpoch",
+          "isCurrent": "() => boolean — immutable caller lifetime includes exact validation snapshot identity",
+          "onTestModel": "(id: string) => void | Promise<void>",
+          "onExpiryReadback": "optional () => void | Promise<void> — saved status readback only"
+        },
+        "caller_contract": "Parent binds actual filename/task/session/validation at owned settlement. Never bind a stale render to new callback/owner via mutable latest refs. Callback changes/equivalent rerenders do not create a fresh expiry allowance. Parent controls operation results; component does not mutate inputs or own HTTP."
+      },
+      "acceptance": [
+        "Use only own model-map entries and own typed fields. visible===false hides; omitted visible does not. Preserve raw map key/rawModelId, accessible raw/friendly label toggle, AG public/available/compatible grouping and stable sorting; GCLI has no fabricated AG catalog metadata.",
+        "Explicit click uses own nonempty testModel exactly. Older GCLI missing testModel may use actual nonempty raw map key; malformed present target and missing AG target disable safely. No generated alias, automatic call, retry or optimistic result.",
+        "Remaining finite0..1, zero/one known, malformed/missing unknown; explicit false quotaInfoPresent/remainingPresent/remainingValid wins. Remaining meter, unknown neutral empty track without aria-valuenow=0; preserve tiny-positive/near-one distinctions. resetTimeRaw strict real calendar/zone/Date range; resetTime display-only. rolling168h means unknown recovery, not a weekly countdown.",
+        "At most one local timer only for visible valid future nonrolling deadlines, clean up on unmount/invalid lifetime/no future deadline. Guard clicks and timer delivery with captured mounted lifetime, !busy, scope.mode===mode and isCurrent. Expiry does not imply recovery; optional saved-readback once per actual owner/deadline, coalesce cards, consume before callback, no retry after rejection. Busy may defer once while same owner remains; invalid lifetime discards.",
+        "Preserve warm-gray card/ARIA style. Known remaining >=70% green #10b981, >=30% #e0aa14, lower #c65746; 6px meter, 14px radius and 15/16px spacing. Keep existing independent real 5H/week summary outside component. No raw errors, credentials, logs, persistence, quota/test/release/Preview HTTP imports.",
+        "Two focused regression groups: actual display/identity/remaining/reset/explicit exact callback with zero automatic transport; then real Core/session validation and channel ABA with bounded fake clock proving expiry-once/coalescing/busy/rejection and stale captured handlers/timers cannot use fresh owner. No big cross-product matrix, validity mocks, as-any, ts-ignore, skips or lowered assertions."
+      ],
+      "commands_from_frontend": [
+        "npm run typecheck",
+        "npm test -- --maxWorkers=2 src/pages/credentials/LegacyModelQuota.test.tsx src/pages/credentials/ResultView.test.tsx"
+      ],
+      "output_contract": "One JSON: summary, changed_files, verification_notes. No tasks/task_results. Author explicitly says commands not run; coordinator supplies actual logs separately."
+    },
+    {
+      "module": "AgQuotaEvidence",
+      "status": "new_source_and_test_absent_planning_only",
+      "allowed_files": [
+        "frontend/src/pages/credentials/AgQuotaEvidence.tsx",
+        "frontend/src/pages/credentials/AgQuotaEvidence.test.tsx"
+      ],
+      "context_files": [
+        "AGENTS.md",
+        "docs/MAINTENANCE_SCOPE.md",
+        "docs/ui-redesign/FULL_PARITY_REQUIREMENTS.md",
+        "docs/ui-redesign/P4_CREDENTIAL_PREVIEW_RELEASE_PUBLIC_CONTRACT.json",
+        "frontend/package.json",
+        "frontend/tsconfig.json",
+        "frontend/vite.config.ts",
+        "frontend/src/app/test-setup.ts",
+        "frontend/src/domain/panel.ts",
+        "frontend/src/domain/shared.ts",
+        "frontend/src/auth/session.ts",
+        "frontend/src/pages/credentials/model.ts",
+        "frontend/src/pages/credentials/ResultView.tsx",
+        "frontend/src/pages/credentials/ResultView.test.tsx",
+        "frontend/src/components/ui/button.tsx",
+        "frontend/src/components/ui/badge.tsx",
+        "frontend/src/pages/credentials/advancedApi.ts",
+        "frontend/src/pages/credentials/advancedApi.test.ts",
+        "frontend/src/api/client.ts",
+        "frontend/src/components/ui/alert-dialog.tsx",
+        "frontend/src/pages/credentials/StatusBadges.tsx"
+      ],
+      "task": "Create the complete independent AgQuotaEvidence component and focused tests together in the two new files. Use the frozen receipt/props contract and actual accepted advancedApi below. Implement evidence, confirmed release and exact lifetime/ticket rules without parent/API/Core/shared changes. Ordinary complete source+tests request; no old request or temporary output reuse.",
+      "interface": {
+        "exports": [
+          "AgQuotaEvidence",
+          "AgQuotaEvidenceProps",
+          "AgQuotaEvidenceReceipt"
+        ],
+        "receipt": "Readonly<{ source: 'response' | 'saved'; filename: string; scope: Readonly<PanelScope>; validation: SessionValidationSnapshot; result: ManualResult }>",
+        "props": {
+          "mode": "PanelMode",
+          "scope": "Readonly<PanelScope>",
+          "filename": "string",
+          "receipt": "AgQuotaEvidenceReceipt | null",
+          "disabled": "optional boolean",
+          "onRefresh": "optional () => void"
+        },
+        "real_adapter": "createAdvancedCredentialApi(mode: PanelMode, scope: PanelScope): AdvancedCredentialApi; releaseQuotaGroup(filename: string, group: string, signal?: AbortSignal): Promise<ReleaseQuotaGroupResult>",
+        "caller_contract": "Receipt object and validation reference are stable immutable identities from the actual owned settlement. Caller does not reconstruct or restamp stale/saved evidence with fresh scope/time. Saved evidence remains display-only. onRefresh requests only current-owner saved status/list readback, never manual quota/release/test.",
+        "real_core": "getSessionSnapshot/getSessionValidationSnapshot/subscribeSession/subscribeSessionValidation; getPanelChannelSnapshot/isPanelScopeCurrent/subscribePanelChannel. capturePanelScope takes the actual current sessionEpoch. SessionValidationSnapshot has only sessionEpoch/status; identity must be retained, no invented token/validationEpoch field."
+      },
+      "acceptance": [
+        "AG only: GCLI renders no AG controls and sends no requests. Union two known groups with own valid returned quota_groups/quota_group_states keys; keep genuine additional canonical groups, not hardcoded two-only. Own typed projection before existing helpers; invalid/conflicting state=>abnormal/restricted, blocked_unknown=>recovery unknown, manual_override retains timed cooldown, missing=>unknown. Seconds must be finite/nonnegative/Date-valid; no unit guessing or expiry-based unblocking.",
+        "Display Opus5.5/4.6 state and valid checked_at/last_attempt_at/next_check_at/blocked_until independently. Fresh directory support requires checked_at<=now<checked_at+43200; unavailable never auto-recovers on timer. Missing/invalid/future evidence unknown. Known reasons generation_404/directory_missing/directory_query_failed/directory_timeout only; raw reason/error hidden. Successful current response with own valid models lacking claude-opus-5-5-(low|medium|high) keys may show5.5 catalog-missing, never fabricate4.6 rule.",
+        "Release eligibility requires same verified owner, filename, Scope3, exact captured validation identity; source=response, result.success, blockedUnknown&&!invalid. UI eligibility is not a server ticket. Saved/failed evidence, remaining fraction, expiry or applied writeback cannot confer permission. Real Core/session subscriptions revoke loss/reverify and session/channel ABA.",
+        "Stable receipt-identity/group single-use ticket; open/cancel zero calls. Capture confirmation actor/owner/target, recheck and consume synchronously before actual adapter call. Old confirm/cancel/A->B->A/rerender/remount handlers cannot revive retired tickets or consume new receipt. Minimal weak identity bookkeeping may preserve consumed/retired tickets across remount; no copied payload cache/storage. Cancel before dispatch leaves ticket unconsumed but retires confirmation actor.",
+        "Abort/retire old work on owner/validation/receipt/target loss, disable or unmount. Late completion/catch/finally cannot change fresh UI/focus/onRefresh. Sent ticket stays consumed on failure/unknown, no retry. Validate safe adapter output; release only removes abnormal blocking, never claims quota replenishment/clears model_cooldowns/other groups. Keep generation verification, local writeback, directory and protection evidence separate.",
+        "Plain text, existing Button/Badge/AlertDialog accessibility/focus; no raw payload/error, real credentials, log/persistence, prop mutation, automatic test/quota/release/Preview/poll. Independent real5H/week quota summary remains outside component, never derived from model fractions/rolling168h/group state.",
+        "Two focused real-component groups: all evidence/provenance/unknown/catalog/GCLI display; release lifecycle with actual Core/session/adapter and synthetic transport: cancel0, confirm1 exact POST, duplicate/old/remounted receipt rejection, same-Scope validation ABA, late ignored-abort response inert and fresh owner/receipt still works. Preserve cooldown/other groups and raw canary exclusion. No fake ownership predicates or giant matrix."
+      ],
+      "commands_from_frontend": [
+        "npm run typecheck",
+        "npm test -- --maxWorkers=2 src/pages/credentials/AgQuotaEvidence.test.tsx src/pages/credentials/advancedApi.test.ts"
+      ],
+      "output_contract": "One JSON: summary, changed_files, verification_notes. No tasks/task_results. Author explicitly says commands not run; coordinator supplies actual logs separately."
+    }
+  ],
+  "parallelism": {
+    "priority_packages": "Disjoint writes; shared readonly context, so may run in parallel only within a new explicit Mac grant and current local limits.",
+    "windows_compatible": [
+      "Page activation/aliases/Console (does not change reserved dependencies)",
+      "credentials/api.ts maintenance repair (not a priority Mac direct dependency)",
+      "Independent Files/Email new components",
+      "Import runner/API/hook work that leaves reserved Core/session/client unchanged"
+    ],
+    "windows_conflicts": [
+      "ResultView.tsx/model.ts/advancedApi.ts writers",
+      "Shared Core/session/client/UI/test configuration writers",
+      "Any parent integration frozen on not-yet-delivered Mac files"
+    ],
+    "rule": "Recheck both write-write and write-read directions with actual current contexts before every dispatch; no omission of true dependencies to force concurrency."
+  },
+  "optional_followup": {
+    "module": "CredentialBatchPanel",
+    "status": "not_selected_for_initial_Mac_work_no_dispatch",
+    "allowed_files": [
+      "frontend/src/pages/credentials/CredentialBatchPanel.tsx",
+      "frontend/src/pages/credentials/CredentialBatchPanel.test.tsx"
+    ],
+    "interface_gate": "Freeze actual createCredentialBatch options/start/getSnapshot/subscribe/stop/dispose and accepted credential/advanced API signatures after Windows maintenance API acceptance. Proposed props scope, readonly filenames, immutable owner revision, isCurrentOwner, disabled and guarded callbacks are not yet published exports.",
+    "scope": "Independent panel wrapping existing controller/manual/quotaBatch/Preview; safe BatchReceipt display, max2 and quota chunks<=10, no duplicate executor/ResultView/raw manual data. Parent mount stays Windows.",
+    "conflict": "Requires credentials/api.ts readonly context, so cannot run alongside Windows maintenance API writer. No batch.ts or existing batch.test write in this optional two-file scope; confirmed controller gaps return to coordinator.",
+    "advanced_tools": "AdvancedTools does not exist and is not a frozen required helper. Do not create it merely to match a plan name; single Preview can later bind existing Detail, batch Preview belongs to BatchPanel."
+  },
+  "handoff": [
+    "Deliver only permitted files in a reviewed patch/file set, plus SHA256 manifest, exported prop/type contract and concise implementation/remaining limits.",
+    "Coordinator on Mac runs declared type/scoped tests using the unchanged lock/config and records exact commands/exit status. Do not claim commands passed from author output. No requirement to commit/push; coordinate transfer.",
+    "Windows checks source/context hashes and allowed-only diff before applying, reruns the two component suites plus relevant adapter/ResultView tests and typecheck, then freezes actual exports for its aggregate parent requests.",
+    "Leaf acceptance is not Page/route activation or full64/P3 acceptance. Base credentials support does not wait for these optional leaf modules. Independent5H/week display remains intact."
+  ],
+  "stop_rules": [
+    "New/unexpected context change or allowed path already present: stop that package, keep unrelated authorized work moving and notify coordinator.",
+    "Need a shared/API/parent fix, ambiguous public data, lifecycle defect outside two files, or undeclared dependency: report concrete finding; do not expand allowed scope.",
+    "Model rate/quota/transport/auth failure: report actual failure; respect new Mac grant retry limits, never replay consumed requests/recover partial temp or start review implicitly.",
+    "Test failure: report actual source/harness cause; repair only within fresh/current authorized scope, never weaken safety assertions or production contracts."
+  ],
+  "source_manifest": [
+    {
+      "path": "AGENTS.md",
+      "exists": true,
+      "sha256": "0dfdc8935733895d9211dae3f83e750b384d95cf0afb04461ca3fc02fc902e70"
+    },
+    {
+      "path": "docs/MAINTENANCE_SCOPE.md",
+      "exists": true,
+      "sha256": "ddc6db0cfc872e95815242c13838ffdbbae642351fe55d14b8f10a65950b58e4"
+    },
+    {
+      "path": "docs/ui-redesign/FULL_PARITY_REQUIREMENTS.md",
+      "exists": true,
+      "sha256": "b67525f34891eb87ecbae5c5d4c9a2701b69eb98f41a7c72816c446b5f4c750a"
+    },
+    {
+      "path": "docs/ui-redesign/P4_CREDENTIAL_PREVIEW_RELEASE_PUBLIC_CONTRACT.json",
+      "exists": true,
+      "sha256": "726fb778d8269b08f8fa9a5d8537b61d064f626159743b3643945c01b8e29f44"
+    },
+    {
+      "path": "frontend/package.json",
+      "exists": true,
+      "sha256": "35d994ae11e80c46ae3402eeaf45c3182ec73de892eb2c731c1202aa9fe87985"
+    },
+    {
+      "path": "frontend/package-lock.json",
+      "exists": true,
+      "sha256": "e51609bf8c4d417de1d795e37013de4068b441349568f0d259fa929df7467ae6"
+    },
+    {
+      "path": "frontend/tsconfig.json",
+      "exists": true,
+      "sha256": "5a3aef9f6a5f6446408e034fe752e617ffb2e37c78f3c42339695c4eb8550b7e"
+    },
+    {
+      "path": "frontend/vite.config.ts",
+      "exists": true,
+      "sha256": "5208b5d1ed6b699aa8f1b5dd699796ffe8b5b29df9ad87e1f0fcf88521d96f8b"
+    },
+    {
+      "path": "frontend/src/app/test-setup.ts",
+      "exists": true,
+      "sha256": "4f2cfb146a5ee9f27ff2b5f6b4137c8ce1f7f75d4f47f681f98d4ac9574f6415"
+    },
+    {
+      "path": "frontend/src/domain/panel.ts",
+      "exists": true,
+      "sha256": "4b357fb8291ede52f814bff25276796b63c6492b152e9876cd69927ce17e6148"
+    },
+    {
+      "path": "frontend/src/domain/shared.ts",
+      "exists": true,
+      "sha256": "72a56ec943325fd4d4024f379056118a6a54f208f11f9a527ebf151fbb5b7128"
+    },
+    {
+      "path": "frontend/src/auth/session.ts",
+      "exists": true,
+      "sha256": "ece4b8695e6551a40c53caf703d0d57dcb5ddf39d0271b2d37546cf9a627326b"
+    },
+    {
+      "path": "frontend/src/api/client.ts",
+      "exists": true,
+      "sha256": "ee3d7dfac1775b55032f3c79ed90624d664778cda34c1a20b16d33e062795eb0"
+    },
+    {
+      "path": "frontend/src/pages/credentials/model.ts",
+      "exists": true,
+      "sha256": "992dd12f914da64b037051b222b36a9d8a329e93b43965ab961210710465663a"
+    },
+    {
+      "path": "frontend/src/pages/credentials/ResultView.tsx",
+      "exists": true,
+      "sha256": "2a30924306f7ef520b083fd69e018d2e91fc5fa2b88fab5828a3b46f44eed6be"
+    },
+    {
+      "path": "frontend/src/pages/credentials/ResultView.test.tsx",
+      "exists": true,
+      "sha256": "37c80679cbd5583600f410ca8a2f3ad4c4081a5fc3f87629269d57323734b862"
+    },
+    {
+      "path": "frontend/src/pages/credentials/advancedApi.ts",
+      "exists": true,
+      "sha256": "2ab54d20217718b4a8beb9d7a65cde3da79a8ed4975e02e5cf695d95908ab3b0"
+    },
+    {
+      "path": "frontend/src/pages/credentials/advancedApi.test.ts",
+      "exists": true,
+      "sha256": "3406dce215c43ad12596cad011447b967b167e5da29e3f9a59d965b15cc588af"
+    },
+    {
+      "path": "frontend/src/pages/credentials/batch.ts",
+      "exists": true,
+      "sha256": "ca581f006b2c451bc472c89e0509fba459f6108b4248097699225fb52091a7a9"
+    },
+    {
+      "path": "frontend/src/pages/credentials/batch.test.ts",
+      "exists": true,
+      "sha256": "0980614f4372208f4a2d226bcb7d40a37783364f0da994d6ad98fd5f3a33b12b"
+    },
+    {
+      "path": "frontend/src/components/ui/button.tsx",
+      "exists": true,
+      "sha256": "4cd09b106629a41f1eb95992e0001eefdbaee72eaac57f80b6ad27d1ec2f7d4b"
+    },
+    {
+      "path": "frontend/src/components/ui/badge.tsx",
+      "exists": true,
+      "sha256": "bc4081078acb1ba8b704f5c4453342e0e584f52b3770fcf2c962e479e8d70b4a"
+    },
+    {
+      "path": "frontend/src/components/ui/progress.tsx",
+      "exists": true,
+      "sha256": "7c209290100f742f80756d3baa16ffd8d4b321802f6c1bd867b23d52057901aa"
+    },
+    {
+      "path": "frontend/src/components/ui/alert-dialog.tsx",
+      "exists": true,
+      "sha256": "7ad9a8c3667287a8ab45badb72c98b3432425642302618481cf14c4aab36e4ea"
+    },
+    {
+      "path": "frontend/src/pages/credentials/StatusBadges.tsx",
+      "exists": true,
+      "sha256": "4888b639feca904687f17c82419f5bf01a4dc8d8075136633068335360eba3d9"
+    }
+  ],
+  "actual_exports_evidence": {
+    "ManualResult": "ResultView exports type ManualResult=ReturnType<typeof manualResult>; private remainingPercentage/recoveryTime helpers are not exported. Read semantics, do not invent imports.",
+    "advanced": "Factory plus typed ConfigurePreviewResult/ReleaseQuotaGroupResult/AdvancedCredentialApi exist. Release may omit fields and only exposes cooldownUntil in quota_groups; never fabricate restricted booleans.",
+    "scope": "PanelScope requires mode,channelEpoch,sessionEpoch. PanelChannelSnapshot is not a complete Scope3. Validation snapshot identity changes independently of same scope."
+  }
+}

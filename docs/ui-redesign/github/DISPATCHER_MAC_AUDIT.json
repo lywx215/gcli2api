@@ -1,0 +1,107 @@
+{
+  "verdict": "CONDITIONAL_MAC_COMPATIBLE_WITHOUT_STARTUP_SOURCE_PATCH",
+  "audited_sources": [
+    {
+      "path": "C:/Users/lywx2/.codex/review/hook.py",
+      "sha256": "f6f1fef5c7cb312d7eadbd22a70ccfdf540efe3a635af400e792d47531f06435"
+    },
+    {
+      "path": "C:/Users/lywx2/.codex/review/USAGE.md",
+      "sha256": "b163fe091503111b54e72f6470c0a5670bcfe97e2d07f848376397cd0e1d40e3"
+    },
+    {
+      "path": "C:/Users/lywx2/.gemini/config/agents/codex-developer.md",
+      "sha256": "dbad10ff4dbe9ec1598ed6d55490803315be0773d4dff91f808f5ec23357d33b"
+    }
+  ],
+  "scope": "Only dispatcher source, usage and public developer-role text read. No credential, state, conversation, local settings or request data accessed. No shared files changed, external CLI/model invoked or grant created.",
+  "requirements": [
+    {
+      "item": "Python",
+      "detail": "Python >=3.10 required by Path.write_text(newline=...) at1196; Python3.12 matches prior Windows setup. stdlib only. Invoke with absolute Python executable and hook path; hook has no shebang."
+    },
+    {
+      "item": "CLI executable",
+      "lines": "282-292",
+      "detail": "Absolute ANTIGRAVITY_CLI_PATH selects existing file; otherwise shutil.which('agy') works on POSIX. Export absolute Mac executable path to actual hook process, not only interactive shell. Existing-file check does not verify executable permission; Mac binary must be executable and CLI-compatible. Root separately verifies official installer/options."
+    },
+    {
+      "item": "Role installation",
+      "lines": "442-447; USAGE131",
+      "detail": "Dispatcher passes --agent codex-developer by name; does not load role file itself. Actual source role is ~/.gemini/config/agents/codex-developer.md (not review/roles). Install role at Mac CLI-supported global role location, verify discovery using official CLI documentation. Role has no Windows paths, prohibits commands/network/other agents, inherits model."
+    },
+    {
+      "item": "Registration",
+      "detail": "Windows Python/path/PowerShell examples in USAGE55-75 cannot run on Mac. Register UserPromptSubmit and Stop against the same Mac-installed hook with absolute paths using the Mac host supported hook format. Actual local settings were deliberately not read; exact host registration syntax is root's documentation verification gate."
+    },
+    {
+      "item": "Permissions/auth",
+      "detail": "Writable project, CODEX_HOME/review, temporary directory and authorized CLI user storage are required; CLI needs executable permission. Use normal Mac user, approved execution context and fresh local login. No copied Windows credentials, grants, consumed requests, sessions or databases."
+    },
+    {
+      "item": "Encoding",
+      "lines": "148,267,451,1099-1100,1196,1328",
+      "detail": "Files/subprocess UTF8 explicit; stdin/stdout uses interpreter defaults. PYTHONUTF8=1 and PYTHONIOENCODING=utf-8 eliminate locale dependence; source/context must be UTF8. Do not rewrite snapshot newlines before baseline verification."
+    }
+  ],
+  "portable_code": [
+    {
+      "lines": "155-222",
+      "detail": "workflow lock selects nonblocking fcntl.flock on POSIX; short state transaction uses blocking flock. Both unlock/close in finally. Existing Windows msvcrt imports are branch-local."
+    },
+    {
+      "lines": "442-452",
+      "detail": "subprocess argv list with shell=False default; no cmd.exe/PowerShell dependency. Working directory is temporary workspace, inherited environment, explicit UTF8 and bounded timeout."
+    },
+    {
+      "lines": "74-108,1034-1072,1132-1149,1189-1199",
+      "detail": "pathlib resolution, os.sep overlap check, tempfile and same-directory atomic replace support POSIX. Fresh Mac repository must not reuse Windows worktree .git pointer. Recreate local worktree/checkout and verify baseline separately."
+    },
+    {
+      "lines": "137-141,1091",
+      "detail": "Paths are casefolded for workflow key and conflicts. On case-sensitive Mac volumes this conservatively merges case-only distinctions; avoid case-only project/file variants. Not an authorization bypass or a blocker for the present project."
+    }
+  ],
+  "patches": [
+    {
+      "priority": "REQUIRED_INSTALLATION_CHANGE_NOT_SOURCE_PATCH",
+      "target": "Mac hook registration and installation instructions",
+      "detail": "Replace Windows absolute interpreter/script/CLI paths and PowerShell invocation with Mac absolute paths and zsh-compatible startup. Supply environment to the GUI/host hook process explicitly. Do not transplant old hook state."
+    },
+    {
+      "priority": "CONDITIONAL_REQUIRED_IF_EDITING_EXISTING_EXECUTABLE_FILES",
+      "target": "hook.py:1186-1197 and rollback1203 onward",
+      "detail": "Delivery recreates a temporary file then replace, without preserving existing POSIX mode; executable scripts can lose execute bits. Capture original stat.S_IMODE, chmod replacement before replace and preserve on rollback; new files need an explicit policy, not blanket +x. No environment variable can preserve inode mode through current replacement. For present nonexecutable TS/TSX scope, no startup blocker; no-patch workaround is exclude executable files or explicitly restore known reviewed mode after delivery before validation."
+    },
+    {
+      "priority": "OPTIONAL_PORTABILITY_CLEANUP",
+      "target": "hook.py:233-246,282-288",
+      "detail": "Gate Windows .exe/WinGet candidate searches under os.name=='nt'; expanduser+resolve explicit executable overrides and check os.access(X_OK) on POSIX. Absolute valid override already avoids this issue; no mandatory source patch for current Mac setup."
+    },
+    {
+      "priority": "DOCUMENTATION_CORRECTION",
+      "target": "hook.py:295-313,690-694; USAGE102-137",
+      "detail": "Windows-specific login/permission advice should distinguish Mac current-user credential context. These are guidance strings, not Windows-only runtime APIs; do not claim Windows Credential Manager exists on Mac."
+    }
+  ],
+  "no_patch_environment": {
+    "ANTIGRAVITY_CLI_PATH": "Absolute path of official Mac agy executable, discovered after installation; not a .exe or shell command.",
+    "CODEX_HOME": "Absolute writable Mac Codex home used consistently by host and dispatcher; empty local workflow state, never restored from Windows.",
+    "PYTHONUTF8": "1",
+    "PYTHONIOENCODING": "utf-8",
+    "PATH": "Include official CLI directory if no explicit override; GUI may not inherit shell login configuration.",
+    "TMPDIR": "Normally leave Mac default; override only to an existing writable local temp directory if required.",
+    "CLAUDE_CODE_PATH": "Optional absolute Mac Claude executable only for separately authorized future review; no Claude install/call required for Antigravity development."
+  },
+  "verification": {
+    "in_memory_python_compile": "PASS",
+    "mock_posix_executable_override_and_PATH": "PASS",
+    "mock_posix_flock_both_context_managers": "PASS",
+    "mock_argv_subprocess_no_shell_utf8": "PASS",
+    "external_processes_started": 0,
+    "workflow_state_or_request_files_created": 0,
+    "limitation": "Windows-host extracted-function mocks only; no real macOS lock/filesystem/CLI execution or login verification."
+  },
+  "packaging": "Ship only public source/role/docs and these audit reports as selected by packager. Exclude state directories, authorization/session records, request JSON files (including synthetic ones), credentials/DBs/logs. Public source schema field names are code, not portable authorization. Fresh explicit human authorization on Mac must create a new local workflow; this audit grants no model call.",
+  "next_gate": "Root verifies official Mac CLI/role/host registration documentation and baseline package. On Mac first verify Python/version/path/executable/role locally without model calls; any actual no-tool model probe or development dispatch requires fresh applicable human authorization."
+}

@@ -1,0 +1,229 @@
+{
+  "document": "P2 FOUNDATION CORE6/AUTH6 OPAQUE PUBLIC CONTRACT",
+  "version": 1,
+  "state": "normative_frozen_for_next_two_request_batch; implementation_and_root_validation_pending",
+  "base_sha": "239bc48aab1d4db4f80e1197eb94e5ee7ae2c691",
+  "scope": "Shared core and authentication preparation within original UI-COMP-001..004 and UI-SUPP-012. No GUI/routes/console/page restoration in this batch. Cancelled MGMT remains cancelled.",
+  "authoring": "All frontend/test source by official Antigravity CLI only. This file is a coordinator specification, not implementation, a test result or an external-model call.",
+  "failure_record": "The preceding 22-file foundation request failed with no usable result and zero applied files; it is consumed and must not be replayed. These are fresh smaller requests with disjoint owners.",
+  "staging": {
+    "artifact": "full-parity-execution/P2_FOUNDATION_OPAQUE_CONTRACT.json",
+    "project_context": "docs/ui-redesign/P2_FOUNDATION_OPAQUE_CONTRACT.json",
+    "instruction": "Root copies this JSON as identical UTF-8 bytes into the named project context, computes its SHA-256, places that exact shared file in both requests and freezes it and all contexts until both deliveries finish. Never edit its contents during the batch. Do not dispatch until staging/context checks pass.",
+    "source_status": "This contract's public declarations/semantics are immutable for this batch; delivered source remains unverified until root unified typecheck and targeted tests pass."
+  },
+  "opaque_boundary": {
+    "core_owner": [
+      "frontend/src/domain/panel.ts",
+      "frontend/src/domain/panel.test.ts",
+      "frontend/src/api/client.ts",
+      "frontend/src/app/client.test.ts",
+      "frontend/src/api/config.ts",
+      "frontend/src/api/config.test.ts"
+    ],
+    "auth_owner": [
+      "frontend/src/auth/session.ts",
+      "frontend/src/auth/AuthProvider.tsx",
+      "frontend/src/auth/index.ts",
+      "frontend/src/auth/AuthProvider.test.tsx",
+      "frontend/src/app/fixtures.ts",
+      "frontend/src/app/fixture-routing.test.ts"
+    ],
+    "core_hidden_sources": [
+      "frontend/src/auth/session.ts",
+      "frontend/src/auth/AuthProvider.tsx",
+      "frontend/src/auth/index.ts",
+      "frontend/src/app/fixtures.ts"
+    ],
+    "auth_hidden_sources": [
+      "frontend/src/domain/panel.ts",
+      "frontend/src/api/client.ts",
+      "frontend/src/api/config.ts"
+    ],
+    "rules": [
+      "CORE consumes the session and fixture APIs described below, not their implementation bodies. AUTH consumes unscoped requestJson/ApiError/readSafeConfig described below, not their bodies.",
+      "The counterpart's write paths must not appear in context_files or be read by an absolute path, alias, live checkout, file search, tool, sibling temporary copy or old snapshot. This is a deliberate opaque API dependency, not removal of a needed implementation hash.",
+      "Existing read-only test setup and imports may refer to opaque modules; their API calls are defined here. Author code/test source against this normative contract without resolving or executing hidden bodies.",
+      "If a task actually needs a counterpart implementation detail not specified here, stop that portion, report the missing contract or body dependency, and have root convert the dependent work to a serial request. Do not guess internals or bypass write/context protection.",
+      "Neither developer executes shell commands or module loads. Root runs unified commands against both actual deliveries, so cross-implementation contract integration is checked rather than claimed in advance.",
+      "No change to counterpart/shared files, production stub/shim copy, dependency upgrade or module alias to imitate the hidden implementation."
+    ]
+  },
+  "session_api": {
+    "module": "@/auth/session",
+    "owner": "AUTH",
+    "types": {
+      "SessionSnapshot": "{token:string|null;sessionEpoch:number} EXACTLY these two fields",
+      "SessionValidationStatus": "'anonymous'|'pending'|'verified'|'unavailable'",
+      "SessionValidationSnapshot": "{sessionEpoch:number;status:SessionValidationStatus} token-free EXACTLY these two fields",
+      "SessionTokenOptions": "{requiresValidation?:boolean}"
+    },
+    "public_exports": [
+      "AUTH_STORAGE_KEY:'gcli2api_auth_token'",
+      "getSessionSnapshot():SessionSnapshot",
+      "subscribeSession(listener:()=>void):()=>void",
+      "registerSessionCleanup(cleanup:()=>void):()=>void",
+      "setSessionToken(token:string|null,persist?:boolean,options?:SessionTokenOptions):void",
+      "invalidateSession(epoch:number):void",
+      "syncSessionFromStorage(event:StorageEvent):void",
+      "getSessionValidationSnapshot():SessionValidationSnapshot",
+      "subscribeSessionValidation(listener:()=>void):()=>void"
+    ],
+    "auth_owner_internal_export": "__setSessionValidationStatus(epoch:number,status:SessionValidationStatus):boolean; only AUTH's validated probe/retry path may write it. Do not re-export the setter from @/auth or use it from feature/GUI code.",
+    "semantics": [
+      "getSessionSnapshot identity is stable until a token transition. It lazily restores the existing localStorage key only; unavailable storage falls back to memory. Initial restored nonnull token has validation status pending.",
+      "The two-argument/default setSessionToken behavior remains proven/verified for nonnull explicit tokens, as used by successful login and existing tests. Null token is anonymous. An optional requiresValidation:true marks a restored/replacement token pending.",
+      "Each setSessionToken call retains the legacy epoch advance and cleanup-on-transition behavior, even for explicit repeated calls; persist defaults true. publish both current snapshots before invoking cleanups, then notify listeners. A rejected stale invalidateSession must not advance the epoch.",
+      "All registered cleanups are invoked on each token transition; one cleanup exception does not prevent others. Unregister is idempotent. This is the guarantee CORE uses to abort in-flight requests and invalidate channel scopes.",
+      "invalidateSession only clears a still-present token for the exact captured epoch, at most once for concurrent failures. No stale response may erase a newer login.",
+      "syncSessionFromStorage reacts only to the existing auth key or clear event and the actual localStorage area. Read latest storage instead of event.newValue; unrelated/read-failed events preserve memory. Genuine nonnull replacement uses pending validation; clear sets anonymous.",
+      "getSessionValidationSnapshot and its subscribe function are separate, stable useSyncExternalStore-compatible APIs. No token, raw config, password or source metadata appears there. Identity changes only for the current epoch or actual status change.",
+      "Successful validation updates pending to verified without incrementing sessionEpoch or running session cleanups. Transient failure becomes unavailable without clearing token. Stale epoch updates return false and do nothing; anonymous is valid only for null token.",
+      "Explicit retry goes from unavailable to pending for the same epoch, creates a new attempt generation and cannot revive previous-session work.",
+      "Session state never imports CORE/client/config/fixture bodies; only AuthProvider owns probe execution. This avoids circular client->session->client initialization."
+    ]
+  },
+  "transport_api": {
+    "module": "@/api/client",
+    "owner": "CORE",
+    "preserved_types": {
+      "Query": "Record<string,string|number|boolean|null|undefined>, re-exported from domain/shared",
+      "RequestOptions": "{method?:string;query?:Query;body?:unknown|FormData;signal?:AbortSignal;scope?:PanelScope}",
+      "BlobResult": "{blob:Blob;response:Response}"
+    },
+    "public_exports": [
+      "ApiError extends Error; constructor(status:number,payload:unknown,message?:string); public status:number,payload:unknown; name='ApiError'",
+      "getServiceBase():string",
+      "createServiceUrl(path:string,query?:Query):URL",
+      "requestJson<T>(path:string,options?:RequestOptions):Promise<T>",
+      "requestBlob(path:string,options?:RequestOptions):Promise<BlobResult>"
+    ],
+    "unscoped_semantics_for_auth": [
+      "Unscoped existing call signatures/behavior remain unchanged. AUTH calls auth/login and readSafeConfig without mode scope; these functions do not import channel/routing/GUI state from AUTH.",
+      "requestJson sends only explicit body/query fields to the injected same-origin service root. JSON gets Content-Type application/json; FormData keeps browser boundary. Scope is never serialized. No automatic mode field or extra request.",
+      "GET config/get?include_secrets=false and POST auth/login use the caller's exact options. Login excludes current bearer; other requests use current nonnull session token. cache:no-store, redirect:error and credentials:same-origin remain.",
+      "AbortSignal and session-epoch fencing are checked before send, after headers and after response body; ignored network abort cannot yield stale data. Network errors remain transport errors; explicit cancellation/staleness is AbortError.",
+      "No automatic retry, including writes. HTTP2xx body is returned for endpoint-specific semantic normalization; no universal success=true assumption.",
+      "Errors carry structured payload only when JSON is parseable; non-JSON payload is null. Public error message never includes raw payload, HTML, token or server detail.",
+      "Only HTTP401/403 with a plain object whose sole key is detail and whose exact value is one of the four approved local strings invalidates session: 密码错误, Not authenticated, Invalid authentication credentials, panel_authentication_required. Preserve first three; fourth is demonstrated by the current quota-summary missing-bearer dependency.",
+      "An auth/login failure never invalidates the current existing session. Business/upstream401/403, extra provenance/filename/error fields, arbitrary detail or any200 never log out. AUTH can rely on central invalidation for exact panel proof and must not broadly clear token in its catch.",
+      "Root/prefix containment, invalid metadata rejection and exactly-once path encoding stay equivalent to the existing implementation. Paths remain relative to the service root, not /ui or production origin."
+    ],
+    "scoped_semantics": [
+      "Optional scope is PanelScope from domain/panel. Require current mode/channelEpoch/sessionEpoch before transport and after headers/body, register scoped channel cleanup in addition to session cleanup, and remove subscriptions after completion.",
+      "If explicit query.mode, JSON body.mode or FormData mode is present and mismatches scope.mode, reject before sending. Do not invent the correct endpoint mode position or silently rewrite the input.",
+      "Channel change abort/fence only scoped requests; unscoped shared settings/auth/log API calls retain their session behavior."
+    ]
+  },
+  "safe_config_api": {
+    "module": "@/api/config",
+    "owner": "CORE",
+    "types": {
+      "SafeConfigResponse": "{config:Record<string,unknown>;capabilities:string[];env_locked:string[];security:Record<string,unknown>;secret_fields:Record<'api_password'|'panel_password'|'password',{configured:boolean}>}"
+    },
+    "public_exports": [
+      "readSafeConfig(signal?:AbortSignal):Promise<SafeConfigResponse>"
+    ],
+    "semantics": [
+      "Perform exactly GET config/get with query {include_secrets:false} and optional signal using unscoped requestJson. Never omit false, auto-fallback to true or use /management/v1.",
+      "Validate the successful safe response envelope; config must not contain any of the three password keys, the configured flags must be booleans and capability/env lock values must be arrays of strings. Do not coerce malformed values into authenticated success.",
+      "Unsafe/malformed successful response throws a fixed safe ApiError with status200 and null payload, without echoing or retaining rejected values. Transport/API errors preserve ApiError/AbortError provenance for the caller.",
+      "Do not import settings/types or any feature body. No plaintext read helper or production stub. Return a projected safe envelope; AuthProvider consumes validity only and discards the data.",
+      "Network/proxy field values are ordinary safe configuration under this existing endpoint, but neither this module nor AuthProvider persists/logs them or caches the response globally."
+    ]
+  },
+  "fixture_api": {
+    "module": "@/app/fixtures",
+    "owner": "AUTH",
+    "types": {
+      "FixtureHandler": "(url:URL,init:RequestInit)=>Response|Promise<Response>"
+    },
+    "public_exports": [
+      "registerFixtureHandler(handler:FixtureHandler):()=>void",
+      "fixtureFetch(url:URL,init:RequestInit):Promise<Response>"
+    ],
+    "semantics": [
+      "Keep current registration order, first response other than404 wins; unregister removes exactly that handler and is idempotent.",
+      "Preserve current explicit DEV model-routing lazy adapter and auth/login synthetic response. Do not eagerly import page bodies or add model/credential fixtures.",
+      "Add GET config/get with an explicit include_secrets=false safe synthetic response matching SafeConfigResponse. It contains only invented ordinary config values/example.invalid URLs and configured booleans, with none of the three password keys.",
+      "Absent/true include_secrets must not produce plaintext or pretend a reveal succeeded; it remains an unsupported fixture request unless a later designated fixture explicitly handles it. No real backend fallback.",
+      "Unknown/unhandled fixture route returns fixed501 synthetic_fixture_not_registered. AbortSignal is checked before and after async handlers. CORE also applies session/scope fencing.",
+      "Production or fixture-disabled request transport never enters fixtureFetch; CORE keeps its existing DEV-and-flag gate."
+    ]
+  },
+  "panel_core_api": {
+    "module": "@/domain/panel",
+    "owner": "CORE",
+    "types": {
+      "PanelMode": "'antigravity'|'geminicli'",
+      "PanelChannelSnapshot": "{readonly mode:PanelMode;readonly channelEpoch:number}",
+      "PanelScope": "{readonly mode:PanelMode;readonly channelEpoch:number;readonly sessionEpoch:number}",
+      "CredentialChange": "{readonly mode:PanelMode;readonly sessionEpoch:number;readonly filenames?:readonly string[]}"
+    },
+    "public_exports": [
+      "PANEL_MODES:readonly PanelMode[]",
+      "isPanelMode(value:unknown):value is PanelMode",
+      "credentialIdentityKey(mode:PanelMode,filename:string):string",
+      "getPanelChannelSnapshot():PanelChannelSnapshot",
+      "subscribePanelChannel(listener:()=>void):()=>void",
+      "registerChannelCleanup(cleanup:()=>void):()=>void",
+      "capturePanelScope(sessionEpoch:number):PanelScope",
+      "isPanelScopeCurrent(scope:PanelScope,currentSessionEpoch:number):boolean",
+      "notifyCredentialChange(change:CredentialChange):void",
+      "subscribeCredentialChanges(listener:(change:CredentialChange)=>void):()=>void"
+    ],
+    "narrow_internal_exports": [
+      "__commitPanelChannel(mode:PanelMode):void; only future guarded route commit and module tests may call",
+      "__invalidatePanelChannel():void; only session cleanup/future coordinator disposal and module tests may call"
+    ],
+    "semantics": [
+      "React-free; no routing/provider/page imports or credential caches. Default modeAG, channelEpoch0; snapshot identity changes only on actual mode commit or invalidation. Store only harmless enum/epoch in memory, no new browser-storage key.",
+      "Identity is collision-safe JSON tuple serialization [mode,filename], retaining Unicode/percent characters without path encoding. Namespaced identity is not a source of credentials.",
+      "Internal commit of a different valid mode increments channelEpoch exactly once, invokes scoped cleanup before publishing the new snapshot and notifies listeners; no-op mode does nothing. Invalid mode is rejected.",
+      "Internal invalidation increments epoch and clears scoped work without resetting harmless selected mode. Integrate once with opaque registerSessionCleanup; avoid duplicate registrations or test-isolation leaks.",
+      "capturePanelScope copies current mode/channel epoch plus caller session epoch; isPanelScopeCurrent compares all three with current snapshot/session epoch. No token in scope.",
+      "Feature code cannot invoke unguarded setters through UI controls. No channels/routes/GUI implementation here; their later accepted implementation alone calls __commitPanelChannel after all route guards approve.",
+      "CredentialChange is metadata only: copy/whitelist mode, epoch and deduplicated basename-like filenames, bound5000, no objects/raw error/token/code/authURL/File/credentials. Drop stale-session or invalid events, isolate listener exceptions, retain no event history and support cleanup/unsubscribe.",
+      "The registry contracts enable later import producer/credentials observer without either worker reading the other's body; they do not implement a batch engine or job persistence."
+    ]
+  },
+  "auth_provider_api": {
+    "module": "@/auth/AuthProvider and @/auth",
+    "owner": "AUTH",
+    "preserve": [
+      "AuthProvider({children:ReactNode})",
+      "useAuth() existing token/authenticated/sessionEpoch/login/logout fields",
+      "registerSessionCleanup re-export from @/auth"
+    ],
+    "additive_fields": {
+      "validationStatus": "SessionValidationStatus",
+      "retryValidation": "()=>void"
+    },
+    "new_reexports_from_auth_index": [
+      "getSessionValidationSnapshot",
+      "subscribeSessionValidation"
+    ],
+    "semantics": [
+      "Use session and separate validation snapshots. authenticated means nonnull token plus current-epoch verified validation. Current App already gates business pages on authenticated, so pending/unavailable cache restores cannot mount active page effects. GUI status/route changes are deferred to later serial batch.",
+      "Restored cache and genuine cross-tab replacement require safe prevalidation. Exactly one active probe for the current epoch/attempt, including StrictMode mount/unmount/remount; direct successful login/default explicit setSessionToken is proven and does not add a redundant config request.",
+      "Use opaque readSafeConfig(signal) once for validation; do not reconstruct/stub it, inspect unsafe legacy fields, store a config payload or add a second fetch. Successful shape validation marks the matching epoch verified without epoch advance.",
+      "Exact central panel auth invalidation removes the token. Other401/403/network/5xx or malformed success becomes unavailable and leaves token persisted; no broad catch logout or false verified state. retryValidation allows an explicit new same-epoch probe.",
+      "Abort/fence on logout/token replacement/unmount and generation changes; late success/error cannot authenticate/erase a newer session. If StrictMode dedup needs a shared in-flight probe, retain only transient promise/controller/epoch metadata, dispose result and safely abort real final unmount.",
+      "Keep existing latest-login attempt protection, logout cleanup, failed login behavior, memory storage fallback and delayed cross-tab event handling.",
+      "Do not alter GUI/LoginScreen/App/routes/channels/console, page source, dependency/style or test setup. Return validation fields so later GUI/console can consume the accepted real interface.",
+      "Frontend tests must exercise real combined shared client/safe config behavior when root runs them; tests may inject/mock transport timing but production must not contain mock aliases or stubs."
+    ]
+  },
+  "acceptance": {
+    "combined": "After both official deliveries root runs npm run typecheck then targeted npm run test -- src/domain/panel.test.ts src/app/client.test.ts src/api/config.test.ts src/auth/AuthProvider.test.tsx src/app/fixture-routing.test.ts. No developer shell execution.",
+    "must_cover": [
+      "Two-field session snapshot compatibility; token-free stable validation snapshot; default explicit setSessionToken proof; pending restore/cross-tab; exactly-one current StrictMode probe; direct-login no extra request; stale and transient outcome handling.",
+      "Safe config false query/poison/malformed errors; metadata/prefix/filename handling; exact local auth versus upstream business401/403 including fourth one-field missing-bearer shape.",
+      "Scoped channel/session/header/body races, mode mismatch before network, no automatic writes/retry, cleanup idempotence.",
+      "Fixture registration/model-routing preservation, safe config false only, no plaintext reveal fixture and no production/live fallback.",
+      "Opaque contracts actual exported signatures, no counterpart context/read bypass, only each owner's6 allowed files changed."
+    ],
+    "remaining": "GUI/routes/channels/console bind only after real accepted exports are read serially. Native64-item restoration, fullfrontend tests/build/six-chunk checks, real integration and P3 remain pending."
+  }
+}
+

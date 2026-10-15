@@ -1,4 +1,5 @@
 import { Badge } from '@/components/ui/badge'
+import type { PanelMode } from '@/domain/panel'
 import { QuotaStateBadge } from './StatusBadges'
 import { manualResult, object, count, familyStatus, type RecordValue } from './model'
 export type ManualResult = ReturnType<typeof manualResult>
@@ -26,6 +27,7 @@ const updateReasons: Record<string, string> = {
 }
 const updateStates: Record<string, string> = { applied: '已更新', pending: '写回结果尚未确认', skipped: '未应用', failed: '更新失败', unknown: '写回状态未知' }
 const updateNames = new Set(['credential', 'quota', 'model_access', 'project', 'counts', 'diagnostics', 'disabled', 'cycle_stats', 'statistics', 'gemini-shared', 'claude-gpt-shared', ...Object.keys(phases)])
+const agOnlyUpdateKeys = new Set(['gemini-shared', 'claude-gpt-shared', 'model_access', 'catalog', 'credit', 'credit_mode', 'opus', 'claude-opus-5-5', 'claude-opus-4-6'])
 function explanation(labels: Record<string, string>, value: unknown, fallback: string) {
   return typeof value === 'string' && Object.prototype.hasOwnProperty.call(labels, value) ? labels[value] : fallback
 }
@@ -58,8 +60,9 @@ function recoveryTime(model: RecordValue) {
   if (year < 1000 || calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month - 1 || calendar.getUTCDate() !== day || calendar.getUTCHours() !== hour || calendar.getUTCMinutes() !== minute || calendar.getUTCSeconds() !== second || offsetHour > 23 || offsetMinute > 59 || !Number.isFinite(date.getTime())) return '恢复时间未知'
   return `${new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Shanghai', hourCycle: 'h23' }).format(date)}（北京时间）`
 }
-export function ManualResultView({ result }: { result: ManualResult }) {
+export function ManualResultView({ result, mode = 'antigravity' }: { result: ManualResult; mode?: PanelMode }) {
   const failure = failureExplanation(result)
+  const updates = mode === 'geminicli' ? result.updates.filter(u => !agOnlyUpdateKeys.has(u.name)) : result.updates
   return <section className="grid gap-2 rounded-xl border bg-card p-3 text-sm text-card-foreground" aria-label="人工操作结果">
     <p className={result.success ? 'font-medium text-success' : 'font-medium text-warning'}>上游操作：{result.success ? '成功' : '未成功 / 未确认'} · HTTP {httpStatus(result.httpStatus) ?? '未知'} · 上游 HTTP {httpStatus(result.upstreamStatus) ?? '未知'}</p>
     {'phase' in result.data && <p>阶段：{explanation(phases, result.data.phase, '请求处理')}</p>}
@@ -67,15 +70,16 @@ export function ManualResultView({ result }: { result: ManualResult }) {
     {failure && <p className="text-warning">结果说明：{failure}</p>}
     {result.verifiedReply !== null && <p className={result.verifiedReply ? 'text-success' : 'text-destructive'}>固定回复校验：{result.verifiedReply ? '通过' : '未通过'}</p>}
     <p>状态写回独立于上游结果：</p>
-    {result.updates.length ? result.updates.map(u => { const update = object(object(result.data.state_update)[u.name]); return <div key={u.name}>
+    {updates.length ? updates.map(u => { const update = object(object(result.data.state_update)[u.name]); return <div key={u.name}>
       <Badge variant={u.status === 'applied' ? 'success' : u.status === 'failed' ? 'destructive' : u.status === 'pending' ? 'warning' : 'info'}>{updateNames.has(u.name) ? u.name : '其他状态'}：{u.status}</Badge>
       <p className="mt-1 text-[13px] text-muted-foreground">{updateStates[u.status]}{'reason' in update ? `（${explanation(updateReasons, update.reason, '未提供可识别原因，请重新读取状态确认。')}）` : ''}</p>
     </div> }) : <p>未提供写回状态</p>}
-    <Evidence data={result.data} />
+    <Evidence data={result.data} mode={mode} />
     <div className="max-h-48 overflow-auto">{Object.entries(object(result.data.models)).filter(([, raw]) => object(raw).visible !== false).map(([name, raw]) => { const model = object(raw); return <p key={name} className="break-all">{name}：剩余 {remainingPercentage(model.remaining)} · {recoveryTime(model)}</p> })}</div>
   </section>
 }
-export function Evidence({ data }: { data: RecordValue }) {
+export function Evidence({ data, mode = 'antigravity' }: { data: RecordValue; mode?: PanelMode }) {
+  if (mode === 'geminicli') return null
   return <div className="grid gap-2 text-[13px]"><div><QuotaStateBadge data={data} group="gemini-shared" label="Gemini" /></div><div><QuotaStateBadge data={data} group="claude-gpt-shared" label="Claude / GPT" /></div><p>Opus 5.5：{familyStatus(data.model_access_families, 'claude-opus-5-5')}；Opus 4.6：{familyStatus(data.model_access_families, 'claude-opus-4-6')}</p><p className="text-muted-foreground">目录支持有效期为 12 小时；权限、额度与生成验证分别判断。</p></div>
 }
 export function ErrorSummary({ data }: { data: RecordValue }) {
@@ -83,5 +87,5 @@ export function ErrorSummary({ data }: { data: RecordValue }) {
   return <div className="text-sm"><p>错误码：{codes ? codes.join('、') || '无已记录错误' : '不可用'}</p>{Object.entries(object(data.error_classifications)).map(([code, value]) => <p key={code}>分类 {code}：{typeof value === 'string' ? value : '已记录，无法识别'}</p>)}<p className="text-[13px] text-muted-foreground">仅显示错误分类，不回显完整上游正文。</p></div>
 }
 export function CycleStatistics({ data }: { data: RecordValue }) {
-  return <div className="text-[13px] text-muted-foreground"><p>累计成功：{count(data.success_count) ?? '不可用'} · 失败：{count(data.failure_count) ?? '不可用'}</p>{['cycle_stats', 'last_cycle_stats'].map(key => <div key={key}><p>{key === 'cycle_stats' ? '当前周期' : '上个周期'}</p>{Object.entries(object(data[key])).map(([family, raw]) => <p key={family}>{family}：{Object.entries(object(raw)).filter(([, v]) => typeof v === 'number').map(([k, v]) => `${k} ${v}`).join(' / ') || '不可用'}</p>)}</div>)}</div>
+  return <div className="text-[13px] text-muted-foreground"><p>累计成功：{count(data.success_count) ?? '不可用'} · 失败：{count(data.failure_count) ?? '不可用'}</p>{['cycle_stats', 'last_cycle_stats'].map(key => { const cycle = object(data[key]); return <div key={key}><p>{key === 'cycle_stats' ? '当前周期' : '上个周期'}</p>{Object.keys(cycle).length > 0 ? ['pro', 'flash', 'other', 'total'].map(k => <p key={k}>{k}：{count(cycle[k]) ?? '不可用'}</p>) : null}</div> })}</div>
 }
