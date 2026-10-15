@@ -56,11 +56,16 @@ class CollaborationGuardTests(unittest.TestCase):
             validate_plan(self.root, self.plan)
 
     def test_excess_concurrency_and_retries_are_rejected(self):
-        for key, value in (("global_cli_limit", 9), ("per_host_cli_limit", 5), ("retry_max_total_attempts", 4)):
+        for key, value in (("global_cli_limit", 17), ("per_host_cli_limit", 9), ("retry_max_total_attempts", 4)):
             plan = copy.deepcopy(self.plan)
             plan["execution_policy"][key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
                 validate_plan(self.root, plan)
+
+    def test_sixteen_total_eight_per_host_is_accepted(self):
+        self.plan["execution_policy"]["global_cli_limit"] = 16
+        self.plan["execution_policy"]["per_host_cli_limit"] = 8
+        validate_plan(self.root, self.plan, verify_hashes=True)
 
     def test_github_cannot_start_a_model(self):
         self.plan["execution_policy"]["max_automatic_runs"] = 1

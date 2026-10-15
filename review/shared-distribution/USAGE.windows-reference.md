@@ -65,7 +65,7 @@ Out-of-scope changes, revoked authorization and changed original/context files c
 Only allowed changed files are copied back. Codex receives changed paths and the child summary and then performs
 acceptance checks. No automatic commit, push, release or reviewer call is performed.
 
-For one to eight independent subtasks, repeat `--request` in the **same** command:
+For one to sixteen independent subtasks, repeat `--request` in the **same** command:
 
 ```powershell
 & 'C:/Users/lywx2/AppData/Local/Programs/Python/Python312/python.exe' `
@@ -76,7 +76,7 @@ For one to eight independent subtasks, repeat `--request` in the **same** comman
 ```
 
 The same actual project/session and current development authorization cover the whole batch.
-At most eight requests are accepted; nine or more are rejected before any CLI call. The dispatcher
+At most sixteen requests are accepted; seventeen or more are rejected before any CLI call. The dispatcher
 validates every request and all request pairs, then reserves the entire batch's IDs atomically
 before any CLI call. Write/write and write/context overlaps, including path aliases and file/parent
 collisions, are rejected up front. Shared read-only context is permitted. Declare every project file
@@ -144,7 +144,7 @@ Official documentation:
 - https://www.antigravity.google/docs/cli/headless/
 - https://www.antigravity.google/docs/subagents/
 
-Eight-way capacity was enabled on 2026-10-14. A batch may contain 1–8 independent requests. Use fewer requests when dependencies or file conflicts prevent safe concurrency. This changes capacity only; it does not authorize development, launch extra CLI sessions, alter model limits, or enable native subagents.
+Eight-way capacity was enabled on 2026-10-14 and increased to sixteen on 2026-10-15. A batch may contain 1–16 independent requests. Use fewer requests when dependencies or file conflicts prevent safe concurrency. This changes capacity only; it does not authorize development, launch extra CLI sessions, alter model limits, or enable native subagents.
 
 ## Scoped dispatch efficiency and failure diagnostics (2026-10-14)
 
@@ -154,7 +154,7 @@ Prefer a complete coherent module per request, grouping related implementation, 
 regressions into an ordered task package instead of separate requests for tiny edits. Preserve separate
 source modules. Keep required project instructions and actual dependencies as context, without repeated
 historical evidence. Freeze shared public interfaces before dependent page work; run independent
-modules in the same batch (up to eight). Dependencies inside one ordered package run serially in its
+modules in the same batch (up to sixteen). Dependencies inside one ordered package run serially in its
 single temporary workspace. Dependencies across packages must run in later batches. Do not omit
 necessary context or replay consumed requests.
 
@@ -167,10 +167,10 @@ Timings and counts are diagnostic evidence; improved real throughput has not yet
 
 ## Ordered module packages and bounded retry opt-in (2026-10-15)
 
-Capacity remains eight independent CLI processes. Each slot may now receive one request containing
+Capacity is sixteen independent CLI processes. Each slot may now receive one request containing
 two to five related tasks (up to twelve), executed in the supplied order within ONE CLI session.
 Use the union of their individual file allowlists and all actual read dependencies. Keep source files
-modular. Do not group unrelated modules merely to fill a slot, or send eight requests which write or
+modular. Do not group unrelated modules merely to fill a slot, or send concurrent requests which write or
 depend on each other's files.
 
 Example new request fields, alongside the existing authorization_id/task/allowed_files/context_files/acceptance:
@@ -209,7 +209,24 @@ Out-of-scope edits, deletion, changed files, revoked/replaced grants, authentica
 errors, cancellations, local print/process timeouts and malformed/incomplete results do not retry.
 No login bypass, role change, production operation or recursive replay of a consumed request occurs.
 
-Retries are sequential within their worker slot, so eight slots never become sixteen or twenty-four
+Retries are sequential within their worker slot, so sixteen slots never become thirty-two or forty-eight
 concurrent CLI processes. A final failure remains consumed; manual redispatch of the same request is
 still rejected. Existing delivered or failed requests are unaffected. The opt-in must be covered by
 the human's current development authorization; changing this capability does not create that grant.
+
+## Sixteen-slot capacity (2026-10-15)
+
+The human requested a capacity increase to sixteen. MAX_DEVELOPMENT_JOBS is now 16;
+17 requests reject before any CLI call. This is local batch capacity, not an account
+quota promise or a distributed semaphore. The current two-host coordination budget
+is at most 16 total and at most 8 per host; narrower existing grants and module
+ownership still win. Windows and Mac independently sum their active counts.
+
+Already-running batches retain their loaded code and worker count. Existing 3-, 4-
+and 8-slot grants are not widened and stored authorizations are not rewritten.
+The project staging helper recognizes a distinct future sixteen-slot task, only
+after a real matching human development grant in that project/session. Capacity
+setup alone starts no CLI, creates no grant and consumes no request. Sequential
+bounded retries, review rounds, scopes, conflict/hash checks and revocation stay
+unchanged. Sync this same source to Mac through its normal user-level installation;
+no second project runner is introduced.

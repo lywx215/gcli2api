@@ -32,7 +32,7 @@ CONTINUE_ALIASES = {CONTINUE_COMMAND, "/claude-review-continue"}
 AGY_START_ALIASES = ("请反重力审核", "启用反重力审核", "/antigravity-review")
 AGY_CONTINUE_ALIASES = {"继续反重力审核", "/antigravity-review-continue"}
 DEVELOP_ALIASES = ("授权反重力开发", "请反重力开发", "/antigravity-develop")
-MAX_DEVELOPMENT_JOBS = 8
+MAX_DEVELOPMENT_JOBS = 16
 MAX_DEVELOPMENT_ATTEMPTS = 3
 DEVELOP_SCHEMA = {
     "type": "object", "properties": {
@@ -1228,7 +1228,7 @@ def fail_development_job(path, authorization_id, job, error):
 def execute_development_batch(root, session, request_names):
     root = Path(root).resolve()
     if not isinstance(request_names, list) or not 1 <= len(request_names) <= MAX_DEVELOPMENT_JOBS:
-        raise ValueError("Development dispatch accepts one to eight request files")
+        raise ValueError(f"Development dispatch accepts one to {MAX_DEVELOPMENT_JOBS} request files")
     path = state_file(root, session)
     with ExitStack() as stack:
         with state_update_lock(path):
@@ -1364,7 +1364,7 @@ if __name__ == "__main__":
         parser.add_argument("--dispatch", action="store_true")
         parser.add_argument("--cwd", required=True)
         parser.add_argument("--session", required=True)
-        parser.add_argument("--request", required=True, action="append", help="One to eight independent request files")
+        parser.add_argument("--request", required=True, action="append", help=f"One to {MAX_DEVELOPMENT_JOBS} independent request files")
         args = parser.parse_args()
         try:
             result = dispatch_development(args.cwd, args.session, args.request)

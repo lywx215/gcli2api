@@ -7,8 +7,8 @@
   "execution_policy": {
     "mode": "queue_only",
     "max_automatic_runs": 0,
-    "global_cli_limit": 8,
-    "per_host_cli_limit": 4,
+    "global_cli_limit": 16,
+    "per_host_cli_limit": 8,
     "current_mac_independent_packages": 2,
     "development_authorization": "fresh local human grant per project/session",
     "retry_max_total_attempts": 3,

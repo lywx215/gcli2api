@@ -34,7 +34,7 @@ def validate_plan(root: Path, plan: dict, *, verify_hashes: bool = False) -> Non
     policy = plan["execution_policy"]
     if policy.get("mode") != "queue_only" or policy.get("max_automatic_runs") != 0:
         raise ValueError("GitHub must remain queue_only with zero automatic model runs")
-    if not 1 <= policy["global_cli_limit"] <= 8 or not 1 <= policy["per_host_cli_limit"] <= 4:
+    if not 1 <= policy["global_cli_limit"] <= 16 or not 1 <= policy["per_host_cli_limit"] <= 8:
         raise ValueError("CLI concurrency exceeds the approved bounds")
     if not 1 <= policy["retry_max_total_attempts"] <= 3:
         raise ValueError("Retry limit exceeds three total attempts")

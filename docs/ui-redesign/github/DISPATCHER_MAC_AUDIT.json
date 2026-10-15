@@ -103,5 +103,18 @@
     "limitation": "Windows-host extracted-function mocks only; no real macOS lock/filesystem/CLI execution or login verification."
   },
   "packaging": "Ship only public source/role/docs and these audit reports as selected by packager. Exclude state directories, authorization/session records, request JSON files (including synthetic ones), credentials/DBs/logs. Public source schema field names are code, not portable authorization. Fresh explicit human authorization on Mac must create a new local workflow; this audit grants no model call.",
-  "next_gate": "Root verifies official Mac CLI/role/host registration documentation and baseline package. On Mac first verify Python/version/path/executable/role locally without model calls; any actual no-tool model probe or development dispatch requires fresh applicable human authorization."
+  "next_gate": "Root verifies official Mac CLI/role/host registration documentation and baseline package. On Mac first verify Python/version/path/executable/role locally without model calls; any actual no-tool model probe or development dispatch requires fresh applicable human authorization.",
+  "capacity_update_20261015": {
+    "batch_capacity": 16,
+    "coordination_global_limit": 16,
+    "coordination_per_host_limit": 8,
+    "updated_hook_sha256": "97469199c128059a5f55063bc70bec4c4f72a0f9f04f6f8a08fa549feae80a55",
+    "updated_usage_sha256": "a6c2aa8bc5990f3cd06ee011c6ff87f74bbd380c498584831af90f0dc1bc8903",
+    "change": "Hook changes only the capacity constant and two capacity help/error strings; no OS or authorization logic changes.",
+    "validation": "21 offline synthetic dispatcher tests passed on Windows, including 16 active workers and rejection of request 17 before any CLI call.",
+    "external_model_calls": 0,
+    "native_mac_verified": false,
+    "prior_audit": "The audited_sources above remain the historical eight-way source hashes; this section identifies the new distribution without claiming a native Mac run.",
+    "old_grants": "Existing 3/4/8-way grants are not enlarged; no authorization/session state is distributed or modified."
+  }
 }
