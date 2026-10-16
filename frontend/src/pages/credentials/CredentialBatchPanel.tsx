@@ -737,7 +737,7 @@ export function CredentialBatchPanel(props: CredentialBatchPanelProps): React.JS
 
   return (
     <section
-      className="space-y-4 rounded-xl border border-border bg-card p-4 text-card-foreground shadow-sm"
+      className="space-y-3 rounded-lg border border-border bg-card p-3 text-card-foreground shadow-sm"
       aria-label="批量操作面板"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1167,6 +1167,7 @@ export function CredentialBatchPanel(props: CredentialBatchPanelProps): React.JS
         }}
       >
         <AlertDialogContent
+          className="max-w-md rounded-lg p-4"
           onCloseAutoFocus={(e) => {
             if (
               !isMountedRef.current ||
@@ -1211,8 +1212,8 @@ export function CredentialBatchPanel(props: CredentialBatchPanelProps): React.JS
             }
           }}
         >
-          <AlertDialogHeader>
-            <AlertDialogTitle>确认批量操作</AlertDialogTitle>
+          <AlertDialogHeader className="space-y-1">
+            <AlertDialogTitle className="text-base font-semibold">确认批量操作</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2 text-xs text-muted-foreground">
                 <p>
@@ -1257,8 +1258,9 @@ export function CredentialBatchPanel(props: CredentialBatchPanelProps): React.JS
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
+          <AlertDialogFooter className="mt-2 gap-2">
             <AlertDialogCancel
+              className="h-8 px-3 text-xs"
               onClick={(e) => {
                 e.preventDefault();
                 if (activeConfirmation) handleCancel(activeConfirmation);
@@ -1267,6 +1269,7 @@ export function CredentialBatchPanel(props: CredentialBatchPanelProps): React.JS
               取消
             </AlertDialogCancel>
             <AlertDialogAction
+              className="h-8 px-3 text-xs"
               onClick={(e) => {
                 e.preventDefault();
                 if (activeConfirmation) handleConfirm(activeConfirmation);

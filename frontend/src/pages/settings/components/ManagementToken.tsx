@@ -181,25 +181,25 @@ export function ManagementToken({ status, onUpdate }: { status?: TokenStatus; on
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>Management Token</CardTitle>
+      <CardHeader className="p-3 pb-1.5">
+        <CardTitle className="text-base font-semibold">Management Token</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={!status || status.locked ? 'warning' : status.configured ? 'success' : 'info'}>
+      <CardContent className="p-3 pt-0 space-y-2.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Badge variant={!status || status.locked ? 'warning' : status.configured ? 'success' : 'info'} className="h-5 text-xs py-0">
             {!status ? '状态未知' : status.configured ? '已配置' : '未配置（Management API 关闭）'}
             {status?.locked ? ' · 环境变量锁定' : ''}
           </Badge>
-          <Badge variant="outline">
+          <Badge variant="outline" className="h-5 text-xs py-0">
             <span className="text-muted-foreground mr-1">来源：</span>
             <span>{formatTokenSource(status?.source)}</span>
           </Badge>
         </div>
-        <label htmlFor="management-token" className="text-sm font-medium text-foreground">
+        <label htmlFor="management-token" className="text-xs md:text-[13px] font-medium text-foreground block">
           新 Token（独立保存）
         </label>
         <Input
-          className="aria-invalid:border-destructive aria-invalid:focus-visible:ring-destructive"
+          className="h-8 text-base md:text-[13px] aria-invalid:border-destructive aria-invalid:focus-visible:ring-destructive"
           ref={input}
           id="management-token"
           type="password"
@@ -217,44 +217,47 @@ export function ManagementToken({ status, onUpdate }: { status?: TokenStatus; on
           }}
           disabled={disabled}
         />
-        <p id="management-token-help" className="text-[13px] leading-4 text-muted-foreground">
+        <p id="management-token-help" className="text-[12px] leading-tight text-muted-foreground">
           未提交输入只留在当前页面；环境锁定、会话变化或离开本页会清除。
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" disabled={disabled || !token} onClick={() => void act('PUT')}>
+          <Button type="button" size="sm" className="h-8 text-xs" disabled={disabled || !token} onClick={() => void act('PUT')}>
             保存 Token
           </Button>
-          <Button type="button" variant="outline" disabled={disabled} onClick={generateToken}>
+          <Button type="button" variant="outline" size="sm" className="h-8 text-xs" disabled={disabled} onClick={generateToken}>
             生成 Token
           </Button>
-          <Button type="button" variant="outline" disabled={disabled || !token} onClick={() => void copyToken()}>
+          <Button type="button" variant="outline" size="sm" className="h-8 text-xs" disabled={disabled || !token} onClick={() => void copyToken()}>
             复制 Token
           </Button>
-          <Button type="button" variant="outline" disabled={pending || !token} onClick={discardInput}>
+          <Button type="button" variant="outline" size="sm" className="h-8 text-xs" disabled={pending || !token} onClick={discardInput}>
             放弃 Token 输入
           </Button>
-          <Button type="button" variant="destructive" disabled={disabled || !status?.configured} onClick={() => setConfirm(true)}>
+          <Button type="button" variant="destructive" size="sm" className="h-8 text-xs" disabled={disabled || !status?.configured} onClick={() => setConfirm(true)}>
             清除 Token
           </Button>
         </div>
         {confirm && (
-          <div role="alert" className="space-y-2 text-sm text-destructive">
+          <div role="alert" className="space-y-1.5 rounded-md border border-destructive/30 bg-destructive-bg p-2 text-xs text-destructive">
             <p>清除将关闭 Management API，依赖此 Token 的连接会失效。</p>
-            <Button variant="destructive" onClick={() => void act('DELETE')}>
-              确认清除
-            </Button>{' '}
-            <Button variant="outline" onClick={() => setConfirm(false)}>
-              取消
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="destructive" size="sm" className="h-7 text-xs px-2" onClick={() => void act('DELETE')}>
+                确认清除
+              </Button>
+              <Button variant="outline" size="sm" className="h-7 text-xs px-2" onClick={() => setConfirm(false)}>
+                取消
+              </Button>
+            </div>
           </div>
         )}
         {fallback && (
           <div className="space-y-1">
-            <label htmlFor="management-token-fallback" className="text-sm font-medium text-foreground">
+            <label htmlFor="management-token-fallback" className="text-xs font-medium text-foreground block">
               手动复制 Token（剪贴板不可用）
             </label>
             <Input
               id="management-token-fallback"
+              className="h-8 text-base md:text-xs font-mono"
               readOnly
               value={token}
               onFocus={event => event.currentTarget.select()}
@@ -263,13 +266,15 @@ export function ManagementToken({ status, onUpdate }: { status?: TokenStatus; on
             />
           </div>
         )}
-        <p
-          id={invalid ? 'management-token-error' : undefined}
-          role={invalid ? 'alert' : 'status'}
-          className={invalid ? 'text-[13px] leading-5 text-destructive' : 'text-sm text-info'}
-        >
-          {message}
-        </p>
+        {message && (
+          <p
+            id={invalid ? 'management-token-error' : undefined}
+            role={invalid ? 'alert' : 'status'}
+            className={invalid ? 'text-[12px] leading-tight text-destructive' : 'text-xs text-info'}
+          >
+            {message}
+          </p>
+        )}
       </CardContent>
     </Card>
   );

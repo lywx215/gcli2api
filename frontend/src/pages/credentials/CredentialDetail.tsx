@@ -471,26 +471,26 @@ export function CredentialDetail({
           event.preventDefault()
           restoreFocus()
         }}
-        className="w-full overflow-y-auto rounded-l-xl bg-popover text-popover-foreground sm:max-w-xl"
+        className="w-full overflow-y-auto rounded-l-lg bg-popover text-popover-foreground sm:max-w-xl p-4 sm:p-5"
       >
-        <SheetHeader>
-          <SheetTitle className="break-all pr-5 text-[24px] font-semibold">{row.filename}</SheetTitle>
-          <SheetDescription className="text-[13px]">
+        <SheetHeader className="space-y-1">
+          <SheetTitle className="break-all pr-5 text-lg sm:text-xl font-semibold">{row.filename}</SheetTitle>
+          <SheetDescription className="text-xs">
             列表摘要与手动检测。不会读取完整凭证 JSON。
           </SheetDescription>
         </SheetHeader>
-        <div className="mt-5 grid gap-5">
+        <div className="mt-3 grid gap-3 text-xs">
           <DetailActionStatus feedback={actionFeedback} />
           {deleted && (
-            <p className="rounded-lg bg-info-bg text-[13px] text-info">
+            <p className="rounded-md bg-info-bg p-2 text-xs text-info">
               该凭证已删除，关闭后可返回列表。
             </p>
           )}
-          <div className="break-all text-sm">
+          <div className="break-all text-xs text-muted-foreground">
             {text(row.user_email, '邮箱未保存')} · <CredentialStateBadge row={row} /> · {text(row.tier)}
           </div>
-          <section className="grid gap-2">
-            <h3 className="text-[18px] font-semibold">已保存证据</h3>
+          <section className="grid gap-1.5 rounded-lg border bg-card p-2.5 text-card-foreground">
+            <h3 className="text-sm font-semibold">已保存证据</h3>
             <Evidence data={row} mode={mode} />
             <CycleStatistics data={row} />
           </section>
@@ -504,27 +504,29 @@ export function CredentialDetail({
               onRefresh={onRefresh}
             />
           )}
-          <div className="flex flex-wrap gap-2">
-            <Button disabled={disabled} onClick={() => void runAction('enable')}>
+          <div className="flex flex-wrap gap-1.5">
+            <Button size="sm" disabled={disabled} onClick={() => void runAction('enable')}>
               启用
             </Button>
-            <Button variant="outline" disabled={disabled} onClick={() => void runAction('disable')}>
+            <Button variant="outline" size="sm" disabled={disabled} onClick={() => void runAction('disable')}>
               禁用
             </Button>
             <ConfirmAction
               label="永久禁用"
+              size="sm"
               disabled={disabled || !caps.has(modeCaps.permanent)}
               description="将该凭证设为永久禁用。成功动作不会因关闭页面而撤销。"
               onConfirm={() => void runAction('permanent_disable')}
             />
             <ConfirmAction
               label="删除"
+              size="sm"
               disabled={disabled}
               description="删除此凭证及其保存状态，此操作不可由页面撤销。"
               onConfirm={() => void runAction('delete')}
             />
           </div>
-          <div className="flex flex-wrap gap-2 border-t pt-3">
+          <div className="flex flex-wrap gap-1.5 border-t pt-2.5">
             <Button
               ref={filesTriggerRef}
               variant="outline"
@@ -564,58 +566,74 @@ export function CredentialDetail({
               />
             </section>
           )}
-          <section className="grid gap-2">
-            <label className="font-medium" htmlFor="credential-remark">
+          <section className="grid gap-1.5 rounded-lg border bg-card p-2.5 text-card-foreground">
+            <label className="text-xs font-medium" htmlFor="credential-remark">
               备注
             </label>
-            <Input
-              id="credential-remark"
-              maxLength={64}
-              value={remark}
-              disabled={!caps.has(modeCaps.remark) || disabled}
-              onChange={e => setRemark(e.target.value)}
-            />
-            <Button
-              variant="outline"
-              disabled={!caps.has(modeCaps.remark) || disabled}
-              onClick={() => void runAction('remark', remark)}
-            >
-              保存备注
-            </Button>
+            <div className="flex gap-2">
+              <Input
+                id="credential-remark"
+                maxLength={64}
+                value={remark}
+                disabled={!caps.has(modeCaps.remark) || disabled}
+                onChange={e => setRemark(e.target.value)}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!caps.has(modeCaps.remark) || disabled}
+                onClick={() => void runAction('remark', remark)}
+              >
+                保存
+              </Button>
+            </div>
             {!caps.has(modeCaps.remark) && (
-              <p className="text-[13px] text-muted-foreground">服务未声明备注编辑能力，仅可查看。</p>
+              <p className="text-[11px] text-muted-foreground">服务未声明备注编辑能力，仅可查看。</p>
             )}
           </section>
           {mode === 'antigravity' && (
-            <section className="grid gap-2 text-sm">
+            <section className="grid gap-1.5 text-xs rounded-lg border bg-card p-2.5">
               <p>信用额度：{row.enable_credit === true ? '开启' : row.enable_credit === false ? '关闭' : '未知'}</p>
-              <ConfirmAction
-                label={row.enable_credit === true ? '关闭信用额度' : '开启信用额度'}
-                disabled={disabled || !caps.has(CAP.credit) || typeof row.enable_credit !== 'boolean'}
-                description="切换信用额度模式会清除该凭证模型冷却，请确认后继续。"
-                onConfirm={() => void runAction(row.enable_credit === true ? 'disable_credit' : 'enable_credit')}
-              />
+              <div>
+                <ConfirmAction
+                  label={row.enable_credit === true ? '关闭信用额度' : '开启信用额度'}
+                  size="sm"
+                  disabled={disabled || !caps.has(CAP.credit) || typeof row.enable_credit !== 'boolean'}
+                  description="切换信用额度模式会清除该凭证模型冷却，请确认后继续。"
+                  onConfirm={() => void runAction(row.enable_credit === true ? 'disable_credit' : 'enable_credit')}
+                />
+              </div>
               {!caps.has(CAP.credit) && (
-                <p className="text-[13px] text-muted-foreground">服务未声明信用额度开关能力。</p>
+                <p className="text-[11px] text-muted-foreground">服务未声明信用额度开关能力。</p>
               )}
             </section>
           )}
-          <section className="grid gap-2">
-            <Button variant="outline" disabled={disabled} onClick={() => void loadErrors()}>
+          <section className="grid gap-1.5">
+            <Button variant="outline" size="sm" disabled={disabled} onClick={() => void loadErrors()}>
               读取已保存错误
             </Button>
             {errors && <SavedErrorDetails data={errors} />}
           </section>
-          <section className="grid gap-3 rounded-xl border bg-card p-3 text-card-foreground">
-            <h3 className="text-[18px] font-semibold">人工检测</h3>
-            <p className="text-[13px] text-muted-foreground">
+          <section className="grid gap-2 rounded-lg border bg-card p-2.5 text-card-foreground text-xs">
+            <h3 className="text-sm font-semibold">人工检测</h3>
+            <p className="text-[11px] text-muted-foreground">
               以下按钮会访问上游，可能刷新 Token、更新权限、额度、项目和统计。不会自动重试。
             </p>
-            <Button disabled={disabled} variant="outline" onClick={() => void runManual('quota')}>
-              刷新额度并同步状态
-            </Button>
-            <label className="grid gap-1 text-sm">
-              测试模型
+            <div className="flex flex-wrap gap-1.5">
+              <Button disabled={disabled} size="sm" variant="outline" onClick={() => void runManual('quota')}>
+                刷新额度并同步状态
+              </Button>
+              <Button
+                disabled={disabled}
+                size="sm"
+                variant="outline"
+                onClick={() => void runManual('verify-project')}
+              >
+                验证并更新项目
+              </Button>
+            </div>
+            <label className="grid gap-1 text-xs">
+              <span>测试模型</span>
               <Input
                 aria-label="测试模型"
                 value={model}
@@ -623,49 +641,45 @@ export function CredentialDetail({
                 disabled={disabled}
               />
             </label>
-            {mode === 'geminicli' && (
+            <div className="flex flex-wrap gap-1.5">
+              {mode === 'geminicli' && (
+                <Button
+                  disabled={disabled}
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void runManual('test', undefined, 'default')}
+                >
+                  默认消息测试
+                </Button>
+              )}
               <Button
-                disabled={disabled}
+                disabled={disabled || !model.trim()}
+                size="sm"
                 variant="outline"
-                onClick={() => void runManual('test', undefined, 'default')}
+                onClick={() => void runManual('test', model.trim(), 'chosen')}
               >
-                默认消息测试
+                发送固定回复模型测试
               </Button>
-            )}
-            <Button
-              disabled={disabled || !model.trim()}
-              variant="outline"
-              onClick={() => void runManual('test', model.trim(), 'chosen')}
-            >
-              发送固定回复模型测试
-            </Button>
+              {mode === 'geminicli' && (
+                <ConfirmAction
+                  label="配置预览"
+                  size="sm"
+                  disabled={disabled || !hasOwnerContext}
+                  description={`为 ${row.filename} 配置 Gemini CLI 预览模式，会访问上游并写回凭证状态。此操作不可由页面撤销。`}
+                  onConfirm={() => void runManual('preview')}
+                />
+              )}
+            </div>
             {mode === 'geminicli' && (
-              <p className="text-[13px] text-muted-foreground">
+              <p className="text-[11px] text-muted-foreground">
                 默认消息测试将不指定模型发起测试，并可能触发后端 Preview 探测流程；测试可能向上游发起实际请求。
               </p>
             )}
-            <Button
-              disabled={disabled}
-              variant="outline"
-              onClick={() => void runManual('verify-project')}
-            >
-              验证并更新项目
-            </Button>
-            {mode === 'geminicli' && (
-              <ConfirmAction
-                label="配置预览"
-                disabled={disabled || !hasOwnerContext}
-                description={`为 ${row.filename} 配置 Gemini CLI 预览模式，会访问上游并写回凭证状态。此操作不可由页面撤销。`}
-                onConfirm={() => void runManual('preview')}
-              />
-            )}
           </section>
           {loading && activeAttempt && (
-            <div className="flex items-center gap-3">
-              <p role="status" className="text-[13px] text-info">
-                处理中…
-              </p>
-              <Button type="button" variant="outline" size="sm" onClick={() => handleStopWaiting(activeAttempt)}>
+            <div className="flex items-center gap-2.5 rounded-md border border-info/30 bg-info-bg p-2 text-xs text-info">
+              <span>处理中…</span>
+              <Button type="button" variant="outline" size="xs" onClick={() => handleStopWaiting(activeAttempt)}>
                 停止等待
               </Button>
             </div>

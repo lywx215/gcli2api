@@ -44,16 +44,62 @@
   --text-sm: 0.875rem;
   --text-lg: 1.125rem;
   --text-2xl: 1.5rem;
-  --radius-sm: var(--radius-control);
+  --radius-sm: calc(var(--radius-control) - 2px);
   --radius-md: var(--radius-control);
   --radius-lg: var(--radius-surface);
-  --radius-xl: var(--radius-surface);
+  --radius-xl: calc(var(--radius-surface) + 2px);
 }
 @layer base {
   * { @apply border-border; }
   body { @apply bg-background text-foreground font-sans; margin: 0; min-width: min(100%, 20rem); font-size: 0.875rem; line-height: 1.5rem; }
   a, button, input, select, textarea { @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2; }
   [hidden] { display: none !important; }
+}
+@media (max-width: 767.98px), (pointer: coarse) {
+  button:not([role="switch"]):not([role="checkbox"]),
+  [role="button"]:not([role="switch"]):not([role="checkbox"]) {
+    min-height: 2.5rem;
+  }
+  button.absolute:has(svg),
+  button:has(> svg:only-child):not([class*="px-"]):not([class*="w-full"]),
+  [data-dialog-close],
+  [data-sheet-close] {
+    min-width: 2.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+  select,
+  [data-shared-control]:not(textarea) {
+    min-height: 2.5rem;
+  }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+  select,
+  textarea,
+  [data-shared-control] {
+    font-size: 1rem !important;
+  }
+  [data-nav-link],
+  [data-sidebar-link] {
+    min-height: 2.5rem;
+  }
+}
+@media (max-height: 720px) {
+  .max-w-\[1720px\] > :not([hidden]):not(.fixed),
+  .max-w-3xl > :not([hidden]):not(.fixed) {
+    margin-bottom: 0 !important;
+    margin-block-end: 0 !important;
+  }
+  .max-w-\[1720px\] > :not([hidden]):not(.fixed) ~ :not([hidden]):not(.fixed),
+  .max-w-3xl > :not([hidden]):not(.fixed) ~ :not([hidden]):not(.fixed) {
+    margin-top: 0.5rem !important;
+    margin-block-start: 0.5rem !important;
+  }
+  .max-w-\[1720px\] > .fixed,
+  .max-w-3xl > .fixed {
+    margin: 0 !important;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }

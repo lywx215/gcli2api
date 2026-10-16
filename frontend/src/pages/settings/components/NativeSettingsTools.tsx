@@ -586,12 +586,12 @@ export function NativeSettingsTools({
   const isAnyLoading = storageLoading || systemLoading || nodeLoading;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Top Header / Actions Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2.5">
         <div>
-          <h2 className="text-lg font-semibold text-foreground">原生设置与运行诊断工具</h2>
-          <p className="text-[13px] text-muted-foreground">
+          <h2 className="text-base font-semibold text-foreground">原生设置与运行诊断工具</h2>
+          <p className="text-xs text-muted-foreground">
             存储引擎诊断与切换、Redis 及 SMART 429 系统状态、节点端点观察及端点预设草稿工具。
           </p>
         </div>
@@ -599,6 +599,7 @@ export function NativeSettingsTools({
           type="button"
           variant="outline"
           size="sm"
+          className="h-8 text-xs"
           onClick={() => void loadData()}
           disabled={disabled || !isVerified || isAnyLoading}
         >
@@ -607,43 +608,43 @@ export function NativeSettingsTools({
       </div>
 
       {!isVerified && (
-        <p role="status" className="rounded-lg border border-warning/30 bg-warning-bg p-3 text-[13px] text-warning">
+        <p role="status" className="rounded-md border border-warning/30 bg-warning-bg p-2.5 text-xs text-warning">
           未登录或面板会话已失效。请登录后查看运行状态与使用工具。
         </p>
       )}
 
       {/* 1. Storage Engine & Migration Section */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">存储引擎与迁移（SQLite / MySQL）</CardTitle>
-          <CardDescription className="text-[13px]">
+        <CardHeader className="p-3 pb-1.5">
+          <CardTitle className="text-base font-semibold">存储引擎与迁移（SQLite / MySQL）</CardTitle>
+          <CardDescription className="text-xs text-muted-foreground">
             查看当前存储引擎与 MySQL 可用性。切换存储引擎需经页面确认，本组件不执行实际写入或配置保存。
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="p-3 pt-0 space-y-3">
           {storageError && (
-            <p role="alert" className="text-[13px] text-destructive">
+            <p role="alert" className="text-xs text-destructive">
               存储状态读取失败：{storageError}
             </p>
           )}
 
           {/* Current storage info */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
-            <div className="rounded-md border border-border p-2.5 bg-background">
-              <span className="text-[13px] text-muted-foreground block">当前存储引擎</span>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+            <div className="rounded-md border border-border p-2 bg-background">
+              <span className="text-[11px] text-muted-foreground block">当前存储引擎</span>
               <span className="font-medium text-foreground">
                 {storageState?.currentEngine ?? (storageLoading ? '读取中…' : '未知')}
               </span>
               {storageState?.currentEngine &&
                 storageState.currentEngine !== 'sqlite' &&
                 storageState.currentEngine !== 'mysql' && (
-                  <span className="text-[13px] text-muted-foreground block mt-0.5">
+                  <span className="text-[11px] text-muted-foreground block mt-0.5">
                     （当前其他后端不承诺支持在线切换）
                   </span>
                 )}
             </div>
-            <div className="rounded-md border border-border p-2.5 bg-background">
-              <span className="text-[13px] text-muted-foreground block">MySQL 可用性 (mysqlAvailable)</span>
+            <div className="rounded-md border border-border p-2 bg-background">
+              <span className="text-[11px] text-muted-foreground block">MySQL 可用性 (mysqlAvailable)</span>
               <span className="font-medium text-foreground">
                 {storageState
                   ? storageState.mysqlAvailable === undefined
@@ -656,8 +657,8 @@ export function NativeSettingsTools({
                     : '未知'}
               </span>
             </div>
-            <div className="rounded-md border border-border p-2.5 bg-background">
-              <span className="text-[13px] text-muted-foreground block">MySQL 配置状态 (mysqlConfigured)</span>
+            <div className="rounded-md border border-border p-2 bg-background">
+              <span className="text-[11px] text-muted-foreground block">MySQL 配置状态 (mysqlConfigured)</span>
               <span className="font-medium text-foreground">
                 {storageState
                   ? storageState.mysqlConfigured === undefined
@@ -673,16 +674,17 @@ export function NativeSettingsTools({
           </div>
 
           {/* Storage Servers Choices */}
-          <div className="space-y-1.5">
-            <span className="text-sm font-medium text-foreground">已发现的服务器列表（点击填入）：</span>
+          <div className="space-y-1">
+            <span className="text-xs font-medium text-foreground">已发现的服务器列表（点击填入）：</span>
             {storageState?.servers && storageState.servers.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-1.5">
                 {storageState.servers.map((srv) => (
                   <Button
                     key={srv.name}
                     type="button"
                     variant="outline"
                     size="sm"
+                    className="h-7 text-xs px-2"
                     disabled={disabled || !isVerified}
                     onClick={() => {
                       if (checkCapturedOwnership(currentEpoch, currentGeneration)) {
@@ -692,22 +694,22 @@ export function NativeSettingsTools({
                   >
                     <span>{srv.name}</span>
                     {srv.status && (
-                      <span className="ml-1 text-[13px] text-muted-foreground">({srv.status})</span>
+                      <span className="ml-1 text-[11px] text-muted-foreground">({srv.status})</span>
                     )}
                   </Button>
                 ))}
               </div>
             ) : (
-              <p className="text-[13px] text-muted-foreground">未返回已配置服务器元数据</p>
+              <p className="text-xs text-muted-foreground">未返回已配置服务器元数据</p>
             )}
           </div>
 
           {/* Target Engine & Server Name Form */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-0.5">
             <div className="space-y-1">
-              <span className="text-sm font-medium text-foreground">目标存储引擎</span>
-              <div className="flex items-center gap-4 text-sm h-10">
-                <label className="flex items-center gap-1.5 cursor-pointer text-sm">
+              <span className="text-xs font-medium text-foreground">目标存储引擎</span>
+              <div className="flex items-center gap-4 text-xs h-8">
+                <label className="flex items-center gap-1.5 cursor-pointer text-xs">
                   <input
                     type="radio"
                     name="nativeTargetEngine"
@@ -722,7 +724,7 @@ export function NativeSettingsTools({
                   />
                   <span>SQLite</span>
                 </label>
-                <label className="flex items-center gap-1.5 cursor-pointer text-sm">
+                <label className="flex items-center gap-1.5 cursor-pointer text-xs">
                   <input
                     type="radio"
                     name="nativeTargetEngine"
@@ -741,11 +743,12 @@ export function NativeSettingsTools({
             </div>
 
             <div className="space-y-1">
-              <label htmlFor="native-storage-server-name" className="text-sm font-medium text-foreground">
+              <label htmlFor="native-storage-server-name" className="text-xs font-medium text-foreground">
                 服务器名称 (serverName)
               </label>
               <Input
                 id="native-storage-server-name"
+                className="h-8 text-base md:text-xs"
                 value={serverName}
                 onChange={(e) => {
                   if (checkCapturedOwnership(currentEpoch, currentGeneration)) {
@@ -758,14 +761,15 @@ export function NativeSettingsTools({
             </div>
           </div>
 
-          {/* Storage Preview (Explicit only) */}
-          <div className="rounded-md border border-border p-3 bg-background space-y-2">
+          {/* Storage Preview (Explicit only) - 2 列紧凑指标展示 */}
+          <div className="rounded-md border border-border p-2.5 bg-background space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-foreground">数据迁移预览</span>
+              <span className="text-xs font-medium text-foreground">数据迁移预览</span>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
+                className="h-7 text-xs px-2"
                 onClick={() => void handleFetchPreview()}
                 disabled={disabled || previewLoading || !isVerified}
               >
@@ -773,59 +777,60 @@ export function NativeSettingsTools({
               </Button>
             </div>
             {previewError && (
-              <p role="alert" className="text-[13px] text-destructive">
+              <p role="alert" className="text-xs text-destructive">
                 预览获取失败：{previewError}
               </p>
             )}
             {previewData ? (
-              <div className="space-y-2 text-sm">
-                <div className="text-[13px] text-muted-foreground">
+              <div className="space-y-1.5 text-xs">
+                <div className="text-xs text-muted-foreground">
                   源引擎：<span className="text-foreground font-medium">{previewData.sourceEngine ?? '未知'}</span>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  <div className="bg-secondary/40 p-2 rounded">
-                    <span className="text-muted-foreground block text-[13px]">Gemini CLI 凭证</span>
-                    <span className="font-medium text-foreground text-sm">
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="bg-secondary/40 p-2 rounded border border-border/60">
+                    <span className="text-muted-foreground block text-[11px]">Gemini CLI 凭证</span>
+                    <span className="font-semibold text-foreground text-xs">
                       {formatCount(previewData.data?.gcliCredentials)}
                     </span>
                   </div>
-                  <div className="bg-secondary/40 p-2 rounded">
-                    <span className="text-muted-foreground block text-[13px]">Antigravity 凭证</span>
-                    <span className="font-medium text-foreground text-sm">
+                  <div className="bg-secondary/40 p-2 rounded border border-border/60">
+                    <span className="text-muted-foreground block text-[11px]">Antigravity 凭证</span>
+                    <span className="font-semibold text-foreground text-xs">
                       {formatCount(previewData.data?.antigravityCredentials)}
                     </span>
                   </div>
-                  <div className="bg-secondary/40 p-2 rounded">
-                    <span className="text-muted-foreground block text-[13px]">配置项</span>
-                    <span className="font-medium text-foreground text-sm">
+                  <div className="bg-secondary/40 p-2 rounded border border-border/60">
+                    <span className="text-muted-foreground block text-[11px]">配置项</span>
+                    <span className="font-semibold text-foreground text-xs">
                       {formatCount(previewData.data?.config)}
                     </span>
                   </div>
-                  <div className="bg-secondary/40 p-2 rounded">
-                    <span className="text-muted-foreground block text-[13px]">总计项</span>
-                    <span className="font-medium text-foreground text-sm">
+                  <div className="bg-secondary/40 p-2 rounded border border-border/60">
+                    <span className="text-muted-foreground block text-[11px]">总计项</span>
+                    <span className="font-semibold text-foreground text-xs">
                       {formatCount(previewData.data?.total)}
                     </span>
                   </div>
                 </div>
               </div>
             ) : !previewError && !previewLoading ? (
-              <p className="text-[13px] text-muted-foreground">暂无迁移预览数据（仅在显式点击上方按钮时发起查询）</p>
+              <p className="text-xs text-muted-foreground">暂无迁移预览数据（仅在显式点击上方按钮时发起查询）</p>
             ) : null}
           </div>
 
           {/* Migration Intent Request Button */}
-          <div className="space-y-1.5 pt-1">
+          <div className="space-y-1 pt-0.5">
             <Button
               type="button"
               variant="default"
               size="sm"
+              className="h-8 text-xs"
               onClick={handleRequestMigration}
               disabled={isMigrationIntentDisabled}
             >
               请求切换存储引擎
             </Button>
-            <p className="text-[13px] leading-relaxed text-muted-foreground">
+            <p className="text-xs leading-relaxed text-muted-foreground">
               注：本操作仅请求页面确认切换存储引擎，不执行实际数据库写入、配置保存或进程重启。
               {targetEngine === 'mysql' && mysqlDisabledReason && (
                 <span className="text-destructive ml-1">（{mysqlDisabledReason}）</span>
@@ -837,25 +842,25 @@ export function NativeSettingsTools({
 
       {/* 2. Redis & SMART 429 Status Section */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">系统状态与缓存（Redis / SMART 429）</CardTitle>
-          <CardDescription className="text-[13px]">
+        <CardHeader className="p-3 pb-1.5">
+          <CardTitle className="text-base font-semibold">系统状态与缓存（Redis / SMART 429）</CardTitle>
+          <CardDescription className="text-xs text-muted-foreground">
             共享节点 Redis 缓存连接诊断与 SMART 429 保护策略观察。
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="p-3 pt-0 space-y-3">
           {systemError && (
-            <p role="alert" className="text-[13px] text-destructive">
+            <p role="alert" className="text-xs text-destructive">
               系统状态读取失败：{systemError}
             </p>
           )}
 
           {/* Redis Sub-section */}
-          <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-foreground">Redis 状态</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 text-sm">
-              <div className="rounded-md border border-border p-2.5 bg-background">
-                <span className="text-[13px] text-muted-foreground block">启用状态</span>
+          <div className="space-y-1.5">
+            <h3 className="text-xs font-semibold text-foreground">Redis 状态</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 text-xs">
+              <div className="rounded-md border border-border p-2 bg-background">
+                <span className="text-[11px] text-muted-foreground block">启用状态</span>
                 <span className="font-medium text-foreground">
                   {systemStatus?.redis?.enabled === undefined
                     ? systemLoading
@@ -866,14 +871,14 @@ export function NativeSettingsTools({
                       : '未启用'}
                 </span>
               </div>
-              <div className="rounded-md border border-border p-2.5 bg-background">
-                <span className="text-[13px] text-muted-foreground block">服务器名称</span>
+              <div className="rounded-md border border-border p-2 bg-background">
+                <span className="text-[11px] text-muted-foreground block">服务器名称</span>
                 <span className="font-medium text-foreground">
                   {systemStatus?.redis?.serverName ?? (systemLoading ? '读取中…' : '未知')}
                 </span>
               </div>
-              <div className="rounded-md border border-border p-2.5 bg-background">
-                <span className="text-[13px] text-muted-foreground block">内存使用</span>
+              <div className="rounded-md border border-border p-2 bg-background">
+                <span className="text-[11px] text-muted-foreground block">内存使用</span>
                 <span className="font-medium text-foreground">
                   {systemStatus?.redis?.memoryUsedMb !== undefined
                     ? `${systemStatus.redis.memoryUsedMb} MB`
@@ -882,32 +887,32 @@ export function NativeSettingsTools({
                       : '未知'}
                 </span>
               </div>
-              <div className="rounded-md border border-border p-2.5 bg-background">
-                <span className="text-[13px] text-muted-foreground block">总键数</span>
+              <div className="rounded-md border border-border p-2 bg-background">
+                <span className="text-[11px] text-muted-foreground block">总键数</span>
                 <span className="font-medium text-foreground">
                   {formatCount(systemStatus?.redis?.totalKeys)}
                 </span>
               </div>
-              <div className="rounded-md border border-border p-2.5 bg-background">
-                <span className="text-[13px] text-muted-foreground block">GCLI 可用池</span>
+              <div className="rounded-md border border-border p-2 bg-background">
+                <span className="text-[11px] text-muted-foreground block">GCLI 可用池</span>
                 <span className="font-medium text-foreground">
                   {formatCount(systemStatus?.redis?.pools?.geminicliAvail)}
                 </span>
               </div>
-              <div className="rounded-md border border-border p-2.5 bg-background">
-                <span className="text-[13px] text-muted-foreground block">GCLI 预览池</span>
+              <div className="rounded-md border border-border p-2 bg-background">
+                <span className="text-[11px] text-muted-foreground block">GCLI 预览池</span>
                 <span className="font-medium text-foreground">
                   {formatCount(systemStatus?.redis?.pools?.geminicliPreview)}
                 </span>
               </div>
-              <div className="rounded-md border border-border p-2.5 bg-background">
-                <span className="text-[13px] text-muted-foreground block">Antigravity 可用池</span>
+              <div className="rounded-md border border-border p-2 bg-background">
+                <span className="text-[11px] text-muted-foreground block">Antigravity 可用池</span>
                 <span className="font-medium text-foreground">
                   {formatCount(systemStatus?.redis?.pools?.antigravityAvail)}
                 </span>
               </div>
-              <div className="rounded-md border border-border p-2.5 bg-background sm:col-span-2">
-                <span className="text-[13px] text-muted-foreground block">诊断结论</span>
+              <div className="rounded-md border border-border p-2 bg-background sm:col-span-2">
+                <span className="text-[11px] text-muted-foreground block">诊断结论</span>
                 <span className="font-medium text-foreground">
                   {systemStatus?.redis?.diagnostic
                     ? formatRedisDiagnostic(systemStatus.redis.diagnostic)
@@ -920,11 +925,11 @@ export function NativeSettingsTools({
           </div>
 
           {/* SMART 429 Sub-section */}
-          <div className="space-y-2 pt-2 border-t border-border">
-            <h3 className="text-sm font-semibold text-foreground">SMART 429 保护状态</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 text-sm">
-              <div className="rounded-md border border-border p-2.5 bg-background">
-                <span className="text-[13px] text-muted-foreground block">运行启用状态</span>
+          <div className="space-y-1.5 pt-2 border-t border-border">
+            <h3 className="text-xs font-semibold text-foreground">SMART 429 保护状态</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 text-xs">
+              <div className="rounded-md border border-border p-2 bg-background">
+                <span className="text-[11px] text-muted-foreground block">运行启用状态</span>
                 <span className="font-medium text-foreground">
                   {systemStatus?.smart429?.enabled === undefined
                     ? systemLoading
@@ -935,8 +940,8 @@ export function NativeSettingsTools({
                       : '未启用'}
                 </span>
               </div>
-              <div className="rounded-md border border-border p-2.5 bg-background">
-                <span className="text-[13px] text-muted-foreground block">配置请求状态</span>
+              <div className="rounded-md border border-border p-2 bg-background">
+                <span className="text-[11px] text-muted-foreground block">配置请求状态</span>
                 <span className="font-medium text-foreground">
                   {systemStatus?.smart429?.requestedEnabled === undefined
                     ? systemLoading
@@ -947,14 +952,14 @@ export function NativeSettingsTools({
                       : '未请求启用'}
                 </span>
               </div>
-              <div className="rounded-md border border-border p-2.5 bg-background">
-                <span className="text-[13px] text-muted-foreground block">最大尝试次数</span>
+              <div className="rounded-md border border-border p-2 bg-background">
+                <span className="text-[11px] text-muted-foreground block">最大尝试次数</span>
                 <span className="font-medium text-foreground">
                   {formatCount(systemStatus?.smart429?.maxAttempts)}
                 </span>
               </div>
-              <div className="rounded-md border border-border p-2.5 bg-background">
-                <span className="text-[13px] text-muted-foreground block">重试基准间隔</span>
+              <div className="rounded-md border border-border p-2 bg-background">
+                <span className="text-[11px] text-muted-foreground block">重试基准间隔</span>
                 <span className="font-medium text-foreground">
                   {systemStatus?.smart429?.retryBaseInterval !== undefined
                     ? `${systemStatus.smart429.retryBaseInterval}s`
@@ -963,8 +968,8 @@ export function NativeSettingsTools({
                       : '未知'}
                 </span>
               </div>
-              <div className="rounded-md border border-border p-2.5 bg-background">
-                <span className="text-[13px] text-muted-foreground block">实例模式</span>
+              <div className="rounded-md border border-border p-2 bg-background">
+                <span className="text-[11px] text-muted-foreground block">实例模式</span>
                 <span className="font-medium text-foreground">
                   {systemStatus?.smart429?.singleInstanceOnly === undefined
                     ? systemLoading
@@ -975,14 +980,14 @@ export function NativeSettingsTools({
                       : '多实例'}
                 </span>
               </div>
-              <div className="rounded-md border border-border p-2.5 bg-background">
-                <span className="text-[13px] text-muted-foreground block">策略版本</span>
+              <div className="rounded-md border border-border p-2 bg-background">
+                <span className="text-[11px] text-muted-foreground block">策略版本</span>
                 <span className="font-medium text-foreground">
                   {formatCount(systemStatus?.smart429?.policyEpoch)}
                 </span>
               </div>
-              <div className="rounded-md border border-border p-2.5 bg-background sm:col-span-3">
-                <span className="text-[13px] text-muted-foreground block">受阻原因诊断</span>
+              <div className="rounded-md border border-border p-2 bg-background sm:col-span-3">
+                <span className="text-[11px] text-muted-foreground block">受阻原因诊断</span>
                 <span className="font-medium text-foreground">
                   {formatSmartBlockedReason(systemStatus?.smart429?.blockedReason)}
                 </span>
@@ -994,35 +999,35 @@ export function NativeSettingsTools({
 
       {/* 3. Embed Policy Security Diagnostics Section */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">嵌入策略安全诊断</CardTitle>
-          <CardDescription className="text-[13px]">
+        <CardHeader className="p-3 pb-1.5">
+          <CardTitle className="text-base font-semibold">嵌入策略安全诊断</CardTitle>
+          <CardDescription className="text-xs text-muted-foreground">
             当前有效控制台嵌入策略只读诊断，由服务安全策略直接上报，不随表单草稿改变。
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-sm">
-            <div className="rounded-md border border-border p-2.5 bg-background">
-              <span className="text-[13px] text-muted-foreground block">策略来源 (source)</span>
+        <CardContent className="p-3 pt-0 space-y-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+            <div className="rounded-md border border-border p-2 bg-background">
+              <span className="text-[11px] text-muted-foreground block">策略来源 (source)</span>
               <span className="font-medium text-foreground">
                 {formatEmbedSource(snapshot?.embedPolicy?.source)}
               </span>
             </div>
-            <div className="rounded-md border border-border p-2.5 bg-background">
-              <span className="text-[13px] text-muted-foreground block">策略有效性 (valid)</span>
+            <div className="rounded-md border border-border p-2 bg-background">
+              <span className="text-[11px] text-muted-foreground block">策略有效性 (valid)</span>
               <span className="font-medium text-foreground">
                 {formatEmbedValidity(snapshot?.embedPolicy?.valid, snapshot?.config?.gcli_embed_mode)}
               </span>
             </div>
-            <div className="rounded-md border border-border p-2.5 bg-background">
-              <span className="text-[13px] text-muted-foreground block">锁定状态 (locked)</span>
+            <div className="rounded-md border border-border p-2 bg-background">
+              <span className="text-[11px] text-muted-foreground block">锁定状态 (locked)</span>
               <span className="font-medium text-foreground">
                 {formatEmbedLocked(snapshot?.embedPolicy?.locked)}
               </span>
             </div>
           </div>
           {snapshot?.embedPolicy?.valid === false && (
-            <p role="alert" className="text-[13px] text-destructive">
+            <p role="alert" className="text-xs text-destructive">
               注意：嵌入策略校验未通过，已进入 Fail-closed 阻断状态（禁止 iframe 嵌入）。
             </p>
           )}
@@ -1031,33 +1036,33 @@ export function NativeSettingsTools({
 
       {/* 4. Node Info & Code Assist Observation Card */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">节点与代码助手观察</CardTitle>
-          <CardDescription className="text-[13px]">
+        <CardHeader className="p-3 pb-1.5">
+          <CardTitle className="text-base font-semibold">节点与代码助手观察</CardTitle>
+          <CardDescription className="text-xs text-muted-foreground">
             当前节点版本观察与 Code Assist 端点，仅供展示，不根据版本推断功能支持。
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="p-3 pt-0 space-y-2.5">
           {nodeError && (
-            <p role="alert" className="text-[13px] text-destructive">
+            <p role="alert" className="text-xs text-destructive">
               节点信息读取失败：{nodeError}
             </p>
           )}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-            <div className="rounded-md border border-border p-3 bg-background space-y-1">
-              <span className="text-[13px] text-muted-foreground block font-medium">节点版本</span>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+            <div className="rounded-md border border-border p-2.5 bg-background space-y-1">
+              <span className="text-[11px] text-muted-foreground block font-medium">节点版本</span>
               {nodeInfo?.version ? (
                 nodeInfo.version.issue ? (
-                  <span className="text-[13px] text-muted-foreground">{nodeInfo.version.issue}</span>
+                  <span className="text-xs text-muted-foreground">{nodeInfo.version.issue}</span>
                 ) : nodeInfo.version.value ? (
-                  <div className="space-y-1.5">
-                    <span className="font-semibold text-foreground text-sm block">
+                  <div className="space-y-1">
+                    <span className="font-semibold text-foreground text-xs block">
                       {nodeInfo.version.value.display_version || nodeInfo.version.value.version || '未知版本'}
                     </span>
                     {(() => {
                       const meta = formatNodeVersionMeta(nodeInfo.version.value);
                       return (
-                        <div className="rounded border border-border/60 bg-muted/40 p-2.5 text-xs space-y-1 text-muted-foreground">
+                        <div className="rounded border border-border/60 bg-muted/40 p-2 text-[11px] space-y-0.5 text-muted-foreground">
                           <div>
                             <span className="font-medium text-foreground">版本来源：</span>
                             <span>{meta.sourceRef}</span>
@@ -1079,56 +1084,57 @@ export function NativeSettingsTools({
                     })()}
                   </div>
                 ) : (
-                  <span className="text-[13px] text-muted-foreground">版本信息不可用</span>
+                  <span className="text-xs text-muted-foreground">版本信息不可用</span>
                 )
               ) : (
-                <span className="text-[13px] text-muted-foreground">{nodeLoading ? '读取中…' : '版本信息不可用'}</span>
+                <span className="text-xs text-muted-foreground">{nodeLoading ? '读取中…' : '版本信息不可用'}</span>
               )}
             </div>
 
-            <div className="rounded-md border border-border p-3 bg-background space-y-1">
-              <span className="text-[13px] text-muted-foreground block font-medium">Code Assist 观察端点</span>
+            <div className="rounded-md border border-border p-2.5 bg-background space-y-1">
+              <span className="text-[11px] text-muted-foreground block font-medium">Code Assist 观察端点</span>
               {nodeInfo?.codeAssistEndpoint ? (
                 nodeInfo.codeAssistEndpoint.issue ? (
-                  <span className="text-[13px] text-muted-foreground">{nodeInfo.codeAssistEndpoint.issue}</span>
+                  <span className="text-xs text-muted-foreground">{nodeInfo.codeAssistEndpoint.issue}</span>
                 ) : nodeInfo.codeAssistEndpoint.value ? (
-                  <span className="font-mono text-sm text-foreground break-all block">
+                  <span className="font-mono text-xs text-foreground break-all block">
                     {nodeInfo.codeAssistEndpoint.value}
                   </span>
                 ) : (
-                  <span className="text-[13px] text-muted-foreground">代码助手端点不可用</span>
+                  <span className="text-xs text-muted-foreground">代码助手端点不可用</span>
                 )
               ) : (
-                <span className="text-[13px] text-muted-foreground">{nodeLoading ? '读取中…' : '代码助手端点不可用'}</span>
+                <span className="text-xs text-muted-foreground">{nodeLoading ? '读取中…' : '代码助手端点不可用'}</span>
               )}
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* 4. Draft Tools Section (Endpoint Presets & Keepalive URL Helper) */}
+      {/* 5. Draft Tools Section (Endpoint Presets & Keepalive URL Helper) */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">端点预设与辅助工具（草稿）</CardTitle>
-          <CardDescription className="text-[13px]">
+        <CardHeader className="p-3 pb-1.5">
+          <CardTitle className="text-base font-semibold">端点预设与辅助工具（草稿）</CardTitle>
+          <CardDescription className="text-xs text-muted-foreground">
             快捷应用端点预设或填充保活 URL 到当前页面草稿中。不会自动保存，受环境变量锁定控制。
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="p-3 pt-0 space-y-3">
           {!snapshot && (
-            <p className="text-[13px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               当前无配置快照（未加载或未认证），草稿辅助工具已禁用。
             </p>
           )}
 
           {/* Preset Buttons */}
-          <div className="space-y-2">
-            <span className="text-sm font-medium text-foreground block">端点快捷预设</span>
-            <div className="flex flex-wrap gap-3">
+          <div className="space-y-1.5">
+            <span className="text-xs font-medium text-foreground block">端点快捷预设</span>
+            <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
+                className="h-8 text-xs"
                 onClick={handleApplyMirrorPresets}
                 disabled={draftToolsDisabled}
               >
@@ -1138,20 +1144,21 @@ export function NativeSettingsTools({
                 type="button"
                 variant="outline"
                 size="sm"
+                className="h-8 text-xs"
                 onClick={handleApplyOfficialPresets}
                 disabled={draftToolsDisabled}
               >
                 应用官方端点预设 (Official)
               </Button>
             </div>
-            <p className="text-[13px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               仅将未被环境锁定的端点地址填入表单草稿，不包含敏感凭据，亦不自动发起网络保存。
             </p>
           </div>
 
           {/* Keepalive URL Helper */}
-          <div className="space-y-2 pt-2 border-t border-border">
-            <label htmlFor="native-keepalive-url-input" className="text-sm font-medium text-foreground block">
+          <div className="space-y-1.5 pt-2 border-t border-border">
+            <label htmlFor="native-keepalive-url-input" className="text-xs font-medium text-foreground block">
               保活 URL 辅助填充
             </label>
             <div className="flex flex-col sm:flex-row gap-2">
@@ -1165,13 +1172,14 @@ export function NativeSettingsTools({
                 }}
                 placeholder="例如：https://example.com/prefix/"
                 disabled={draftToolsDisabled || isKeepaliveLocked}
-                className="font-mono"
+                className="h-8 text-xs font-mono"
               />
               <div className="flex flex-wrap gap-2 shrink-0">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
+                  className="h-8 text-xs"
                   onClick={handleFillServiceBaseKeepalive}
                   disabled={draftToolsDisabled || isKeepaliveLocked}
                 >
@@ -1181,6 +1189,7 @@ export function NativeSettingsTools({
                   type="button"
                   variant="secondary"
                   size="sm"
+                  className="h-8 text-xs"
                   onClick={handleApplyKeepaliveInput}
                   disabled={draftToolsDisabled || isKeepaliveLocked || !keepaliveInput.trim()}
                 >
@@ -1189,7 +1198,7 @@ export function NativeSettingsTools({
               </div>
             </div>
             {isKeepaliveLocked && snapshot && (
-              <p className="text-[13px] text-warning">
+              <p className="text-xs text-warning">
                 保活 URL 已被环境变量锁定，无法通过界面修改草稿。
               </p>
             )}

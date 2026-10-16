@@ -291,12 +291,12 @@ export function UnsavedChangesGuard() {
   return (
     <>
       {secrets && (
-        <p className="text-[13px] leading-5 text-warning">
+        <p className="text-xs leading-4 text-warning">
           未提交的密码、Token 或敏感地址输入不会跨页面保留；离开设置页会清除这些输入。
         </p>
       )}
       {unconfirmed && (
-        <p role="status" className="text-[13px] leading-5 text-warning">
+        <p role="status" className="text-xs leading-4 text-warning">
           存在尚未确认的配置提交。普通读回不会解除提醒；可明确采用观察值或放弃草稿结束跟踪，不会自动重试。
         </p>
       )}
@@ -312,6 +312,7 @@ export function UnsavedChangesGuard() {
         }}
       >
         <AlertDialogContent
+          className="p-4 max-w-md"
           onCloseAutoFocus={event => {
             event.preventDefault();
             if (!authenticated) return;
@@ -329,19 +330,20 @@ export function UnsavedChangesGuard() {
             }
           }}
         >
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+          <AlertDialogHeader className="space-y-1">
+            <AlertDialogTitle className="text-base font-semibold">
               {pending?.full ? '离开设置页面？' : '清除秘密输入后切换页面？'}
             </AlertDialogTitle>
-            <AlertDialogDescription>
+            <AlertDialogDescription className="text-xs text-muted-foreground">
               {pending?.full
                 ? '存在未保存的修改或尚未确认的提交。继续离开会放弃本页草稿和未提交的秘密输入；不会撤销已发送到服务器的操作。'
                 : '未提交的密码、Token 和敏感地址输入将被清除。非敏感草稿继续保留在内存中；不会提交或撤销服务器操作。'}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={handleCancel}>继续编辑</AlertDialogCancel>
+          <AlertDialogFooter className="pt-2 gap-2">
+            <AlertDialogCancel className="h-8 text-xs" onClick={handleCancel}>继续编辑</AlertDialogCancel>
             <AlertDialogAction
+              className="h-8 text-xs"
               onClick={() => {
                 if (
                   !pending ||

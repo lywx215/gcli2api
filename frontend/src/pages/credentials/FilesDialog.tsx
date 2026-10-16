@@ -415,25 +415,26 @@ function FilesDialogView(props: FilesDialogProps): ReactElement {
       }}
     >
       <DialogContent
-        className="sm:max-w-xl max-h-[85vh] flex flex-col gap-4 overflow-hidden"
+        className="sm:max-w-xl max-h-[85vh] flex flex-col gap-3 overflow-hidden p-3.5 sm:p-4 rounded-lg"
         onCloseAutoFocus={(e) => e.preventDefault()}
       >
-        <DialogHeader>
-          <DialogTitle>{dialogTitle}</DialogTitle>
-          <DialogDescription>{dialogDescription}</DialogDescription>
+        <DialogHeader className="space-y-1">
+          <DialogTitle className="text-base font-semibold">{dialogTitle}</DialogTitle>
+          <DialogDescription className="text-xs text-muted-foreground">{dialogDescription}</DialogDescription>
         </DialogHeader>
 
         {actor.target.kind === 'single' && (
-          <div className="flex flex-col gap-4 py-2">
+          <div className="flex flex-col gap-3 py-1">
             {jsonContent === null ? (
-              <div className="flex flex-col gap-3">
-                <p className="text-sm text-muted-foreground">
+              <div className="flex flex-col gap-2.5">
+                <p className="text-xs text-muted-foreground">
                   请选择操作：查看凭证完整 JSON 内容（需要显式敏感操作确认），或直接下载单文件 JSON。
                 </p>
-                <div className="flex flex-wrap gap-3">
+                <div className="flex flex-wrap gap-2">
                   <Button
                     type="button"
                     variant="outline"
+                    size="sm"
                     disabled={!isSingleValid || readBusy || downloadBusy || actor.confirmationConsumed}
                     onClick={() => {
                       if (!actor.retired && isActorValid(actor) && !actor.confirmationConsumed) {
@@ -446,6 +447,7 @@ function FilesDialogView(props: FilesDialogProps): ReactElement {
                   <Button
                     type="button"
                     variant="default"
+                    size="sm"
                     disabled={!isSingleValid || readBusy || downloadBusy}
                     onClick={handleDownload}
                   >
@@ -454,10 +456,10 @@ function FilesDialogView(props: FilesDialogProps): ReactElement {
                 </div>
               </div>
             ) : (
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-muted-foreground">完整凭证 JSON（已排除服务端信封）：</span>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     {copyStatus && <span className="text-xs text-muted-foreground">{copyStatus}</span>}
                     <Button
                       type="button"
@@ -481,7 +483,7 @@ function FilesDialogView(props: FilesDialogProps): ReactElement {
                 <Textarea
                   readOnly
                   value={JSON.stringify(jsonContent, null, 2)}
-                  className="font-mono text-xs h-64 resize-none overflow-auto bg-muted/30 select-text"
+                  className="font-mono text-xs h-52 resize-none overflow-auto bg-muted/30 select-text rounded-md"
                   aria-label="凭证 JSON 内容"
                 />
               </div>
@@ -496,7 +498,7 @@ function FilesDialogView(props: FilesDialogProps): ReactElement {
         )}
 
         {actor.target.kind === 'selection' && (
-          <div className="flex flex-col gap-4 py-2">
+          <div className="flex flex-col gap-3 py-1">
             {!isSelectionValid ? (
               <p className="text-xs text-destructive" role="alert">
                 {actor.target.filenames.length === 0
@@ -506,7 +508,7 @@ function FilesDialogView(props: FilesDialogProps): ReactElement {
                   : '所选文件列表中包含重复项或无效文件名。'}
               </p>
             ) : (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 可将已选择的 {actor.target.filenames.length} 项凭证打包为 ZIP 文件下载。
               </p>
             )}
@@ -514,6 +516,7 @@ function FilesDialogView(props: FilesDialogProps): ReactElement {
               <Button
                 type="button"
                 variant="default"
+                size="sm"
                 disabled={!isSelectionValid || downloadBusy}
                 onClick={handleDownload}
               >
@@ -527,14 +530,15 @@ function FilesDialogView(props: FilesDialogProps): ReactElement {
         )}
 
         {actor.target.kind === 'channel' && (
-          <div className="flex flex-col gap-4 py-2">
-            <p className="text-sm text-muted-foreground">
+          <div className="flex flex-col gap-3 py-1">
+            <p className="text-xs text-muted-foreground">
               将下载当前渠道全部凭证文件并打包为 ZIP 归档。
             </p>
             <div>
               <Button
                 type="button"
                 variant="default"
+                size="sm"
                 disabled={downloadBusy}
                 onClick={handleDownload}
               >
@@ -547,30 +551,32 @@ function FilesDialogView(props: FilesDialogProps): ReactElement {
           </div>
         )}
 
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={handleClose}>
+        <DialogFooter className="mt-1">
+          <Button type="button" variant="outline" size="sm" onClick={handleClose}>
             关闭
           </Button>
         </DialogFooter>
 
         {actor.target.kind === 'single' && (
           <AlertDialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
-            <AlertDialogContent onCloseAutoFocus={(e) => e.preventDefault()}>
-              <AlertDialogHeader>
-                <AlertDialogTitle>查看完整凭证内容确认</AlertDialogTitle>
-                <AlertDialogDescription>
+            <AlertDialogContent className="max-w-md rounded-lg p-4" onCloseAutoFocus={(e) => e.preventDefault()}>
+              <AlertDialogHeader className="space-y-1">
+                <AlertDialogTitle className="text-base font-semibold">查看完整凭证内容确认</AlertDialogTitle>
+                <AlertDialogDescription className="text-xs text-muted-foreground">
                   即将查看凭证「{actor.target.filename}」的完整明文内容（包含敏感密钥与配置）。请确认当前屏幕安全，避免敏感信息泄露。
                 </AlertDialogDescription>
               </AlertDialogHeader>
-              <AlertDialogFooter>
+              <AlertDialogFooter className="mt-2 gap-2">
                 <AlertDialogCancel
                   disabled={readBusy}
+                  className="h-8 px-3 text-xs"
                   onClick={handleCancelConfirm}
                 >
                   取消
                 </AlertDialogCancel>
                 <AlertDialogAction
                   disabled={readBusy}
+                  className="h-8 px-3 text-xs"
                   onClick={handleConfirmRead}
                 >
                   确认查看

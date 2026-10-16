@@ -438,55 +438,63 @@ export default function SettingsPage() {
   }, [s.auth.sessionEpoch, checkVerifiedOwner, readbackLoading]);
 
   return (
-    <div id="settings-content" tabIndex={-1} className="mx-auto max-w-6xl space-y-6">
+    <div
+      id="settings-content"
+      tabIndex={-1}
+      className="w-full max-w-[1720px] min-w-0 space-y-3 md:space-y-3.5"
+    >
       {fixtureMode && (
-        <p role="status" className="rounded-lg border border-border bg-info-bg p-3 text-sm text-info">
+        <p role="status" className="rounded-md border border-border bg-info-bg p-2.5 text-xs text-info">
           合成预览：本页所有操作仅影响内存示例，不访问后台。
         </p>
       )}
-      <header>
-        <h1 className="text-2xl font-semibold text-foreground">设置</h1>
-        <p className="text-sm text-muted-foreground">
+      <header className="space-y-0.5">
+        <h1 className="text-xl font-semibold text-foreground">设置</h1>
+        <p className="text-xs text-muted-foreground">
           Antigravity 与共享配置。只提交已修改且未被环境锁定的字段。
         </p>
       </header>
 
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           id="settings-read-config"
           variant="outline"
+          size="sm"
+          className="h-8 text-xs"
           disabled={s.busy || !s.auth.authenticated}
           onClick={() => void s.refresh()}
         >
           重新读取并对照
         </Button>
         {s.observed && (
-          <Button variant="outline" disabled={s.busy} onClick={s.acceptObservation}>
+          <Button variant="outline" size="sm" className="h-8 text-xs" disabled={s.busy} onClick={s.acceptObservation}>
             放弃草稿并采用观察值
           </Button>
         )}
       </div>
 
-      <p className="text-[13px] leading-5 text-muted-foreground">
+      <p className="text-xs leading-4 text-muted-foreground">
         非敏感草稿只保留在当前标签页内存。切换新版页面可保留修改；刷新、关闭浏览器或前往旧页面会丢失草稿，请先处理未保存修改。
       </p>
 
-      <p
-        role="status"
-        aria-live="polite"
-        className={s.needsRead ? 'text-sm text-warning' : 'text-sm text-info'}
-      >
-        {s.busy ? '正在处理…' : s.status}
-      </p>
+      {s.status && (
+        <p
+          role="status"
+          aria-live="polite"
+          className={s.needsRead ? 'text-xs text-warning' : 'text-xs text-info'}
+        >
+          {s.busy ? '正在处理…' : s.status}
+        </p>
+      )}
 
       <UnsavedChangesGuard />
 
-      <p className="rounded-lg border border-warning/25 bg-warning-bg p-3 text-[13px] leading-5 text-warning">
+      <p className="rounded-md border border-warning/25 bg-warning-bg p-2.5 text-xs leading-4 text-warning">
         监听地址、端口、凭证目录等运行配置保存后可能需要重启服务才生效；保存确认不代表运行进程已切换。本页不会自动重启。
       </p>
 
       {!s.auth.authenticated && (
-        <p role="alert" className="text-sm text-warning">
+        <p role="alert" className="text-xs text-warning">
           请重新登录。非敏感草稿仅保存在内存，秘密输入已清除。
         </p>
       )}
@@ -500,14 +508,14 @@ export default function SettingsPage() {
             document.getElementById(first.key)?.scrollIntoView?.({ block: 'center' });
           }
         })}
-        className="space-y-6"
+        className="space-y-4"
       >
         {[...new Set(fields.map((f) => f.section))].map((section) => (
           <Card key={section}>
-            <CardHeader>
-              <CardTitle>{section}</CardTitle>
+            <CardHeader className="p-3 pb-1.5">
+              <CardTitle className="text-base font-semibold">{section}</CardTitle>
             </CardHeader>
-            <CardContent className="grid gap-4 md:grid-cols-2">
+            <CardContent className="p-3 pt-0 grid gap-2.5 md:grid-cols-2">
               {fields
                 .filter((f) => f.section === section)
                 .map((field) => (
@@ -524,22 +532,22 @@ export default function SettingsPage() {
         ))}
 
         <Card>
-          <CardHeader>
-            <CardTitle>修改对照（{changes.length}）</CardTitle>
+          <CardHeader className="p-3 pb-1.5">
+            <CardTitle className="text-base font-semibold">修改对照（{changes.length}）</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-[13px] leading-5 text-muted-foreground">
+          <CardContent className="p-3 pt-0 space-y-2 text-xs">
+            <p className="text-xs leading-4 text-muted-foreground">
               读取仅反映当前观察值，不保证事务、原子性或没有其他写入。密码与可能含秘密的网络字段均隐藏值。
             </p>
-            <div className="overflow-x-auto rounded-xl bg-background ring-1 ring-border">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-secondary text-[13px] text-muted-foreground [&_th]:font-medium">
+            <div className="overflow-x-auto rounded-md bg-background ring-1 ring-border">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-secondary text-[12px] text-muted-foreground [&_th]:font-medium">
                   <tr>
-                    <th>字段</th>
-                    <th>原基线</th>
-                    <th>草稿</th>
-                    <th>最近提交</th>
-                    <th>当前观察</th>
+                    <th className="py-1 px-2">字段</th>
+                    <th className="py-1 px-2">原基线</th>
+                    <th className="py-1 px-2">草稿</th>
+                    <th className="py-1 px-2">最近提交</th>
+                    <th className="py-1 px-2">当前观察</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -553,11 +561,11 @@ export default function SettingsPage() {
                         className="border-t border-border text-foreground hover:bg-secondary/60"
                         key={f.key}
                       >
-                        <th className="py-2 font-medium">{f.label}</th>
-                        <td>{show(s.baseline[f.key])}</td>
-                        <td>{show(values[f.key])}</td>
-                        <td>{show(s.sent?.[f.key])}</td>
-                        <td>{show(s.observed?.[f.key])}</td>
+                        <th className="py-1 px-2 font-medium">{f.label}</th>
+                        <td className="py-1 px-2">{show(s.baseline[f.key])}</td>
+                        <td className="py-1 px-2">{show(values[f.key])}</td>
+                        <td className="py-1 px-2">{show(s.sent?.[f.key])}</td>
+                        <td className="py-1 px-2">{show(s.observed?.[f.key])}</td>
                       </tr>
                     );
                   })}
@@ -566,6 +574,8 @@ export default function SettingsPage() {
             </div>
             <Button
               type="submit"
+              size="sm"
+              className="h-8 text-xs"
               disabled={
                 s.busy || !s.auth.authenticated || !s.snapshot || s.needsRead || !changes.length
               }
@@ -577,11 +587,11 @@ export default function SettingsPage() {
       </form>
 
       <Card>
-        <CardHeader>
-          <CardTitle>已保存密码</CardTitle>
+        <CardHeader className="p-3 pb-1.5">
+          <CardTitle className="text-base font-semibold">已保存密码</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-[13px] leading-5 text-muted-foreground">
+        <CardContent className="p-3 pt-0 space-y-2">
+          <p className="text-xs leading-4 text-muted-foreground">
             在明确确认后查看已保存的密码明文。
           </p>
           <SavedPasswordsDialog disabled={s.busy || !s.auth.authenticated} />
@@ -603,27 +613,27 @@ export default function SettingsPage() {
       />
 
       <Card>
-        <CardHeader>
-          <CardTitle>存储与模型路由</CardTitle>
+        <CardHeader className="p-3 pb-1.5">
+          <CardTitle className="text-base font-semibold">存储与模型路由</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-foreground">
+        <CardContent className="p-3 pt-0 space-y-3">
+          <p className="text-xs text-foreground">
             当前存储引擎配置观察：<strong className="font-semibold">{s.engine}</strong>
           </p>
 
-          <p className="text-[13px] leading-5 text-muted-foreground">
+          <p className="text-xs leading-4 text-muted-foreground">
             切换存储可能迁移或覆盖数据、改变凭证可见性。可通过原生设置工具请求切换并在弹窗中明确确认。独立读取仅反映当前观察值，不代表先前写入确认。
           </p>
 
           {migrationAdmissionError && (
-            <p role="alert" className="text-[13px] leading-5 text-destructive rounded-md border border-destructive/30 bg-destructive/10 p-3">
+            <p role="alert" className="text-xs leading-4 text-destructive rounded-md border border-destructive/30 bg-destructive/10 p-2.5">
               {migrationAdmissionError}
             </p>
           )}
 
           {migrationEvidence && (
-            <div className="rounded-md border border-border bg-secondary/30 p-3 space-y-2 text-sm">
-              <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="rounded-md border border-border bg-secondary/30 p-2.5 space-y-1.5 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-1.5">
                 <span className="font-medium text-foreground">
                   最近存储切换提交记录（目标：{migrationEvidence.targetEngine === 'sqlite' ? 'SQLite' : 'MySQL'}
                   {migrationEvidence.serverName ? ` / ${migrationEvidence.serverName}` : ''}）
@@ -631,12 +641,12 @@ export default function SettingsPage() {
                 <span
                   className={
                     migrationEvidence.result.kind === 'acknowledged'
-                      ? 'text-success font-medium text-xs'
+                      ? 'text-success font-medium text-[11px]'
                       : migrationEvidence.result.kind === 'partial'
-                      ? 'text-warning font-medium text-xs'
+                      ? 'text-warning font-medium text-[11px]'
                       : migrationEvidence.result.kind === 'rejected'
-                      ? 'text-destructive font-medium text-xs'
-                      : 'text-muted-foreground font-medium text-xs'
+                      ? 'text-destructive font-medium text-[11px]'
+                      : 'text-muted-foreground font-medium text-[11px]'
                   }
                 >
                   {{
@@ -647,11 +657,11 @@ export default function SettingsPage() {
                   }[migrationEvidence.result.kind]}
                 </span>
               </div>
-              <p className="text-[13px] text-muted-foreground">{migrationEvidence.statusText}</p>
+              <p className="text-xs text-muted-foreground">{migrationEvidence.statusText}</p>
               {migrationEvidence.result.migration && (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs pt-1">
-                  <div className="bg-background/80 p-2 rounded border border-border">
-                    <span className="text-muted-foreground block">Gemini CLI 凭证</span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 text-xs pt-0.5">
+                  <div className="bg-background/80 p-1.5 rounded border border-border">
+                    <span className="text-muted-foreground block text-[11px]">Gemini CLI 凭证</span>
                     <span className="font-medium text-foreground">
                       迁移: {migrationEvidence.result.migration.gcliCredentials.migrated ?? '未知'} /{' '}
                       {migrationEvidence.result.migration.gcliCredentials.total ?? '未知'}
@@ -662,8 +672,8 @@ export default function SettingsPage() {
                       )}
                     </span>
                   </div>
-                  <div className="bg-background/80 p-2 rounded border border-border">
-                    <span className="text-muted-foreground block">Antigravity 凭证</span>
+                  <div className="bg-background/80 p-1.5 rounded border border-border">
+                    <span className="text-muted-foreground block text-[11px]">Antigravity 凭证</span>
                     <span className="font-medium text-foreground">
                       迁移: {migrationEvidence.result.migration.antigravityCredentials.migrated ?? '未知'} /{' '}
                       {migrationEvidence.result.migration.antigravityCredentials.total ?? '未知'}
@@ -674,8 +684,8 @@ export default function SettingsPage() {
                       )}
                     </span>
                   </div>
-                  <div className="bg-background/80 p-2 rounded border border-border">
-                    <span className="text-muted-foreground block">配置项</span>
+                  <div className="bg-background/80 p-1.5 rounded border border-border">
+                    <span className="text-muted-foreground block text-[11px]">配置项</span>
                     <span className="font-medium text-foreground">
                       迁移: {migrationEvidence.result.migration.config.migrated ?? '未知'} /{' '}
                       {migrationEvidence.result.migration.config.total ?? '未知'}
@@ -687,7 +697,7 @@ export default function SettingsPage() {
                     </span>
                   </div>
                   {migrationEvidence.result.migration.totalMigrated !== undefined && (
-                    <div className="sm:col-span-3 text-xs text-muted-foreground">
+                    <div className="sm:col-span-3 text-[11px] text-muted-foreground">
                       总迁移项计数:{' '}
                       <span className="font-medium text-foreground">
                         {migrationEvidence.result.migration.totalMigrated}
@@ -699,27 +709,28 @@ export default function SettingsPage() {
             </div>
           )}
 
-          <div className="space-y-2 pt-1 border-t border-border">
-            <div className="flex flex-wrap items-center gap-3">
+          <div className="space-y-1.5 pt-1 border-t border-border">
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
+                className="h-8 text-xs"
                 disabled={readbackLoading || !s.auth.authenticated}
                 onClick={() => void handleReadbackStorageState()}
               >
                 {readbackLoading ? '正在读取…' : '独立读取当前存储观察值'}
               </Button>
               {storageObservationStatus && (
-                <span className="text-[13px] text-muted-foreground">{storageObservationStatus}</span>
+                <span className="text-xs text-muted-foreground">{storageObservationStatus}</span>
               )}
             </div>
             {storageObservation && (
-              <div className="rounded-md border border-border bg-background p-2.5 text-[13px] space-y-1">
+              <div className="rounded-md border border-border bg-background p-2 text-xs space-y-0.5">
                 <span className="text-muted-foreground block font-medium">
                   当前独立观察值（非先前写入确认）：
                 </span>
-                <div className="flex flex-wrap gap-x-4 gap-y-1 text-foreground">
+                <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-foreground">
                   <span>
                     当前引擎: <strong className="font-semibold">{storageObservation.currentEngine ?? '未知'}</strong>
                   </span>
@@ -751,7 +762,7 @@ export default function SettingsPage() {
             )}
           </div>
 
-          <div className="flex flex-wrap gap-4 text-sm pt-1">
+          <div className="flex flex-wrap gap-3 text-xs pt-0.5">
             {fixtureMode ? (
               <span className="text-muted-foreground">合成预览中不打开真实存储入口。</span>
             ) : (
@@ -783,18 +794,18 @@ export default function SettingsPage() {
             if (!open) handleCancelMigration(migrationModal);
           }}
         >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>确认切换存储引擎</AlertDialogTitle>
-              <AlertDialogDescription>
+          <AlertDialogContent className="p-4 max-w-lg">
+            <AlertDialogHeader className="space-y-1">
+              <AlertDialogTitle className="text-base font-semibold">确认切换存储引擎</AlertDialogTitle>
+              <AlertDialogDescription className="text-xs text-muted-foreground">
                 切换存储可能迁移或覆盖数据、改变凭证可见性。请在弹窗中仔细检查目标配置及迁移预览后再明确确认切换。
               </AlertDialogDescription>
             </AlertDialogHeader>
-            <div className="space-y-3 text-sm text-foreground">
-              <span className="block font-medium text-warning text-[13px]">
+            <div className="space-y-2.5 text-xs text-foreground">
+              <span className="block font-medium text-warning text-xs">
                 警告：切换存储引擎将迁移或覆盖目标数据库中的数据，并改变凭证与配置的可见性。此操作不可自动撤销。
               </span>
-              <div className="rounded-md border border-border bg-secondary/40 p-3 space-y-1 text-[13px]">
+              <div className="rounded-md border border-border bg-secondary/40 p-2.5 space-y-1 text-xs">
                 <div>
                   <span className="text-muted-foreground">目标存储引擎：</span>
                   <span className="font-semibold text-foreground">
@@ -822,37 +833,37 @@ export default function SettingsPage() {
                 </div>
               </div>
 
-              <div className="rounded-md border border-border p-3 space-y-1.5 text-[13px]">
+              <div className="rounded-md border border-border p-2.5 space-y-1.5 text-xs">
                 <span className="font-medium text-foreground block">数据迁移预览（快照）：</span>
                 {migrationModal.preview?.data ? (
                   <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <span className="text-muted-foreground">Gemini CLI 凭证：</span>
-                      <span className="font-medium text-foreground ml-1">
+                    <div className="rounded bg-background/80 p-2 border border-border/60">
+                      <span className="text-muted-foreground block text-[11px]">Gemini CLI 凭证</span>
+                      <span className="font-semibold text-foreground">
                         {migrationModal.preview.data.gcliCredentials !== undefined
                           ? migrationModal.preview.data.gcliCredentials
                           : '未知'}
                       </span>
                     </div>
-                    <div>
-                      <span className="text-muted-foreground">Antigravity 凭证：</span>
-                      <span className="font-medium text-foreground ml-1">
+                    <div className="rounded bg-background/80 p-2 border border-border/60">
+                      <span className="text-muted-foreground block text-[11px]">Antigravity 凭证</span>
+                      <span className="font-semibold text-foreground">
                         {migrationModal.preview.data.antigravityCredentials !== undefined
                           ? migrationModal.preview.data.antigravityCredentials
                           : '未知'}
                       </span>
                     </div>
-                    <div>
-                      <span className="text-muted-foreground">配置项：</span>
-                      <span className="font-medium text-foreground ml-1">
+                    <div className="rounded bg-background/80 p-2 border border-border/60">
+                      <span className="text-muted-foreground block text-[11px]">配置项</span>
+                      <span className="font-semibold text-foreground">
                         {migrationModal.preview.data.config !== undefined
                           ? migrationModal.preview.data.config
                           : '未知'}
                       </span>
                     </div>
-                    <div>
-                      <span className="text-muted-foreground">总计项：</span>
-                      <span className="font-medium text-foreground ml-1">
+                    <div className="rounded bg-background/80 p-2 border border-border/60">
+                      <span className="text-muted-foreground block text-[11px]">总计项</span>
+                      <span className="font-semibold text-foreground">
                         {migrationModal.preview.data.total !== undefined
                           ? migrationModal.preview.data.total
                           : '未知'}
@@ -866,9 +877,10 @@ export default function SettingsPage() {
                 )}
               </div>
             </div>
-            <AlertDialogFooter>
-              <AlertDialogCancel onClick={() => handleCancelMigration(migrationModal)}>取消</AlertDialogCancel>
+            <AlertDialogFooter className="pt-2 gap-2">
+              <AlertDialogCancel className="h-8 text-xs" onClick={() => handleCancelMigration(migrationModal)}>取消</AlertDialogCancel>
               <AlertDialogAction
+                className="h-8 text-xs bg-destructive text-destructive-foreground hover:bg-destructive/90"
                 disabled={
                   migrationBusy ||
                   (migrationModal.targetEngine === 'mysql' && !migrationModal.serverName.trim())

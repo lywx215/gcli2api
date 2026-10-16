@@ -628,34 +628,67 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
   const isToolOpen = toolSession !== null || (activeReservationRef.current !== null && activeReservationRef.current.kind === 'tool')
   const blocked = busy || c.materializing || isToolOpen || activeReservationRef.current !== null
   const noSelection = blocked || !c.selected.size
+  const isDockVisible = c.selected.size > 0 || mobilePanels.bulk
+  const bulkDockRef = useRef<HTMLElement | null>(null)
+  const [dockHeight, setDockHeight] = useState(0)
+
+  useEffect(() => {
+    if (!isDockVisible) {
+      setDockHeight(0)
+      return
+    }
+    const el = bulkDockRef.current
+    if (!el) return
+    const update = () => {
+      setDockHeight(el.offsetHeight)
+    }
+    update()
+    let observer: ResizeObserver | null = null
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(() => {
+        update()
+      })
+      observer.observe(el)
+    }
+    window.addEventListener('resize', update)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', update)
+    }
+  }, [isDockVisible])
 
   return (
     <section
       ref={workspace}
-      className="min-w-0 space-y-5"
+      className="w-full max-w-[1720px] min-w-0 space-y-3 md:space-y-3.5"
+      style={{
+        paddingBottom: isDockVisible
+          ? `calc(${dockHeight || 64}px + 1rem + env(safe-area-inset-bottom, 0px))`
+          : undefined,
+      }}
       aria-label={mode === 'geminicli' ? 'Gemini CLI 凭证' : 'Antigravity 凭证'}
       aria-busy={busy || c.loading}
     >
       <ConsoleHandshake active={mode === 'geminicli'} />
-      <header className="flex flex-wrap items-center justify-between gap-3">
+      <header className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h1 ref={listTitle} tabIndex={-1} className="text-2xl font-semibold">
+          <h1 ref={listTitle} tabIndex={-1} className="text-xl md:text-2xl font-semibold">
             {mode === 'geminicli' ? 'Gemini CLI 凭证' : 'Antigravity 凭证'}
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">筛选、跨页选择与凭证状态管理</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">筛选、跨页选择与凭证状态管理</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div
             role="radiogroup"
             aria-label="视图模式"
-            className="inline-flex rounded-lg border bg-secondary p-1"
+            className="inline-flex rounded-md border bg-secondary p-0.5"
           >
             <Button
               type="button"
               role="radio"
               aria-checked={viewMode === 'table'}
               variant={viewMode === 'table' ? 'default' : 'ghost'}
-              size="sm"
+              size="xs"
               disabled={busy}
               onClick={() => setViewMode('table')}
             >
@@ -666,7 +699,7 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
               role="radio"
               aria-checked={viewMode === 'cards'}
               variant={viewMode === 'cards' ? 'default' : 'ghost'}
-              size="sm"
+              size="xs"
               disabled={busy}
               onClick={() => setViewMode('cards')}
             >
@@ -675,6 +708,7 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
           </div>
           <Button
             variant="outline"
+            size="sm"
             disabled={busy}
             onClick={() => {
               if (isOwnerActive()) c.refresh()
@@ -685,7 +719,7 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
         </div>
       </header>
       {fixtureMode && (
-        <p role="status" className="rounded-xl border bg-info-bg p-3 text-[13px] text-info">
+        <p role="status" className="rounded-md border bg-info-bg p-2 text-xs text-info">
           开发模式合成预览。操作结果为模拟数据，不代表后端已执行。
         </p>
       )}
@@ -709,15 +743,13 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
           }}
         />
       </fieldset>
-      <section
-        id={mobilePanelIds.bulk}
-        className={`space-y-3 rounded-xl border bg-card p-4 text-card-foreground ${mobilePanels.bulk ? 'block' : 'hidden md:block'}`}
-        aria-label="批量操作"
-      >
-        <div className="flex flex-wrap items-center gap-2">
-          <strong className="mr-2 text-sm">已跨页选择 {c.selected.size} 项</strong>
+
+      {/* 零选择常驻全渠道工具条 */}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div className="flex flex-wrap items-center gap-1.5">
           <Button
             variant="outline"
+            size="xs"
             disabled={blocked || !c.data?.items.length}
             onClick={() => {
               if (isOwnerActive() && activeReservationRef.current === null && c.data?.items.length) {
@@ -729,6 +761,7 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
           </Button>
           <Button
             variant="outline"
+            size="xs"
             disabled={blocked || !c.data?.total}
             onClick={() => {
               if (isOwnerActive() && activeReservationRef.current === null && c.data?.total) {
@@ -736,71 +769,11 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
               }
             }}
           >
-            读取并选择全部匹配
-          </Button>
-          <Button
-            variant="ghost"
-            disabled={blocked}
-            onClick={() => {
-              if (isOwnerActive() && activeReservationRef.current === null) c.clearSelection()
-            }}
-          >
-            清除选择
-          </Button>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button disabled={noSelection} onClick={() => void action([...c.selected], 'enable')}>
-            批量启用
-          </Button>
-          <Button variant="outline" disabled={noSelection} onClick={() => void action([...c.selected], 'disable')}>
-            批量禁用
-          </Button>
-          <ConfirmAction
-            label="批量永久禁用"
-            disabled={noSelection || !c.caps.has(modeCaps.permanent)}
-            description={`对已物化集合中的 ${c.selected.size} 个凭证永久禁用；可能部分成功。`}
-            onConfirm={() => void action([...c.selected], 'permanent_disable')}
-          />
-          <ConfirmAction
-            label="批量删除"
-            disabled={noSelection}
-            description={`删除已物化集合中的 ${c.selected.size} 个凭证。此操作不可由页面撤销，可能部分成功。`}
-            onConfirm={() => void action([...c.selected], 'delete')}
-          />
-          {mode === 'antigravity' && (
-            <>
-              <ConfirmAction
-                label="批量开启信用额度"
-                disabled={noSelection || !c.caps.has(CAP.credit)}
-                description="对选中凭证开启信用额度并清除模型冷却，可能部分成功。"
-                onConfirm={() => void action([...c.selected], 'enable_credit')}
-              />
-              <ConfirmAction
-                label="批量关闭信用额度"
-                disabled={noSelection || !c.caps.has(CAP.credit)}
-                description="对选中凭证关闭信用额度并清除模型冷却，可能部分成功。"
-                onConfirm={() => void action([...c.selected], 'disable_credit')}
-              />
-            </>
-          )}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            disabled={blocked || !selectedToolsAllowed(c.selected)}
-            onClick={() => openTool('files', { kind: 'selection', filenames: [...c.selected] })}
-          >
-            下载选中
+            读取全部匹配
           </Button>
           <Button
             variant="outline"
-            disabled={blocked || !selectedToolsAllowed(c.selected)}
-            onClick={() => openTool('email', { kind: 'selection', filenames: [...c.selected] })}
-          >
-            复制邮箱
-          </Button>
-          <Button
-            variant="outline"
+            size="xs"
             disabled={blocked}
             onClick={() => openTool('files', { kind: 'channel' })}
           >
@@ -808,23 +781,134 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
           </Button>
           <Button
             variant="outline"
+            size="xs"
             disabled={blocked}
             onClick={() => openTool('email', { kind: 'channel' })}
           >
             全渠道邮箱维护
           </Button>
-          <Button
-            variant="outline"
-            disabled={noSelection}
-            onClick={() => openTool('batch', [...c.selected])}
-          >
-            批量检测与额度刷新
-          </Button>
         </div>
-        <p className="text-[13px] text-muted-foreground">
-          全部匹配按每页 1000 项读取并保存文件名；读取期间列表可能变化，不保证原子快照。
-        </p>
-      </section>
+        {c.selected.size > 0 && (
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span>已跨页选择 <strong className="font-semibold tabular-nums text-foreground">{c.selected.size}</strong> 项</span>
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={blocked}
+              onClick={() => {
+                if (isOwnerActive() && activeReservationRef.current === null) c.clearSelection()
+              }}
+              className="h-6 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+            >
+              清除选择
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {/* 选中时呈现的情境感知浮动批量操作坞 (Contextual Bulk Dock) */}
+      {isDockVisible && (
+        <aside
+          ref={bulkDockRef}
+          id={mobilePanelIds.bulk}
+          role="region"
+          aria-label="批量操作"
+          className="fixed bottom-0 left-0 right-0 md:right-[13.5rem] z-40 border-t bg-card/95 backdrop-blur shadow-lg max-h-[35vh] md:max-h-[25vh] overflow-y-auto"
+          style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
+        >
+          <div className="flex w-full max-w-[1752px] px-3 py-2 md:px-4 sm:py-2.5 flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <strong className="text-xs sm:text-sm font-semibold">
+                已跨页选择 {c.selected.size} 项
+              </strong>
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={blocked}
+                onClick={() => {
+                  if (isOwnerActive() && activeReservationRef.current === null) c.clearSelection()
+                }}
+                className="h-6 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+              >
+                清除选择
+              </Button>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Button
+                size="xs"
+                disabled={noSelection}
+                onClick={() => void action([...c.selected], 'enable')}
+              >
+                批量启用
+              </Button>
+              <Button
+                variant="outline"
+                size="xs"
+                disabled={noSelection}
+                onClick={() => void action([...c.selected], 'disable')}
+              >
+                批量禁用
+              </Button>
+              <ConfirmAction
+                label="批量永久禁用"
+                size="xs"
+                disabled={noSelection || !c.caps.has(modeCaps.permanent)}
+                description={`对已物化集合中的 ${c.selected.size} 个凭证永久禁用；可能部分成功。`}
+                onConfirm={() => void action([...c.selected], 'permanent_disable')}
+              />
+              <ConfirmAction
+                label="批量删除"
+                size="xs"
+                disabled={noSelection}
+                description={`删除已物化集合中的 ${c.selected.size} 个凭证。此操作不可由页面撤销，可能部分成功。`}
+                onConfirm={() => void action([...c.selected], 'delete')}
+              />
+              {mode === 'antigravity' && (
+                <>
+                  <ConfirmAction
+                    label="批量开启信用额度"
+                    size="xs"
+                    disabled={noSelection || !c.caps.has(CAP.credit)}
+                    description="对选中凭证开启信用额度并清除模型冷却，可能部分成功。"
+                    onConfirm={() => void action([...c.selected], 'enable_credit')}
+                  />
+                  <ConfirmAction
+                    label="批量关闭信用额度"
+                    size="xs"
+                    disabled={noSelection || !c.caps.has(CAP.credit)}
+                    description="对选中凭证关闭信用额度并清除模型冷却，可能部分成功。"
+                    onConfirm={() => void action([...c.selected], 'disable_credit')}
+                  />
+                </>
+              )}
+              <Button
+                variant="outline"
+                size="xs"
+                disabled={blocked || !selectedToolsAllowed(c.selected)}
+                onClick={() => openTool('files', { kind: 'selection', filenames: [...c.selected] })}
+              >
+                下载选中
+              </Button>
+              <Button
+                variant="outline"
+                size="xs"
+                disabled={blocked || !selectedToolsAllowed(c.selected)}
+                onClick={() => openTool('email', { kind: 'selection', filenames: [...c.selected] })}
+              >
+                复制邮箱
+              </Button>
+              <Button
+                variant="outline"
+                size="xs"
+                disabled={noSelection}
+                onClick={() => openTool('batch', [...c.selected])}
+              >
+                批量检测与额度刷新
+              </Button>
+            </div>
+          </div>
+        </aside>
+      )}
 
       {toolSession && toolSession.tool === 'files' && activeReservationRef.current?.id === toolSession.id && (() => {
         const toolRes = activeReservationRef.current
@@ -846,9 +930,9 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
       {toolSession && toolSession.tool === 'email' && toolSession.source === 'page' && activeReservationRef.current?.id === toolSession.id && (() => {
         const toolRes = activeReservationRef.current
         return (
-          <section className="space-y-3 rounded-xl border bg-card p-4 text-card-foreground" aria-label="邮箱维护">
+          <section className="space-y-2.5 rounded-lg border bg-card p-3 text-card-foreground shadow-sm" aria-label="邮箱维护">
             <div className="flex items-center justify-between border-b pb-2">
-              <h3 className="text-base font-semibold">邮箱维护</h3>
+              <h3 className="text-sm font-semibold">邮箱维护</h3>
               <Button variant="outline" size="sm" onClick={createToolClose(toolRes)}>
                 退出邮箱维护
               </Button>
@@ -870,9 +954,9 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
       {toolSession && toolSession.tool === 'batch' && toolSession.source === 'page' && activeReservationRef.current?.id === toolSession.id && (() => {
         const toolRes = activeReservationRef.current
         return (
-          <section className="space-y-3 rounded-xl border bg-card p-4 text-card-foreground" aria-label="批量检测面板">
+          <section className="space-y-2.5 rounded-lg border bg-card p-3 text-card-foreground shadow-sm" aria-label="批量检测面板">
             <div className="flex items-center justify-between border-b pb-2">
-              <h3 className="text-base font-semibold">批量检测面板</h3>
+              <h3 className="text-sm font-semibold">批量检测面板</h3>
               <Button variant="outline" size="sm" onClick={createToolClose(toolRes)}>
                 退出批量面板
               </Button>
@@ -892,12 +976,13 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
       })()}
 
       {c.materializing && (
-        <div className="flex items-center gap-3">
-          <p role="status" className="text-[13px] text-info">
+        <div role="status" className="flex items-center gap-2.5 rounded-md border border-info/30 bg-info-bg p-2 text-xs text-info">
+          <span className="font-medium">
             正在物化文件集合，已读取 {c.progress} 项…
-          </p>
+          </span>
           <Button
             variant="outline"
+            size="xs"
             onClick={() => {
               if (isOwnerActive()) c.cancelSelection()
             }}
@@ -907,18 +992,18 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
         </div>
       )}
       {c.selected.size > 100 && (
-        <p className="text-[13px] text-warning">
+        <p className="text-xs text-warning">
           下载和复制邮箱最多 100 项，请减少选择。其他批量动作仍可使用当前集合。
         </p>
       )}
-      {c.notice && <p role="status" className="text-sm text-muted-foreground">{c.notice}</p>}
-      {result && <p role="status" className="rounded-xl border bg-info-bg p-3 text-sm text-info">{result}</p>}
+      {c.notice && <p role="status" className="text-xs text-muted-foreground">{c.notice}</p>}
+      {result && <p role="status" className="rounded-md border bg-info-bg p-2 text-xs text-info">{result}</p>}
       {c.error && (
-        <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive-bg p-4 text-destructive">
-          {c.error}
+        <div role="alert" className="flex items-center justify-between rounded-md border border-destructive/30 bg-destructive-bg p-2.5 text-xs text-destructive">
+          <span>{c.error}</span>
           <Button
             variant="outline"
-            className="ml-3"
+            size="xs"
             onClick={() => {
               if (isOwnerActive()) c.refresh()
             }}
@@ -928,13 +1013,13 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
         </div>
       )}
       {c.loading && (
-        <div role="status" aria-label="正在加载列表" className="grid gap-3">
-          <Skeleton className="h-12 w-full" />
-          <Skeleton className="h-32 w-full" />
+        <div role="status" aria-label="正在加载列表" className="grid gap-2">
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-24 w-full" />
         </div>
       )}
       {!c.loading && c.data && !c.data.items.length && (
-        <p className="rounded-xl border bg-card p-8 text-center text-muted-foreground">
+        <p className="rounded-lg border bg-card p-6 text-center text-xs text-muted-foreground">
           {c.data.stats.total === 0 ? '尚无凭证，请前往导入页面。' : '没有匹配的凭证，请调整筛选。'}
         </p>
       )}
@@ -953,7 +1038,7 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
             mode={mode}
           />
         ) : (
-          <div className="grid grid-cols-1 min-w-0 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 min-w-0 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
             {c.data.items.map(row => {
               const itemState = quota.getState(row.filename)
               const isSelected = c.selected.has(row.filename)
@@ -961,7 +1046,7 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
                 <div
                   key={row.filename}
                   data-state={isSelected ? 'selected' : undefined}
-                  className="min-w-0 flex flex-col gap-3 rounded-xl border bg-card p-4 text-card-foreground shadow-sm transition-colors data-[state=selected]:border-primary/50 data-[state=selected]:bg-selected"
+                  className="min-w-0 flex flex-col gap-2 rounded-lg border bg-card p-3 text-card-foreground shadow-sm transition-colors data-[state=selected]:border-primary/50 data-[state=selected]:bg-selected"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
                     <div className="flex items-center gap-2 min-w-0 max-w-full">
@@ -973,14 +1058,14 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
                           if (isOwnerActive() && activeReservationRef.current === null) c.toggle([row.filename], v === true)
                         }}
                       />
-                      <span className="truncate text-sm font-medium" title={row.filename}>
+                      <span className="truncate text-xs font-medium" title={row.filename}>
                         {row.filename}
                       </span>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                       <Button
                         variant="outline"
-                        size="sm"
+                        size="xs"
                         disabled={blocked}
                         data-credential-filename={row.filename}
                         data-credential-trigger="card-detail"
@@ -990,7 +1075,7 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
                       </Button>
                       <Button
                         variant="outline"
-                        size="sm"
+                        size="xs"
                         disabled={blocked || !quota.capabilityEnabled}
                         title={!quota.capabilityEnabled ? '当前服务未启用额度查询能力' : undefined}
                         data-credential-filename={row.filename}
@@ -1029,14 +1114,14 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
           </div>
         )
       )}
-      <nav className="flex flex-wrap items-center justify-between gap-3" aria-label="分页">
-        <label className="flex items-center gap-2 text-sm">
+      <nav className="flex flex-wrap items-center justify-between gap-2 text-xs" aria-label="分页">
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
           每页
           <select
             aria-label="每页数量"
             value={c.limit}
             disabled={blocked}
-            className="rounded-md border border-input bg-popover p-2 text-base leading-5 md:text-sm disabled:opacity-100 disabled:bg-secondary disabled:text-muted-foreground disabled:border-border disabled:cursor-not-allowed"
+            className="h-8 rounded-md border border-input bg-control-background px-2 py-0 text-base md:text-[13px] leading-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-100 disabled:bg-secondary disabled:text-muted-foreground disabled:border-border disabled:cursor-not-allowed"
             onChange={e => {
               if (isOwnerActive() && activeReservationRef.current === null) c.setLimit(Number(e.target.value))
             }}
@@ -1046,12 +1131,13 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
             ))}
           </select>
         </label>
-        <span className="text-sm text-muted-foreground">
+        <span className="text-xs text-muted-foreground">
           第 {Math.floor(c.offset / c.limit) + 1} 页 · 匹配 {c.data?.total ?? '未知'} 项
         </span>
-        <div className="flex gap-2">
+        <div className="flex gap-1.5">
           <Button
             variant="outline"
+            size="sm"
             disabled={blocked || c.loading || c.offset === 0}
             onClick={() => {
               if (isOwnerActive() && activeReservationRef.current === null) c.setOffset(Math.max(0, c.offset - c.limit))
@@ -1061,6 +1147,7 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
           </Button>
           <Button
             variant="outline"
+            size="sm"
             disabled={blocked || c.loading || !c.data?.hasMore}
             onClick={() => {
               if (isOwnerActive() && activeReservationRef.current === null) c.setOffset(c.offset + c.limit)

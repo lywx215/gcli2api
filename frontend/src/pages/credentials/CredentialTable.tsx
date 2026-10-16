@@ -473,10 +473,10 @@ export function CredentialTable({
       id: 'detail',
       header: '操作',
       cell: ({ row }) => (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           <Button
             variant="outline"
-            size="sm"
+            size="xs"
             data-credential-filename={row.original.filename}
             data-credential-trigger="desktop-detail"
             onClick={() => open(row.original.filename, 'desktop-detail')}
@@ -485,7 +485,7 @@ export function CredentialTable({
           </Button>
           <Button
             variant="outline"
-            size="sm"
+            size="xs"
             data-credential-filename={row.original.filename}
             data-credential-trigger="desktop-quota"
             disabled={disabled || !quotaCapabilityEnabled || !openQuota}
@@ -510,13 +510,13 @@ export function CredentialTable({
 
   return (
     <>
-      <div data-testid="desktop-branch" className="hidden overflow-hidden rounded-xl border bg-card md:block">
+      <div data-testid="desktop-branch" className="hidden overflow-x-auto rounded-lg border bg-card md:block shadow-sm">
         <Table>
           <TableHeader className="bg-secondary">
             {table.getHeaderGroups().map(group => (
               <TableRow key={group.id}>
                 {group.headers.map(header => (
-                  <TableHead className="text-[13px]" key={header.id}>
+                  <TableHead className="text-[12px]" key={header.id}>
                     {flexRender(header.column.columnDef.header, header.getContext())}
                   </TableHead>
                 ))}
@@ -540,14 +540,14 @@ export function CredentialTable({
           </TableBody>
         </Table>
       </div>
-      <div data-testid="mobile-branch" className="grid gap-3 md:hidden">
+      <div data-testid="mobile-branch" className="grid gap-2.5 md:hidden">
         {rows.map(row => (
           <Card
             key={row.filename}
             data-state={selected.has(row.filename) ? 'selected' : undefined}
-            className="rounded-xl data-[state=selected]:border-input data-[state=selected]:bg-secondary"
+            className="rounded-lg data-[state=selected]:border-input data-[state=selected]:bg-secondary"
           >
-            <CardContent className="grid gap-3 pt-4">
+            <CardContent className="grid gap-2 p-3">
               <div className="flex min-w-0 items-center gap-3">
                 <Checkbox
                   aria-label={`移动选择 ${row.filename}`}

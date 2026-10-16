@@ -11,7 +11,27 @@ it("logs in using only fixtures, navigates six real lazy pages, and logs out", a
   await user.click(screen.getByRole("button", { name: "登录" }));
   await within(screen.getByRole("main")).findByRole("heading", { level: 1, name: "概览" });
   expect(screen.getByRole("link", { name: "模型路由" })).toHaveAttribute("href", "#/model-routing");
-  for (const [id, name, title] of [["credentials", "凭证", "Antigravity 凭证"], ["import", "添加凭证", "导入凭证"], ["settings", "设置", "设置"], ["logs", "日志", "日志"], ["model-routing", "模型路由", "模型路由"], ["overview", "概览", "概览"]]) {
+
+  // Verify navigation to Anti凭证
+  await user.click(screen.getByRole("link", { name: "Anti凭证" }));
+  await waitFor(() => expect(screen.getByRole("link", { name: "Anti凭证" })).toHaveAttribute("aria-current", "page"));
+  expect(location.hash).toBe("#/credentials");
+  await within(screen.getByRole("main")).findByRole("heading", { level: 1, name: "Antigravity 凭证" });
+
+  // Verify navigation to CLI凭证
+  await user.click(screen.getByRole("link", { name: "CLI凭证" }));
+  await waitFor(() => expect(screen.getByRole("link", { name: "CLI凭证" })).toHaveAttribute("aria-current", "page"));
+  expect(location.hash).toBe("#/credentials?channel=geminicli");
+  await within(screen.getByRole("main")).findByRole("heading", { level: 1, name: "Gemini CLI 凭证" });
+
+  // Verify direct switch back from CLI凭证 to Anti凭证
+  await user.click(screen.getByRole("link", { name: "Anti凭证" }));
+  await waitFor(() => expect(screen.getByRole("link", { name: "Anti凭证" })).toHaveAttribute("aria-current", "page"));
+  expect(screen.getByRole("link", { name: "CLI凭证" })).not.toHaveAttribute("aria-current");
+  expect(location.hash).toBe("#/credentials");
+  await within(screen.getByRole("main")).findByRole("heading", { level: 1, name: "Antigravity 凭证" });
+
+  for (const [id, name, title] of [["import", "添加凭证", "导入凭证"], ["settings", "设置", "设置"], ["logs", "日志", "日志"], ["model-routing", "模型路由", "模型路由"], ["overview", "概览", "概览"]]) {
     await user.click(screen.getByRole("link", { name }));
     await waitFor(() => expect(screen.getByRole("link", { name })).toHaveAttribute("aria-current", "page"));
     expect(location.hash).toBe(`#/${id}`);
@@ -21,6 +41,44 @@ it("logs in using only fixtures, navigates six real lazy pages, and logs out", a
   expect(screen.getByLabelText("面板密码")).toHaveValue("");
   expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
   expect(fetch).not.toHaveBeenCalled();
+});
+
+it("protects unsaved routes with guard when switching between credentials channels, and allows navigation after unguard", async () => {
+  vi.stubEnv("DEV", true); vi.stubEnv("VITE_UI_FIXTURES", "true");
+  const user = userEvent.setup(); render(<App />);
+  await user.type(screen.getByLabelText("面板密码"), "synthetic-preview");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  await within(screen.getByRole("main")).findByRole("heading", { level: 1, name: "概览" });
+
+  // Navigate to CLI credentials first
+  await user.click(screen.getByRole("link", { name: "CLI凭证" }));
+  await waitFor(() => expect(screen.getByRole("link", { name: "CLI凭证" })).toHaveAttribute("aria-current", "page"));
+  expect(location.hash).toBe("#/credentials?channel=geminicli");
+  await within(screen.getByRole("main")).findByRole("heading", { level: 1, name: "Gemini CLI 凭证" });
+
+  // Register a route guard simulating uncommitted draft / leaving protection
+  let blockNavigation = true;
+  const { registerRouteGuard } = await import("./routes");
+  const unguard = registerRouteGuard(() => !blockNavigation);
+
+  try {
+    // Attempt to navigate to Anti凭证 while blocked
+    await user.click(screen.getByRole("link", { name: "Anti凭证" }));
+    // Guard blocked navigation: remains on CLI凭证
+    expect(screen.getByRole("link", { name: "CLI凭证" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Anti凭证" })).not.toHaveAttribute("aria-current");
+    expect(location.hash).toBe("#/credentials?channel=geminicli");
+
+    // Unblock and navigate to Anti凭证
+    blockNavigation = false;
+    await user.click(screen.getByRole("link", { name: "Anti凭证" }));
+    await waitFor(() => expect(screen.getByRole("link", { name: "Anti凭证" })).toHaveAttribute("aria-current", "page"));
+    expect(screen.getByRole("link", { name: "CLI凭证" })).not.toHaveAttribute("aria-current");
+    expect(location.hash).toBe("#/credentials");
+    await within(screen.getByRole("main")).findByRole("heading", { level: 1, name: "Antigravity 凭证" });
+  } finally {
+    unguard();
+  }
 });
 it("shows safe login failures without echoing the payload", async () => {
   vi.mocked(fetch).mockResolvedValue(Response.json({ detail: "synthetic-private-detail" }, { status: 401 }));

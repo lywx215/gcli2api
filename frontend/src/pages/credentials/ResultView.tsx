@@ -119,7 +119,7 @@ export function ManualResultView({
   )
 
   return (
-    <section className="grid gap-2 rounded-xl border bg-card p-3 text-sm text-card-foreground" aria-label="人工操作结果">
+    <section className="grid gap-1.5 rounded-lg border bg-card p-2.5 text-xs text-card-foreground shadow-sm" aria-label="人工操作结果">
       <p className={result.success ? 'font-medium text-success' : 'font-medium text-warning'}>
         上游操作：{result.success ? '成功' : '未成功 / 未确认'} · HTTP {httpStatus(result.httpStatus) ?? '未知'} · 上游 HTTP {httpStatus(result.upstreamStatus) ?? '未知'}
       </p>
@@ -128,19 +128,19 @@ export function ManualResultView({
         const event = object(raw)
         const status = httpStatus(event.upstream_status)
         return (
-          <p key={index} className="text-[13px] text-muted-foreground">
+          <p key={index} className="text-xs text-muted-foreground">
             {explanation(phases, event.phase, '辅助请求')}：{status === null ? '未取得有效上游 HTTP 状态' : `上游 HTTP ${status}`}
           </p>
         )
       })}
-      {failure && <p className="text-warning">结果说明：{failure}</p>}
+      {failure && <p className="text-warning font-medium">结果说明：{failure}</p>}
       {!result.success && (safeDetails.safe_failure_reason || safeDetails.failure_reason) && (safeDetails.safe_failure_reason !== failure) && (
-        <p className="text-destructive text-[13px]">
+        <p className="text-destructive text-xs font-medium">
           失败原因：{safeDetails.safe_failure_reason || safeDetails.failure_reason}
         </p>
       )}
       {result.verifiedReply !== null && (
-        <p className={result.verifiedReply ? 'text-success' : 'text-destructive'}>
+        <p className={result.verifiedReply ? 'text-success font-medium' : 'text-destructive font-medium'}>
           固定回复校验：{result.verifiedReply ? '通过' : '未通过'}
         </p>
       )}
@@ -237,7 +237,7 @@ export function ManualResultView({
 export function Evidence({ data, mode = 'antigravity' }: { data: RecordValue; mode?: PanelMode }) {
   if (mode === 'geminicli') return null
   return (
-    <div className="grid gap-2 text-[13px]">
+    <div className="grid gap-1.5 text-xs">
       <div><QuotaStateBadge data={data} group="gemini-shared" label="Gemini" /></div>
       <div><QuotaStateBadge data={data} group="claude-gpt-shared" label="Claude / GPT" /></div>
       <p>Opus 5.5：{familyStatus(data.model_access_families, 'claude-opus-5-5')}；Opus 4.6：{familyStatus(data.model_access_families, 'claude-opus-4-6')}</p>
@@ -249,25 +249,25 @@ export function Evidence({ data, mode = 'antigravity' }: { data: RecordValue; mo
 export function ErrorSummary({ data }: { data: RecordValue }) {
   const codes = Array.isArray(data.error_codes) ? data.error_codes.filter(c => typeof c === 'number' || typeof c === 'string') : null
   return (
-    <div className="text-sm">
-      <p>错误码：{codes ? codes.join('、') || '无已记录错误' : '不可用'}</p>
+    <div className="text-xs space-y-1">
+      <p className="font-medium">错误码：{codes ? codes.join('、') || '无已记录错误' : '不可用'}</p>
       {Object.entries(object(data.error_classifications)).map(([code, value]) => (
-        <p key={code}>分类 {code}：{typeof value === 'string' ? value : '已记录，无法识别'}</p>
+        <p key={code} className="text-muted-foreground">分类 {code}：{typeof value === 'string' ? value : '已记录，无法识别'}</p>
       ))}
-      <p className="text-[13px] text-muted-foreground">仅显示错误分类，不回显完整上游正文。</p>
+      <p className="text-[11px] text-muted-foreground">仅显示错误分类，不回显完整上游正文。</p>
     </div>
   )
 }
 
 export function CycleStatistics({ data }: { data: RecordValue }) {
   return (
-    <div className="text-[13px] text-muted-foreground">
+    <div className="text-xs text-muted-foreground space-y-1">
       <p>累计成功：{count(data.success_count) ?? '不可用'} · 失败：{count(data.failure_count) ?? '不可用'}</p>
       {['cycle_stats', 'last_cycle_stats'].map(key => {
         const cycle = object(data[key])
         return (
           <div key={key}>
-            <p>{key === 'cycle_stats' ? '当前周期' : '上个周期'}</p>
+            <p className="font-medium text-foreground">{key === 'cycle_stats' ? '当前周期' : '上个周期'}</p>
             {Object.keys(cycle).length > 0 ? (
               <>
                 {['pro', 'flash', 'other', 'total'].map(k => (

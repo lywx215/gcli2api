@@ -5,11 +5,11 @@ export function CredentialStateBadge({ row }: { row: Credential }) {
   const variant = row.permanent_disabled === true ? 'destructive'
     : row.disabled === true ? 'warning'
     : row.disabled === false && row.permanent_disabled === false ? 'success' : 'info'
-  return <Badge variant={variant} className="max-w-full whitespace-normal">{credentialStatus(row)}</Badge>
+  return <Badge variant={variant} className="max-w-full whitespace-normal text-[11px] px-1.5 py-0 leading-tight">{credentialStatus(row)}</Badge>
 }
 
 export function QuotaStateBadge({ data, group, label }: { data: RecordValue; group: string; label: string }) {
   const state = quotaState(data, group)
   const variant = state.invalid ? 'destructive' : state.restricted === true ? 'warning' : state.known ? 'success' : 'info'
-  return <Badge variant={variant} className="max-w-full whitespace-normal">{label}：{quotaText(data, group)}</Badge>
+  return <Badge variant={variant} className="max-w-full whitespace-normal text-[11px] px-1.5 py-0 leading-tight">{label}：{quotaText(data, group)}</Badge>
 }

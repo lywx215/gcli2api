@@ -754,12 +754,12 @@ export default function ImportPage() {
   const dialogTicket = exportConfirm
 
   return (
-    <section className="mx-auto max-w-4xl space-y-6 text-sm text-foreground">
-      <header>
-        <h1 className="text-2xl font-semibold text-foreground">
+    <section className="w-full max-w-[1720px] min-w-0 space-y-3 md:space-y-3.5 text-sm text-foreground">
+      <header className="space-y-1">
+        <h1 className="text-xl md:text-2xl font-semibold text-foreground">
           {mode === 'geminicli' ? '导入 Gemini CLI 凭证' : '导入凭证'}
         </h1>
-        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+        <p className="text-xs leading-relaxed text-muted-foreground">
           {mode === 'geminicli'
             ? '添加 Gemini CLI 账号。操作只在提交后开始，结果按每项显示。'
             : '添加 Antigravity 账号。操作只在提交后开始，结果按每项显示。'}
@@ -767,23 +767,24 @@ export default function ImportPage() {
       </header>
 
       {preview && (
-        <p role="status" className="rounded-lg border border-border bg-info-bg p-3 text-sm text-info">
+        <p role="status" className="max-w-3xl rounded-lg border border-border bg-info-bg p-2.5 text-xs text-info">
           合成预览：不会调用后台或打开真实 OAuth。点击完成授权可查看示例结果。
         </p>
       )}
 
       {!flow.authenticated && (
-        <p role="status" className="text-sm text-warning">
+        <p role="status" className="max-w-3xl text-xs text-warning">
           请先登录。
         </p>
       )}
 
-      <div className="flex flex-wrap gap-2" aria-label="导入方式">
+      <div className="flex flex-wrap gap-1.5 max-w-3xl" role="group" aria-label="导入方式">
         {(['oauth', 'files', 'tokens'] as const).map(value => (
           <Button
             key={value}
+            size="sm"
             variant={method === value ? 'secondary' : 'outline'}
-            className="aria-pressed:shadow-selected"
+            className="h-8 text-[13px] px-3 aria-pressed:shadow-selected"
             disabled={flow.busy}
             aria-pressed={method === value}
             onClick={() => setMethod(value)}
@@ -793,9 +794,9 @@ export default function ImportPage() {
         ))}
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>
+      <Card className="max-w-3xl border border-border">
+        <CardHeader className="p-3.5 pb-2">
+          <CardTitle className="text-sm font-semibold">
             {method === 'oauth'
               ? 'Google OAuth 授权'
               : method === 'files'
@@ -803,13 +804,13 @@ export default function ImportPage() {
                 : '通过 Refresh token 添加'}
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-3 p-3.5 pt-0">
           {method === 'oauth' && (
             <>
-              <label className="block space-y-2">
-                <span className="font-medium">项目 ID（可选，留空自动检测）</span>
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-foreground">项目 ID（可选，留空自动检测）</span>
                 <Input
-                  className="shadow-control"
+                  className="h-8 text-xs md:text-[13px] shadow-control"
                   value={projectId}
                   onChange={event => handleProjectIdChange(event.target.value)}
                   disabled={disabled}
@@ -819,39 +820,41 @@ export default function ImportPage() {
               {flow.prompt && (
                 <div
                   role="status"
-                  className="rounded-lg border border-warning/30 bg-warning-bg p-3 text-warning"
+                  className="rounded-lg border border-warning/30 bg-warning-bg p-2.5 text-xs text-warning space-y-1.5"
                 >
-                  <p>{flow.prompt.manual ? '需要手动填写项目 ID' : '请选择项目后继续授权'}</p>
-                  {flow.prompt.projects.map(project => (
-                    <Button
-                      key={project}
-                      variant="outline"
-                      className="m-1"
-                      onClick={() => handleSelectProject(project)}
-                    >
-                      {project}
-                    </Button>
-                  ))}
-                  {flow.prompt.projectOptions &&
-                    flow.prompt.projectOptions.map(opt => (
+                  <p className="font-medium">{flow.prompt.manual ? '需要手动填写项目 ID' : '请选择项目后继续授权'}</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {flow.prompt.projects.map(project => (
                       <Button
-                        key={opt.projectId}
+                        key={project}
                         variant="outline"
-                        className="m-1"
-                        onClick={() => handleSelectProject(opt.projectId)}
+                        size="xs"
+                        onClick={() => handleSelectProject(project)}
                       >
-                        {opt.name ? `${opt.name} (${opt.projectId})` : opt.projectId}
+                        {project}
                       </Button>
                     ))}
+                    {flow.prompt.projectOptions &&
+                      flow.prompt.projectOptions.map(opt => (
+                        <Button
+                          key={opt.projectId}
+                          variant="outline"
+                          size="xs"
+                          onClick={() => handleSelectProject(opt.projectId)}
+                        >
+                          {opt.name ? `${opt.name} (${opt.projectId})` : opt.projectId}
+                        </Button>
+                      ))}
+                  </div>
                 </div>
               )}
 
-              <Button disabled={disabled} onClick={handleStartOAuth}>
+              <Button size="sm" disabled={disabled} onClick={handleStartOAuth}>
                 生成授权链接
               </Button>
 
               {flow.authUrl && (
-                <p>
+                <p className="text-xs">
                   <a
                     className="rounded-md text-primary underline underline-offset-4 hover:text-primary-hover"
                     href={flow.authUrl}
@@ -864,14 +867,14 @@ export default function ImportPage() {
                 </p>
               )}
 
-              <p className="text-xs leading-5 text-muted-foreground">
+              <p className="text-xs leading-relaxed text-muted-foreground">
                 在授权页面完成操作后，点击完成授权。若浏览器显示无法连接本地回调地址，可粘贴完整回调 URL。
               </p>
 
-              <label className="block space-y-2">
-                <span className="font-medium">回调 URL（可选，含敏感授权码）</span>
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-foreground">回调 URL（可选，含敏感授权码）</span>
                 <Input
-                  className="shadow-control"
+                  className="h-8 text-xs md:text-[13px] shadow-control"
                   type="password"
                   autoComplete="off"
                   value={callbackUrl}
@@ -881,6 +884,7 @@ export default function ImportPage() {
               </label>
 
               <Button
+                size="sm"
                 disabled={disabled || (!preview && !flow.authUrl && !callbackUrl)}
                 onClick={handleCompleteOAuth}
               >
@@ -899,10 +903,10 @@ export default function ImportPage() {
                 progress={null}
                 byteProgress={flow.byteProgress}
               />
-              <p className="text-xs leading-5 text-muted-foreground">
+              <p className="text-xs leading-relaxed text-muted-foreground">
                 ZIP 不递归解压；文件数量和解压预算由服务器校验。
               </p>
-              <Button disabled={disabled || files.length === 0} onClick={handleUploadFiles}>
+              <Button size="sm" disabled={disabled || files.length === 0} onClick={handleUploadFiles}>
                 上传并导入
               </Button>
             </>
@@ -910,10 +914,10 @@ export default function ImportPage() {
 
           {method === 'tokens' && (
             <>
-              <label className="block space-y-2">
-                <span className="font-medium">Refresh token（每行一个）</span>
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-foreground">Refresh token（每行一个）</span>
                 <Textarea
-                  className="shadow-control"
+                  className="shadow-control max-h-[120px] font-mono text-xs leading-normal resize-y"
                   autoComplete="off"
                   spellCheck={false}
                   rows={5}
@@ -922,23 +926,23 @@ export default function ImportPage() {
                   disabled={disabled}
                 />
               </label>
-              <p className="text-xs leading-5 text-muted-foreground">
+              <p className="text-xs leading-relaxed text-muted-foreground">
                 共 {tokenList.length} 个去重后 token，每批最多 200 个；输入仅保留在本页内存中。
               </p>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <label className="space-y-2">
-                  <span className="font-medium">Client ID（可选）</span>
+              <div className="grid gap-2.5 sm:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-xs font-medium text-foreground">Client ID（可选）</span>
                   <Input
-                    className="shadow-control"
+                    className="h-8 text-xs md:text-[13px] shadow-control"
                     value={clientId}
                     disabled={disabled}
                     onChange={event => handleClientIdChange(event.target.value)}
                   />
                 </label>
-                <label className="space-y-2">
-                  <span className="font-medium">Client secret（可选）</span>
+                <label className="space-y-1">
+                  <span className="text-xs font-medium text-foreground">Client secret（可选）</span>
                   <Input
-                    className="shadow-control"
+                    className="h-8 text-xs md:text-[13px] shadow-control"
                     type="password"
                     autoComplete="off"
                     value={clientSecret}
@@ -946,22 +950,22 @@ export default function ImportPage() {
                     onChange={event => handleClientSecretChange(event.target.value)}
                   />
                 </label>
-                <label className="space-y-2">
-                  <span className="font-medium">
+                <label className="space-y-1">
+                  <span className="text-xs font-medium text-foreground">
                     {tokenList.length > 1 ? '文件名前缀（可选）' : '文件名（可选）'}
                   </span>
                   <Input
-                    className="shadow-control"
+                    className="h-8 text-xs md:text-[13px] shadow-control"
                     value={filename}
                     disabled={disabled}
                     onChange={event => handleFilenameChange(event.target.value)}
                   />
                 </label>
                 {tokenList.length <= 1 && (
-                  <label className="space-y-2">
-                    <span className="font-medium">项目 ID（可选）</span>
+                  <label className="space-y-1">
+                    <span className="text-xs font-medium text-foreground">项目 ID（可选）</span>
                     <Input
-                      className="shadow-control"
+                      className="h-8 text-xs md:text-[13px] shadow-control"
                       value={projectId}
                       disabled={disabled}
                       onChange={event => handleProjectIdChange(event.target.value)}
@@ -970,6 +974,7 @@ export default function ImportPage() {
                 )}
               </div>
               <Button
+                size="sm"
                 disabled={disabled || !tokenList.length || tokenList.length > 200}
                 onClick={handleImportTokens}
               >
@@ -981,39 +986,41 @@ export default function ImportPage() {
       </Card>
 
       {flow.busy && (
-        <div role="status" className="flex items-center gap-3 text-info">
-          <p>请求处理中…</p>
-          <Button variant="outline" onClick={handleCancel}>
+        <div role="status" className="max-w-3xl flex items-center gap-2.5 rounded-md border border-info/30 bg-info-bg px-3 py-2 text-xs md:text-sm text-info">
+          <p className="font-medium">请求处理中…</p>
+          <Button variant="outline" size="xs" onClick={handleCancel}>
             停止等待
           </Button>
         </div>
       )}
 
       {flow.message && (
-        <p role="status" className="rounded-lg border border-border bg-info-bg p-3 text-sm text-info">
+        <p role="status" className="max-w-3xl rounded-lg border border-border bg-info-bg p-2.5 text-xs text-info">
           {flow.message}
         </p>
       )}
 
       {flow.result && (
-        <ImportResults
-          result={flow.result}
-          onExport={handleOpenExportDialog}
-          exportDisabled={!canExport}
-          exportReason={!canExport && flow.result ? exportEligibility.reason : undefined}
-          isExporting={isExporting}
-          exportMessage={exportMessage}
-        />
+        <div className="max-w-3xl">
+          <ImportResults
+            result={flow.result}
+            onExport={handleOpenExportDialog}
+            exportDisabled={!canExport}
+            exportReason={!canExport && flow.result ? exportEligibility.reason : undefined}
+            isExporting={isExporting}
+            exportMessage={exportMessage}
+          />
+        </div>
       )}
 
       {mode === 'antigravity' && (flow.emailJobs.length > 0 || flow.emailWarning) && (
-        <div className="space-y-3">
+        <div className="max-w-3xl space-y-2.5">
           <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold text-foreground">邮箱补全</h2>
+            <h2 className="text-sm font-semibold text-foreground">邮箱补全</h2>
             {hasFinishedEmailJobs && (
               <Button
                 variant="outline"
-                size="sm"
+                size="xs"
                 onClick={handleClearFinishedEmailJobs}
               >
                 清除已完成任务
@@ -1024,13 +1031,13 @@ export default function ImportPage() {
           {flow.emailWarning && (
             <p
               role="status"
-              className="rounded-lg border border-border bg-warning-bg p-3 text-sm text-warning"
+              className="rounded-lg border border-border bg-warning-bg p-2.5 text-xs text-warning"
             >
               {flow.emailWarning}
             </p>
           )}
 
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             {flow.emailJobs.map(job => (
               <EmailJobCard
                 key={job.jobId}
@@ -1050,26 +1057,36 @@ export default function ImportPage() {
           if (!open && dialogTicket) handleCancelExport(dialogTicket)
         }}
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>确认导出敏感凭证</AlertDialogTitle>
-            <AlertDialogDescription>
+        <AlertDialogContent className="p-4 sm:p-5 max-w-md">
+          <AlertDialogHeader className="space-y-1">
+            <AlertDialogTitle className="text-base font-semibold">确认导出敏感凭证</AlertDialogTitle>
+            <AlertDialogDescription className="text-xs leading-relaxed text-muted-foreground">
               将导出通道{' '}
-              <strong>
+              <strong className="text-foreground">
                 {dialogTicket?.channelMode === 'geminicli' ? 'Gemini CLI' : 'Antigravity'}
               </strong>{' '}
               下已确认的 {dialogTicket?.filenames.length} 个凭证文件。完整的敏感凭证文件将被下载到本地，请妥善保管。
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="max-h-48 overflow-y-auto rounded border border-border p-2 text-xs space-y-1">
-            <p className="font-medium text-foreground">包含的文件：</p>
-            {dialogTicket?.filenames.map(name => (
-              <p key={name} className="break-all text-muted-foreground">
-                {name}
-              </p>
-            ))}
+          <div className="max-h-40 overflow-y-auto rounded border border-border bg-secondary/20 p-2 text-xs space-y-1">
+            <div className="flex items-center justify-between border-b border-border/60 pb-1 text-[11px] font-medium text-muted-foreground">
+              <span>待导出凭证文件</span>
+              <span>共 {dialogTicket?.filenames.length ?? 0} 项</span>
+            </div>
+            <div className="divide-y divide-border/40 pt-1">
+              {dialogTicket?.filenames.map((name, i) => (
+                <div key={name} className="py-1 px-1 flex items-center justify-between text-xs">
+                  <span className="truncate break-all text-foreground" title={name}>
+                    {name}
+                  </span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground font-mono ml-2">
+                    #{i + 1}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
-          <AlertDialogFooter>
+          <AlertDialogFooter className="pt-2 gap-2">
             <AlertDialogCancel
               onClick={() => {
                 if (dialogTicket) handleCancelExport(dialogTicket)
@@ -1091,7 +1108,7 @@ export default function ImportPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <div className="flex flex-wrap gap-4">
+      <div className="flex flex-wrap gap-3 text-xs">
         <a
           href={panelRouteHref('credentials', mode)}
           className="rounded-md text-primary underline underline-offset-4 hover:text-primary-hover"

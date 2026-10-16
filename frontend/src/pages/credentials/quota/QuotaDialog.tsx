@@ -39,10 +39,10 @@ export function QuotaDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         onCloseAutoFocus={onCloseAutoFocus}
-        className="w-[calc(100%-1.5rem)] sm:max-w-xl max-h-[85vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6"
+        className="w-[calc(100%-1.5rem)] sm:max-w-xl max-h-[85vh] overflow-y-auto overflow-x-hidden p-3.5 sm:p-4 rounded-lg"
       >
-        <DialogHeader>
-          <DialogTitle className="break-all text-base sm:text-lg font-semibold">
+        <DialogHeader className="space-y-1">
+          <DialogTitle className="break-all text-base font-semibold">
             {filename ? `凭证额度：${filename}` : '凭证额度'}
           </DialogTitle>
           <DialogDescription className="text-xs text-muted-foreground">
@@ -53,7 +53,7 @@ export function QuotaDialog({
         {error && (
           <div
             role="status"
-            className="rounded-lg border border-destructive/30 bg-destructive-bg p-3 text-sm text-destructive"
+            className="rounded-md border border-destructive/30 bg-destructive-bg p-2.5 text-xs text-destructive"
           >
             {error}
           </div>
@@ -73,7 +73,7 @@ export function QuotaDialog({
         )}
 
         <DialogFooter className="mt-2 sm:justify-end">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
             关闭
           </Button>
         </DialogFooter>

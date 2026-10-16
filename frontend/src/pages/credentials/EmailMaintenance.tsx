@@ -541,7 +541,7 @@ function EmailMaintenanceView(props: EmailMaintenanceProps): ReactElement {
   const channelDisplayName = props.mode === 'antigravity' ? 'Antigravity' : 'Gemini CLI'
 
   return (
-    <div className="rounded-lg border border-border bg-card p-4 text-card-foreground shadow-sm space-y-4">
+    <div className="rounded-lg border border-border bg-card p-3 text-card-foreground shadow-sm space-y-3">
       {props.target.kind === 'single' && (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -822,16 +822,16 @@ function EmailMaintenanceView(props: EmailMaintenanceProps): ReactElement {
 
           {/* 去重二次确认弹窗 */}
           <AlertDialog open={dedupDialogOpen} onOpenChange={handleDedupOpenChange}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>确认按邮箱去重</AlertDialogTitle>
-                <AlertDialogDescription>
+            <AlertDialogContent className="max-w-md rounded-lg p-4">
+              <AlertDialogHeader className="space-y-1">
+                <AlertDialogTitle className="text-base font-semibold">确认按邮箱去重</AlertDialogTitle>
+                <AlertDialogDescription className="text-xs text-muted-foreground">
                   此操作将在当前整个渠道（{channelDisplayName}）中按用户邮箱执行去重，保留首个凭证，删除其余重复凭证。此操作为破坏性操作，不可回滚。确定要继续吗？
                 </AlertDialogDescription>
               </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel onClick={handleCancelDedup}>取消</AlertDialogCancel>
-                <AlertDialogAction onClick={handleConfirmDedup}>确认去重</AlertDialogAction>
+              <AlertDialogFooter className="mt-2 gap-2">
+                <AlertDialogCancel className="h-8 px-3 text-xs" onClick={handleCancelDedup}>取消</AlertDialogCancel>
+                <AlertDialogAction className="h-8 px-3 text-xs" onClick={handleConfirmDedup}>确认去重</AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>

@@ -347,12 +347,15 @@ export function SavedPasswordsDialog({ disabled = false }: { disabled?: boolean 
         <Button
           ref={triggerRef}
           variant="outline"
+          size="sm"
+          className="h-8 text-xs"
           disabled={disabled}
         >
           查看已保存密码
         </Button>
       </DialogTrigger>
       <DialogContent
+        className="p-4 max-w-md"
         onCloseAutoFocus={(e) => {
           if (!triggerRef.current || !document.contains(triggerRef.current)) {
             e.preventDefault();
@@ -361,28 +364,28 @@ export function SavedPasswordsDialog({ disabled = false }: { disabled?: boolean 
           }
         }}
       >
-        <DialogHeader>
-          <DialogTitle>查看已保存密码</DialogTitle>
-          <DialogDescription>
+        <DialogHeader className="space-y-1">
+          <DialogTitle className="text-base font-semibold">查看已保存密码</DialogTitle>
+          <DialogDescription className="text-xs text-muted-foreground">
             确认后将从服务端读取当前已保存的密码明文。请确保周围环境安全，并在使用完毕后及时关闭。
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
+        <div className="space-y-3 py-1 text-xs">
           {status === "loading" && (
-            <div role="status" className="text-sm text-muted-foreground">
+            <div role="status" className="text-xs text-muted-foreground">
               正在读取已保存密码...
             </div>
           )}
 
           {status === "error" && errorMessage && (
-            <div role="alert" className="text-sm text-destructive">
+            <div role="alert" className="text-xs text-destructive">
               {errorMessage}
             </div>
           )}
 
           {effectivePasswords !== null && (
-            <div className="space-y-3">
+            <div className="space-y-2.5">
               {PASSWORD_FIELDS.map(({ key, label }) => {
                 const hasKey = Object.prototype.hasOwnProperty.call(effectivePasswords, key);
                 const rawVal = hasKey ? effectivePasswords[key as keyof typeof effectivePasswords] : undefined;
@@ -394,14 +397,14 @@ export function SavedPasswordsDialog({ disabled = false }: { disabled?: boolean 
                 return (
                   <div key={key} className="space-y-1">
                     <div className="flex items-center justify-between">
-                      <label htmlFor={`saved-password-${key}`} className="text-sm font-medium">
+                      <label htmlFor={`saved-password-${key}`} className="text-xs md:text-[13px] font-medium text-foreground">
                         {label}
                       </label>
                       {isAbsent && (
-                        <span className="text-xs text-muted-foreground">未提供/未知</span>
+                        <span className="text-[11px] text-muted-foreground">未提供/未知</span>
                       )}
                       {isEmptyString && (
-                        <span className="text-xs text-muted-foreground">空字符串</span>
+                        <span className="text-[11px] text-muted-foreground">空字符串</span>
                       )}
                     </div>
                     <Input
@@ -411,7 +414,7 @@ export function SavedPasswordsDialog({ disabled = false }: { disabled?: boolean 
                       tabIndex={0}
                       value={displayValue}
                       placeholder={placeholder}
-                      className="font-mono text-sm"
+                      className="h-8 font-mono text-base md:text-xs"
                     />
                   </div>
                 );
@@ -420,16 +423,20 @@ export function SavedPasswordsDialog({ disabled = false }: { disabled?: boolean 
           )}
         </div>
 
-        <DialogFooter className="flex flex-row justify-end space-x-2">
+        <DialogFooter className="pt-2 gap-2 flex flex-row justify-end space-x-0">
           {effectivePasswords === null && (
             <>
               <Button
                 variant="outline"
+                size="sm"
+                className="h-8 text-xs"
                 onClick={() => handleOpenChange(false)}
               >
                 {status === "error" ? "关闭" : "取消"}
               </Button>
               <Button
+                size="sm"
+                className="h-8 text-xs"
                 onClick={() => handleConfirm(renderedOpeningId)}
                 disabled={disabled || hasConsumed || isRevoked || status === "loading" || status === "error"}
               >
@@ -440,6 +447,8 @@ export function SavedPasswordsDialog({ disabled = false }: { disabled?: boolean 
           {effectivePasswords !== null && (
             <Button
               variant="outline"
+              size="sm"
+              className="h-8 text-xs"
               onClick={() => handleOpenChange(false)}
             >
               关闭

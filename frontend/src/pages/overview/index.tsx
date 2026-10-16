@@ -18,18 +18,18 @@ export const supportedPanelModes: readonly PanelMode[] = Object.freeze(['antigra
 
 function formatNodeVersionMeta(version: NodeVersion) {
   const isUsable = (val?: string) =>
-    typeof val === 'string' && val.trim().length > 0 && val.trim().toLowerCase() !== 'unknown';
+    typeof val === 'string' && val.trim().length > 0 && val.trim().toLowerCase() !== 'unknown'
 
-  const sourceRef = isUsable(version.source_ref) ? version.source_ref!.trim() : '未知';
-  const fullHash = isUsable(version.full_hash) ? version.full_hash!.trim() : '未知';
+  const sourceRef = isUsable(version.source_ref) ? version.source_ref!.trim() : '未知'
+  const fullHash = isUsable(version.full_hash) ? version.full_hash!.trim() : '未知'
   const commitDate = isUsable(version.commit_date)
     ? version.commit_date!.trim()
     : isUsable(version.date)
     ? version.date!.trim()
-    : '未知';
-  const message = isUsable(version.message) ? version.message!.trim() : '未知';
+    : '未知'
+  const message = isUsable(version.message) ? version.message!.trim() : '未知'
 
-  return { sourceRef, fullHash, commitDate, message };
+  return { sourceRef, fullHash, commitDate, message }
 }
 
 function isValidSafeUrl(raw: string): boolean {
@@ -135,6 +135,7 @@ export default function OverviewPage() {
 
   const [copyStatus, setCopyStatus] = useState<{ id: string; text: string } | null>(null)
   const [fallback, setFallback] = useState<FallbackItem | null>(null)
+  const [versionDetailsOpen, setVersionDetailsOpen] = useState(false)
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isMountedRef = useRef<boolean>(true)
 
@@ -357,36 +358,134 @@ export default function OverviewPage() {
     : []
 
   return (
-    <section className="space-y-6 text-sm text-foreground" aria-label={`${channelLabel} 概览`} aria-busy={loading}>
-      <header className="flex flex-wrap items-start justify-between gap-3">
+    <section className="w-full max-w-[1720px] min-w-0 space-y-3 md:space-y-3.5 text-sm text-foreground" aria-label={`${channelLabel} 概览`} aria-busy={loading}>
+      <header className="flex flex-wrap items-center justify-between gap-2.5">
         <div>
-          <h1 className="text-2xl font-semibold text-foreground">概览</h1>
-          <p className="text-[13px] text-muted-foreground">
+          <h1 className="text-xl font-bold tracking-tight text-foreground">概览</h1>
+          <p className="text-xs text-muted-foreground">
             {channelLabel} · logical requests · 每日按北京时间结算{data?.today.value?.date ? ` · ${data.today.value.date}` : ''}
           </p>
         </div>
-        <Button variant="outline" onClick={refresh} disabled={loading}>
+        <Button variant="outline" size="sm" onClick={refresh} disabled={loading} className="h-8 px-2.5 text-xs">
           刷新统计
         </Button>
       </header>
 
       {import.meta.env.DEV && import.meta.env.VITE_UI_FIXTURES === 'true' && (
-        <p className="rounded-xl border border-border bg-info-bg p-3 text-[13px] text-info">
+        <p className="rounded-md border border-border bg-info-bg p-2.5 text-xs text-info">
           合成预览数据，未读取后端。
         </p>
       )}
 
       {loading && !data && (
-        <p role="status" className="text-muted-foreground">正在读取统计…</p>
+        <p role="status" className="text-xs text-muted-foreground">正在读取统计…</p>
       )}
 
       {data?.today.issue && (
-        <p role="status" className="rounded-xl border border-border bg-info-bg p-3 text-info">
+        <p role="status" className="rounded-md border border-border bg-info-bg p-2.5 text-xs text-info">
           {data.today.issue}
         </p>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      {/* 顶层节点版本信息单行高密度状态条 */}
+      <div className="rounded-lg border border-border/80 bg-card px-3 py-1.5 text-xs text-muted-foreground shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 min-w-0">
+            <span className="font-semibold text-foreground">节点版本</span>
+            {nodeLoading && !nodeData ? (
+              <span role="status">正在读取节点信息…</span>
+            ) : nodeData?.version.issue ? (
+              <span role="status" className="text-destructive">{nodeData.version.issue}</span>
+            ) : nodeData?.version.value ? (
+              <>
+                <span className="font-semibold text-foreground">
+                  {nodeData.version.value.display_version || nodeData.version.value.version || '不可用'}
+                </span>
+                {(() => {
+                  const meta = formatNodeVersionMeta(nodeData.version.value)
+                  const shortHash = meta.fullHash.length > 8 ? meta.fullHash.slice(0, 8) : meta.fullHash
+                  return (
+                    <>
+                      <span className="text-border">·</span>
+                      <span>Ref: <span className="text-foreground">{meta.sourceRef}</span></span>
+                      <span className="text-border">·</span>
+                      <span className="font-mono" title={meta.fullHash}>Hash: <span className="text-foreground">{shortHash}</span></span>
+                      <span className="text-border">·</span>
+                      <span>{meta.commitDate}</span>
+                      {meta.message !== '未知' && (
+                        <>
+                          <span className="text-border hidden md:inline">·</span>
+                          <span className="hidden md:inline truncate max-w-[240px] lg:max-w-md" title={meta.message}>
+                            {meta.message}
+                          </span>
+                        </>
+                      )}
+                    </>
+                  )
+                })()}
+              </>
+            ) : (
+              <span>版本信息不可用</span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {nodeData?.version.value && (
+              <button
+                type="button"
+                onClick={() => setVersionDetailsOpen((prev) => !prev)}
+                className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-hover transition-colors"
+                aria-expanded={versionDetailsOpen}
+                aria-label="切换节点版本详情"
+              >
+                {versionDetailsOpen ? '收起详情' : '版本详情'}
+              </button>
+            )}
+            {refreshNode && (
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={refreshNode}
+                disabled={nodeLoading}
+                className="h-6 px-1.5 text-[11px]"
+                aria-label="刷新节点信息"
+              >
+                刷新
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {versionDetailsOpen && nodeData?.version.value && (
+          <div className="mt-2 border-t border-border/60 pt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs text-muted-foreground">
+            {(() => {
+              const meta = formatNodeVersionMeta(nodeData.version.value)
+              return (
+                <>
+                  <div>
+                    <span className="font-medium text-foreground">版本来源：</span>
+                    <span>{meta.sourceRef}</span>
+                  </div>
+                  <div>
+                    <span className="font-medium text-foreground">完整 Hash：</span>
+                    <span className="font-mono break-all">{meta.fullHash}</span>
+                  </div>
+                  <div>
+                    <span className="font-medium text-foreground">提交日期：</span>
+                    <span>{meta.commitDate}</span>
+                  </div>
+                  <div>
+                    <span className="font-medium text-foreground">提交信息：</span>
+                    <span className="break-words whitespace-pre-wrap">{meta.message}</span>
+                  </div>
+                </>
+              )
+            })()}
+          </div>
+        )}
+      </div>
+
+      {/* 核心指标卡片（成功率、请求数、RPM）高度 72px，4-6 列自适应网格 */}
+      <div className="grid gap-2.5 grid-cols-2 sm:grid-cols-3 md:grid-cols-5">
         {metrics.map(([label, value, type]) => {
           const formatted = type === 'rate' ? displayRate(value) : displayCount(value)
           const colorClass =
@@ -398,118 +497,91 @@ export default function OverviewPage() {
                   ? 'text-destructive'
                   : 'text-foreground'
           return (
-            <Card key={label}>
-              <CardHeader>
-                <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
-              </CardHeader>
-              <CardContent className={`text-3xl font-semibold tabular-nums ${colorClass}`}>
+            <Card key={label} className="h-[72px] p-2.5 flex flex-col justify-between min-w-0">
+              <span className="text-xs font-medium text-muted-foreground truncate">{label}</span>
+              <span className={`text-xl font-bold tabular-nums leading-tight ${colorClass}`}>
                 {formatted}
-              </CardContent>
+              </span>
             </Card>
           )
         })}
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Card className="min-w-0">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <div>
-              <CardTitle>节点与端点</CardTitle>
-              <CardDescription className="text-[13px] text-muted-foreground">节点版本与代码助手配置</CardDescription>
+      {/* 服务地址与代码助手端点：双列栅格，28px 按钮，整洁折叠手动复制回退栏 */}
+      <Card className="min-w-0">
+        <CardHeader className="p-3 pb-1.5">
+          <CardTitle className="text-sm font-semibold">服务地址与端点</CardTitle>
+          <CardDescription className="text-xs text-muted-foreground">
+            根据当前通道模式提供兼容的 API 基础端点与代码助手配置
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2.5 p-3 pt-0">
+          <details className="group text-xs text-muted-foreground">
+            <summary className="cursor-pointer select-none font-medium text-foreground hover:underline flex items-center gap-1.5 py-0.5">
+              <span>使用说明</span>
+              <span className="text-[11px] text-muted-foreground font-normal">(点击展开配置指引)</span>
+            </summary>
+            <div className="mt-1.5 rounded-md border border-border/60 bg-muted/30 p-2.5 text-xs text-muted-foreground space-y-1">
+              <ul className="list-disc pl-4 space-y-0.5">
+                <li>选择当前通道模式并选用客户端兼容的协议（OpenAI、Claude 或 Gemini）。</li>
+                <li>复制下方展示的完整基础地址（保留服务根路径前缀），填入客户端的 API 基础地址（Base URL）配置。</li>
+                <li>在客户端配置对应的 API 认证凭据，并选用该服务实际支持的模型。</li>
+              </ul>
             </div>
-            {refreshNode && (
-              <Button variant="outline" size="sm" onClick={refreshNode} disabled={nodeLoading}>
-                刷新节点信息
-              </Button>
-            )}
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {nodeLoading && !nodeData && (
-              <p role="status" className="text-[13px] text-muted-foreground">正在读取节点信息…</p>
-            )}
-            <div>
-              <p className="text-[13px] font-medium text-foreground">节点版本</p>
-              {nodeData?.version.issue ? (
-                <p role="status" className="text-[13px] text-muted-foreground">{nodeData.version.issue}</p>
-              ) : nodeData?.version.value ? (
-                <div className="mt-1 text-sm space-y-1.5">
-                  <div className="font-semibold text-foreground">
-                    {nodeData.version.value.display_version || nodeData.version.value.version || '不可用'}
-                  </div>
-                  {(() => {
-                    const meta = formatNodeVersionMeta(nodeData.version.value);
-                    return (
-                      <div className="rounded border border-border/60 bg-muted/40 p-2.5 text-xs space-y-1 text-muted-foreground">
-                        <div>
-                          <span className="font-medium text-foreground">版本来源：</span>
-                          <span>{meta.sourceRef}</span>
-                        </div>
-                        <div>
-                          <span className="font-medium text-foreground">完整 Hash：</span>
-                          <span className="font-mono break-all">{meta.fullHash}</span>
-                        </div>
-                        <div>
-                          <span className="font-medium text-foreground">提交日期：</span>
-                          <span>{meta.commitDate}</span>
-                        </div>
-                        <div>
-                          <span className="font-medium text-foreground">提交信息：</span>
-                          <span className="break-words whitespace-pre-wrap">{meta.message}</span>
-                        </div>
-                      </div>
-                    );
-                  })()}
-                </div>
-              ) : (
-                <p className="text-[13px] text-muted-foreground">版本信息不可用</p>
-              )}
-            </div>
-            <div>
-              <p className="text-[13px] font-medium text-foreground">代码助手端点</p>
-              {nodeData?.codeAssistEndpoint.issue ? (
-                <p role="status" className="text-[13px] text-muted-foreground">{nodeData.codeAssistEndpoint.issue}</p>
-              ) : nodeData?.codeAssistEndpoint.value ? (
-                <div className="mt-1 flex flex-wrap items-center gap-2">
-                  <code className="rounded bg-secondary/80 px-2 py-0.5 text-xs text-foreground">
-                    {nodeData.codeAssistEndpoint.value}
-                  </code>
-                  {isValidSafeUrl(nodeData.codeAssistEndpoint.value) && (
-                    <>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleCopy('code-assist', nodeData.codeAssistEndpoint.value!)}
-                        aria-label="复制代码助手端点"
-                      >
-                        复制
-                      </Button>
-                      <Button asChild variant="outline" size="sm">
-                        <a
-                          href={nodeData.codeAssistEndpoint.value}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label="打开代码助手端点"
-                        >
-                          打开
-                        </a>
-                      </Button>
-                      {copyStatus?.id === 'code-assist' && (
-                        <span role="status" className="text-[13px] text-muted-foreground">
-                          {copyStatus.text}
-                        </span>
-                      )}
-                    </>
+          </details>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+            {/* 代码助手端点 */}
+            <div className="rounded-lg border border-border bg-card p-2.5 space-y-1.5 transition-colors">
+              <div className="flex items-center justify-between gap-2 min-h-[32px]">
+                <div className="min-w-0 flex-1">
+                  <span className="text-xs font-semibold text-foreground block">代码助手端点</span>
+                  {nodeLoading && !nodeData ? (
+                    <p role="status" className="text-[11px] text-muted-foreground">正在读取代码助手端点…</p>
+                  ) : nodeData?.codeAssistEndpoint.issue ? (
+                    <p role="status" className="text-[11px] text-destructive">{nodeData.codeAssistEndpoint.issue}</p>
+                  ) : nodeData?.codeAssistEndpoint.value ? (
+                    <code className="block truncate text-[11px] text-muted-foreground font-mono" title={nodeData.codeAssistEndpoint.value}>
+                      {nodeData.codeAssistEndpoint.value}
+                    </code>
+                  ) : (
+                    <p className="text-[11px] text-muted-foreground">代码助手端点不可用</p>
                   )}
                 </div>
-              ) : (
-                <p className="text-[13px] text-muted-foreground">代码助手端点不可用</p>
+                {nodeData?.codeAssistEndpoint?.value && isValidSafeUrl(nodeData.codeAssistEndpoint.value) && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={() => handleCopy('code-assist', nodeData.codeAssistEndpoint.value!)}
+                      aria-label="复制代码助手端点"
+                    >
+                      复制
+                    </Button>
+                    <Button asChild variant="outline" size="xs">
+                      <a
+                        href={nodeData.codeAssistEndpoint.value}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label="打开代码助手端点"
+                      >
+                        打开
+                      </a>
+                    </Button>
+                  </div>
+                )}
+              </div>
+              {copyStatus?.id === 'code-assist' && (
+                <span role="status" className="block text-[11px] text-muted-foreground">
+                  {copyStatus.text}
+                </span>
               )}
               {isValidSafeUrl(nodeData?.codeAssistEndpoint?.value ?? '') &&
                 activeFallback?.id === 'code-assist' && (
-                  <div className="mt-2 space-y-1 border-t border-border/60 pt-2">
+                  <div className="space-y-1 border-t border-border/60 pt-1.5">
                     <label
                       htmlFor="manual-copy-code-assist"
-                      className="block text-xs font-medium text-foreground"
+                      className="block text-[11px] font-medium text-foreground"
                     >
                       代码助手端点（手动复制）
                     </label>
@@ -520,158 +592,147 @@ export default function OverviewPage() {
                       value={activeFallback.url}
                       onFocus={(e) => e.currentTarget.select()}
                       onClick={(e) => e.currentTarget.select()}
-                      className="w-full rounded border border-input bg-background px-2.5 py-1 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="w-full h-7 rounded border border-input bg-background px-2 py-0.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       aria-label="代码助手端点（手动复制）"
                     />
-                    <p className="text-[12px] text-muted-foreground">
+                    <p className="text-[11px] text-muted-foreground">
                       剪贴板不可用，请全选上方端点并手动复制。
                     </p>
                   </div>
                 )}
             </div>
-          </CardContent>
-        </Card>
 
-        <Card className="min-w-0">
-          <CardHeader>
-            <CardTitle>服务地址</CardTitle>
-            <CardDescription className="text-[13px] text-muted-foreground">
-              根据当前通道模式提供兼容的 API 基础端点
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground space-y-1.5">
-              <p className="font-medium text-foreground">使用说明</p>
-              <ul className="list-disc pl-4 space-y-1">
-                <li>选择当前通道模式并选用客户端兼容的协议（OpenAI、Claude 或 Gemini）。</li>
-                <li>复制下方展示的完整基础地址（保留服务根路径前缀），填入客户端的 API 基础地址（Base URL）配置。</li>
-                <li>在客户端配置对应的 API 认证凭据，并选用该服务实际支持的模型。</li>
-              </ul>
-            </div>
-
+            {/* 服务地址列表 */}
             {apiAddresses.issue ? (
-              <p role="status" className="text-[13px] text-muted-foreground">{apiAddresses.issue}</p>
+              <div className="rounded-lg border border-border p-2.5">
+                <p role="status" className="text-xs text-destructive">{apiAddresses.issue}</p>
+              </div>
             ) : !apiAddresses.value || apiAddresses.value.length === 0 ? (
-              <p className="text-[13px] text-muted-foreground">服务地址不可用</p>
+              <div className="rounded-lg border border-border p-2.5">
+                <p className="text-xs text-muted-foreground">服务地址不可用</p>
+              </div>
             ) : (
-              <div className="space-y-3">
-                {apiAddresses.value.map(item => {
-                  const isValid = isValidSafeUrl(item.url)
-                  const isFallbackActive = isValid && activeFallback?.id === item.id
-                  return (
-                    <div
-                      key={item.id}
-                      className="rounded-lg border border-border p-3 space-y-2"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-[13px] font-medium text-foreground">{item.label}</p>
-                          <code className="break-all text-xs text-muted-foreground">{item.url}</code>
-                        </div>
-                        {isValid && (
-                          <div className="flex items-center gap-2 shrink-0">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleCopy(item.id, item.url)}
-                              aria-label={`复制 ${item.label} 服务地址`}
-                            >
-                              复制
-                            </Button>
-                            <Button asChild variant="outline" size="sm">
-                              <a
-                                href={item.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                aria-label={`打开 ${item.label} 服务地址`}
-                              >
-                                打开
-                              </a>
-                            </Button>
-                            {copyStatus?.id === item.id && (
-                              <span role="status" className="text-[13px] text-muted-foreground">
-                                {copyStatus.text}
-                              </span>
-                            )}
-                          </div>
-                        )}
+              apiAddresses.value.map((item) => {
+                const isValid = isValidSafeUrl(item.url)
+                const isFallbackActive = isValid && activeFallback?.id === item.id
+                return (
+                  <div
+                    key={item.id}
+                    className="rounded-lg border border-border bg-card p-2.5 space-y-1.5 transition-colors"
+                  >
+                    <div className="flex items-center justify-between gap-2 min-h-[32px]">
+                      <div className="min-w-0 flex-1">
+                        <span className="text-xs font-semibold text-foreground block">{item.label} 服务地址</span>
+                        <code className="block truncate text-[11px] text-muted-foreground font-mono" title={item.url}>
+                          {item.url}
+                        </code>
                       </div>
-                      {isFallbackActive && (
-                        <div className="space-y-1 border-t border-border/60 pt-2">
-                          <label
-                            htmlFor={`manual-copy-${item.id}`}
-                            className="block text-xs font-medium text-foreground"
+                      {isValid && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            onClick={() => handleCopy(item.id, item.url)}
+                            aria-label={`复制 ${item.label} 服务地址`}
                           >
-                            {item.label} 服务地址（手动复制）
-                          </label>
-                          <input
-                            id={`manual-copy-${item.id}`}
-                            type="text"
-                            readOnly
-                            value={activeFallback.url}
-                            onFocus={(e) => e.currentTarget.select()}
-                            onClick={(e) => e.currentTarget.select()}
-                            className="w-full rounded border border-input bg-background px-2.5 py-1 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                            aria-label={`${item.label} 服务地址（手动复制）`}
-                          />
-                          <p className="text-[12px] text-muted-foreground">
-                            剪贴板不可用，请全选上方地址并手动复制。
-                          </p>
+                            复制
+                          </Button>
+                          <Button asChild variant="outline" size="xs">
+                            <a
+                              href={item.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              aria-label={`打开 ${item.label} 服务地址`}
+                            >
+                              打开
+                            </a>
+                          </Button>
                         </div>
                       )}
                     </div>
-                  )
-                })}
-              </div>
+                    {copyStatus?.id === item.id && (
+                      <span role="status" className="block text-[11px] text-muted-foreground">
+                        {copyStatus.text}
+                      </span>
+                    )}
+                    {isFallbackActive && (
+                      <div className="space-y-1 border-t border-border/60 pt-1.5">
+                        <label
+                          htmlFor={`manual-copy-${item.id}`}
+                          className="block text-[11px] font-medium text-foreground"
+                        >
+                          {item.label} 服务地址（手动复制）
+                        </label>
+                        <input
+                          id={`manual-copy-${item.id}`}
+                          type="text"
+                          readOnly
+                          value={activeFallback.url}
+                          onFocus={(e) => e.currentTarget.select()}
+                          onClick={(e) => e.currentTarget.select()}
+                          className="w-full h-7 rounded border border-input bg-background px-2 py-0.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          aria-label={`${item.label} 服务地址（手动复制）`}
+                        />
+                        <p className="text-[11px] text-muted-foreground">
+                          剪贴板不可用，请全选上方地址并手动复制。
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )
+              })
             )}
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+        </CardContent>
+      </Card>
 
+      {/* 凭证摘要计数器与 AG 额度冷却组：行距由 gap-8 调整为 gap-4，内边距紧凑 */}
       <Card>
-        <CardHeader>
-          <CardTitle>凭证摘要</CardTitle>
+        <CardHeader className="p-3 pb-1.5">
+          <CardTitle className="text-sm font-semibold">凭证摘要</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-3 pt-0">
           {data?.credentials.issue ? (
-            <p role="status" className="text-muted-foreground">{data.credentials.issue}</p>
+            <p role="status" className="text-xs text-destructive">{data.credentials.issue}</p>
           ) : (
-            <div className="space-y-4">
-              <dl className="flex flex-wrap gap-8">
+            <div className="space-y-2.5">
+              <dl className="flex flex-wrap gap-4 sm:gap-6">
                 {commonCounters.map(([label, value]) => (
-                  <div key={label}>
-                    <dt className="text-[13px] text-muted-foreground">{label}</dt>
-                    <dd className="text-xl font-semibold tabular-nums">{displayCount(value)}</dd>
+                  <div key={label} className="min-w-[64px]">
+                    <dt className="text-xs text-muted-foreground">{label}</dt>
+                    <dd className="text-lg font-bold tabular-nums text-foreground">{displayCount(value)}</dd>
                   </div>
                 ))}
               </dl>
               {hasAgQuota && (
-                <div className="border-t border-border pt-3">
-                  <p className="mb-2 text-xs font-medium text-muted-foreground">额度与冷却组</p>
-                  <dl className="flex flex-wrap gap-8">
+                <div className="border-t border-border/70 pt-2">
+                  <p className="mb-1 text-xs font-medium text-muted-foreground">额度与冷却组</p>
+                  <dl className="flex flex-wrap gap-4 sm:gap-6">
                     {agQuotaCounters.map(([label, value]) => (
-                      <div key={label}>
-                        <dt className="text-[13px] text-muted-foreground">{label}</dt>
-                        <dd className="text-xl font-semibold tabular-nums">{displayCount(value)}</dd>
+                      <div key={label} className="min-w-[64px]">
+                        <dt className="text-xs text-muted-foreground">{label}</dt>
+                        <dd className="text-lg font-bold tabular-nums text-foreground">{displayCount(value)}</dd>
                       </div>
                     ))}
                     <div>
-                      <dt className="text-[13px] text-muted-foreground">下次额度重置</dt>
-                      <dd className="text-xl font-semibold tabular-nums">{formatQuotaExpiry(creds?.quota_next_expiry)}</dd>
+                      <dt className="text-xs text-muted-foreground">下次额度重置</dt>
+                      <dd className="text-lg font-bold tabular-nums text-foreground">{formatQuotaExpiry(creds?.quota_next_expiry)}</dd>
                     </div>
                   </dl>
                 </div>
               )}
             </div>
           )}
-          <p className="mt-3 text-[13px] text-muted-foreground">
+          <p className="mt-2 text-xs text-muted-foreground">
             状态由后端摘要提供；正常状态不代表额度或模型权限已验证。
           </p>
         </CardContent>
       </Card>
 
+      {/* 统计报表 */}
       <StatisticsTables data={data} />
-      <p className="text-[13px] text-muted-foreground">
+
+      <p className="text-xs text-muted-foreground">
         可见页面每 30 秒刷新。统计请求分别读取，不保证同一时刻快照；不支持或缺失的数据标记为不可用。
       </p>
     </section>

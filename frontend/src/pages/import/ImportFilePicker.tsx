@@ -298,7 +298,7 @@ export function ImportFilePicker(props: ImportFilePickerProps): React.JSX.Elemen
   const validByteProgress = isValidByteProgress(byteProgress) ? byteProgress : null;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div
         role="region"
         aria-label="文件拖拽与选择区域"
@@ -307,12 +307,12 @@ export function ImportFilePicker(props: ImportFilePickerProps): React.JSX.Elemen
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         className={cn(
-          "flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-6 text-center transition-colors",
+          "flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-4 text-center transition-colors",
           isDraggingOver ? "border-primary bg-primary/5" : "border-border bg-card",
           disabled && "opacity-60 cursor-not-allowed"
         )}
       >
-        <p className="text-sm text-muted-foreground mb-3">
+        <p className="text-xs md:text-sm text-muted-foreground mb-2">
           拖拽文件至此处，或点击下方按钮选择文件
         </p>
         <label htmlFor="import-file-input" className="sr-only">
@@ -332,6 +332,7 @@ export function ImportFilePicker(props: ImportFilePickerProps): React.JSX.Elemen
         <Button
           type="button"
           variant="outline"
+          size="sm"
           disabled={disabled}
           onClick={() => inputRef.current?.click()}
           aria-label="选择文件"
@@ -339,20 +340,20 @@ export function ImportFilePicker(props: ImportFilePickerProps): React.JSX.Elemen
           选择文件
         </Button>
         {rejectionNotice && (
-          <p role="alert" className="text-xs text-destructive mt-3">
+          <p role="alert" className="text-xs text-destructive mt-2">
             {rejectionNotice}
           </p>
         )}
       </div>
 
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-foreground">
+        <span className="text-xs md:text-sm font-medium text-foreground">
           已选文件 ({files.length})
         </span>
         <Button
           type="button"
           variant="ghost"
-          size="sm"
+          size="xs"
           disabled={disabled || files.length === 0}
           onClick={handleClear}
           aria-label="清空全部"
@@ -362,20 +363,20 @@ export function ImportFilePicker(props: ImportFilePickerProps): React.JSX.Elemen
       </div>
 
       {files.length > 0 && (
-        <ul className="divide-y divide-border rounded-md border border-border px-3" aria-label="已选文件列表">
+        <ul className="divide-y divide-border rounded-md border border-border px-2.5 max-h-48 overflow-y-auto" aria-label="已选文件列表">
           {files.map((file, index) => (
             <li
               key={`${file.name}-${file.size}-${file.lastModified}-${index}`}
-              className="flex items-center justify-between gap-4 py-2 text-sm text-foreground"
+              className="flex items-center justify-between gap-3 py-1.5 text-xs md:text-[13px] text-foreground"
             >
               <div className="flex flex-col min-w-0 pr-2">
-                <span className="font-medium truncate break-all">{file.name}</span>
-                <span className="text-xs text-muted-foreground">{formatFileSize(file.size)}</span>
+                <span className="font-medium truncate break-all" title={file.name}>{file.name}</span>
+                <span className="text-[11px] text-muted-foreground">{formatFileSize(file.size)}</span>
               </div>
               <Button
                 type="button"
                 variant="ghost"
-                size="sm"
+                size="xs"
                 disabled={disabled}
                 onClick={() => handleRemove(index)}
                 aria-label={`移除 ${file.name}`}
@@ -391,37 +392,57 @@ export function ImportFilePicker(props: ImportFilePickerProps): React.JSX.Elemen
         <div
           role="status"
           aria-label="上传进度"
-          className="flex items-center justify-between rounded-md border border-border bg-secondary/30 px-3 py-2 text-sm text-foreground"
+          className="rounded-md border border-border bg-secondary/30 px-3 py-2 text-xs md:text-sm text-foreground space-y-1.5"
         >
-          <span className="text-muted-foreground">上传进度</span>
-          <span className="font-medium">
-            {!validByteProgress.available ? (
-              "进度不可用"
-            ) : validByteProgress.phase === "processing" ? (
-              validByteProgress.totalBytes !== null && validByteProgress.totalBytes > 0 && validByteProgress.percentage !== null
-                ? `已接收 ${formatFileSize(validByteProgress.receivedBytes)} / ${formatFileSize(validByteProgress.totalBytes)} (${validByteProgress.percentage}%)，正在处理...`
-                : `已接收 ${formatFileSize(validByteProgress.receivedBytes)} / 未知，正在处理...`
-            ) : validByteProgress.phase === "finished" ? (
-              "进度观察已结束，等待上传结果"
-            ) : validByteProgress.phase === "interrupted" ? (
-              "进度观察已中断，上传结果仍待确认"
-            ) : validByteProgress.totalBytes !== null && validByteProgress.totalBytes > 0 && validByteProgress.percentage !== null ? (
-              `已接收 ${formatFileSize(validByteProgress.receivedBytes)} / ${formatFileSize(validByteProgress.totalBytes)} (${validByteProgress.percentage}%)`
-            ) : (
-              `已接收 ${formatFileSize(validByteProgress.receivedBytes)} / 未知`
-            )}
-          </span>
+          <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+            <span className="text-muted-foreground shrink-0">上传进度</span>
+            <span className="font-medium text-xs md:text-[13px] text-right break-words leading-relaxed">
+              {!validByteProgress.available ? (
+                "进度不可用"
+              ) : validByteProgress.phase === "processing" ? (
+                validByteProgress.totalBytes !== null && validByteProgress.totalBytes > 0 && validByteProgress.percentage !== null
+                  ? `已接收 ${formatFileSize(validByteProgress.receivedBytes)} / ${formatFileSize(validByteProgress.totalBytes)} (${validByteProgress.percentage}%)，正在处理...`
+                  : `已接收 ${formatFileSize(validByteProgress.receivedBytes)} / 未知，正在处理...`
+              ) : validByteProgress.phase === "finished" ? (
+                "进度观察已结束，等待上传结果"
+              ) : validByteProgress.phase === "interrupted" ? (
+                "进度观察已中断，上传结果仍待确认"
+              ) : validByteProgress.totalBytes !== null && validByteProgress.totalBytes > 0 && validByteProgress.percentage !== null ? (
+                `已接收 ${formatFileSize(validByteProgress.receivedBytes)} / ${formatFileSize(validByteProgress.totalBytes)} (${validByteProgress.percentage}%)`
+              ) : (
+                `已接收 ${formatFileSize(validByteProgress.receivedBytes)} / 未知`
+              )}
+            </span>
+          </div>
+          {validByteProgress.percentage !== null && (
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+              <div
+                className="h-full bg-primary transition-all duration-300"
+                style={{ width: `${Math.min(100, Math.max(0, validByteProgress.percentage))}%` }}
+              />
+            </div>
+          )}
         </div>
       ) : validProgress ? (
         <div
           role="status"
           aria-label="上传进度"
-          className="flex items-center justify-between rounded-md border border-border bg-secondary/30 px-3 py-2 text-sm text-foreground"
+          className="rounded-md border border-border bg-secondary/30 px-3 py-2 text-xs md:text-sm text-foreground space-y-1.5"
         >
-          <span className="text-muted-foreground">上传进度</span>
-          <span className="font-medium">
-            已完成 {validProgress.completed} / {validProgress.total}
-          </span>
+          <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+            <span className="text-muted-foreground shrink-0">上传进度</span>
+            <span className="font-medium text-xs md:text-[13px] text-right break-words">
+              已完成 {validProgress.completed} / {validProgress.total}
+            </span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+            <div
+              className="h-full bg-primary transition-all duration-300"
+              style={{
+                width: `${Math.min(100, Math.max(0, Math.round((validProgress.completed / validProgress.total) * 100)))}%`
+              }}
+            />
+          </div>
         </div>
       ) : null}
     </div>
