@@ -35,6 +35,7 @@ from src.models import (
 from src.storage_adapter import get_storage_adapter
 from src.utils import verify_panel_token, GEMINICLI_USER_AGENT, ANTIGRAVITY_USER_AGENT
 from src.api.antigravity import fetch_quota_info
+from src.antigravity_refresh import refreshed_credential_data
 from src.api.utils import check_should_auto_ban, parse_and_log_cooldown
 from src.smart_429 import (
     Upstream429Kind,
@@ -1118,7 +1119,8 @@ async def verify_credential_project_common(filename: str, mode: str = "geminicli
     # 如果token被刷新了，更新存储
     if token_refreshed:
         log.info(f"[CREDENTIAL VERIFY] token_refreshed mode={mode}")
-        credential_data = credentials.to_dict()
+        credential_data = (refreshed_credential_data(credential_data, credentials.to_dict())
+                           if mode == "antigravity" else credentials.to_dict())
         if mode != "antigravity":
             await storage_adapter.store_credential(filename, credential_data, mode=mode)
 
@@ -2109,9 +2111,11 @@ async def _fetch_quota_for_credential(filename: str, mode: str, *, origin="legac
         return {"success": False, "error": "凭证不存在"}
 
     creds = Credentials.from_dict(credential_data)
-    await creds.refresh_if_needed()
-    updated_data = creds.to_dict()
-    if updated_data != credential_data:
+    token_refreshed = await creds.refresh_if_needed()
+    updated_data = (refreshed_credential_data(credential_data, creds.to_dict())
+                    if mode == "antigravity" else creds.to_dict())
+    should_save_refresh = token_refreshed if mode == "antigravity" else updated_data != credential_data
+    if should_save_refresh:
         updated_data = await _save_refreshed_quota_credential(storage_adapter, filename, updated_data, mode, quota_snapshot)
         credential_data = updated_data
 
@@ -2610,7 +2614,7 @@ async def configure_preview_channel(
 def _antigravity_test_stats_model(requested_model, upstream_model):
     """Count current Opus probes by routed generation without rewriting history."""
     from src.antigravity_model_access import ROUTES
-    if upstream_model in ROUTES:
+    if upstream_model in ROUTES or (isinstance(upstream_model, str) and upstream_model.startswith("gemini-3.8-flash-")):
         return upstream_model
     return requested_model or upstream_model
 
@@ -2702,6 +2706,23 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         if not filename.endswith(".json"):
             raise HTTPException(status_code=400, detail="无效的文件名")
 
+        # Resolve local policy before credential reads or OAuth refresh.
+        test_model = model if model else "gemini-2.5-flash"
+        if mode == "antigravity":
+            from src.antigravity_models import is_retired_antigravity_model
+            from src.utils import normalize_antigravity_model_alias
+            from src.converter.gemini_fix import map_antigravity_gemini_model
+            from src.diagnostics.antigravity import requested_model
+
+            requested_model(test_model)
+            test_model = normalize_antigravity_model_alias(test_model)
+            if test_model.startswith("gemini-"):
+                test_model = map_antigravity_gemini_model(test_model, None, None)
+            if is_retired_antigravity_model(test_model):
+                return JSONResponse(status_code=404, content={
+                    "success": False, "status_code": 404, "error": "Resource unavailable.",
+                })
+
         storage_adapter = await get_storage_adapter()
 
         # 获取凭证数据
@@ -2717,7 +2738,8 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         # 如果 token 被刷新了，更新存储
         if token_refreshed:
             log.info(f"Token已自动刷新: {'[credential]' if mode == 'antigravity' else filename} (mode={mode})")
-            credential_data = credentials.to_dict()
+            credential_data = (refreshed_credential_data(credential_data, credentials.to_dict())
+                               if mode == "antigravity" else credentials.to_dict())
             credential_data = await _save_refreshed_quota_credential(storage_adapter, filename, credential_data, mode, quota_snapshot)
 
         # 获取访问令牌
@@ -2734,7 +2756,6 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
             raise HTTPException(status_code=400, detail="凭证中没有项目ID")
 
         # 使用指定的模型或默认模型
-        test_model = model if model else "gemini-2.5-flash"
         # 如果指定了具体模型，则跳过后续的 preview 模型测试
         skip_preview_test = model is not None
         strict_antigravity_model_test = mode == "antigravity" and model is not None
@@ -2745,16 +2766,6 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         )
         test_max_output_tokens = 256 if strict_antigravity_model_test else 1
         upstream_test_model = test_model
-        if mode == "antigravity":
-            from src.converter.gemini_fix import map_antigravity_gemini_model
-            from src.utils import normalize_antigravity_model_alias
-
-            upstream_test_model = normalize_antigravity_model_alias(test_model)
-            if upstream_test_model.startswith("gemini-"):
-                upstream_test_model = map_antigravity_gemini_model(
-                    upstream_test_model, None, None
-                )
-
         if mode == "antigravity":
             api_base_url = await get_antigravity_api_url()
             from src.api.antigravity import build_antigravity_headers

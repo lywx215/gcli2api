@@ -109,12 +109,12 @@ async def test_antigravity_specific_model_uses_current_header_signature(monkeypa
 
     assert response.status_code == 200
     assert payload["success"] is True
-    assert captured_request["json"]["model"] == "gemini-3.6-flash-high"
+    assert captured_request["json"]["model"] == "gemini-3.8-flash-high"
     assert captured_request["headers"]["Authorization"] == (
         "Bearer test-access-token"
     )
     assert storage._backend.success_calls == [
-        ("credential.json", "gemini-3.6-flash-high", "antigravity")
+        ("credential.json", "gemini-3.8-flash-high", "antigravity")
     ]
     assert captured_request["json"]["request"]["contents"][0]["parts"][0][
         "text"
@@ -160,26 +160,13 @@ async def test_antigravity_specific_model_rejects_deprecation_text(monkeypatch):
     assert storage._backend.success_calls == []
 
 
-async def test_antigravity_model_test_uses_current_service_route(monkeypatch):
-    storage = _FakeStorageAdapter()
-    captured_request = {}
+async def test_antigravity_retired_pro_model_test_stops_before_storage(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Retired Pro must not read credentials or call upstream")
 
-    async def fake_get_storage_adapter():
-        return storage
-
-    async def fake_get_antigravity_api_url():
-        return "https://antigravity.test"
-
-    async def fake_post_async(**kwargs):
-        captured_request.update(kwargs)
-        return _FakeResponse()
-
-    monkeypatch.setattr(creds_panel, "get_storage_adapter", fake_get_storage_adapter)
-    monkeypatch.setattr(
-        creds_panel, "get_antigravity_api_url", fake_get_antigravity_api_url
-    )
-    monkeypatch.setattr(creds_panel, "Credentials", _FakeCredentialsFactory)
-    monkeypatch.setattr(httpx_client, "post_async", fake_post_async)
+    monkeypatch.setattr(creds_panel, "get_storage_adapter", forbidden)
+    monkeypatch.setattr(creds_panel, "Credentials", forbidden)
+    monkeypatch.setattr(httpx_client, "post_async", forbidden)
 
     response = await creds_panel.test_credential_common(
         "credential.json",
@@ -187,8 +174,10 @@ async def test_antigravity_model_test_uses_current_service_route(monkeypatch):
         model="gemini-3.1-pro-high",
     )
 
-    assert response.status_code == 200
-    assert captured_request["json"]["model"] == "gemini-pro-agent"
+    assert response.status_code == 404
+    payload = json.loads(response.body)
+    assert payload["success"] is False
+    assert payload["error"] == "Resource unavailable."
 
 
 async def test_antigravity_generic_429_does_not_create_persistent_cooldown():

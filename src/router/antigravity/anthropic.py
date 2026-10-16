@@ -26,6 +26,7 @@ from log import log
 
 # 本地模块 - 工具和认证
 from src.utils import (
+    normalize_antigravity_model_alias, get_base_model_from_feature_model,
     authenticate_bearer,
 )
 from src.model_routing import (
@@ -49,7 +50,9 @@ from src.router.stream_passthrough import (
     prepend_async_item,
     read_first_async_item,
 )
+from src.antigravity_models import is_retired_antigravity_model
 from src.router.model_api_errors import (
+    ErrorOrigin, ErrorKind, make_model_api_error,
     ModelApiErrorException,
     error_from_response,
     error_from_model_payload,
@@ -111,6 +114,12 @@ async def messages(
     requested_name = claude_request.model
     normalized_dict = model_to_dict(claude_request)
 
+    real_model = normalize_antigravity_model_alias(get_base_model_from_feature_model(requested_name))
+    if is_retired_antigravity_model(real_model):
+        raise ModelApiErrorException(
+            make_model_api_error(origin=ErrorOrigin.LOCAL, kind=ErrorKind.LOCAL, status=404)
+        )
+
     # 健康检查
     if is_health_check_request(normalized_dict, format="anthropic"):
         response = create_health_check_response(format="anthropic")
@@ -125,6 +134,10 @@ async def messages(
     record_requested_model(requested_name)
     real_model = normalization_model(route_context)
     dispatch_model = route_context.resolution.dispatch_model
+    if is_retired_antigravity_model(dispatch_model):
+        raise ModelApiErrorException(
+            make_model_api_error(origin=ErrorOrigin.LOCAL, kind=ErrorKind.LOCAL, status=404)
+        )
 
     # 获取流式标志
     is_streaming = claude_request.stream

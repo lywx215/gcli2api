@@ -45,7 +45,6 @@ def reply(text="测试成功", finish="STOP"):
     ("claude-opus-5-5-high", "claude-opus-5-5-high", "claude-opus-5-5-high"),
     ("claude-opus-4-6", "claude-opus-4-6-thinking", "claude-opus-4-6-thinking"),
     ("claude-opus-4.6", "claude-opus-4-6-thinking", "claude-opus-4-6-thinking"),
-    ("gemini-3.1-pro", "gemini-pro-agent", "gemini-3.1-pro"),
 ])
 async def test_panel_probe_stats_use_routed_opus_generation(
     panel_store, monkeypatch, origin, outcome, requested, upstream, stats_model,
@@ -125,6 +124,111 @@ async def test_restored_opus_panel_probe_preserves_version(panel_store, monkeypa
     assert response.status_code == 200
     assert json.loads(response.body)["success"] is True
     assert calls == ["claude-opus-4-6-thinking"]
+
+
+@pytest.mark.parametrize("model", ["gemini-3.1-pro", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "gemini-pro-agent",
+                                  "假流式/gemini-3.1-pro-high"])
+async def test_retired_manual_model_has_no_credential_or_state_access(monkeypatch, model):
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("retired models must not access credentials, dispatch or settle")
+    monkeypatch.setattr(manual, "prepare", forbidden)
+    monkeypatch.setattr(panel, "record_logical_request", forbidden)
+    monkeypatch.setattr("src.httpx_client.post_async", forbidden)
+    response = await manual.test(NAME, model)
+    body = json.loads(response.body)
+    assert response.status_code == 404
+    assert body["error"] == "Resource unavailable."
+    assert body["upstream_status"] is None and body["response_source"] == "local"
+    assert body["phase"] == "preparation" and body["phases"] == [] and body["state_update"] == {}
+    assert body["upstream_model_version"] is None
+    assert body["capabilities"] == ["antigravity.test.model_version"]
+    assert (await manual.test("invalid.txt", model)).status_code == 400
+
+
+@pytest.mark.parametrize("requested,resolved", [
+    ("gemini-3.6-flash-high", "gemini-3.8-flash-high"),
+    ("假流式/gemini-3.7-flash-low", "gemini-3.8-flash-low"),
+    ("gemini-3.5-flash", "gemini-3.8-flash-medium"),
+])
+async def test_manual_migration_dispatch_and_statistics(panel_store, monkeypatch, requested, resolved):
+    calls, stats, diagnostics = [], [], []
+    async def post(**kwargs):
+        calls.append(kwargs); return httpx.Response(200, json=reply())
+    async def logical(*args): stats.append(args)
+    monkeypatch.setattr("src.httpx_client.post_async", post)
+    monkeypatch.setattr("src.diagnostics.antigravity.requested_model", diagnostics.append)
+    monkeypatch.setattr(panel, "record_logical_request", logical)
+    assert json.loads((await manual.test(NAME, requested)).body)["success"]
+    assert calls[0]["json"]["model"] == resolved
+    assert stats == [(resolved, "antigravity", True)]
+    assert diagnostics == [requested]
+
+
+@pytest.mark.parametrize("location,version,status,text,expected", [
+    ("nested", "gemini-3.8-flash-build.123", 200, "测试成功", "gemini-3.8-flash-build.123"),
+    ("top", "claude-sonnet-4-6", 200, "测试成功", "claude-sonnet-4-6"),
+    ("nested", "gpt-oss-120b", 200, "测试成功", "gpt-oss-120b"),
+    ("missing", None, 200, "测试成功", None),
+    ("nested", "gemini-unsafe<script>", 200, "测试成功", None),
+    ("nested", "gemini-invalid\n", 200, "测试成功", None),
+    ("nested", "gemini-" + "a" * 121, 200, "测试成功", None),
+    ("nested", 123, 200, "测试成功", None),
+    ("nested", {"model": "gemini-native"}, 200, "测试成功", None),
+    ("nested", "gemini-secret-build", 200, "wrong", None),
+    ("nested", "gemini-secret-build", 403, "测试成功", None),
+])
+async def test_model_version_only_on_valid_success_never_settled(panel_store, monkeypatch, location, version, status, text, expected):
+    payload = reply(text)
+    if location == "top": payload = payload["response"]
+    if location != "missing":
+        (payload["response"] if location == "nested" else payload)["modelVersion"] = version
+    settled, logs = [], []
+    class Log:
+        def __getattr__(self, level): return lambda message, *a, **kw: logs.append(message)
+    original = panel_store.manual_record_result
+    async def record(*args, **kwargs):
+        settled.append((args, kwargs)); return await original(*args, **kwargs)
+    async def post(**kw): return httpx.Response(status, json=payload)
+    monkeypatch.setattr("src.httpx_client.post_async", post)
+    monkeypatch.setattr(panel_store, "manual_record_result", record)
+    monkeypatch.setattr(panel, "log", Log())
+    body = json.loads((await manual.test(NAME, GEMINI)).body)
+    assert body["capabilities"] == ["antigravity.test.model_version"]
+    assert body["upstream_model_version"] == expected
+    if isinstance(version, str):
+        assert version not in repr(settled) and version not in repr(logs)
+        assert version not in json.dumps(await panel_store.get_credential_state(NAME, "antigravity"))
+    if not body["success"]: assert "secret-build" not in json.dumps(body)
+
+
+async def test_model_version_batch_items_keep_capability(panel_store, monkeypatch):
+    payload = reply(); payload["response"]["modelVersion"] = "gemini-native-build"
+    async def post(**kw): return httpx.Response(200, json=payload)
+    monkeypatch.setattr("src.httpx_client.post_async", post)
+    result = await panel.batch_test_credentials(panel.CredFileBatchTestRequest(filenames=[NAME]),
+                                                mode="antigravity", _token="synthetic")
+    item = json.loads(result.body)["results"][0]
+    assert item["upstream_model_version"] == "gemini-native-build"
+    assert item["capabilities"] == ["antigravity.test.model_version"]
+
+
+@pytest.mark.parametrize("payload", [
+    {"error": {"message": "gemini-native-secret"}, "modelVersion": "gemini-native-secret"},
+    {"response": {"modelVersion": "gemini-native-secret", "candidates": []}},
+])
+async def test_http_200_errors_cannot_expose_model_version(panel_store, monkeypatch, payload):
+    async def post(**kw): return httpx.Response(200, json=payload)
+    monkeypatch.setattr("src.httpx_client.post_async", post)
+    response = await manual.test(NAME, GEMINI)
+    body = json.loads(response.body)
+    assert not body["success"] and body["upstream_model_version"] is None
+    assert b"gemini-native-secret" not in response.body
+
+
+def test_model_version_does_not_fallback_outside_present_response_wrapper():
+    # Only genuinely unwrapped payloads use the top-level field.
+    for response in ({}, {"modelVersion": "bad"}, None):
+        assert manual.model_version_fields({"response": response, "modelVersion": "gemini-native"})["upstream_model_version"] is None
 
 
 @pytest.mark.parametrize("disabled,permanent", [(False, False), (True, False), (True, True)])
@@ -515,6 +619,17 @@ global.AppState = {antigravityCreds: {refresh: async () => {}}};
  payload = {success: false, upstream_status: 429, message:'Rate limit exceeded.'};
  await testAntigravityCredential('synthetic.json');
  assert.equal(modal.tone, 'error'); assert.match(modal.text, /Google HTTP 429/);
+ const generation = {success: true, phase: 'generation', upstream_status: 200};
+ const capability = ['antigravity.test.model_version'];
+ assert.match(manualResultSummary(generation), /当前节点未提供模型版本信息/);
+ assert.match(manualResultSummary({...generation, capabilities: capability, upstream_model_version: null}), /上游未返回模型版本/);
+ assert.match(manualResultSummary({...generation, capabilities: capability, upstream_model_version: 'gemini-native-build.12'}), /实际模型版本：gemini-native-build.12/);
+ for (const invalid of ['gemini-<script>', 'gemini-build\n', 'gemini-build\r', 'gemini-build\u2028', {}, 42]) {
+   const summary = manualResultSummary({...generation, capabilities: capability, upstream_model_version: invalid});
+   assert.match(summary, /上游未返回模型版本/); assert.doesNotMatch(summary, /实际模型版本|<script>/);
+ }
+ assert.doesNotMatch(manualResultSummary({...generation, success: false, capabilities: capability, upstream_model_version:'gemini-native'}), /模型版本/);
+ assert.doesNotMatch(manualResultSummary({...generation, phase: 'quota'}), /模型版本/);
 })().catch(e => { console.error(e); process.exitCode=1; });
 '''
     result = subprocess.run([node, "-"], input=script, text=True, encoding="utf-8", capture_output=True)

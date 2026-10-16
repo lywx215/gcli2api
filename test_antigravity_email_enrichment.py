@@ -38,10 +38,13 @@ class Store:
     def receipt(self, filename="1621_test.json", supported=True):
         return ImportReceipt(filename, self.generation, credential_version(self.data), supported)
 
-    async def quota_current_credential(self, filename, generation):
+    async def quota_current_credential(self, filename, generation, *, include_credit_state=True):
         if generation != self.generation:
             return None
-        return {**self.data, "_quota_generation": generation, "_quota_credential_version": credential_version(self.data), "enable_credit": False}
+        result = {**self.data, "_quota_generation": generation, "_quota_credential_version": credential_version(self.data)}
+        if include_credit_state:
+            result["enable_credit"] = False
+        return result
 
     async def quota_refresh_credential(self, filename, generation, data, expected_version=None, state_updates=None):
         self.writes.append((data, state_updates))

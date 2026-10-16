@@ -399,12 +399,12 @@ class LogicalRequestStreamTests(unittest.TestCase):
         ):
             response = asyncio.run(
                 credential_routes.test_credential_common(
-                    "fixture.json", mode="antigravity", model="gemini-3.1-pro"
+                    "fixture.json", mode="antigravity", model="gemini-3.8-flash-high"
                 )
             )
 
         self.assertEqual(response.status_code, 424)
-        self.assertEqual(recorded, [("gemini-3.1-pro", "antigravity", False)])
+        self.assertEqual(recorded, [("gemini-3.8-flash-high", "antigravity", False)])
         self.assertEqual(len(storage._backend.failures), 1)
 
 

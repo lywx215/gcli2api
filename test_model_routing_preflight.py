@@ -35,11 +35,30 @@ async def isolated_environment(monkeypatch, tmp_path):
     for key in ("CODE_ASSIST_ENDPOINT", "ANTIGRAVITY_API_URL", "KEEPALIVE_URL", "OAUTHLIB_INSECURE_TRANSPORT"):
         monkeypatch.delenv(key, raising=False)
 
+    # Windows builds asyncio's private self-pipe with a loopback socketpair.
+    # Exempt that synchronous IPC construction only; ordinary loopback TCP and
+    # all external connects remain forbidden, including during fixture teardown.
+    pairing = [False]
+    original_pair, original_connect = socket.socketpair, socket.socket.connect
+    original_connect_ex = socket.socket.connect_ex
+    def local_pair(*args, **kwargs):
+        pairing[0] = True
+        try:
+            return original_pair(*args, **kwargs)
+        finally:
+            pairing[0] = False
+    def guarded(original):
+        def connect(sock, address, *args, **kwargs):
+            if pairing[0] and isinstance(address, tuple) and address[0] in ("127.0.0.1", "::1"):
+                return original(sock, address, *args, **kwargs)
+            raise AssertionError("Real network is forbidden in MR06 unit tests.")
+        return connect
     def forbidden_network(*_args, **_kwargs):
         raise AssertionError("Real network is forbidden in MR06 unit tests.")
 
-    monkeypatch.setattr(socket.socket, "connect", forbidden_network)
-    monkeypatch.setattr(socket.socket, "connect_ex", forbidden_network)
+    monkeypatch.setattr(socket, "socketpair", local_pair)
+    monkeypatch.setattr(socket.socket, "connect", guarded(original_connect))
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded(original_connect_ex))
     monkeypatch.setattr(socket, "create_connection", forbidden_network)
     yield
 

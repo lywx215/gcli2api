@@ -516,7 +516,7 @@ async def test_combined_openai_error_done_is_failed_once(monkeypatch, captured_s
 
 @pytest.mark.parametrize('backend,alias,expected', [
     ('geminicli', 'gemini-3.5-flash-preview', 'gemini-3-flash'),
-    ('antigravity', 'gemini-3.7-flash', 'gemini-3.7-flash-medium'),
+    ('antigravity', 'gemini-3.7-flash', 'gemini-3.8-flash-medium'),
 ])
 @pytest.mark.parametrize('protocol', PROTOCOLS)
 @pytest.mark.parametrize('mode', MODES)

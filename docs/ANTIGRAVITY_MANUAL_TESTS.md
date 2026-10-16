@@ -24,6 +24,21 @@
 界面分别展示Google响应、本地验证以及状态更新。Google成功但回写冲突时仍保留成功结果，
 同时显示状态未更新。批量结果逐项保留这些信息。
 
+2026-10-13：生成测试结果新增操作级 `capabilities: ["antigravity.test.model_version"]`
+和 `upstream_model_version: string | null`，单项及批量项使用同一结构。
+只有成功且通过原有响应校验的结果可读取 `response.modelVersion`，未包裹响应则读取
+顶层 `modelVersion`。版本必须完整匹配 `(gemini|claude|gpt-oss)-[A-Za-z0-9._-]{1,120}`，
+不修剪、不推断；缺失、非法、错误响应、HTTP 200 校验失败均为 `null`。
+该值仅用于成功结果展示，不进入日志、错误或持久化状态。
+桌面与移动面板共用文本展示：有值显示“实际模型版本”，支持但为空显示“上游未返回模型版本”，
+旧后端缺少 capability 显示“当前节点未提供模型版本信息”；失败不显示版本行。
+
+模型迁移及退役策略见 [Antigravity 模型迁移](ANTIGRAVITY_MODEL_MIGRATION.md)。人工测试
+先验证文件名，再在读取凭证/OAuth 前完成模型解析和退役拦截。退役返回本地 404
+`Resource unavailable.`，`upstream_status=null`、`response_source=local`、
+`phase=preparation`、`state_update={}`；不结算失败统计、不禁用、不改冷却或凭证状态。
+非退役请求以解析后的模型执行请求和逻辑统计，原请求模型保留在安全诊断字段中。
+
 凭证代次、内容版本和目标状态快照限制回写，不能覆盖替换凭证或较新的冷却。
 并发Token刷新只可复用同代且稳定身份字段一致的有效Token。旧记录复用既有方法初始化代次，
 损坏额度状态不阻止请求；统计、错误、冷却、周期统计分别报告更新结果。
@@ -31,7 +46,8 @@
 ## 兼容和范围
 
 - 来源参数只由服务端认证入口设置，默认`legacy`，且只有Antigravity模式才能进入人工分支。
-- 正常模型API、自动保护和Management旧调用保持当前规则；Gemini CLI没有专属改造。
+- Antigravity 模型 API 和 Management 旧测试调用复用统一迁移及停用规则；自动额度保护
+  与旧接口字段不变。Gemini CLI 没有专属改造。
 - Management schema/capability不变，不新增数据库字段，无迁移或manager侧配套动作。
 - 两个诊断脚本调用面板额度接口也会触发人工恢复。模型目录验证默认操作临时实例，
   `--live-url`和额度测量脚本操作指定服务；源SQLite只读不代表目标服务状态只读。

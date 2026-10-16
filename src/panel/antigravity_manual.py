@@ -13,12 +13,26 @@ from src.antigravity_directory_runtime import (
 )
 from src.antigravity_model_access import access_model
 from src.storage.antigravity_model_access import row_state as access_row_state
+import re
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
 from src.manual_google import manual_google_phase
+from src.antigravity_refresh import refreshed_credential_data
 from src.storage.antigravity_quota import credential_version
+
+
+def model_version_fields(payload=None):
+    """Expose only a validated native version on a successful manual result."""
+    version = None
+    if isinstance(payload, dict):
+        obj = payload.get("response", payload)
+        if isinstance(obj, dict):
+            candidate = obj.get("modelVersion")
+            if isinstance(candidate, str) and re.fullmatch(r"(gemini|claude|gpt-oss)-[A-Za-z0-9._-]{1,120}", candidate):
+                version = candidate
+    return {"capabilities": ["antigravity.test.model_version"], "upstream_model_version": version}
 
 
 def error_message(status):
@@ -102,9 +116,7 @@ async def prepare(filename, events, *, deadline=None):
     if refreshed:
         # Preserve imported metadata so concurrent refreshes retain the same
         # stable identity. Keep the legacy token alias in sync as well.
-        data = {**data, **credentials.to_dict()}
-        if "token" in data:
-            data["token"] = data["access_token"]
+        data = refreshed_credential_data(data, credentials.to_dict())
         if snapshot.get("generation"):
             saved = await _atomic(lambda: storage._backend.quota_refresh_credential(
                 filename, snapshot["generation"], data, expected_version=snapshot["version"]), deadline, "credential_cas")
@@ -135,7 +147,9 @@ async def test(filename, model=None):
     from src.httpx_client import post_async
     from src.api.antigravity import build_antigravity_headers
     from src.converter.gemini_fix import map_antigravity_gemini_model
+    from src.antigravity_models import is_retired_antigravity_model
     from src.utils import normalize_antigravity_model_alias
+    from src.diagnostics.antigravity import requested_model as record_requested_model
     from src.antigravity_completion import validate_json
     from src.router.model_api_errors import parse_model_response, error_from_retirement_payload, error_from_retirement_body, ModelApiErrorException
 
@@ -143,15 +157,22 @@ async def test(filename, model=None):
     response = None
     strict = model is not None
     requested_model = model or "gemini-2.5-flash"
+    record_requested_model(requested_model)
     upstream_model = requested_model
     dispatched = False
     try:
-        storage, snapshot, data = await prepare(filename, events)
-        if not data.get("project_id"):
+        # Preserve filename validation before the pure model guard. Neither
+        # check reads credentials or refreshes OAuth tokens.
+        if not filename.endswith(".json"):
             raise HTTPException(400)
         upstream_model = normalize_antigravity_model_alias(requested_model)
         if upstream_model.startswith("gemini-"):
             upstream_model = map_antigravity_gemini_model(upstream_model, None, None)
+        if is_retired_antigravity_model(upstream_model):
+            raise HTTPException(404)
+        storage, snapshot, data = await prepare(filename, events)
+        if not data.get("project_id"):
+            raise HTTPException(400)
         url = f"{await p.get_antigravity_api_url()}/v1internal:generateContent"
         dispatched = True
         response = await post_async(
@@ -185,6 +206,7 @@ async def test(filename, model=None):
                     await p.record_logical_request(p._antigravity_test_stats_model(requested_model, upstream_model), "antigravity", False)
                 except Exception:
                     result["state_update"]["logical_statistics"] = failed_update("statistics_update_failed")
+        result.update(model_version_fields())
         return JSONResponse(status_code=result["status_code"], content=result)
 
     status = response.status_code
@@ -208,6 +230,7 @@ async def test(filename, model=None):
     result = {"filename": filename, "success": valid, "status_code": status, "upstream_status": response.status_code,
               "response_source": "google", "phase": "generation", "phases": events,
               "verified_reply": valid if strict else None, "message": message}
+    result.update(model_version_fields(payload if valid else None))
     if not valid:
         result["error"] = message
     if strict:

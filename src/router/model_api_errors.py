@@ -340,6 +340,8 @@ def _message_id(error: ModelApiError) -> ErrorMessageId:
 def fixed_error_message(error: ModelApiError) -> str:
     """Return the fixed English message for an internal error description."""
 
+    if error.origin == ErrorOrigin.LOCAL and error.kind == ErrorKind.LOCAL and error.status == 404:
+        return "Resource unavailable."
     return FIXED_ERROR_MESSAGES[_message_id(error)]
 
 

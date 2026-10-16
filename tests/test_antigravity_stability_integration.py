@@ -14,7 +14,7 @@ from src.router.model_api_errors import (
 )
 
 BODY = b'data: {"candidates":[{"content":{"parts":[{"text":"synthetic"}]}}]}\n\n'
-MODEL = "gemini-3.7-flash-medium"
+MODEL = "gemini-3.8-flash-medium"
 PROTOCOLS = ["openai", "claude", "gemini"]
 
 

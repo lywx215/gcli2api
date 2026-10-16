@@ -65,14 +65,14 @@ def test_client_image_config_has_priority_over_size_and_model_suffix():
     }
 
 
-def test_antigravity_gemini_aliases_keep_fork_model_mapping():
+def test_antigravity_bare_flash_migration_uses_medium_even_with_client_high():
     generation_config = {"thinkingConfig": {"thinkingLevel": "HIGH"}}
 
     mapped = _normalize_antigravity_request(
         {}, "gemini-3.5-flash", generation_config, True
     )
 
-    assert mapped == "gemini-3.5-flash-high"
+    assert mapped == "gemini-3.8-flash-medium"
     assert generation_config["thinkingConfig"] == {"includeThoughts": True}
 
 

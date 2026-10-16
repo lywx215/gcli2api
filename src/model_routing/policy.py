@@ -9,7 +9,7 @@ from functools import lru_cache
 
 from src.antigravity_models import (ANTIGRAVITY_MODEL_ALIASES,
                                     ANTIGRAVITY_NATIVE_MODEL_IDS, PUBLIC_ANTIGRAVITY_MODEL_IDS,
-                                    resolve_antigravity_opus_model)
+                                    resolve_antigravity_opus_model, RETIRED_ANTIGRAVITY_MODEL_IDS)
 from src.geminicli_models import GEMINI_38_FLASH_MODEL, GEMINI_38_FLASH_THINKING_LEVELS
 from .types import CONTRACT_VERSION, RoutingPolicySnapshot, thaw
 
@@ -40,16 +40,16 @@ _SOURCE_SELECTORS = {
     "src/model_routing/__init__.py": ("check_route_dispatch",),
 }
 PROVEN_SOURCE_DIGESTS = {
-    "src/utils.py": "eaf4198125faf76e3f20ce142b5b1699a6f11bb9ea28ddf77db22c5d62bfee26",
-    "src/converter/gemini_fix.py": "7f472ba5f0179fbbb8bea0fca50f7f20d8982556ac6153a613d8f4d144adf615",
+    "src/utils.py": "3a9147ed62237e2c1dce467b6a24a45349fd9dc06ad14bfe9919f0c0e148548c",
+    "src/converter/gemini_fix.py": "ff39dc1ba6d8bfb7b7df5db0d3a6654d96391af104959751b1481bf144bc1d4f",
     "src/converter/antigravity_fix.py": "b166e8a807a791cb0462abc9548a336ab6426e55273207e1f109f1f22e2fff6a",
     "src/converter/openai2gemini.py": "2d3b56714dddb86d74acf2ff96aae8020d4c7f7d44dac8b649e1958fa304369f",
     "src/converter/anthropic2gemini.py": "c0166a60768165d6d2efdfccd6e398a277dd7902e4056e060a9a74b51c2c6ff4",
     "src/converter/utils.py": "6f3491fe7a95302734ad31b90fa52551a7132cd151191cea1f9ece5f07863dab",
     "src/converter/thoughtSignature_fix.py": "2591fca1e8bfd959b764148cf74636cf85e1f17df63d0c03e8adcdf7c0ca3840",
-    "src/antigravity_models.py": "531104d648974bc86d1a152217c0ab53f6502506185bba8ef1fd9b97e975c2ac",
+    "src/antigravity_models.py": "1a9d6ff95fd76687ee4f6657fa5454e4ee517067662827c8b8923df6ebe071ab",
     "src/geminicli_models.py": "3128ad421b943730c5a8032dd448048530bc89600c3a1cb3bda889138c4048c2",
-    "src/models.py": "01f40fce3cf3ecccb0e36fb393fbf7bb9fbc421276289d64775aa1384c3f9681",
+    "src/models.py": "01dd775fac4a57dc9a1e648912c5c9e9e16b41370b6b0c41a8197d8df55529bb",
     "src/model_routing/__init__.py": "3543b4693a36a1098850b8bc928887694ed59a6deb7d3dfd0339de01f55a77b6",
 }
 
@@ -60,7 +60,7 @@ PROVEN_SOURCE_DIGESTS = {
 # None, snapshots replace only config reads, and explicit dispatch is checked
 # without rewriting the normalized model. No implicit acceptance of new source.
 REVIEWED_CONTEXT_SOURCE_DIGESTS = {
-    "src/converter/gemini_fix.py": "7f472ba5f0179fbbb8bea0fca50f7f20d8982556ac6153a613d8f4d144adf615",
+    "src/converter/gemini_fix.py": "ff39dc1ba6d8bfb7b7df5db0d3a6654d96391af104959751b1481bf144bc1d4f",
     "src/converter/antigravity_fix.py": "b166e8a807a791cb0462abc9548a336ab6426e55273207e1f109f1f22e2fff6a",
     "src/converter/openai2gemini.py": "9458041ad12d284f9eb61a2c3e4416855f5d3f37e3f4e52845d086761a69e13c",
     "src/converter/anthropic2gemini.py": "d07dafed54e9836f3cbc4d4cdca46a7dd10ad284fd5aa6c78cd949a61e3a3902",
@@ -107,6 +107,7 @@ def build_policy_snapshot() -> RoutingPolicySnapshot:
     rules = {"prefixes": PREFIXES, "suffixes": SUFFIXES, "cli_bases": CLI_BASES,
              "cli_aliases": CLI_ALIASES, "cli_alias_suffixes": CLI_ALIAS_SUFFIXES,
              "ag_aliases": ANTIGRAVITY_MODEL_ALIASES, "ag_native": sorted(ANTIGRAVITY_NATIVE_MODEL_IDS),
+             "ag_retired": sorted(RETIRED_ANTIGRAVITY_MODEL_IDS),
              "ag_public": PUBLIC_ANTIGRAVITY_MODEL_IDS, "ag_exact": sorted(EXACT_AG_MODELS),
              "cli38": GEMINI_38_FLASH_MODEL, "cli38_levels": GEMINI_38_FLASH_THINKING_LEVELS,
              "precedence": ("ag_image", "ag_pro_high_redirect", "ag_native", "ag_exact", "ag_suffix", "ag_body_level"),
@@ -188,34 +189,26 @@ def thinking_settings(name, policy):
 
 
 def map_ag_gemini(name, level, budget, policy):
-    lower = name.lower()
-    if lower == "gemini-3.1-pro-high":
-        return "gemini-pro-agent"
-    if lower in policy.static_rules["ag_native"]:
+    aliases = policy.static_rules["ag_aliases"]
+    retired = policy.static_rules["ag_retired"]
+    lower = aliases.get(name.lower(), name.lower())
+    if lower in retired or lower in policy.static_rules["ag_native"]:
         return lower
-    base = strip_suffixes(lower, policy, native=True)
+    base = lower
+    changed = True
+    while changed:
+        changed = False
+        for suffix in policy.static_rules["suffixes"]:
+            if base.endswith(suffix):
+                base = base[:-len(suffix)]
+                base = aliases.get(base, base)
+                if base in retired or base in policy.static_rules["ag_native"]:
+                    return base
+                changed = True
     if base in policy.static_rules["ag_exact"]:
         return base
-    if "gemini-3.1-pro" in base:
-        if "-high" in lower:
-            return "gemini-pro-agent"
-        if "-low" in lower:
-            return "gemini-3.1-pro-low"
-    if "gemini-3.5-flash" in base:
-        if "-extra-low" in lower or "-minimal" in lower:
-            return "gemini-3.5-flash-extra-low"
-        if "-low" in lower:
-            return "gemini-3.5-flash-low"
-        if "-high" in lower:
-            return "gemini-3.5-flash-high"
     if "gemini-3-flash" in base:
         return "gemini-3-flash-agent"
-    if "gemini-3.1-pro" in base:
-        return "gemini-pro-agent" if level and level.upper() == "HIGH" else "gemini-3.1-pro-low"
-    if "gemini-3.5-flash" in base:
-        if level and level.upper() in ("MINIMAL", "EXTRA-LOW"):
-            return "gemini-3.5-flash-extra-low"
-        return "gemini-3.5-flash-high" if level and level.upper() == "HIGH" else "gemini-3.5-flash-low"
     return base
 
 

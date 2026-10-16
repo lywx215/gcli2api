@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from log import log
 
 from src.google_oauth_api import Credentials
+from src.antigravity_refresh import refreshed_credential_data
 from src.storage_adapter import get_storage_adapter
 from src.antigravity_import_limits import import_write_slot
 
@@ -370,6 +371,9 @@ class CredentialManager:
                 log.info(f"Token已自动刷新: {_credential_label(credential_name, mode)} (mode={mode})")
                 updated_data = credentials.to_dict()
                 if mode == "antigravity":
+                    # OAuth serializes its own fields only; retain uploaded
+                    # metadata and keep the legacy token alias in sync.
+                    updated_data = refreshed_credential_data(credential_data, updated_data)
                     saved = await self._storage_adapter._backend.quota_refresh_credential(
                         credential_name, (quota_snapshot or {}).get("quota_credential_generation"),
                         updated_data, expected_version=quota_version)
@@ -554,9 +558,30 @@ class CredentialManager:
             if mode == "antigravity" and atomic is not None:
                 return await atomic(operation, deadline=deadline, phase="credential_cas")
             return await operation()
+        async def current(*, include_credit_state=True):
+            async def read():
+                return await self._storage_adapter._backend.quota_current_credential(
+                    filename, credential_data.get("_quota_generation"),
+                    include_credit_state=include_credit_state)
+            if deadline is None:
+                return await read()
+            try:
+                async with asyncio.timeout_at(deadline):
+                    return await read()
+            except TimeoutError:
+                from src.antigravity_directory_runtime import QuotaWorkError
+                raise QuotaWorkError("quota_timeout", "preparation") from None
         try:
+            original = credential_data
+            if mode == "antigravity":
+                # The selection view overlays control-state Credit. Only a
+                # current raw snapshot may be used to rebuild persisted JSON.
+                original = await current(include_credit_state=False)
+                if (not original or original.get("_quota_credential_version")
+                        != credential_data.get("_quota_credential_version")):
+                    return None
             # 创建Credentials对象
-            creds = Credentials.from_dict(credential_data)
+            creds = Credentials.from_dict(original)
 
             # 检查是否可以刷新
             if not creds.refresh_token:
@@ -588,34 +613,32 @@ class CredentialManager:
             else:
                 await creds.refresh()
 
-            # 更新凭证数据
-            if creds.access_token:
-                credential_data["access_token"] = creds.access_token
-                # 保持兼容性
-                credential_data["token"] = creds.access_token
-
-            if creds.expires_at:
-                credential_data["expiry"] = creds.expires_at.isoformat()
-
             # 保存到存储
             if mode == "antigravity":
+                refreshed = {"access_token": creds.access_token, "refresh_token": creds.refresh_token}
+                if creds.expires_at:
+                    refreshed["expiry"] = creds.expires_at.isoformat()
+                updated = refreshed_credential_data(original, refreshed)
                 saved = await fenced(lambda: self._storage_adapter._backend.quota_refresh_credential(
-                    filename, credential_data.get("_quota_generation"), credential_data,
+                    filename, credential_data.get("_quota_generation"), updated,
                     expected_version=credential_data.get("_quota_credential_version"),
                 ))
-                if not saved:
-                    # A concurrent refresh may already have won the CAS. Reuse
-                    # the authoritative fresh token without writing the old data.
-                    current = await self._storage_adapter._backend.quota_current_credential(
-                        filename, credential_data.get("_quota_generation"))
-                    if current and (current.get("access_token") or current.get("token")) and not await self._should_refresh_token(current):
-                        return current
+                # Return a current selection view (including runtime Credit)
+                # with the exact persisted version, even if another CAS won.
+                latest = await current()
+                if not latest:
                     return None
+                if not saved and (not (latest.get("access_token") or latest.get("token"))
+                                  or await self._should_refresh_token(latest)):
+                    return None
+                credential_data = latest
             else:
+                if creds.access_token:
+                    credential_data["access_token"] = creds.access_token
+                    credential_data["token"] = creds.access_token
+                if creds.expires_at:
+                    credential_data["expiry"] = creds.expires_at.isoformat()
                 await self._storage_adapter.store_credential(filename, credential_data, mode=mode)
-            if mode == "antigravity":
-                from src.storage.antigravity_quota import credential_version
-                credential_data["_quota_credential_version"] = credential_version({k: v for k, v in credential_data.items() if not k.startswith("_quota_")})
             log.info(f"Token刷新成功并已保存: {_credential_label(filename, mode)} (mode={mode})")
 
             return credential_data

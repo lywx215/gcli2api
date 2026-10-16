@@ -4,7 +4,7 @@ from config import get_api_password, get_panel_password
 from fastapi import Depends, HTTPException, Header, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from log import log
-from src.antigravity_models import ANTIGRAVITY_MODEL_ALIASES
+from src.antigravity_models import resolve_antigravity_model_id
 from src.geminicli_models import GEMINI_38_FLASH_MODEL, GEMINI_38_FLASH_THINKING_LEVELS
 
 # HTTP Bearer security scheme
@@ -119,7 +119,7 @@ def normalize_antigravity_model_alias(model_name: str) -> str:
     if "claude" in normalized and "opus" in normalized:
         from src.antigravity_models import resolve_antigravity_opus_model
         return resolve_antigravity_opus_model(normalized)
-    return ANTIGRAVITY_MODEL_ALIASES.get(model_name, model_name)
+    return resolve_antigravity_model_id(model_name)
 
 
 def get_base_model_from_feature_model(model_name: str) -> str:

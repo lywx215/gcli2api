@@ -11,6 +11,8 @@ from log import log
 from src.antigravity_models import (
     ANTIGRAVITY_NATIVE_MODEL_IDS,
     resolve_antigravity_opus_model,
+    is_retired_antigravity_model,
+    resolve_antigravity_model_id,
 )
 from src.geminicli_models import GEMINI_38_FLASH_MODEL, GEMINI_38_FLASH_THINKING_LEVELS
 from src.converter.thoughtSignature_fix import SKIP_THOUGHT_SIGNATURE_VALIDATOR
@@ -571,8 +573,10 @@ def get_base_model_name(model_name: str, mode: str = "geminicli") -> str:
     GeminiCLI 的思考档位后缀剥掉，否则会把 gemini-3.1-pro-high
     错改成不存在的 gemini-3.1-pro。
     """
-    if mode == "antigravity" and model_name in ANTIGRAVITY_NATIVE_MODEL_IDS:
-        return model_name
+    if mode == "antigravity":
+        model_name = resolve_antigravity_model_id(model_name)
+        if model_name in ANTIGRAVITY_NATIVE_MODEL_IDS or is_retired_antigravity_model(model_name):
+            return model_name
 
     # 按照从长到短的顺序排列，避免短后缀先于长后缀被匹配
     suffixes = [
@@ -589,6 +593,10 @@ def get_base_model_name(model_name: str, mode: str = "geminicli") -> str:
             if result.endswith(suffix):
                 result = result[:-len(suffix)]
                 changed = True
+                if mode == "antigravity":
+                    result = resolve_antigravity_model_id(result)
+                    if result in ANTIGRAVITY_NATIVE_MODEL_IDS or is_retired_antigravity_model(result):
+                        return result
                 # 不使用 break，继续检查是否还有其他后缀
     return result
 
@@ -685,12 +693,9 @@ def map_antigravity_gemini_model(model_name: str, thinking_level: Optional[str],
     """
     将客户端请求的 Gemini 模型和思考参数，映射到 Antigravity 后端支持的精确模型 ID。
     """
-    model_lower = model_name.lower()
-
-    # The public 3.1 Pro High slug is translated by the Antigravity client to
-    # its current service route. The quota response still exposes both names.
-    if model_lower == "gemini-3.1-pro-high":
-        return "gemini-pro-agent"
+    model_lower = resolve_antigravity_model_id(model_name.lower())
+    if is_retired_antigravity_model(model_lower):
+        return model_lower
 
     # Other native Antigravity effort tiers are complete upstream IDs.
     # Checking the unmodified name first prevents -high/-medium/-low from
@@ -712,42 +717,15 @@ def map_antigravity_gemini_model(model_name: str, thinking_level: Optional[str],
     base_model = get_base_model_name(model_lower, mode="antigravity")
 
     # 已经是一个精确的后端模型 ID 则直接返回
-    if base_model in exact_models:
+    if (
+        base_model in exact_models
+        or base_model in ANTIGRAVITY_NATIVE_MODEL_IDS
+        or is_retired_antigravity_model(base_model)
+    ):
         return base_model
-
-    # 2. 根据请求的模型名后缀直接映射
-    if "gemini-3.1-pro" in base_model:
-        if "-high" in model_lower:
-            # gemini-3.1-pro-high is deprecated on the backend, mapped to gemini-pro-agent
-            return "gemini-pro-agent"
-        elif "-low" in model_lower:
-            return "gemini-3.1-pro-low"
-
-    if "gemini-3.5-flash" in base_model:
-        if "-extra-low" in model_lower or "-minimal" in model_lower:
-            return "gemini-3.5-flash-extra-low"
-        elif "-low" in model_lower:
-            return "gemini-3.5-flash-low"
-        elif "-high" in model_lower:
-            return "gemini-3.5-flash-high"
 
     if "gemini-3-flash" in base_model:
         return "gemini-3-flash-agent"
-
-    # 3. 如果请求的是基础名，根据传入的 thinkingLevel 参数进行映射
-    if "gemini-3.1-pro" in base_model:
-        if thinking_level and thinking_level.upper() == "HIGH":
-            return "gemini-pro-agent"
-        else:
-            return "gemini-3.1-pro-low"
-
-    if "gemini-3.5-flash" in base_model:
-        if thinking_level and thinking_level.upper() in ("MINIMAL", "EXTRA-LOW"):
-            return "gemini-3.5-flash-extra-low"
-        elif thinking_level and thinking_level.upper() == "HIGH":
-            return "gemini-3.5-flash-high"
-        else:
-            return "gemini-3.5-flash-low"
 
     return base_model
 

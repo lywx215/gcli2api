@@ -13,6 +13,8 @@ from src.antigravity_models import (
     PUBLIC_ANTIGRAVITY_MODEL_IDS,
     describe_antigravity_model,
     select_public_model_ids,
+    resolve_antigravity_model_id,
+    is_retired_antigravity_model,
 )
 from src.api import antigravity as antigravity_api
 from src.converter.gemini_fix import (
@@ -71,10 +73,9 @@ def test_public_catalog_intersects_upstream_in_stable_order():
 
     assert select_public_model_ids(upstream) == [
         "gemini-3.8-flash-high",
-        "gemini-3.6-flash-medium",
         "claude-sonnet-4-6",
     ]
-    assert len(PUBLIC_ANTIGRAVITY_MODEL_IDS) == len(set(PUBLIC_ANTIGRAVITY_MODEL_IDS)) == 17
+    assert len(PUBLIC_ANTIGRAVITY_MODEL_IDS) == len(set(PUBLIC_ANTIGRAVITY_MODEL_IDS)) == 9
 
 
 def test_quota_metadata_preserves_raw_internal_models():
@@ -101,7 +102,7 @@ def test_quota_metadata_preserves_raw_internal_models():
     assert internal["badge"] == "内部/兼容"
 
 
-def test_unavailable_quota_models_keep_raw_metadata_but_are_hidden():
+def test_hidden_quota_models_keep_raw_metadata_but_are_hidden():
     assert HIDDEN_ANTIGRAVITY_QUOTA_MODEL_IDS == {
         "chat_20706",
         "chat_23310",
@@ -118,8 +119,8 @@ def test_unavailable_quota_models_keep_raw_metadata_but_are_hidden():
         assert metadata["rawModelId"] == model_id
         assert metadata["testModel"] == model_id
         assert metadata["visible"] is False
-        assert metadata["availability"] == "unavailable"
-        assert metadata["badge"] == "不可用"
+        assert metadata["availability"] == "hidden"
+        assert metadata["badge"] == "内部/隐藏"
         assert get_base_model_name(model_id, mode="antigravity") == model_id
         assert map_antigravity_gemini_model(model_id, None, None) == model_id
 
@@ -146,17 +147,44 @@ def test_gemini_31_flash_image_is_visible_as_normal_internal_model():
     assert "gemini-3.1-flash-image" not in PUBLIC_ANTIGRAVITY_MODEL_IDS
 
 
-def test_current_native_effort_and_tiered_ids_are_never_stripped():
-    model_ids = [
-        f"gemini-{version}-flash-{tier}"
-        for version in ("3.6", "3.7", "3.8")
-        for tier in ("high", "medium", "low", "tiered")
-    ]
+@pytest.mark.parametrize("version", ["3.6", "3.7", "3.8"])
+@pytest.mark.parametrize("tier", ["high", "medium", "low", "tiered"])
+def test_effort_migration_preserves_tiered_routes(version, tier):
+    model_id = f"gemini-{version}-flash-{tier}"
+    expected = model_id if tier == "tiered" else f"gemini-3.8-flash-{tier}"
+    assert expected in ANTIGRAVITY_NATIVE_MODEL_IDS
+    assert get_base_model_name(model_id, mode="antigravity") == expected
+    assert map_antigravity_gemini_model(model_id, "HIGH", 100) == expected
+    assert get_base_model_name(model_id + "-search", mode="antigravity") == expected
 
-    for model_id in model_ids:
-        assert model_id in ANTIGRAVITY_NATIVE_MODEL_IDS
-        assert get_base_model_name(model_id, mode="antigravity") == model_id
-        assert map_antigravity_gemini_model(model_id, None, None) == model_id
+
+@pytest.mark.parametrize("prefix", ["", "假流式/", "抗截断/", "流式抗截断/"])
+@pytest.mark.parametrize("model_id", [
+    "gemini-3.1-pro", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "gemini-pro-agent",
+])
+def test_retirement_is_exact_and_never_remapped(prefix, model_id):
+    assert is_retired_antigravity_model(prefix + model_id)
+    assert resolve_antigravity_model_id(prefix + model_id) == model_id
+    assert map_antigravity_gemini_model(prefix + model_id, "HIGH", None) == model_id
+
+
+@pytest.mark.parametrize("model_id", [
+    "gemini-3.5-flash-high", "gemini-3.5-flash-medium", "gemini-3.5-flash-low",
+    "gemini-3.5-flash-extra-low", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
+    "gemini-3.1-flash-image", "gemini-3.5-flash-image", "gemini-2.5-pro", "gemini-3.1-pro-preview",
+    "gemini-3-flash", "chat_20706", "tab_flash_lite_preview",
+])
+def test_precise_compatibility_ids_are_preserved(model_id):
+    assert not is_retired_antigravity_model(model_id)
+    assert resolve_antigravity_model_id(model_id) == model_id
+    assert get_base_model_name(model_id, mode="antigravity") == model_id
+    assert map_antigravity_gemini_model(model_id, "HIGH", 100) == model_id
+
+
+def test_resolver_strips_only_one_feature_prefix():
+    assert resolve_antigravity_model_id("假流式/抗截断/gemini-3.7-flash") == (
+        "抗截断/gemini-3.7-flash"
+    )
 
 
 def test_bare_and_claude_aliases_resolve_to_real_upstream_ids():
@@ -164,19 +192,20 @@ def test_bare_and_claude_aliases_resolve_to_real_upstream_ids():
         "gemini-3.8-flash-medium"
     )
     assert normalize_antigravity_model_alias("gemini-3.7-flash") == (
-        "gemini-3.7-flash-medium"
+        "gemini-3.8-flash-medium"
     )
     assert normalize_antigravity_model_alias("gemini-3.6-flash") == (
-        "gemini-3.6-flash-medium"
+        "gemini-3.8-flash-medium"
     )
-    assert normalize_antigravity_model_alias("gemini-3.1-pro") == "gemini-3.1-pro-high"
+    assert normalize_antigravity_model_alias("gemini-3.1-pro") == "gemini-3.1-pro"
+    assert normalize_antigravity_model_alias("gemini-3.5-flash") == "gemini-3.8-flash-medium"
     assert normalize_antigravity_model_alias("claude-sonnet-4-6-thinking") == (
         "claude-sonnet-4-6"
     )
     assert normalize_antigravity_model_alias("claude-opus-4-6") == "claude-opus-4-6-thinking"
     assert normalize_antigravity_model_alias("gpt-oss-120b") == "gpt-oss-120b-medium"
     assert map_antigravity_gemini_model("gemini-3.1-pro-high", None, None) == (
-        "gemini-pro-agent"
+        "gemini-3.1-pro-high"
     )
 
 
@@ -260,7 +289,6 @@ async def test_fetch_available_models_advertises_only_public_intersection(monkey
 
     assert [model["id"] for model in models] == [
         "gemini-3.8-flash-medium",
-        "gemini-3.6-flash-high",
         "claude-opus-5-5-low",
         "claude-opus-5-5-medium",
         "claude-opus-5-5-high",
@@ -511,3 +539,40 @@ async def test_cached_union_keeps_only_evidenced_native_versions(monkeypatch, ro
     monkeypatch.setattr(manager, "model_access_observe", observe)
     result = await antigravity_api.fetch_available_models()
     assert [entry["id"] for entry in result] == select_public_model_ids(["gemini-3.8-flash-medium", *routes])
+
+
+async def test_synthetic_snapshot_preserves_raw_quota_and_current_public_models(monkeypatch):
+    # Synthetic fixture: no live model calls or credential state are used.
+    raw_ids = [
+        *PUBLIC_ANTIGRAVITY_MODEL_IDS,
+        *sorted(HIDDEN_ANTIGRAVITY_QUOTA_MODEL_IDS),
+        "gemini-3.8-flash-tiered", "gemini-3.7-flash-tiered", "gemini-3.6-flash-tiered",
+        "gemini-3.5-flash-high", "gemini-3.5-flash-medium", "gemini-3.5-flash-lite",
+        "gemini-3-flash", "gemini-3.1-flash-image",
+    ]
+    assert len(set(raw_ids)) == 25
+    payload = {"models": {model_id: {} for model_id in raw_ids}}
+
+    async def fake_post_async(**kwargs):
+        return _FakeResponse(payload)
+
+    async def fake_get_antigravity_api_url():
+        return "https://antigravity.invalid"
+
+    monkeypatch.setattr(antigravity_api, "credential_manager", _FakeCredentialManager())
+    monkeypatch.setattr(antigravity_api, "post_async", fake_post_async)
+    monkeypatch.setattr(antigravity_api, "get_antigravity_api_url", fake_get_antigravity_api_url)
+
+    public = await antigravity_api.fetch_available_models()
+    assert [model["id"] for model in public] == list(PUBLIC_ANTIGRAVITY_MODEL_IDS)
+    features = await antigravity_model_list.get_antigravity_models_with_features()
+    assert len(features) == 27
+    quota = await antigravity_api.fetch_quota_info("fixture-access-token")
+    assert quota["success"] is True
+    assert set(quota["models"]) == set(raw_ids)
+    assert sum(item["visible"] for item in quota["models"].values()) == 17
+    for item in quota["models"].values():
+        assert item["remaining"] is None
+        assert item["remainingPresent"] is False
+        assert item["remainingValid"] is False
+        assert item["quotaInfoPresent"] is False

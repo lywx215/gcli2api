@@ -236,7 +236,7 @@ class AntigravityQuotaMixin(AntigravityPanelMixin, AntigravityModelAccessMixin, 
         return {"quota_credential_generation": rows[0].get("quota_credential_generation"),
                 "_quota_credential_version": credential_version(rows[0].get("credential_data"))}
 
-    async def quota_current_credential(self, filename, generation):
+    async def quota_current_credential(self, filename, generation, *, include_credit_state=True):
         rows = await self._quota_rows(filename)
         if not rows or rows[0].get("quota_credential_generation") != generation:
             return None
@@ -245,9 +245,13 @@ class AntigravityQuotaMixin(AntigravityPanelMixin, AntigravityModelAccessMixin, 
         # or token metadata lookup for this exact imported account.
         row = rows[0]
         data = _object(row.get("credential_data"))
-        return {**data, "_quota_generation": generation,
-                "_quota_credential_version": credential_version(row.get("credential_data")),
-                "enable_credit": bool(row.get("enable_credit"))}
+        result = {**data, "_quota_generation": generation,
+                  "_quota_credential_version": credential_version(row.get("credential_data"))}
+        # Selection callers retain the control-state overlay by default. Refresh
+        # callers opt out so an uploaded field with the same name is not lost.
+        if include_credit_state:
+            result["enable_credit"] = bool(row.get("enable_credit"))
+        return result
 
     async def quota_refresh_credential(self, filename, generation, credential_data, expected_version=None, state_updates=None):
         # Network-derived control metadata must share the content fence, too.

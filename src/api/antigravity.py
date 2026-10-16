@@ -49,6 +49,8 @@ from src.models import Model, model_to_dict
 from src.antigravity_models import (
     describe_antigravity_model,
     select_public_model_ids,
+    resolve_antigravity_model_id,
+    is_retired_antigravity_model,
 )
 from src.utils import ANTIGRAVITY_USER_AGENT
 
@@ -422,9 +424,25 @@ async def _switch_credential_for_retry(
 
 # ==================== 新的流式和非流式请求函数 ====================
 
+def _resolve_request_model(body):
+    """Resolve the dispatch ID without mutating the caller's request."""
+    return {**body, "model": resolve_antigravity_model_id(str(body.get("model") or ""))}
+
+
+def _retired_model_response():
+    return attach_model_api_error(
+        build_error_response("Resource unavailable.", 404),
+        make_model_api_error(origin=ErrorOrigin.LOCAL, kind=ErrorKind.LOCAL, status=404),
+    )
+
+
 async def stream_request(body, native=False, headers=None, events=False, *, route_context=None):
     from src.model_routing.stream_runtime import dispatch_request_body
     body = dispatch_request_body(body, route_context)
+    body = _resolve_request_model(body)
+    if is_retired_antigravity_model(body["model"]):
+        yield _retired_model_response()
+        return
     from src.antigravity_limits import (
         GenerationBudget, GenerationLimits, GenerationTimeout, current_budget, timeout_response,
     )
@@ -477,7 +495,11 @@ async def _stream_request(
     Yields:
         Response对象（错误时）或 bytes流/str流（成功时）
     """
-    model_name = body.get("model", "")
+    body = _resolve_request_model(body)
+    model_name = body["model"]
+    if is_retired_antigravity_model(model_name):
+        yield _retired_model_response()
+        return
     breaker_response = _capacity_breaker_response(model_name)
     if breaker_response is not None:
         yield breaker_response
@@ -881,6 +903,9 @@ async def _non_stream_request(
         Response对象
     """
     # 检查是否启用流式收集模式
+    body = _resolve_request_model(body)
+    if is_retired_antigravity_model(body["model"]):
+        return _retired_model_response()
     budget = current_budget.get()
     stream2nostream = (budget.stream_collect if budget is not None and budget.stream_collect is not None
                       else await _use_stream_collector(body.get("model", ""), route_context))
@@ -1212,6 +1237,9 @@ async def non_stream_request(
     from src.antigravity_limits import timeout_response
     from src.model_routing.stream_runtime import dispatch_request_body
     body = dispatch_request_body(body, route_context)
+    body = _resolve_request_model(body)
+    if is_retired_antigravity_model(body["model"]):
+        return _retired_model_response()
     inherited = current_budget.get()
     budget = inherited or await create_non_stream_budget(body.get("model", ""), route_context)
     try:

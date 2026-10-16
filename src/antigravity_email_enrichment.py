@@ -11,6 +11,7 @@ import uuid
 
 from src.antigravity_directory_runtime import atomic_registry, SettlementPending, QuotaWorkError
 from src.manual_google import manual_google_phase
+from src.antigravity_refresh import refreshed_credential_data
 
 SEARCH_CAPABILITY = "antigravity.credentials.search"
 AUTO_EMAIL_CAPABILITY = "antigravity.credentials.auto_email"
@@ -295,7 +296,7 @@ class EmailEnrichmentService:
         deadline = time.monotonic() + self.execution_budget
         manager = await self._bounded(self._manager, deadline)
         data = await self._bounded(lambda: manager.quota_current_credential(
-            item.filename, receipt.generation), deadline)
+            item.filename, receipt.generation, include_credit_state=False), deadline)
         if not data or data.get("_quota_credential_version") != receipt.credential_version:
             item.status, item.reason = "superseded", "credential_changed"
             return
@@ -304,12 +305,7 @@ class EmailEnrichmentService:
             credentials = Credentials.from_dict(data)
             refreshed = await self._bounded(credentials.refresh_if_needed, deadline)
             if refreshed:
-                updated = {**data, **credentials.to_dict()}
-                updated.pop("_quota_generation", None)
-                updated.pop("_quota_credential_version", None)
-                updated.pop("enable_credit", None)
-                if "token" in updated:
-                    updated["token"] = updated["access_token"]
+                updated = refreshed_credential_data(data, credentials.to_dict())
                 if not await self._write(item, manager, "token_refresh", updated, version, deadline):
                     return
                 version = credential_version(updated)

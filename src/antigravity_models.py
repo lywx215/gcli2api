@@ -38,36 +38,6 @@ PUBLIC_ANTIGRAVITY_MODELS: tuple[AntigravityModelMetadata, ...] = (
         "gemini-3.8-flash-low", "Gemini 3.8 Flash (Low)", "gemini-3.8-flash", "low"
     ),
     AntigravityModelMetadata(
-        "gemini-3.7-flash-high", "Gemini 3.7 Flash (High)", "gemini-3.7-flash", "high"
-    ),
-    AntigravityModelMetadata(
-        "gemini-3.7-flash-medium",
-        "Gemini 3.7 Flash (Medium)",
-        "gemini-3.7-flash",
-        "medium",
-    ),
-    AntigravityModelMetadata(
-        "gemini-3.7-flash-low", "Gemini 3.7 Flash (Low)", "gemini-3.7-flash", "low"
-    ),
-    AntigravityModelMetadata(
-        "gemini-3.6-flash-high", "Gemini 3.6 Flash (High)", "gemini-3.6-flash", "high"
-    ),
-    AntigravityModelMetadata(
-        "gemini-3.6-flash-medium",
-        "Gemini 3.6 Flash (Medium)",
-        "gemini-3.6-flash",
-        "medium",
-    ),
-    AntigravityModelMetadata(
-        "gemini-3.6-flash-low", "Gemini 3.6 Flash (Low)", "gemini-3.6-flash", "low"
-    ),
-    AntigravityModelMetadata(
-        "gemini-3.1-pro-high", "Gemini 3.1 Pro (High)", "gemini-3.1-pro", "high"
-    ),
-    AntigravityModelMetadata(
-        "gemini-3.1-pro-low", "Gemini 3.1 Pro (Low)", "gemini-3.1-pro", "low"
-    ),
-    AntigravityModelMetadata(
         "claude-sonnet-4-6", "Claude Sonnet 4.6 (Thinking)", "claude-sonnet-4-6", "thinking"
     ),
     AntigravityModelMetadata(
@@ -93,11 +63,8 @@ PUBLIC_ANTIGRAVITY_MODEL_IDS: tuple[str, ...] = tuple(
 _PUBLIC_MODEL_BY_ID = {model.id: model for model in PUBLIC_ANTIGRAVITY_MODELS}
 
 
-# These IDs are accepted by the upstream service and therefore remain in raw
-# quota responses and direct routing. They are known unavailable choices for
-# operators, however, so the quota panel must not render them as selectable
-# models. Keep this list separate from the public API catalog: visibility is a
-# panel concern and must never remove an upstream ID from compatibility paths.
+# Internal upstream IDs stay routable and retain raw quota data, but are hidden
+# from quota cards. Hidden is a presentation policy, not an availability verdict.
 HIDDEN_ANTIGRAVITY_QUOTA_MODEL_IDS = frozenset(
     {
         "chat_20706",
@@ -130,10 +97,9 @@ DISPLAY_ONLY_ANTIGRAVITY_QUOTA_MODELS = {
 # request routers but are deliberately absent from the advertised model list.
 ANTIGRAVITY_MODEL_ALIASES = {
     "gemini-3.8-flash": "gemini-3.8-flash-medium",
-    "gemini-3.7-flash": "gemini-3.7-flash-medium",
-    "gemini-3.6-flash": "gemini-3.6-flash-medium",
-    "gemini-3.1-pro": "gemini-3.1-pro-high",
-    "gemini-3.5-flash": "gemini-3.5-flash-low",
+    "gemini-3.7-flash": "gemini-3.8-flash-medium",
+    "gemini-3.6-flash": "gemini-3.8-flash-medium",
+    "gemini-3.5-flash": "gemini-3.8-flash-medium",
     "claude-sonnet-4-6-thinking": "claude-sonnet-4-6",
     "claude-opus-5-5": "claude-opus-5-5-medium",
     "claude-opus-5-5-thinking": "claude-opus-5-5-medium",
@@ -142,6 +108,31 @@ ANTIGRAVITY_MODEL_ALIASES = {
     "claude-opus-4.6-thinking": "claude-opus-4-6-thinking",
     "gpt-oss-120b": "gpt-oss-120b-medium",
 }
+
+
+ANTIGRAVITY_MODEL_ALIASES.update({
+    f"gemini-{version}-flash-{tier}": f"gemini-3.8-flash-{tier}"
+    for version in ("3.6", "3.7")
+    for tier in ("high", "medium", "low")
+})
+
+RETIRED_ANTIGRAVITY_MODEL_IDS = frozenset({
+    "gemini-3.1-pro", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "gemini-pro-agent",
+})
+
+
+def resolve_antigravity_model_id(model_name: str) -> str:
+    """Strip one feature prefix and apply exact compatibility migrations."""
+    for prefix in ("假流式/", "抗截断/", "流式抗截断/"):
+        if model_name.startswith(prefix):
+            model_name = model_name[len(prefix):]
+            break
+    return ANTIGRAVITY_MODEL_ALIASES.get(model_name, model_name)
+
+
+def is_retired_antigravity_model(model_name: str) -> bool:
+    """Identify only the explicitly retired routes after alias resolution."""
+    return resolve_antigravity_model_id(model_name) in RETIRED_ANTIGRAVITY_MODEL_IDS
 
 
 # IDs whose final effort suffix is part of the real upstream model name.
@@ -209,7 +200,7 @@ def describe_antigravity_model(model_id: str) -> dict[str, object]:
             "badge": display_model.badge,
         }
 
-    unavailable = model_id in HIDDEN_ANTIGRAVITY_QUOTA_MODEL_IDS
+    hidden = model_id in HIDDEN_ANTIGRAVITY_QUOTA_MODEL_IDS
     return {
         "displayName": model_id,
         "rawModelId": model_id,
@@ -217,9 +208,9 @@ def describe_antigravity_model(model_id: str) -> dict[str, object]:
         "family": family,
         "tier": tier,
         "testModel": model_id,
-        "visible": not unavailable,
-        "availability": "unavailable" if unavailable else "compatible",
-        "badge": "不可用" if unavailable else "内部/兼容",
+        "visible": not hidden,
+        "availability": "hidden" if hidden else "compatible",
+        "badge": "内部/隐藏" if hidden else "内部/兼容",
     }
 
 

@@ -128,6 +128,8 @@ def _supported_policy(channel, policy):
 def _target_profile(channel, target, policy):
     if channel == "geminicli" and any(target.endswith(suffix) for suffix in policy.static_rules["suffixes"]):
         return None, "AMBIGUOUS_TARGET_NAME"
+    if channel == "antigravity" and target in policy.static_rules["ag_retired"]:
+        return None, "UNSTABLE_TARGET_DISPATCH"
     possible = _possible_dispatches(channel, target, policy)
     if possible != frozenset((target,)):
         return None, "UNSTABLE_TARGET_DISPATCH"

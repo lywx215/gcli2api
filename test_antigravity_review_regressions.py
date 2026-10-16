@@ -279,6 +279,7 @@ async def test_project_verification_never_reverts_concurrent_upload(store,monkey
 
 @pytest.mark.parametrize('replacement_at',['refresh','email',None])
 async def test_email_lookup_fences_tokens_and_cached_metadata(store,monkeypatch,replacement_at):
+    original = await store.get_credential(NAME, 'antigravity')
     from src.credential_manager import CredentialManager
     from src import google_oauth_api as oauth
     adapter=StorageAdapter();adapter._backend=store;adapter._initialized=True
@@ -306,7 +307,7 @@ async def test_email_lookup_fences_tokens_and_cached_metadata(store,monkeypatch,
         assert data=={'access_token':'replacement'}
     else:
         assert result==state['user_email']=='synthetic@example.invalid'
-        assert data=={'access_token':'refreshed'}
+        assert data=={**original, 'access_token':'refreshed'}
 
 
 async def test_control_metadata_shares_refresh_fence_on_remote_backends(backend):

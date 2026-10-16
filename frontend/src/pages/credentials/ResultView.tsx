@@ -88,6 +88,64 @@ function safeFamilyLabel(value: unknown): string {
   return '未知'
 }
 
+export const MODEL_VERSION_CAPABILITY = 'antigravity.test.model_version'
+export const MODEL_VERSION_REGEX = /^(gemini|claude|gpt-oss)-[A-Za-z0-9._-]{1,120}$/
+
+export interface ModelVersionInfo {
+  readonly hasCapability: boolean
+  readonly isValidVersion: boolean
+  readonly version: string | null
+  readonly displayText: string
+}
+
+export function resolveModelVersion(
+  result: ManualResult,
+  mode: PanelMode = 'antigravity',
+): ModelVersionInfo | null {
+  if (
+    mode !== 'antigravity' ||
+    result.data.mode === 'geminicli' ||
+    !result.success ||
+    result.data.phase !== 'generation'
+  ) {
+    return null
+  }
+
+  const caps = result.data.capabilities
+  const hasCapability =
+    Array.isArray(caps) &&
+    (caps as readonly unknown[]).includes(MODEL_VERSION_CAPABILITY)
+
+  if (!hasCapability) {
+    return {
+      hasCapability: false,
+      isValidVersion: false,
+      version: null,
+      displayText: '当前节点未提供模型版本信息',
+    }
+  }
+
+  const raw = result.data.upstream_model_version
+  const match = typeof raw === 'string' ? MODEL_VERSION_REGEX.exec(raw) : null
+  const isValid = typeof raw === 'string' && match !== null && match[0] === raw
+
+  if (isValid) {
+    return {
+      hasCapability: true,
+      isValidVersion: true,
+      version: raw,
+      displayText: raw,
+    }
+  }
+
+  return {
+    hasCapability: true,
+    isValidVersion: false,
+    version: null,
+    displayText: '上游未返回模型版本',
+  }
+}
+
 export function ManualResultView({
   result,
   mode = 'antigravity',
@@ -105,6 +163,7 @@ export function ManualResultView({
 
   const failure = failureExplanation(result)
   const updates = mode === 'geminicli' ? result.updates.filter(u => !agOnlyUpdateKeys.has(u.name)) : result.updates
+  const modelVersion = resolveModelVersion(result, mode)
 
   const hasPublicMetadata = Boolean(
     safeDetails.project_id ||
@@ -142,6 +201,11 @@ export function ManualResultView({
       {result.verifiedReply !== null && (
         <p className={result.verifiedReply ? 'text-success font-medium' : 'text-destructive font-medium'}>
           固定回复校验：{result.verifiedReply ? '通过' : '未通过'}
+        </p>
+      )}
+      {modelVersion && (
+        <p>
+          实际模型版本：<span className={modelVersion.isValidVersion ? 'font-mono text-foreground' : 'text-muted-foreground'}>{modelVersion.displayText}</span>
         </p>
       )}
 

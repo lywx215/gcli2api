@@ -2836,6 +2836,13 @@ function manualResultSummary(data) {
     }
     if (data.verified_reply === false) lines.push('本地回复校验：未通过');
     else if (data.verified_reply === true) lines.push('本地回复校验：通过');
+    if (data.success && data.phase === 'generation') {
+        const supportsVersion = Array.isArray(data.capabilities) && data.capabilities.includes('antigravity.test.model_version');
+        const version = data.upstream_model_version;
+        const safeVersion = typeof version === 'string' && /^(gemini|claude|gpt-oss)-[A-Za-z0-9._-]{1,120}$/.exec(version)?.[0] === version;
+        lines.push(!supportsVersion ? '当前节点未提供模型版本信息'
+            : safeVersion ? `实际模型版本：${version}` : '上游未返回模型版本');
+    }
     const reasons = {incomplete_quota: '额度信息不完整', invalid_policy: '本地额度状态损坏',
         credential_changed: '凭证已变化', state_conflict: '状态已被其他操作更新',
         no_recovery_evidence: '没有恢复依据', statistics_update_failed: '统计更新失败',

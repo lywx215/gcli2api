@@ -141,7 +141,7 @@ def test_non_retryable_error_stops_stage():
             execute_valid_request(
                 client,
                 api_headers={},
-                model="gemini-3.1-pro-high",
+                model="gemini-3.8-flash-high",
                 payload={},
                 label="fixture",
                 stage_deadline=10**12,

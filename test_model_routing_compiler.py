@@ -57,14 +57,14 @@ def test_cli_target_stripped_suffix_is_ambiguous_even_when_disabled(target,polic
 
 @pytest.mark.parametrize("channel,target",[("geminicli","gemini-3.5-flash-preview"),
     ("antigravity","gemini-3.1-pro-high"),("antigravity","gemini-3.8-flash"),
-    ("antigravity","gemini-3.1-pro-unknown"),("antigravity","gemini-3.5-flash-unknown"),
     ("antigravity","claude-haiku"),("antigravity","GEMINI-3.8-FLASH-HIGH"),("antigravity","my-image-model")])
 def test_actual_unstable_targets(channel,target,policy):
     result=compile_rows([row(channel=channel,target=target)],policy,channel)
     assert any(issue.reason=="UNSTABLE_TARGET_DISPATCH" for issue in result.issues)
 
 
-@pytest.mark.parametrize("target",["opaque-high","gemini-3.8-flash-high","gemini-3.8-flash-tiered","gemini-pro-agent", "gemini-3-flash",
+@pytest.mark.parametrize("target",["opaque-high","gemini-3.8-flash-high","gemini-3.8-flash-tiered", "gemini-3-flash",
+    "gemini-3.1-pro-unknown", "gemini-3.5-flash-unknown",
     "claude-sonnet-4-6","claude-opus-5-5-low","claude-opus-5-5-medium","claude-opus-5-5-high","gemini-3.1-flash-image","gemini-unknown-transparent"])
 def test_ag_stable_native_and_transparent_targets(target,policy):
     result=compile_rows([row(channel="antigravity",target=target)],policy,"antigravity")
@@ -108,9 +108,9 @@ def test_legacy_alias_finite_rewrite_does_not_prove_infinite_language(policy):
     assert any(issue.reason=="PROTECTED_ENTRY_CAPTURE" for issue in result.issues)
 
 
-def test_ag_equal_dispatch_unequal_parameter_profile_is_rejected(policy):
+def test_ag_retired_target_is_rejected_before_namespace_proof(policy):
     result=compile_rows([row("gemini-3.1-pro-high","gemini-pro-agent","antigravity")],policy,"antigravity")
-    assert any(issue.reason=="PROTECTED_ENTRY_CAPTURE" for issue in result.issues)
+    assert any(issue.reason=="UNSTABLE_TARGET_DISPATCH" for issue in result.issues)
 
 
 def test_ag_true_keyword_alias_identity_preserves_final_cleanup_profile(policy):
@@ -135,3 +135,11 @@ def test_saved_bad_row_cannot_be_dropped_to_make_channel_valid(policy):
     assert not compile_channel("geminicli",parsed,policy).valid
     assert compile_channel("antigravity",parsed,policy).valid
     assert validate_table(parsed,policy)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("target", ["gemini-3.1-pro", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "gemini-pro-agent"])
+def test_retired_antigravity_targets_are_not_admitted(target, enabled, policy):
+    result = compile_rows([row(channel="antigravity", target=target, enabled=enabled)], policy, "antigravity")
+    assert not result.valid
+    assert any(issue.field == "upstream_name" and issue.reason == "UNSTABLE_TARGET_DISPATCH" for issue in result.issues)

@@ -223,7 +223,7 @@ async def test_real_routes_timeout_before_first_content(short_limits, monkeypatc
         request = ClaudeRequest(model=model, messages=[{'role':'user','content':'synthetic prompt'}], max_tokens=50, stream=True)
         response = await module.messages(request)
     assert response.status_code == 504
-    short_limits[1].assert_awaited_once_with('gemini-3.7-flash-medium', 'antigravity', False)
+    short_limits[1].assert_awaited_once_with('gemini-3.8-flash-medium', 'antigravity', False)
 
 async def test_stream_collection_applies_idle_inside_total_budget(short_limits):
     budget = limits.GenerationBudget(short_limits[0], non_stream=True, streaming=True)

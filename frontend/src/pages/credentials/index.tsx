@@ -657,6 +657,58 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
     }
   }, [isDockVisible])
 
+  const renderPagination = (position: 'top' | 'bottom') => (
+    <nav
+      key={position}
+      className="flex flex-wrap items-center justify-between gap-2 text-xs"
+      aria-label={position === 'top' ? '顶部分页' : '底部分页'}
+      data-pagination={position}
+      data-pagination-position={position}
+    >
+      <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        每页
+        <select
+          aria-label="每页数量"
+          value={c.limit}
+          disabled={blocked}
+          className="h-8 rounded-md border border-input bg-control-background px-2 py-0 text-base md:text-[13px] leading-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-100 disabled:bg-secondary disabled:text-muted-foreground disabled:border-border disabled:cursor-not-allowed"
+          onChange={e => {
+            if (isOwnerActive() && activeReservationRef.current === null) c.setLimit(Number(e.target.value))
+          }}
+        >
+          {[10, 20, 25, 50, 100, 200, 500, 1000].map(n => (
+            <option key={n}>{n}</option>
+          ))}
+        </select>
+      </label>
+      <span className="text-xs text-muted-foreground">
+        第 {Math.floor(c.offset / c.limit) + 1} 页 · 匹配 {c.data?.total ?? '未知'} 项
+      </span>
+      <div className="flex gap-1.5">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={blocked || c.loading || c.offset === 0}
+          onClick={() => {
+            if (isOwnerActive() && activeReservationRef.current === null) c.setOffset(Math.max(0, c.offset - c.limit))
+          }}
+        >
+          上一页
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={blocked || c.loading || !c.data?.hasMore}
+          onClick={() => {
+            if (isOwnerActive() && activeReservationRef.current === null) c.setOffset(c.offset + c.limit)
+          }}
+        >
+          下一页
+        </Button>
+      </div>
+    </nav>
+  )
+
   return (
     <section
       ref={workspace}
@@ -1012,6 +1064,7 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
           </Button>
         </div>
       )}
+      {renderPagination('top')}
       {c.loading && (
         <div role="status" aria-label="正在加载列表" className="grid gap-2">
           <Skeleton className="h-8 w-full" />
@@ -1073,17 +1126,6 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
                       >
                         详情与操作
                       </Button>
-                      <Button
-                        variant="outline"
-                        size="xs"
-                        disabled={blocked || !quota.capabilityEnabled}
-                        title={!quota.capabilityEnabled ? '当前服务未启用额度查询能力' : undefined}
-                        data-credential-filename={row.filename}
-                        data-credential-trigger="card-quota"
-                        onClick={() => openQuota(row.filename, 'card-quota')}
-                      >
-                        查看额度
-                      </Button>
                     </div>
                   </div>
 
@@ -1114,49 +1156,7 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
           </div>
         )
       )}
-      <nav className="flex flex-wrap items-center justify-between gap-2 text-xs" aria-label="分页">
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          每页
-          <select
-            aria-label="每页数量"
-            value={c.limit}
-            disabled={blocked}
-            className="h-8 rounded-md border border-input bg-control-background px-2 py-0 text-base md:text-[13px] leading-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-100 disabled:bg-secondary disabled:text-muted-foreground disabled:border-border disabled:cursor-not-allowed"
-            onChange={e => {
-              if (isOwnerActive() && activeReservationRef.current === null) c.setLimit(Number(e.target.value))
-            }}
-          >
-            {[10, 20, 25, 50, 100, 200, 500, 1000].map(n => (
-              <option key={n}>{n}</option>
-            ))}
-          </select>
-        </label>
-        <span className="text-xs text-muted-foreground">
-          第 {Math.floor(c.offset / c.limit) + 1} 页 · 匹配 {c.data?.total ?? '未知'} 项
-        </span>
-        <div className="flex gap-1.5">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={blocked || c.loading || c.offset === 0}
-            onClick={() => {
-              if (isOwnerActive() && activeReservationRef.current === null) c.setOffset(Math.max(0, c.offset - c.limit))
-            }}
-          >
-            上一页
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={blocked || c.loading || !c.data?.hasMore}
-            onClick={() => {
-              if (isOwnerActive() && activeReservationRef.current === null) c.setOffset(c.offset + c.limit)
-            }}
-          >
-            下一页
-          </Button>
-        </div>
-      </nav>
+      {renderPagination('bottom')}
       {!fixtureMode && (
         <p className="text-sm text-muted-foreground">
           {mode === 'geminicli'
