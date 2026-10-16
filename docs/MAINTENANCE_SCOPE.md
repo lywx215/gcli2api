@@ -56,3 +56,9 @@ Gemini CLI专属内容从此任务排除，不恢复其SMART、健康状态或�
   和 `panel-version.txt`，manager 无需配套动作（`no_counterpart_action`）。
 - 此前已完成的Antigravity防重放、逻辑请求统计、模型验证、选中凭证工具和SQLite
   默认列表有界分页继续保留，不重复立项。
+
+## 2026-10-14：全渠道旧面板恢复授权
+
+所有者在本会话明确选择恢复全部渠道旧面板功能，并授权前端仅由官方 Antigravity CLI 开发、后端由 Codex 开发。该例外覆盖 Antigravity、Gemini CLI 既有 UI 功能及恢复所需的额度摘要、搜索、分页、健康状态与配置安全读取兼容修正；不恢复新模型适配、性能项目或 cancelled MGMT-009/010/012。
+
+实现位于 codex/ui-full-parity（基线239bc48），保持旧接口、旧入口、数据库 schema 与真实数据。范围与阶段见 docs/ui-redesign/FULL_PARITY_REQUIREMENTS.md；全部前端与真实额度验收尚未完成，Docker、部署、推送及真实模型生成未执行。

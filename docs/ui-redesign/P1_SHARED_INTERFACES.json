@@ -1,0 +1,520 @@
+{
+  "schema_version": "p1-shared-interfaces-1",
+  "purpose": "Non-executable immutable interface context for the proposed STYLE and WIRING batch; not an authorization or a production/frontend implementation.",
+  "project_context_destination": "docs/ui-redesign/P1_SHARED_INTERFACES.json",
+  "scope": {
+    "p1_visible_channel": "antigravity",
+    "future_type_modes": [
+      "antigravity",
+      "geminicli"
+    ],
+    "style_write_scope": [
+      "frontend/src/pages/credentials/quota/QuotaCard.css",
+      "frontend/src/pages/credentials/quota/fixtures.ts"
+    ],
+    "style_mutations_permitted": [
+      "Specified readable text/state foreground/background color and disabled opacity correction only.",
+      "Fixture group display_name and description text only, explicitly synthetic neutral group A/B; no real model/provider/tier support claims."
+    ],
+    "style_mutations_forbidden": [
+      "Exports/signatures/types, filename branch conditions/order, modes/sources/status/reasons, IDs, group/bucket counts, fractions/windows/relative timestamps.",
+      "CSS selector/class names, geometry/layout/fonts, meter threshold colors, responsive breakpoints, interaction/focus/reduced-motion behavior, attribution.",
+      "QuotaCard.tsx and api/hook/page/auth/client context content."
+    ],
+    "wiring_treatment": "Compose QuotaCard as an opaque imported component using its props; do not inspect or modify fixture/CSS implementation bodies, override qc-* geometry, or duplicate fixture/API logic."
+  },
+  "card": {
+    "module": "frontend/src/pages/credentials/quota/QuotaCard.tsx",
+    "named_export": "QuotaCard",
+    "type_module": "frontend/src/pages/credentials/quota/types.ts",
+    "props": {
+      "filename": "string",
+      "mode": "QuotaMode",
+      "summary": "QuotaSummary | null",
+      "loading": "optional boolean; default false",
+      "onRefresh": "() => void",
+      "disabled": "optional boolean; default false"
+    },
+    "root_interface": {
+      "element": "article",
+      "class_name": "qc-card",
+      "accessible_name_pattern": "额度卡片: {filename}"
+    },
+    "events": {
+      "unloaded_body": "Explicit clickable button invokes onRefresh only; disabled when disabled=true.",
+      "footer_refresh": "Button invokes onRefresh only; disabled when disabled=true or loading=true.",
+      "timer": "Local elapsed-time display only; no network requests."
+    },
+    "states": [
+      "unloaded",
+      "loading skeleton",
+      "available groups",
+      "partial",
+      "unsupported",
+      "unknown",
+      "error"
+    ],
+    "bucket_semantics": [
+      "5h then weekly then remaining real buckets; missing primary windows use 未提供 placeholders with null ratio/reset.",
+      "0 is real zero remaining; 1 is 100% remaining/额度可用; invalid/missing/null fraction uses unknown label and empty bar.",
+      "No inference from reset deltas, rolling168h or model protection; no fraction duplication."
+    ],
+    "composition_rule": "Use separate sibling controlled selection/detail/查看额度 controls, with no parent click handler that replays the card onRefresh event."
+  },
+  "dto": {
+    "type_module": "frontend/src/pages/credentials/quota/types.ts",
+    "exports": [
+      "QuotaMode",
+      "QuotaStatus",
+      "QuotaSource",
+      "QuotaWindow",
+      "QuotaBucket",
+      "QuotaGroup",
+      "QuotaSummary",
+      "QuotaCardProps"
+    ],
+    "QuotaMode": [
+      "antigravity",
+      "geminicli"
+    ],
+    "QuotaStatus": [
+      "available",
+      "partial",
+      "unsupported",
+      "unknown",
+      "error"
+    ],
+    "QuotaSource": [
+      "antigravity_quota_summary",
+      "geminicli_retrieve_user_quota"
+    ],
+    "QuotaWindow": [
+      "5h",
+      "weekly",
+      "daily",
+      "monthly",
+      "unknown"
+    ],
+    "QuotaBucket": {
+      "bucket_id": "string",
+      "display_name": "string",
+      "raw_window": "string | null",
+      "window": "QuotaWindow",
+      "remaining_fraction": "finite number in [0,1] | null",
+      "reset_at": "ISO UTC string | null"
+    },
+    "QuotaGroup": {
+      "group_id": "string",
+      "display_name": "string",
+      "description": "string | null",
+      "buckets": "QuotaBucket[]"
+    },
+    "QuotaSummary": {
+      "status": "QuotaStatus",
+      "source": "QuotaSource",
+      "captured_at": "ISO UTC string | null",
+      "upstream_status": "number | null",
+      "reason": "safe stable string | null",
+      "groups": "QuotaGroup[]"
+    }
+  },
+  "fixture": {
+    "module": "frontend/src/pages/credentials/quota/fixtures.ts",
+    "named_export": "quotaFixture",
+    "parameters": [
+      {
+        "name": "filename",
+        "type": "string"
+      },
+      {
+        "name": "mode",
+        "type": "QuotaMode"
+      }
+    ],
+    "return_type": "QuotaSummary",
+    "consumer": "Only the already delivered quota/api.ts calls this export through dynamic import inside DEV && VITE_UI_FIXTURES===true. WIRING does not import/call it directly.",
+    "filename_normalization": "filename.toLowerCase()",
+    "branch_priority": [
+      {
+        "order": 1,
+        "match": "contains error OR contains err",
+        "status": "error",
+        "upstream_status": 500,
+        "reason": "upstream_service_unavailable",
+        "groups": []
+      },
+      {
+        "order": 2,
+        "match": "contains unsupported",
+        "status": "unsupported",
+        "upstream_status": null,
+        "reason": "credential_quota_unsupported",
+        "groups": []
+      },
+      {
+        "order": 3,
+        "match": "contains unknown",
+        "status": "unknown",
+        "upstream_status": null,
+        "reason": "channel_quota_status_unknown",
+        "groups": []
+      },
+      {
+        "order": 4,
+        "match": "contains partial",
+        "status": "partial",
+        "upstream_status": 200,
+        "reason": "partial_quota_available",
+        "group_shape": "partial_groups"
+      },
+      {
+        "order": 5,
+        "match": "otherwise",
+        "status": "available",
+        "upstream_status": 200,
+        "reason": null,
+        "group_shape": "default_groups_for_mode"
+      }
+    ],
+    "source_by_mode": {
+      "antigravity": "antigravity_quota_summary",
+      "geminicli": "geminicli_retrieve_user_quota"
+    },
+    "relative_time_origin": "Date.now() per explicit fixture call",
+    "captured_at_offset_seconds": -60,
+    "reset_at_rule": "new Date(call_time_ms + reset_offset_seconds * 1000).toISOString()",
+    "partial_groups": [
+      {
+        "group_id": "group_primary",
+        "buckets": [
+          {
+            "bucket_id": "bucket_5h_1",
+            "window": "5h",
+            "raw_window": "5h",
+            "remaining_fraction": 0.35,
+            "reset_offset_seconds": 8100
+          },
+          {
+            "bucket_id": "bucket_weekly_1",
+            "window": "weekly",
+            "raw_window": "weekly",
+            "remaining_fraction": 0.78,
+            "reset_offset_seconds": 288000
+          }
+        ]
+      },
+      {
+        "group_id": "group_secondary",
+        "buckets": [
+          {
+            "bucket_id": "bucket_5h_2",
+            "window": "5h",
+            "raw_window": "5h",
+            "remaining_fraction": 0.62,
+            "reset_offset_seconds": 17100
+          }
+        ],
+        "weekly_bucket_absent": true
+      }
+    ],
+    "default_groups_for_mode": {
+      "antigravity": [
+        {
+          "group_id": "gemini_models",
+          "buckets": [
+            {
+              "bucket_id": "ag_gemini_5h",
+              "window": "5h",
+              "raw_window": "5h",
+              "remaining_fraction": 0.45,
+              "reset_offset_seconds": 9000
+            },
+            {
+              "bucket_id": "ag_gemini_weekly",
+              "window": "weekly",
+              "raw_window": "weekly",
+              "remaining_fraction": 0.82,
+              "reset_offset_seconds": 388800
+            }
+          ]
+        },
+        {
+          "group_id": "claude_gpt_models",
+          "buckets": [
+            {
+              "bucket_id": "ag_claude_5h",
+              "window": "5h",
+              "raw_window": "5h",
+              "remaining_fraction": 0.22,
+              "reset_offset_seconds": 4200
+            },
+            {
+              "bucket_id": "ag_claude_weekly",
+              "window": "weekly",
+              "raw_window": "weekly",
+              "remaining_fraction": 0.65,
+              "reset_offset_seconds": 453600
+            }
+          ]
+        }
+      ],
+      "geminicli": [
+        {
+          "group_id": "gemini_pro_models",
+          "buckets": [
+            {
+              "bucket_id": "gcli_pro_5h",
+              "window": "5h",
+              "raw_window": "5h",
+              "remaining_fraction": 0.58,
+              "reset_offset_seconds": 6000
+            },
+            {
+              "bucket_id": "gcli_pro_weekly",
+              "window": "weekly",
+              "raw_window": "weekly",
+              "remaining_fraction": 0.88,
+              "reset_offset_seconds": 316800
+            }
+          ]
+        },
+        {
+          "group_id": "gemini_flash_models",
+          "buckets": [
+            {
+              "bucket_id": "gcli_flash_5h",
+              "window": "5h",
+              "raw_window": "5h",
+              "remaining_fraction": 0.74,
+              "reset_offset_seconds": 12000
+            },
+            {
+              "bucket_id": "gcli_flash_weekly",
+              "window": "weekly",
+              "raw_window": "weekly",
+              "remaining_fraction": 0.96,
+              "reset_offset_seconds": 597600
+            }
+          ]
+        }
+      ]
+    },
+    "visible_text_rule": "Group display_name/description are intentionally NOT frozen byte values: STYLE replaces them with synthetic neutral group A/B preview labels. Internal IDs remain synthetic identity and must be unchanged. Existing bucket names 5小时限额/每周限额 remain unchanged.",
+    "suggested_wiring_fixture_filenames": {
+      "available": "synthetic-1.json",
+      "partial": "synthetic-2-partial.json",
+      "error": "synthetic-3-error.json",
+      "unknown": "synthetic-4-unknown.json",
+      "unsupported": "synthetic-5-unsupported.json"
+    },
+    "list_fixture_compatibility": "Keep first default synthetic-1.json and existing row count/status/email/action semantics; add only summary capability and smallest deterministic scenario filename mapping. Avoid mixing branch keywords in one filename."
+  },
+  "css_public_interface": {
+    "module": "frontend/src/pages/credentials/quota/QuotaCard.css",
+    "side_effect_import_owner": "QuotaCard.tsx already imports ./QuotaCard.css; WIRING needs no separate stylesheet body/import.",
+    "class_names": [
+      "qc-action-pill",
+      "qc-bar",
+      "qc-bar-fill",
+      "qc-bar-fill-empty",
+      "qc-bar-fill-high",
+      "qc-bar-fill-low",
+      "qc-bar-fill-medium",
+      "qc-body",
+      "qc-captured-time",
+      "qc-card",
+      "qc-error-strip",
+      "qc-filename",
+      "qc-footer",
+      "qc-group",
+      "qc-group-description",
+      "qc-group-header",
+      "qc-group-title",
+      "qc-head",
+      "qc-head-title-wrap",
+      "qc-icon",
+      "qc-icon-wrap",
+      "qc-idle-body",
+      "qc-idle-glyph",
+      "qc-idle-hint",
+      "qc-meta",
+      "qc-model",
+      "qc-notice-strip",
+      "qc-partial-tag",
+      "qc-percent",
+      "qc-percent-unavailable",
+      "qc-provider-tag",
+      "qc-reset",
+      "qc-reset-soon",
+      "qc-row",
+      "qc-row-header",
+      "qc-skeleton",
+      "qc-skeleton-label",
+      "qc-skeleton-row",
+      "qc-skeleton-track",
+      "qc-spinning",
+      "qc-sr-only"
+    ],
+    "fixed_card_geometry": {
+      "width": "100%",
+      "min_width": 0,
+      "box_sizing": "border-box",
+      "display": "flex column",
+      "gap_px": 11,
+      "padding_y_px": 15,
+      "padding_x_px": 16,
+      "border_radius_px": 14,
+      "border_width_px": 1
+    },
+    "fixed_meter_geometry": {
+      "height_px": 6,
+      "track_radius": "9999px",
+      "empty_width": "0%"
+    },
+    "fixed_header_geometry": {
+      "gap_px": 9,
+      "icon_wrap_size_px": 26,
+      "icon_wrap_radius_px": 8,
+      "icon_size_px": 16,
+      "title_gap_px": 8,
+      "filename_font_px": 12.5
+    },
+    "fixed_content_geometry": {
+      "body_gap_px": 9,
+      "group_gap_px": 7,
+      "group_header_gap_px": 2,
+      "row_gap_px": 5,
+      "row_header_gap_px": 8,
+      "meta_gap_px": 7,
+      "group_separator_margin_top_px": 3,
+      "group_separator_padding_top_px": 9
+    },
+    "fixed_footer_geometry": {
+      "display": "flex space-between wrap",
+      "gap_px": 8,
+      "margin_top_px": 2,
+      "refresh_pill_padding_y_px": 5,
+      "refresh_pill_padding_x_px": 11,
+      "refresh_pill_gap_px": 5,
+      "refresh_pill_radius": "9999px",
+      "refresh_pill_alignment": "right via margin-left:auto"
+    },
+    "fixed_responsive_rules": [
+      {
+        "max_width_px": 768,
+        "row_header": "column/flex-start; gap3px",
+        "model_name": "width100%, wrapping anywhere, no ellipsis clipping",
+        "footer": "column/flex-start; gap8px",
+        "refresh_pill": "align-self:flex-end"
+      },
+      {
+        "max_width_px": 390,
+        "card_padding_y_px": 13,
+        "card_padding_x_px": 12,
+        "card_gap_px": 9,
+        "header_gap_px": 7,
+        "filename_font_px": 12
+      }
+    ],
+    "fixed_meter_thresholds": {
+      "high": {
+        "minimum_percent": 70,
+        "color": "#10b981"
+      },
+      "medium": {
+        "minimum_percent": 30,
+        "color": "#e0aa14"
+      },
+      "low": {
+        "below_percent": 30,
+        "color": "#c65746"
+      }
+    },
+    "preserved_accessibility": [
+      "Existing focus-visible2px outline/2px offset.",
+      "Disabled selectors and cursor:not-allowed; hover/active never enabled for disabled.",
+      "Reduced-motion removes existing transitions/animations/transforms.",
+      "Typography, wrapping, skeleton/spinning behavior and MIT/fixed-reference attribution remain unchanged."
+    ],
+    "permitted_readability_changes": [
+      "--qc-text-tertiary/quaternary -> var(--muted-foreground,#68625b)",
+      "partial tag foreground/background -> warning/warning-bg semantic tokens",
+      "error strip foreground/background -> destructive/destructive-bg semantic tokens",
+      "reset-soon foreground -> destructive token",
+      "idle/refresh whole-control disabled opacity ->1; preserve disabled behavior/geometry"
+    ],
+    "wiring_rule": "Outer layout uses existing shared UI/Tailwind and opaque Card props. Do not target/override qc-* selectors or depend on mutable text/color literal values."
+  },
+  "core_binding": {
+    "module": "frontend/src/pages/credentials/quota/useQuotaSummary.ts",
+    "export": "useQuotaSummary",
+    "options_object_binding": {
+      "mode": "antigravity",
+      "sessionEpoch": "useAuth().sessionEpoch",
+      "detailEpoch": "useCredentials().detailEpoch",
+      "capabilities": "useCredentials().caps"
+    },
+    "capabilities_type_proof": {
+      "actual_credentials_alias": "Capabilities = Set<string>",
+      "hook_option_type": "Set<string> | readonly string[] | undefined",
+      "compatible": true,
+      "cast_required": false,
+      "runtime_branch": "isQuotaCapabilitySupported handles instanceof Set"
+    },
+    "entry_shape": {
+      "summary": "QuotaSummary|null",
+      "loading": "boolean",
+      "unloaded": "boolean",
+      "error": "safe string|null"
+    },
+    "returns": [
+      "entries",
+      "getState(filename)",
+      "activeFilename",
+      "activeState",
+      "capabilityEnabled",
+      "open(filename)",
+      "refresh(filename)",
+      "close(filename?)",
+      "cancel(filename)",
+      "clear(filenames?)"
+    ],
+    "caller_lifecycle_constraints": [
+      "open(B) does not cancel A: explicitly cancel/close the old target before alternate open.",
+      "close(oldFilename) clears active target unconditionally: use current target/opening serial guards for close/autofocus callbacks.",
+      "clear callback identity changes with activeFilename; do not make its identity or the hook object trigger a reset effect.",
+      "clear([]) clears all: skip a targeted clear when the disappeared-filename list is empty.",
+      "Drive resets by actual mode/session/detail/capability/paging/row transitions, not loading/getState/entries identity."
+    ]
+  },
+  "dependency_assessment": {
+    "wiring_needs_fixture_implementation_body": false,
+    "fixture_reason": "WIRING never calls or rewrites quotaFixture. The delivered CORE adapter owns the dynamic DEV import. Only exported signature, DTO, immutable filename branch rules and illustrative scenario names are needed for credentials/fixtures.ts mapping.",
+    "wiring_needs_card_css_body": false,
+    "css_reason": "WIRING composes an opaque QuotaCard and shared Dialog/outer layout. Import ownership/classes/geometry are frozen here; mutable colors/visible labels do not affect TypeScript wiring or request/selection/focus lifetimes.",
+    "necessary_wiring_body_contexts_retained": [
+      "quota/QuotaCard.tsx",
+      "quota/types.ts",
+      "quota/api.ts",
+      "quota/useQuotaSummary.ts",
+      "existing credential/auth/client/focus/UI integration sources"
+    ],
+    "not_a_bypass": "This frozen context must be staged byte-for-byte as a repository-relative read-only context and included in the same before/apply digest validation. STYLE may change only permitted values and must preserve every frozen interface invariant. Any true implementation-body dependency or interface drift requires sequential work/replanning; do not discard a necessary context hash check."
+  },
+  "source_evidence": {
+    "immutable_context_baseline_sha256": {
+      "frontend/src/pages/credentials/quota/QuotaCard.tsx": "8255c80fccb404579fc45fd3a3556b8990e10ca8012e819ad86184bd9a96f751",
+      "frontend/src/pages/credentials/quota/types.ts": "865a7f74c2622f5ead95dfe7f437cf18cc107abb737812f5bf414f5015ef627d",
+      "frontend/src/pages/credentials/quota/api.ts": "4f0598ce70e03937b67c61a7764f121b13e50e799c4f351114266df17d556d08",
+      "frontend/src/pages/credentials/quota/useQuotaSummary.ts": "d8b861f64796798ce70170f1530938f295c9e7238cb1b17caf9f5a3327ff7d75",
+      "frontend/src/pages/credentials/model.ts": "9379437f1ec17fc2462c4d4cdeed822e1e60a70caba8488375b75380d4cb4167",
+      "frontend/src/pages/credentials/useCredentials.ts": "f0c2c3e5456e1aff7cdd6ecb19d64c03f4f0e3e901cf0318245e779fea9e955e"
+    },
+    "mutable_body_baseline_sha256_for_trace_only": {
+      "frontend/src/pages/credentials/quota/QuotaCard.css": "43ea8310d03f58d84c4b10516b6e0e9883a65984ea668fb48cf6e5d0f68221b0",
+      "frontend/src/pages/credentials/quota/fixtures.ts": "32824c4a2c233177e1280a83a276ced6f612e1585e6fe46a36c555056debaf27"
+    },
+    "mutable_body_note": "Mutable-body hashes identify the inspected baseline only; they are not a requirement that STYLE retain full text/color bytes. Frozen semantic invariants and per-worker actual allowed/context digest checks remain binding."
+  },
+  "authorization_and_execution": "No authorization_id. Requires a fresh human Antigravity development prefix for dispatcher changes/batch dispatch, validated synthetic batch tests, one same-project/session lock across the whole batch, separate private CLI copies and coordinator-only serial apply/status. No direct parallel shared-hook calls, fake session, installed Hook edit or model/CLI call authorized by this artifact."
+}

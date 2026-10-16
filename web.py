@@ -35,6 +35,10 @@ from src.panel.ui import install_ui
 from src.keeplive import keepalive_service
 from src.management import install_management_api
 from src.antigravity_import_limits import AntigravityUploadMiddleware
+from src.panel.upload_progress import (
+    install_upload_progress,
+    confirm_native_single_worker as confirm_upload_progress_single_worker,
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -175,6 +179,7 @@ app = DiagnosticFastAPI(
 )
 
 app.add_middleware(AntigravityUploadMiddleware)
+install_upload_progress(app)
 
 # CORS中间件
 app.add_middleware(
@@ -246,6 +251,7 @@ def main():
     workers = int(os.environ.get("WORKERS", 1))
     from src.antigravity_email_enrichment import confirm_native_single_worker
     confirm_native_single_worker(workers)
+    confirm_upload_progress_single_worker(workers)
 
     async def _run():
         port = await get_server_port()

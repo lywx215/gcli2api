@@ -1,13 +1,46 @@
-import { act, renderHook, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
+import { act, renderHook as rtlRenderHook, waitFor, type RenderHookOptions } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/api/client'
+import { AuthProvider } from '@/auth'
+import { setSessionToken } from '@/auth/session'
+import { __commitPanelChannel } from '@/domain/panel'
 import { api } from './api'
 import { CAP, initialFilters, parsePage } from './model'
 import { useCredentials } from './useCredentials'
-vi.mock('./api', async original => ({ ...await original<typeof import('./api')>(), api: { list: vi.fn() } }))
+
+vi.mock('./api', async original => {
+  const actual = await original<typeof import('./api')>()
+  const list = vi.fn()
+  return {
+    ...actual,
+    createCredentialApi: (
+      mode: Parameters<typeof actual.createCredentialApi>[0],
+      scope?: Parameters<typeof actual.createCredentialApi>[1]
+    ) => ({
+      ...actual.createCredentialApi(mode, scope),
+      list,
+    }),
+    api: {
+      ...actual.api,
+      list,
+    },
+  }
+})
+
+const wrapper = ({ children }: { children: ReactNode }) => <AuthProvider>{children}</AuthProvider>
+const renderHook = <Result, Props>(
+  render: (initialProps: Props) => Result,
+  options?: RenderHookOptions<Props>
+) => rtlRenderHook(render, { wrapper, ...options })
+
 const page = (filename = 'a.json', caps: string[] = Object.values(CAP), more = false) => parsePage({ items: [{ filename }], total: more ? 1001 : 1, has_more: more, panel_capabilities: caps })
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r }); return { promise, resolve } }
-beforeEach(() => { vi.mocked(api.list).mockReset() })
+beforeEach(() => {
+  vi.mocked(api.list).mockReset()
+  __commitPanelChannel('antigravity')
+  setSessionToken('synthetic-credential-session', false)
+})
 describe('credential controller isolation', () => {
   it('drops late A after B even when abort is ignored', async () => {
     const old = deferred<ReturnType<typeof page>>(); vi.mocked(api.list).mockReturnValueOnce(old.promise).mockResolvedValue(page('new.json'))

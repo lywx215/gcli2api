@@ -49,6 +49,7 @@ from src.storage.antigravity_quota import AntigravityQuotaMixin
 
 
 class MongoDBManager(AntigravityQuotaMixin):
+    SUPPORTS_PANEL_CREDENTIAL_SEARCH = True
     SUPPORTS_QUOTA_GROUP_FILTER = True
     QUOTA_ENGINE = 'mongo'
     """MongoDB 数据库管理器"""
@@ -1451,13 +1452,13 @@ class MongoDBManager(AntigravityQuotaMixin):
 
                 if mode == "geminicli":
                     summary.update({
-                        "health_status": doc.get("health_status") or "healthy",
+                        "health_status": doc.get("health_status") or None,
                         "quarantine_reason": doc.get("quarantine_reason"),
-                        "probe_stage": doc.get("probe_stage", 0),
+                        "probe_stage": doc.get("probe_stage"),
                         "next_probe_at": doc.get("next_probe_at"),
                         "last_health_check_at": doc.get("last_health_check_at"),
                         "health_check_started_at": doc.get("health_check_started_at"),
-                        "health_state_version": doc.get("health_state_version", 0),
+                        "health_state_version": doc.get("health_state_version"),
                     })
 
                 if mode == "antigravity":

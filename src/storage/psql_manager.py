@@ -53,6 +53,7 @@ from src.storage.antigravity_quota import AntigravityQuotaMixin
 
 
 class PSQLManager(AntigravityQuotaMixin):
+    SUPPORTS_PANEL_CREDENTIAL_SEARCH = True
     SUPPORTS_QUOTA_GROUP_FILTER = True
     QUOTA_ENGINE = 'postgres'
     """PostgreSQL 数据库管理器"""
@@ -1107,13 +1108,13 @@ class PSQLManager(AntigravityQuotaMixin):
 
                     if mode == "geminicli":
                         summary["preview"] = bool(row["preview"]) if row["preview"] is not None else True
-                        summary["health_status"] = row["health_status"] or "healthy"
+                        summary["health_status"] = row["health_status"] or None
                         summary["quarantine_reason"] = row["quarantine_reason"]
-                        summary["probe_stage"] = row["probe_stage"] or 0
+                        summary["probe_stage"] = row["probe_stage"]
                         summary["next_probe_at"] = row["next_probe_at"]
                         summary["last_health_check_at"] = row["last_health_check_at"]
                         summary["health_check_started_at"] = row["health_check_started_at"]
-                        summary["health_state_version"] = row["health_state_version"] or 0
+                        summary["health_state_version"] = row["health_state_version"]
 
                         if preview_filter:
                             preview_value = summary.get("preview", True)

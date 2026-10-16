@@ -1,10 +1,37 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { getServiceBase } from '@/api/client'
 import { useAuth } from '@/auth'
+import {
+  getSessionSnapshot,
+  getSessionValidationSnapshot,
+  subscribeSessionValidation,
+  type SessionValidationSnapshot,
+} from '@/auth/session'
+import { usePanelChannel } from '@/app/channels'
+import { ConsoleHandshake } from '@/app/ConsoleHandshake'
+import {
+  isPanelScopeCurrent,
+  type PanelMode,
+  type PanelScope,
+} from '@/domain/panel'
+
+export const supportedPanelModes: readonly PanelMode[] = Object.freeze(['antigravity', 'geminicli'] as const)
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, actionFailure, failureMessage, fixtureMode } from './api'
-import { CAP, selectedToolsAllowed, type Credential, type Outcome } from './model'
+import {
+  actionFailure,
+  createCredentialApi,
+  fixtureMode,
+} from './api'
+import {
+  CAP,
+  CAP_BY_MODE,
+  selectedToolsAllowed,
+  type Credential,
+  type Outcome,
+  type RecordValue,
+} from './model'
 import { useCredentials } from './useCredentials'
 import { FiltersPanel } from './FiltersPanel'
 import { CredentialTable } from './CredentialTable'
@@ -13,87 +40,1329 @@ import { ConfirmAction } from './ConfirmAction'
 import { Statistics } from './Statistics'
 import { restoreCredentialFocus, type DetailTrigger } from './focus'
 import { MobileControls, mobilePanelIds, type MobilePanels } from './MobileControls'
-import { ManualResultView, type ManualResult } from './ResultView'
+import { type ManualResult } from './ResultView'
+import { useQuotaSummary } from './quota/useQuotaSummary'
+import { QuotaCard } from './quota/QuotaCard'
+import { QuotaDialog } from './quota/QuotaDialog'
+import { FilesDialog, type FilesDialogTarget } from './FilesDialog'
+import { EmailMaintenance, type EmailMaintenanceTarget } from './EmailMaintenance'
+import { CredentialBatchPanel } from './CredentialBatchPanel'
+
+const validationIncarnations = new WeakMap<object, number>()
+let nextValidationIncarnation = 1
+
+function getValidationIncarnation(snap: object): number {
+  let inc = validationIncarnations.get(snap)
+  if (!inc) {
+    inc = nextValidationIncarnation++
+    validationIncarnations.set(snap, inc)
+  }
+  return inc
+}
+
+interface PageToolSession {
+  readonly id: number
+  readonly tool: 'files' | 'email' | 'batch'
+  readonly target?: FilesDialogTarget | EmailMaintenanceTarget
+  readonly filenames?: readonly string[]
+  readonly ownerRevision: object
+  readonly source: 'page' | 'detail'
+  readonly scope: Readonly<PanelScope>
+  readonly validation: Readonly<SessionValidationSnapshot>
+}
+
+interface PageReservation {
+  readonly id: number
+  readonly kind: 'tool' | 'manual' | 'action'
+  readonly token: object
+  readonly tool?: 'files' | 'email' | 'batch'
+  readonly target?: FilesDialogTarget | EmailMaintenanceTarget
+  readonly filenames?: readonly string[]
+  readonly source?: 'page' | 'detail'
+  readonly ownerRevision: object
+  readonly scope: Readonly<PanelScope>
+  readonly validation: Readonly<SessionValidationSnapshot>
+  readonly openingId?: number
+  readonly openingFilename?: string
+  readonly task: () => boolean
+  retired: boolean
+}
+
+interface DetailOpeningActor {
+  readonly id: number
+  readonly filename: string
+  readonly trigger: DetailTrigger
+  readonly detailEpoch: number
+  readonly scope: Readonly<PanelScope>
+  readonly validation: Readonly<SessionValidationSnapshot>
+  readonly ownerRevision: object
+  readonly taskSnapshot: () => boolean
+  readonly isOpeningActive: () => boolean
+  retired: boolean
+}
+
 export default function CredentialsPage() {
   const { authenticated, sessionEpoch } = useAuth()
-  // Unmounting removes body-portaled dialogs as well as all credential state.
-  return authenticated ? <CredentialWorkspace key={sessionEpoch} /> : <p className="text-muted-foreground">请登录后查看凭证。</p>
+  const { mode, channelEpoch } = usePanelChannel()
+  const valSnap = useSyncExternalStore(subscribeSessionValidation, getSessionValidationSnapshot)
+  const isVerified = authenticated && valSnap.status === 'verified' && valSnap.sessionEpoch === sessionEpoch
+  const incarnation = isVerified ? getValidationIncarnation(valSnap) : 0
+
+  return isVerified ? (
+    <CredentialWorkspace
+      key={`${sessionEpoch}:${channelEpoch}:${mode}:${incarnation}`}
+      mode={mode}
+    />
+  ) : (
+    <p className="text-muted-foreground">请登录后查看凭证。</p>
+  )
 }
-export function CredentialWorkspace() {
-  const legacy = new URL(getServiceBase()); legacy.hash = 'antigravity-manage'
-  const c = useCredentials(); const [detail, setDetail] = useState<Credential | null>(null)
-  const [busy, setBusy] = useState(false); const [result, setResult] = useState('')
-  const [batch, setBatch] = useState<{ filename: string; result: ManualResult }[]>([])
-  const [batchRunning, setBatchRunning] = useState(false); const stop = useRef(false)
+
+export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {}) {
+  const channel = usePanelChannel()
+  const mode: PanelMode = propMode ?? channel.mode
+  const channelEpoch = channel.channelEpoch
+  const { sessionEpoch } = useAuth()
+
+  const legacy = new URL(getServiceBase())
+  legacy.hash = mode === 'geminicli' ? 'manage' : 'antigravity-manage'
+
+  const ownerScope: PanelScope = useMemo(
+    () =>
+      Object.freeze({
+        mode,
+        channelEpoch,
+        sessionEpoch,
+      }),
+    [mode, channelEpoch, sessionEpoch]
+  )
+
+  const capturedValidationSnapshot = useRef<SessionValidationSnapshot>(getSessionValidationSnapshot())
+  const isMountedRef = useRef(true)
+
+  const isOwnerActive = useCallback((): boolean => {
+    if (!isMountedRef.current) return false
+    const currentSession = getSessionSnapshot()
+    if (currentSession.token === null || currentSession.sessionEpoch !== ownerScope.sessionEpoch) {
+      return false
+    }
+    if (!isPanelScopeCurrent(ownerScope, currentSession.sessionEpoch)) {
+      return false
+    }
+    const currentValidation = getSessionValidationSnapshot()
+    if (
+      currentValidation.sessionEpoch !== ownerScope.sessionEpoch ||
+      currentValidation.status !== 'verified' ||
+      currentValidation !== capturedValidationSnapshot.current
+    ) {
+      return false
+    }
+    return true
+  }, [ownerScope])
+
+  const ownedApi = useMemo(() => createCredentialApi(mode, ownerScope), [mode, ownerScope])
+
+  const c = useCredentials(mode)
+  const modeCaps = CAP_BY_MODE[mode]
+
+  const [detail, setDetail] = useState<Credential | null>(null)
+  const [detailOpening, setDetailOpening] = useState<DetailOpeningActor | null>(null)
+  const activeOpeningRef = useRef<DetailOpeningActor | null>(null)
+  const detailSerial = useRef(0)
+  const focusReturn = useRef<DetailTrigger>('desktop-detail')
+  const detailFocusRestoredRef = useRef(0)
+
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState('')
+  const [mobilePanels, setMobilePanels] = useState<MobilePanels>({ statistics: false, filters: false, bulk: false })
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table')
+
+  // Page exclusive reservation and tool session
+  const [toolSession, setToolSession] = useState<PageToolSession | null>(null)
+  const activeReservationRef = useRef<PageReservation | null>(null)
+  const nextToolSerial = useRef(1)
+  const detailToolCloseCallbackRef = useRef<(() => void) | null>(null)
+
   const workspace = useRef<HTMLElement | null>(null)
   const listTitle = useRef<HTMLHeadingElement | null>(null)
-  const focusReturn = useRef<DetailTrigger>('desktop-detail')
-  const detailSerial = useRef(0)
-  const [detailId, setDetailId] = useState(0)
-  const [mobilePanels, setMobilePanels] = useState<MobilePanels>({ statistics: false, filters: false, bulk: false })
-  useEffect(() => { setDetail(null); setResult(''); setBatch([]); setBusy(false); setBatchRunning(false); stop.current = true }, [c.detailEpoch])
-  useEffect(() => () => { stop.current = true }, [])
-  useEffect(() => { if (detail && c.data) { const fresh = c.data.items.find(r => r.filename === detail.filename); if (fresh) setDetail(fresh) } }, [c.data])
-  function open(filename: string, trigger: DetailTrigger) {
-    const row = c.data?.items.find(r => r.filename === filename)
-    if (row) { focusReturn.current = trigger; setDetailId(++detailSerial.current); setDetail(row) }
-  }
-  function close() { setDetail(null) }
-  async function action(names: string[], name: string, remark?: string): Promise<Outcome | undefined> {
-    if (busy || !names.length) return
-    const valid = c.captureTask(); setBusy(true); setResult(''); c.invalidateReads()
-    try { const outcome = await api.action(names, name, remark); if (valid()) { setResult(`${outcome.kind === 'partial' ? '部分成功：' : outcome.kind === 'unknown' ? '结果未知：' : ''}${outcome.message}`); return outcome } }
-    catch (e) { if (valid()) { const outcome = actionFailure(e, names.length); c.revoke(e); setResult(outcome.message); return outcome } }
-    finally { if (valid()) { setBusy(false); c.refresh() } }
-  }
-  async function selectedTool(kind: 'download' | 'emails') {
-    const names = [...c.selected]; if (!selectedToolsAllowed(c.selected) || busy) return
-    const valid = c.captureTask(); setBusy(true); setResult('')
-    try {
-      if (kind === 'download') {
-        const data = await api.download(names); if (!valid()) return
-        const url = URL.createObjectURL(data.blob); const a = document.createElement('a'); a.href = url; a.download = 'antigravity-selected.zip'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
-        setResult(`下载已生成：打包 ${data.selected ?? '未知'} 项，缺失 ${data.missing ?? '未知'} 项。`)
+
+  // Quota summary hook
+  const quota = useQuotaSummary({
+    mode,
+    sessionEpoch,
+    detailEpoch: c.detailEpoch,
+    capabilities: c.caps,
+    ownerScope,
+  })
+
+  const quotaRef = useRef(quota)
+  quotaRef.current = quota
+  const currentQuotaTargetRef = useRef<string | null>(null)
+  const quotaSerial = useRef(0)
+  const [quotaDialogSerial, setQuotaDialogSerial] = useState(0)
+  const [quotaDialogFilename, setQuotaDialogFilename] = useState<string | null>(null)
+  const quotaFocusReturn = useRef<DetailTrigger>('desktop-quota')
+  const quotaFocusRestoredRef = useRef(0)
+
+  function openTool(
+    tool: 'files' | 'email' | 'batch',
+    targetOrFilenames: FilesDialogTarget | EmailMaintenanceTarget | readonly string[],
+    source: 'page' | 'detail' = 'page'
+  ): boolean {
+    if (!isOwnerActive() || busy || activeReservationRef.current !== null) return false
+
+    const taskSnapshot = c.captureTask()
+    if (!taskSnapshot()) return false
+
+    const id = nextToolSerial.current++
+    const ownerRevision = Object.freeze({})
+    const scopeSnapshot = ownerScope
+    const validationSnapshot = capturedValidationSnapshot.current
+
+    let frozenTarget: FilesDialogTarget | EmailMaintenanceTarget | undefined
+    let frozenFilenames: readonly string[] | undefined
+
+    if (tool === 'batch') {
+      frozenFilenames = Object.freeze([...(targetOrFilenames as readonly string[])])
+    } else {
+      const t = targetOrFilenames as FilesDialogTarget | EmailMaintenanceTarget
+      if (t.kind === 'single') {
+        frozenTarget = Object.freeze({ kind: 'single', filename: t.filename })
+      } else if (t.kind === 'selection') {
+        frozenTarget = Object.freeze({ kind: 'selection', filenames: Object.freeze([...t.filenames]) })
       } else {
-        const data = await api.emails(names); if (!valid()) return
-        await navigator.clipboard.writeText(data.emails.join('\n')); if (valid()) setResult(`已复制 ${data.emails.length} 个去重邮箱；匹配 ${data.matched ?? '未知'} 项，缺失 ${data.missing ?? '未知'} 项。`)
+        frozenTarget = Object.freeze({ kind: 'channel' })
       }
-    } catch (e) { if (valid()) setResult(failureMessage(e)) }
-    finally { if (valid()) setBusy(false) }
+    }
+
+    const reservation: PageReservation = {
+      id,
+      kind: 'tool',
+      token: Object.freeze({}),
+      tool,
+      target: frozenTarget,
+      filenames: frozenFilenames,
+      source,
+      ownerRevision,
+      scope: scopeSnapshot,
+      validation: validationSnapshot,
+      openingId: activeOpeningRef.current?.id,
+      openingFilename: activeOpeningRef.current?.filename,
+      task: taskSnapshot,
+      retired: false,
+    }
+
+    activeReservationRef.current = reservation
+
+    const session: PageToolSession = {
+      id,
+      tool,
+      target: frozenTarget,
+      filenames: frozenFilenames,
+      ownerRevision,
+      source,
+      scope: scopeSnapshot,
+      validation: validationSnapshot,
+    }
+
+    setToolSession(session)
+    return true
   }
-  async function batchQuota() {
-    if (busy || !c.selected.size) return
-    const names = [...c.selected]; const valid = c.captureTask(); stop.current = false; setBusy(true); setBatchRunning(true); setBatch([]); setResult(''); c.invalidateReads()
-    let completed = 0
+
+  function exitTool(actor?: PageToolSession | PageReservation | number) {
+    const current = activeReservationRef.current
+    if (!current || current.kind !== 'tool') return
+    if (actor !== undefined) {
+      const actorId = typeof actor === 'number' ? actor : actor.id
+      if (current.id !== actorId) return
+    }
+
+    current.retired = true
+    activeReservationRef.current = null
+
+    if (current.tool === 'batch') {
+      setResult('已退出批量工具；已执行的操作不会回滚。')
+    }
+
+    const prevSource = current.source
+    setToolSession(null)
+
+    if (prevSource === 'detail') {
+      detailToolCloseCallbackRef.current?.()
+    }
+  }
+
+  const createToolOwnerPredicate = useCallback(
+    (res: PageReservation): (() => boolean) => {
+      return () => {
+        if (!isMountedRef.current) return false
+        if (res.retired) return false
+        if (activeReservationRef.current !== res) return false
+        if (!isOwnerActive()) return false
+        if (!res.task()) return false
+        if (res.openingId !== undefined) {
+          if (
+            !activeOpeningRef.current ||
+            activeOpeningRef.current.id !== res.openingId ||
+            activeOpeningRef.current.retired
+          ) {
+            return false
+          }
+        }
+        return true
+      }
+    },
+    [isOwnerActive]
+  )
+
+  const createToolRefresh = useCallback(
+    (res: PageReservation): (() => void) => {
+      return () => {
+        if (
+          isMountedRef.current &&
+          !res.retired &&
+          activeReservationRef.current === res &&
+          isOwnerActive() &&
+          res.task()
+        ) {
+          if (res.openingId !== undefined) {
+            if (
+              !activeOpeningRef.current ||
+              activeOpeningRef.current.id !== res.openingId ||
+              activeOpeningRef.current.retired
+            ) {
+              return
+            }
+          }
+          c.refresh()
+        }
+      }
+    },
+    [isOwnerActive, c.refresh]
+  )
+
+  const createToolClose = useCallback(
+    (res: PageReservation): (() => void) => {
+      return () => {
+        exitTool(res)
+      }
+    },
+    []
+  )
+
+  // Synchronous invalidation on validation change while mounted
+  useEffect(() => {
+    const unsubValidation = subscribeSessionValidation(() => {
+      if (!isOwnerActive()) {
+        if (activeOpeningRef.current) {
+          activeOpeningRef.current.retired = true
+          activeOpeningRef.current = null
+        }
+        if (activeReservationRef.current) {
+          activeReservationRef.current.retired = true
+          activeReservationRef.current = null
+        }
+        setDetailOpening(null)
+        setDetail(null)
+        setResult('')
+        setBusy(false)
+        currentQuotaTargetRef.current = null
+        quotaSerial.current++
+        setQuotaDialogSerial(0)
+        setQuotaDialogFilename(null)
+        quotaRef.current.clear()
+        setToolSession(null)
+      }
+    })
+    return unsubValidation
+  }, [isOwnerActive])
+
+  // DetailEpoch reset
+  useEffect(() => {
+    if (activeOpeningRef.current) {
+      activeOpeningRef.current.retired = true
+      activeOpeningRef.current = null
+    }
+    if (activeReservationRef.current) {
+      activeReservationRef.current.retired = true
+      activeReservationRef.current = null
+    }
+    setDetailOpening(null)
+    setDetail(null)
+    setResult('')
+    setBusy(false)
+    currentQuotaTargetRef.current = null
+    quotaSerial.current++
+    setQuotaDialogSerial(0)
+    setQuotaDialogFilename(null)
+    prevItemsRef.current = null
+    setToolSession(null)
+  }, [c.detailEpoch])
+
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+      if (activeOpeningRef.current) {
+        activeOpeningRef.current.retired = true
+        activeOpeningRef.current = null
+      }
+      if (activeReservationRef.current) {
+        activeReservationRef.current.retired = true
+        activeReservationRef.current = null
+      }
+      setDetailOpening(null)
+      setToolSession(null)
+    }
+  }, [])
+
+  // Keep open detail fresh if current page data updates
+  useEffect(() => {
+    if (detail && c.data) {
+      const fresh = c.data.items.find(r => r.filename === detail.filename)
+      if (fresh) setDetail(fresh)
+    }
+  }, [c.data, detail])
+
+  // Paging transition disposal
+  const prevPagingRef = useRef({ offset: c.offset, limit: c.limit })
+  useEffect(() => {
+    if (prevPagingRef.current.offset !== c.offset || prevPagingRef.current.limit !== c.limit) {
+      prevPagingRef.current = { offset: c.offset, limit: c.limit }
+      currentQuotaTargetRef.current = null
+      quotaSerial.current++
+      setQuotaDialogSerial(0)
+      setQuotaDialogFilename(null)
+      quotaRef.current.clear()
+    }
+  }, [c.offset, c.limit])
+
+  // Completed list result row removal
+  const prevItemsRef = useRef<string[] | null>(null)
+  useEffect(() => {
+    if (c.data?.items) {
+      const currentFilenames = c.data.items.map(r => r.filename)
+      if (prevItemsRef.current !== null) {
+        const currentSet = new Set(currentFilenames)
+        const disappeared = prevItemsRef.current.filter(fn => !currentSet.has(fn))
+        if (disappeared.length > 0) {
+          quotaRef.current.clear(disappeared)
+          if (currentQuotaTargetRef.current && disappeared.includes(currentQuotaTargetRef.current)) {
+            const removed = currentQuotaTargetRef.current
+            currentQuotaTargetRef.current = null
+            quotaSerial.current++
+            setQuotaDialogSerial(0)
+            setQuotaDialogFilename(null)
+            quotaRef.current.close(removed)
+          }
+        }
+      }
+      prevItemsRef.current = currentFilenames
+    }
+  }, [c.data])
+
+  function open(filename: string, trigger: DetailTrigger) {
+    if (!isOwnerActive() || busy || activeReservationRef.current !== null) return
+    if (currentQuotaTargetRef.current) {
+      const prev = currentQuotaTargetRef.current
+      currentQuotaTargetRef.current = null
+      quotaSerial.current++
+      setQuotaDialogSerial(0)
+      setQuotaDialogFilename(null)
+      quotaRef.current.close(prev)
+    }
+    const row = c.data?.items.find(r => r.filename === filename)
+    if (!row) return
+
+    if (activeOpeningRef.current) {
+      activeOpeningRef.current.retired = true
+    }
+
+    focusReturn.current = trigger
+    const nextId = ++detailSerial.current
+    const taskSnapshot = c.captureTask()
+    const ownerRevision = Object.freeze({})
+    const scopeSnapshot = ownerScope
+    const validationSnapshot = capturedValidationSnapshot.current
+    const currentDetailEpoch = c.detailEpoch
+
+    let actor: DetailOpeningActor
+
+    const isOpeningActive = () => {
+      if (actor.retired) return false
+      if (!isMountedRef.current) return false
+      if (activeOpeningRef.current !== actor) return false
+      if (c.detailEpoch !== currentDetailEpoch) return false
+      if (!isOwnerActive()) return false
+      if (!taskSnapshot()) return false
+      return true
+    }
+
+    actor = {
+      id: nextId,
+      filename,
+      trigger,
+      detailEpoch: currentDetailEpoch,
+      scope: scopeSnapshot,
+      validation: validationSnapshot,
+      ownerRevision,
+      taskSnapshot,
+      isOpeningActive,
+      retired: false,
+    }
+
+    activeOpeningRef.current = actor
+    setDetailOpening(actor)
+    setDetail(row)
+  }
+
+  function closeDetail(actorToClose?: DetailOpeningActor) {
+    const current = activeOpeningRef.current
+    if (!current) return
+    if (actorToClose && current !== actorToClose) return
+
+    current.retired = true
+    activeOpeningRef.current = null
+    setDetailOpening(null)
+    setDetail(null)
+
+    if (activeReservationRef.current?.source === 'detail') {
+      exitTool(activeReservationRef.current)
+    }
+    if (activeReservationRef.current?.kind === 'manual' && activeReservationRef.current.openingId === current.id) {
+      activeReservationRef.current.retired = true
+      activeReservationRef.current = null
+      setBusy(false)
+    }
+  }
+
+  function openQuota(filename: string, trigger: DetailTrigger) {
+    if (!isOwnerActive() || busy || activeReservationRef.current !== null) return
+    if (activeOpeningRef.current) {
+      activeOpeningRef.current.retired = true
+      activeOpeningRef.current = null
+    }
+    if (detail) {
+      setDetail(null)
+      setDetailOpening(null)
+      setBusy(false)
+    }
+    const prev = currentQuotaTargetRef.current
+    if (prev && prev !== filename) {
+      quotaRef.current.cancel(prev)
+      quotaRef.current.close(prev)
+    }
+    currentQuotaTargetRef.current = filename
+    quotaFocusReturn.current = trigger
+    const currentSerial = ++quotaSerial.current
+    setQuotaDialogSerial(currentSerial)
+    setQuotaDialogFilename(filename)
+    void quotaRef.current.open(filename)
+  }
+
+  function closeQuota(serial: number, filename: string) {
+    if (!isOwnerActive()) return
+    if (quotaSerial.current !== serial) return
+    currentQuotaTargetRef.current = null
+    setQuotaDialogSerial(0)
+    setQuotaDialogFilename(null)
+    quotaRef.current.close(filename)
+  }
+
+  function handleQuotaCloseAutoFocus(event: Event, serial: number, filename: string) {
+    event.preventDefault()
+    if (!isOwnerActive()) return
+    if (quotaSerial.current !== serial) return
+    if (quotaFocusRestoredRef.current === serial) return
+    quotaFocusRestoredRef.current = serial
+    restoreCredentialFocus(workspace.current, filename, quotaFocusReturn.current, listTitle.current)
+  }
+
+  async function action(names: string[], name: string, remark?: string): Promise<Outcome | undefined> {
+    if (!isOwnerActive() || busy || activeReservationRef.current !== null || !names.length) return
+    const taskSnapshot = c.captureTask()
+    if (!taskSnapshot()) return
+
+    const reservation: PageReservation = {
+      id: nextToolSerial.current++,
+      kind: 'action',
+      token: Object.freeze({}),
+      ownerRevision: Object.freeze({}),
+      scope: ownerScope,
+      validation: capturedValidationSnapshot.current,
+      task: taskSnapshot,
+      retired: false,
+    }
+
+    activeReservationRef.current = reservation
+    setBusy(true)
+    setResult('')
+    c.invalidateReads()
     try {
-      for (let i = 0; i < names.length && valid() && !stop.current; i += 10) {
-        const rows = await api.quotaBatch(names.slice(i, i + 10)); if (!valid()) break
-        completed += rows.length; setBatch(previous => [...previous, ...rows.map(row => ({ filename: row.filename, result: row }))])
+      const outcome = await ownedApi.action(names, name, remark)
+      if (isOwnerActive() && activeReservationRef.current === reservation && taskSnapshot()) {
+        setResult(
+          `${outcome.kind === 'partial' ? '部分成功：' : outcome.kind === 'unknown' ? '结果未知：' : ''}${outcome.message}`
+        )
+        return outcome
       }
-      if (valid()) setResult(`${stop.current ? '已停止后续批次' : '批量额度检测完成'}：已返回 ${completed}/${names.length} 项。已执行的操作不会回滚。`)
-    } catch (e) { if (valid()) { c.revoke(e); setResult(`${failureMessage(e, true)} 已返回 ${completed}/${names.length} 项，其余未确认。`) } }
-    finally { if (valid()) { setBusy(false); setBatchRunning(false); c.refresh() } }
+    } catch (e) {
+      if (isOwnerActive() && activeReservationRef.current === reservation && taskSnapshot()) {
+        const outcome = actionFailure(e, names.length)
+        c.revoke(e)
+        setResult(outcome.message)
+        return outcome
+      }
+    } finally {
+      if (activeReservationRef.current === reservation) {
+        reservation.retired = true
+        activeReservationRef.current = null
+        setBusy(false)
+        if (isOwnerActive()) {
+          c.refresh()
+        }
+      }
+    }
   }
-  const blocked = busy || c.materializing; const noSelection = blocked || !c.selected.size
-  return <section ref={workspace} className="min-w-0 space-y-5" aria-label="Antigravity 凭证" aria-busy={busy || c.loading}><header className="flex flex-wrap items-center justify-between gap-3"><div><h1 ref={listTitle} tabIndex={-1} className="text-2xl font-semibold">Antigravity 凭证</h1><p className="mt-1 text-sm text-muted-foreground">筛选、跨页选择与凭证状态管理</p></div><Button variant="outline" disabled={busy} onClick={c.refresh}>重新读取</Button></header>
-    {fixtureMode && <p role="status" className="rounded-xl border bg-info-bg p-3 text-[13px] text-info">开发模式合成预览。操作结果为模拟数据，不代表后端已执行。</p>}
-    <MobileControls total={c.data?.total} selected={c.selected.size} panels={mobilePanels} toggle={panel => setMobilePanels(current => ({ ...current, [panel]: !current[panel] }))} />
-    <div id={mobilePanelIds.statistics} className={mobilePanels.statistics ? 'block' : 'hidden md:block'}>{c.data && <Statistics page={c.data} />}</div>
-    <fieldset id={mobilePanelIds.filters} className={mobilePanels.filters ? 'block' : 'hidden md:block'} disabled={busy}><legend className="sr-only">凭证筛选</legend><FiltersPanel filters={c.filters} caps={c.caps} onApply={c.applyFilters} /></fieldset>
-    <section id={mobilePanelIds.bulk} className={`space-y-3 rounded-xl border bg-card p-4 text-card-foreground ${mobilePanels.bulk ? 'block' : 'hidden md:block'}`} aria-label="批量操作"><div className="flex flex-wrap items-center gap-2"><strong className="mr-2 text-sm">已跨页选择 {c.selected.size} 项</strong><Button variant="outline" disabled={blocked || !c.data?.items.length} onClick={() => c.toggle(c.data!.items.map(r => r.filename), true)}>选择当前页</Button><Button variant="outline" disabled={blocked || !c.data?.total} onClick={() => void c.selectAll()}>读取并选择全部匹配</Button><Button variant="ghost" disabled={busy} onClick={c.clearSelection}>清除选择</Button></div>
-    <div className="flex flex-wrap gap-2"><Button disabled={noSelection} onClick={() => void action([...c.selected], 'enable')}>批量启用</Button><Button variant="outline" disabled={noSelection} onClick={() => void action([...c.selected], 'disable')}>批量禁用</Button><ConfirmAction label="批量永久禁用" disabled={noSelection || !c.caps.has(CAP.permanent)} description={`对已物化集合中的 ${c.selected.size} 个凭证永久禁用；可能部分成功。`} onConfirm={() => void action([...c.selected], 'permanent_disable')} /><ConfirmAction label="批量删除" disabled={noSelection} description={`删除已物化集合中的 ${c.selected.size} 个凭证。此操作不可由页面撤销，可能部分成功。`} onConfirm={() => void action([...c.selected], 'delete')} /><ConfirmAction label="批量开启信用额度" disabled={noSelection || !c.caps.has(CAP.credit)} description="对选中凭证开启信用额度并清除模型冷却，可能部分成功。" onConfirm={() => void action([...c.selected], 'enable_credit')} /><ConfirmAction label="批量关闭信用额度" disabled={noSelection || !c.caps.has(CAP.credit)} description="对选中凭证关闭信用额度并清除模型冷却，可能部分成功。" onConfirm={() => void action([...c.selected], 'disable_credit')} /></div>
-    <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={blocked || !selectedToolsAllowed(c.selected)} onClick={() => void selectedTool('download')}>下载选中</Button><Button variant="outline" disabled={blocked || !selectedToolsAllowed(c.selected)} onClick={() => void selectedTool('emails')}>复制邮箱</Button><ConfirmAction label="批量刷新额度" disabled={noSelection} description={`将为 ${c.selected.size} 个凭证访问上游并同步额度与权限，每批最多 10 项；可停止后续批次，已执行动作不回滚。`} onConfirm={() => void batchQuota()} /></div>
-    <p className="text-[13px] text-muted-foreground">全部匹配按每页 1000 项读取并保存文件名；读取期间列表可能变化，不保证原子快照。</p></section>
-    {c.materializing && <div className="flex items-center gap-3"><p role="status" className="text-[13px] text-info">正在物化文件集合，已读取 {c.progress} 项…</p><Button variant="outline" onClick={c.cancelSelection}>取消读取</Button></div>}
-    {batchRunning && <Button variant="outline" onClick={() => { stop.current = true; setResult('停止请求已记录；当前批次完成后停止，不会回滚。') }}>停止后续批次</Button>}
-    {c.selected.size > 100 && <p className="text-[13px] text-warning">下载和复制邮箱最多 100 项，请减少选择。其他批量动作仍可使用当前集合。</p>}
-    {c.notice && <p role="status" className="text-sm text-muted-foreground">{c.notice}</p>}{result && <p role="status" className="rounded-xl border bg-info-bg p-3 text-sm text-info">{result}</p>}{c.error && <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive-bg p-4 text-destructive">{c.error}<Button variant="outline" className="ml-3" onClick={c.refresh}>重试读取</Button></div>}
-    {c.loading && <div role="status" aria-label="正在加载列表" className="grid gap-3"><Skeleton className="h-12 w-full" /><Skeleton className="h-32 w-full" /></div>}
-    {!c.loading && c.data && !c.data.items.length && <p className="rounded-xl border bg-card p-8 text-center text-muted-foreground">{c.data.stats.total === 0 ? '尚无凭证，请前往导入页面。' : '没有匹配的凭证，请调整筛选。'}</p>}
-    {c.data && !!c.data.items.length && <CredentialTable rows={c.data.items} selected={c.selected} toggle={c.toggle} open={open} disabled={blocked} />}
-    <nav className="flex flex-wrap items-center justify-between gap-3" aria-label="分页"><label className="flex items-center gap-2 text-sm">每页<select aria-label="每页数量" value={c.limit} disabled={blocked} className="rounded-md border border-input bg-popover p-2 text-base leading-5 md:text-sm disabled:opacity-100 disabled:bg-secondary disabled:text-muted-foreground disabled:border-border disabled:cursor-not-allowed" onChange={e => c.setLimit(Number(e.target.value))}>{[20, 25, 50, 100, 200, 500, 1000].map(n => <option key={n}>{n}</option>)}</select></label><span className="text-sm text-muted-foreground">第 {Math.floor(c.offset / c.limit) + 1} 页 · 匹配 {c.data?.total ?? '未知'} 项</span><div className="flex gap-2"><Button variant="outline" disabled={blocked || c.loading || c.offset === 0} onClick={() => c.setOffset(Math.max(0, c.offset - c.limit))}>上一页</Button><Button variant="outline" disabled={blocked || c.loading || !c.data?.hasMore} onClick={() => c.setOffset(c.offset + c.limit)}>下一页</Button></div></nav>
-    {batch.length > 0 && <section className="grid gap-3" aria-label="批量额度逐项结果">{batch.map(item => <details className="rounded-xl border bg-card p-3 text-card-foreground" key={item.filename}><summary className="break-all text-sm font-medium">{item.filename} · {item.result.success ? '上游成功' : '未成功 / 未确认'} · 写回 {item.result.updates.map(u => u.status).join(' / ') || '未知'}</summary><ManualResultView result={item.result} /></details>)}</section>}
-    {!fixtureMode && <p className="text-sm text-muted-foreground">手动获取邮箱、批量模型检测及风险检测继续使用 <a className="underline underline-offset-4" href={legacy.href}>旧 AG 面板高级工具</a>。</p>}
-    {detail && <CredentialDetail key={`${detail.filename}:${c.detailEpoch}:${detailId}`} row={detail} caps={c.caps} close={close} restoreFocus={() => { if (detailSerial.current === detailId) restoreCredentialFocus(workspace.current, detail.filename, focusReturn.current, listTitle.current) }} busy={busy} action={action} beforeManual={() => { setBusy(true); c.invalidateReads() }} afterManual={() => { setBusy(false); c.refresh() }} captureTask={c.captureTask} revoke={c.revoke} />}
-  </section>
+
+  const isToolOpen = toolSession !== null || (activeReservationRef.current !== null && activeReservationRef.current.kind === 'tool')
+  const blocked = busy || c.materializing || isToolOpen || activeReservationRef.current !== null
+  const noSelection = blocked || !c.selected.size
+
+  return (
+    <section
+      ref={workspace}
+      className="min-w-0 space-y-5"
+      aria-label={mode === 'geminicli' ? 'Gemini CLI 凭证' : 'Antigravity 凭证'}
+      aria-busy={busy || c.loading}
+    >
+      <ConsoleHandshake active={mode === 'geminicli'} />
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 ref={listTitle} tabIndex={-1} className="text-2xl font-semibold">
+            {mode === 'geminicli' ? 'Gemini CLI 凭证' : 'Antigravity 凭证'}
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">筛选、跨页选择与凭证状态管理</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div
+            role="radiogroup"
+            aria-label="视图模式"
+            className="inline-flex rounded-lg border bg-secondary p-1"
+          >
+            <Button
+              type="button"
+              role="radio"
+              aria-checked={viewMode === 'table'}
+              variant={viewMode === 'table' ? 'default' : 'ghost'}
+              size="sm"
+              disabled={busy}
+              onClick={() => setViewMode('table')}
+            >
+              表格
+            </Button>
+            <Button
+              type="button"
+              role="radio"
+              aria-checked={viewMode === 'cards'}
+              variant={viewMode === 'cards' ? 'default' : 'ghost'}
+              size="sm"
+              disabled={busy}
+              onClick={() => setViewMode('cards')}
+            >
+              额度卡片
+            </Button>
+          </div>
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => {
+              if (isOwnerActive()) c.refresh()
+            }}
+          >
+            重新读取
+          </Button>
+        </div>
+      </header>
+      {fixtureMode && (
+        <p role="status" className="rounded-xl border bg-info-bg p-3 text-[13px] text-info">
+          开发模式合成预览。操作结果为模拟数据，不代表后端已执行。
+        </p>
+      )}
+      <MobileControls
+        total={c.data?.total}
+        selected={c.selected.size}
+        panels={mobilePanels}
+        toggle={panel => setMobilePanels(current => ({ ...current, [panel]: !current[panel] }))}
+      />
+      <div id={mobilePanelIds.statistics} className={mobilePanels.statistics ? 'block' : 'hidden md:block'}>
+        {c.data && <Statistics page={c.data} mode={mode} />}
+      </div>
+      <fieldset id={mobilePanelIds.filters} className={mobilePanels.filters ? 'block' : 'hidden md:block'} disabled={blocked}>
+        <legend className="sr-only">凭证筛选</legend>
+        <FiltersPanel
+          filters={c.filters}
+          caps={c.caps}
+          mode={mode}
+          onApply={next => {
+            if (isOwnerActive() && activeReservationRef.current === null) c.applyFilters(next)
+          }}
+        />
+      </fieldset>
+      <section
+        id={mobilePanelIds.bulk}
+        className={`space-y-3 rounded-xl border bg-card p-4 text-card-foreground ${mobilePanels.bulk ? 'block' : 'hidden md:block'}`}
+        aria-label="批量操作"
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <strong className="mr-2 text-sm">已跨页选择 {c.selected.size} 项</strong>
+          <Button
+            variant="outline"
+            disabled={blocked || !c.data?.items.length}
+            onClick={() => {
+              if (isOwnerActive() && activeReservationRef.current === null && c.data?.items.length) {
+                c.toggle(c.data.items.map(r => r.filename), true)
+              }
+            }}
+          >
+            选择当前页
+          </Button>
+          <Button
+            variant="outline"
+            disabled={blocked || !c.data?.total}
+            onClick={() => {
+              if (isOwnerActive() && activeReservationRef.current === null && c.data?.total) {
+                void c.selectAll()
+              }
+            }}
+          >
+            读取并选择全部匹配
+          </Button>
+          <Button
+            variant="ghost"
+            disabled={blocked}
+            onClick={() => {
+              if (isOwnerActive() && activeReservationRef.current === null) c.clearSelection()
+            }}
+          >
+            清除选择
+          </Button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button disabled={noSelection} onClick={() => void action([...c.selected], 'enable')}>
+            批量启用
+          </Button>
+          <Button variant="outline" disabled={noSelection} onClick={() => void action([...c.selected], 'disable')}>
+            批量禁用
+          </Button>
+          <ConfirmAction
+            label="批量永久禁用"
+            disabled={noSelection || !c.caps.has(modeCaps.permanent)}
+            description={`对已物化集合中的 ${c.selected.size} 个凭证永久禁用；可能部分成功。`}
+            onConfirm={() => void action([...c.selected], 'permanent_disable')}
+          />
+          <ConfirmAction
+            label="批量删除"
+            disabled={noSelection}
+            description={`删除已物化集合中的 ${c.selected.size} 个凭证。此操作不可由页面撤销，可能部分成功。`}
+            onConfirm={() => void action([...c.selected], 'delete')}
+          />
+          {mode === 'antigravity' && (
+            <>
+              <ConfirmAction
+                label="批量开启信用额度"
+                disabled={noSelection || !c.caps.has(CAP.credit)}
+                description="对选中凭证开启信用额度并清除模型冷却，可能部分成功。"
+                onConfirm={() => void action([...c.selected], 'enable_credit')}
+              />
+              <ConfirmAction
+                label="批量关闭信用额度"
+                disabled={noSelection || !c.caps.has(CAP.credit)}
+                description="对选中凭证关闭信用额度并清除模型冷却，可能部分成功。"
+                onConfirm={() => void action([...c.selected], 'disable_credit')}
+              />
+            </>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            disabled={blocked || !selectedToolsAllowed(c.selected)}
+            onClick={() => openTool('files', { kind: 'selection', filenames: [...c.selected] })}
+          >
+            下载选中
+          </Button>
+          <Button
+            variant="outline"
+            disabled={blocked || !selectedToolsAllowed(c.selected)}
+            onClick={() => openTool('email', { kind: 'selection', filenames: [...c.selected] })}
+          >
+            复制邮箱
+          </Button>
+          <Button
+            variant="outline"
+            disabled={blocked}
+            onClick={() => openTool('files', { kind: 'channel' })}
+          >
+            全渠道文件打包
+          </Button>
+          <Button
+            variant="outline"
+            disabled={blocked}
+            onClick={() => openTool('email', { kind: 'channel' })}
+          >
+            全渠道邮箱维护
+          </Button>
+          <Button
+            variant="outline"
+            disabled={noSelection}
+            onClick={() => openTool('batch', [...c.selected])}
+          >
+            批量检测与额度刷新
+          </Button>
+        </div>
+        <p className="text-[13px] text-muted-foreground">
+          全部匹配按每页 1000 项读取并保存文件名；读取期间列表可能变化，不保证原子快照。
+        </p>
+      </section>
+
+      {toolSession && toolSession.tool === 'files' && activeReservationRef.current?.id === toolSession.id && (() => {
+        const toolRes = activeReservationRef.current
+        return (
+          <FilesDialog
+            mode={mode}
+            scope={toolSession.scope}
+            validation={toolSession.validation}
+            ownerRevision={toolSession.ownerRevision}
+            isCurrentOwner={createToolOwnerPredicate(toolRes)}
+            disabled={false}
+            open={true}
+            target={toolSession.target as FilesDialogTarget}
+            onClose={createToolClose(toolRes)}
+          />
+        )
+      })()}
+
+      {toolSession && toolSession.tool === 'email' && toolSession.source === 'page' && activeReservationRef.current?.id === toolSession.id && (() => {
+        const toolRes = activeReservationRef.current
+        return (
+          <section className="space-y-3 rounded-xl border bg-card p-4 text-card-foreground" aria-label="邮箱维护">
+            <div className="flex items-center justify-between border-b pb-2">
+              <h3 className="text-base font-semibold">邮箱维护</h3>
+              <Button variant="outline" size="sm" onClick={createToolClose(toolRes)}>
+                退出邮箱维护
+              </Button>
+            </div>
+            <EmailMaintenance
+              mode={mode}
+              scope={toolSession.scope}
+              validation={toolSession.validation}
+              ownerRevision={toolSession.ownerRevision}
+              isCurrentOwner={createToolOwnerPredicate(toolRes)}
+              disabled={false}
+              target={toolSession.target as EmailMaintenanceTarget}
+              onRefresh={createToolRefresh(toolRes)}
+            />
+          </section>
+        )
+      })()}
+
+      {toolSession && toolSession.tool === 'batch' && toolSession.source === 'page' && activeReservationRef.current?.id === toolSession.id && (() => {
+        const toolRes = activeReservationRef.current
+        return (
+          <section className="space-y-3 rounded-xl border bg-card p-4 text-card-foreground" aria-label="批量检测面板">
+            <div className="flex items-center justify-between border-b pb-2">
+              <h3 className="text-base font-semibold">批量检测面板</h3>
+              <Button variant="outline" size="sm" onClick={createToolClose(toolRes)}>
+                退出批量面板
+              </Button>
+            </div>
+            <CredentialBatchPanel
+              mode={mode}
+              scope={toolSession.scope}
+              validation={toolSession.validation}
+              ownerRevision={toolSession.ownerRevision}
+              isCurrentOwner={createToolOwnerPredicate(toolRes)}
+              filenames={toolSession.filenames as readonly string[]}
+              disabled={false}
+              onRefresh={createToolRefresh(toolRes)}
+            />
+          </section>
+        )
+      })()}
+
+      {c.materializing && (
+        <div className="flex items-center gap-3">
+          <p role="status" className="text-[13px] text-info">
+            正在物化文件集合，已读取 {c.progress} 项…
+          </p>
+          <Button
+            variant="outline"
+            onClick={() => {
+              if (isOwnerActive()) c.cancelSelection()
+            }}
+          >
+            取消读取
+          </Button>
+        </div>
+      )}
+      {c.selected.size > 100 && (
+        <p className="text-[13px] text-warning">
+          下载和复制邮箱最多 100 项，请减少选择。其他批量动作仍可使用当前集合。
+        </p>
+      )}
+      {c.notice && <p role="status" className="text-sm text-muted-foreground">{c.notice}</p>}
+      {result && <p role="status" className="rounded-xl border bg-info-bg p-3 text-sm text-info">{result}</p>}
+      {c.error && (
+        <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive-bg p-4 text-destructive">
+          {c.error}
+          <Button
+            variant="outline"
+            className="ml-3"
+            onClick={() => {
+              if (isOwnerActive()) c.refresh()
+            }}
+          >
+            重试读取
+          </Button>
+        </div>
+      )}
+      {c.loading && (
+        <div role="status" aria-label="正在加载列表" className="grid gap-3">
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-32 w-full" />
+        </div>
+      )}
+      {!c.loading && c.data && !c.data.items.length && (
+        <p className="rounded-xl border bg-card p-8 text-center text-muted-foreground">
+          {c.data.stats.total === 0 ? '尚无凭证，请前往导入页面。' : '没有匹配的凭证，请调整筛选。'}
+        </p>
+      )}
+      {c.data && !!c.data.items.length && (
+        viewMode === 'table' ? (
+          <CredentialTable
+            rows={c.data.items}
+            selected={c.selected}
+            toggle={(names, checked) => {
+              if (isOwnerActive() && activeReservationRef.current === null) c.toggle(names, checked)
+            }}
+            open={open}
+            disabled={blocked}
+            openQuota={openQuota}
+            quotaCapabilityEnabled={quota.capabilityEnabled}
+            mode={mode}
+          />
+        ) : (
+          <div className="grid grid-cols-1 min-w-0 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {c.data.items.map(row => {
+              const itemState = quota.getState(row.filename)
+              const isSelected = c.selected.has(row.filename)
+              return (
+                <div
+                  key={row.filename}
+                  data-state={isSelected ? 'selected' : undefined}
+                  className="min-w-0 flex flex-col gap-3 rounded-xl border bg-card p-4 text-card-foreground shadow-sm transition-colors data-[state=selected]:border-primary/50 data-[state=selected]:bg-selected"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
+                    <div className="flex items-center gap-2 min-w-0 max-w-full">
+                      <Checkbox
+                        aria-label={`选择 ${row.filename}`}
+                        disabled={blocked}
+                        checked={isSelected}
+                        onCheckedChange={v => {
+                          if (isOwnerActive() && activeReservationRef.current === null) c.toggle([row.filename], v === true)
+                        }}
+                      />
+                      <span className="truncate text-sm font-medium" title={row.filename}>
+                        {row.filename}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={blocked}
+                        data-credential-filename={row.filename}
+                        data-credential-trigger="card-detail"
+                        onClick={() => open(row.filename, 'card-detail')}
+                      >
+                        详情与操作
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={blocked || !quota.capabilityEnabled}
+                        title={!quota.capabilityEnabled ? '当前服务未启用额度查询能力' : undefined}
+                        data-credential-filename={row.filename}
+                        data-credential-trigger="card-quota"
+                        onClick={() => openQuota(row.filename, 'card-quota')}
+                      >
+                        查看额度
+                      </Button>
+                    </div>
+                  </div>
+
+                  {itemState.error && (
+                    <div
+                      role="status"
+                      className="rounded-md border border-destructive/30 bg-destructive-bg p-2 text-xs text-destructive"
+                    >
+                      {itemState.error}
+                    </div>
+                  )}
+
+                  <QuotaCard
+                    filename={row.filename}
+                    mode={mode}
+                    summary={itemState.summary}
+                    loading={itemState.loading}
+                    onRefresh={() => {
+                      if (isOwnerActive() && activeReservationRef.current === null) {
+                        void quota.refresh(row.filename)
+                      }
+                    }}
+                    disabled={blocked || !quota.capabilityEnabled}
+                  />
+                </div>
+              )
+            })}
+          </div>
+        )
+      )}
+      <nav className="flex flex-wrap items-center justify-between gap-3" aria-label="分页">
+        <label className="flex items-center gap-2 text-sm">
+          每页
+          <select
+            aria-label="每页数量"
+            value={c.limit}
+            disabled={blocked}
+            className="rounded-md border border-input bg-popover p-2 text-base leading-5 md:text-sm disabled:opacity-100 disabled:bg-secondary disabled:text-muted-foreground disabled:border-border disabled:cursor-not-allowed"
+            onChange={e => {
+              if (isOwnerActive() && activeReservationRef.current === null) c.setLimit(Number(e.target.value))
+            }}
+          >
+            {[10, 20, 25, 50, 100, 200, 500, 1000].map(n => (
+              <option key={n}>{n}</option>
+            ))}
+          </select>
+        </label>
+        <span className="text-sm text-muted-foreground">
+          第 {Math.floor(c.offset / c.limit) + 1} 页 · 匹配 {c.data?.total ?? '未知'} 项
+        </span>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            disabled={blocked || c.loading || c.offset === 0}
+            onClick={() => {
+              if (isOwnerActive() && activeReservationRef.current === null) c.setOffset(Math.max(0, c.offset - c.limit))
+            }}
+          >
+            上一页
+          </Button>
+          <Button
+            variant="outline"
+            disabled={blocked || c.loading || !c.data?.hasMore}
+            onClick={() => {
+              if (isOwnerActive() && activeReservationRef.current === null) c.setOffset(c.offset + c.limit)
+            }}
+          >
+            下一页
+          </Button>
+        </div>
+      </nav>
+      {!fixtureMode && (
+        <p className="text-sm text-muted-foreground">
+          {mode === 'geminicli'
+            ? '其他高级管理工具请前往 '
+            : '风险检测等其他高级功能继续使用 '}
+          <a className="underline underline-offset-4" href={legacy.href}>
+            {mode === 'geminicli' ? '旧控制面板' : '旧 AG 面板高级工具'}
+          </a>
+          。
+        </p>
+      )}
+      {detail && detailOpening && (() => {
+        const openingActor = detailOpening
+
+        const ownerBoundErrors = async (filename: string, signal?: AbortSignal): Promise<RecordValue> => {
+          if (!isOwnerActive() || !openingActor.isOpeningActive() || (filename && filename !== openingActor.filename)) {
+            throw new DOMException('操作已取消。', 'AbortError')
+          }
+          if (busy || activeReservationRef.current !== null) {
+            throw new DOMException('操作已取消。', 'AbortError')
+          }
+          if (!openingActor.taskSnapshot()) {
+            throw new DOMException('操作已取消。', 'AbortError')
+          }
+          const reservation: PageReservation = {
+            id: nextToolSerial.current++,
+            kind: 'action',
+            token: Object.freeze({}),
+            ownerRevision: openingActor.ownerRevision,
+            scope: openingActor.scope,
+            validation: openingActor.validation,
+            openingId: openingActor.id,
+            openingFilename: openingActor.filename,
+            task: openingActor.taskSnapshot,
+            retired: false,
+          }
+          activeReservationRef.current = reservation
+          try {
+            const val = await ownedApi.errors(filename, signal)
+            if (
+              !isOwnerActive() ||
+              !openingActor.isOpeningActive() ||
+              activeReservationRef.current !== reservation ||
+              reservation.retired ||
+              !openingActor.taskSnapshot()
+            ) {
+              throw new DOMException('操作已取消。', 'AbortError')
+            }
+            return val
+          } finally {
+            if (activeReservationRef.current === reservation) {
+              reservation.retired = true
+              activeReservationRef.current = null
+            }
+          }
+        }
+
+        const ownerBoundManual = async (
+          filename: string,
+          operation: 'quota' | 'test' | 'verify-project',
+          model?: string,
+          signal?: AbortSignal
+        ): Promise<ManualResult> => {
+          if (!isOwnerActive() || !openingActor.isOpeningActive() || (filename && filename !== openingActor.filename)) {
+            throw new DOMException('操作已取消。', 'AbortError')
+          }
+          const current = activeReservationRef.current
+          if (!current || current.kind !== 'manual' || current.retired) {
+            throw new DOMException('操作已取消。', 'AbortError')
+          }
+          try {
+            const val = await ownedApi.manual(filename, operation, model, signal)
+            if (
+              !isOwnerActive() ||
+              !openingActor.isOpeningActive() ||
+              activeReservationRef.current !== current ||
+              current.retired
+            ) {
+              throw new DOMException('操作已取消。', 'AbortError')
+            }
+            return val
+          } catch (err) {
+            if (
+              !isOwnerActive() ||
+              !openingActor.isOpeningActive() ||
+              activeReservationRef.current !== current ||
+              current.retired
+            ) {
+              throw new DOMException('操作已取消。', 'AbortError')
+            }
+            throw err
+          }
+        }
+
+        const detailApi = {
+          ...ownedApi,
+          errors: ownerBoundErrors,
+          manual: ownerBoundManual,
+        }
+
+        const detailAction = async (
+          names: string[],
+          actionName: string,
+          remark?: string
+        ): Promise<Outcome | undefined> => {
+          if (!openingActor.isOpeningActive() || busy || activeReservationRef.current !== null || !names.length) {
+            return
+          }
+          const reservation: PageReservation = {
+            id: nextToolSerial.current++,
+            kind: 'action',
+            token: Object.freeze({}),
+            ownerRevision: openingActor.ownerRevision,
+            scope: openingActor.scope,
+            validation: openingActor.validation,
+            openingId: openingActor.id,
+            openingFilename: openingActor.filename,
+            task: openingActor.taskSnapshot,
+            retired: false,
+          }
+          activeReservationRef.current = reservation
+          setBusy(true)
+          setResult('')
+          c.invalidateReads()
+          try {
+            const outcome = await ownedApi.action(names, actionName, remark)
+            if (openingActor.isOpeningActive() && activeReservationRef.current === reservation) {
+              setResult(
+                `${outcome.kind === 'partial' ? '部分成功：' : outcome.kind === 'unknown' ? '结果未知：' : ''}${outcome.message}`
+              )
+              return outcome
+            }
+          } catch (e) {
+            if (openingActor.isOpeningActive() && activeReservationRef.current === reservation) {
+              const outcome = actionFailure(e, names.length)
+              c.revoke(e)
+              setResult(outcome.message)
+              return outcome
+            }
+          } finally {
+            if (activeReservationRef.current === reservation) {
+              reservation.retired = true
+              activeReservationRef.current = null
+              setBusy(false)
+              if (openingActor.isOpeningActive()) {
+                c.refresh()
+              }
+            }
+          }
+        }
+
+        const handleBeforeManual = (token?: object): boolean => {
+          if (!isOwnerActive() || !openingActor.isOpeningActive()) return false
+          if (busy || activeReservationRef.current !== null) return false
+          if (!openingActor.taskSnapshot()) return false
+          const opToken = token ?? Object.freeze({})
+          const reservation: PageReservation = {
+            id: nextToolSerial.current++,
+            kind: 'manual',
+            token: opToken,
+            ownerRevision: openingActor.ownerRevision,
+            scope: openingActor.scope,
+            validation: openingActor.validation,
+            openingId: openingActor.id,
+            openingFilename: openingActor.filename,
+            task: openingActor.taskSnapshot,
+            retired: false,
+          }
+          activeReservationRef.current = reservation
+          setBusy(true)
+          c.invalidateReads()
+          return true
+        }
+
+        const handleAfterManual = (token?: object) => {
+          const current = activeReservationRef.current
+          if (current && current.kind === 'manual') {
+            if (token !== undefined && current.token !== token) {
+              return
+            }
+            current.retired = true
+            activeReservationRef.current = null
+            setBusy(false)
+            if (openingActor.isOpeningActive()) {
+              c.refresh()
+            }
+          }
+        }
+
+        const nestedEmailSession =
+          toolSession &&
+          toolSession.tool === 'email' &&
+          toolSession.source === 'detail' &&
+          activeReservationRef.current &&
+          activeReservationRef.current.id === toolSession.id &&
+          !activeReservationRef.current.retired &&
+          activeReservationRef.current.openingId === openingActor.id
+            ? {
+                id: activeReservationRef.current.id,
+                ownerRevision: activeReservationRef.current.ownerRevision,
+                isCurrentOwner: createToolOwnerPredicate(activeReservationRef.current),
+                onClose: createToolClose(activeReservationRef.current),
+                onRefresh: createToolRefresh(activeReservationRef.current),
+              }
+            : null
+
+        return (
+          <CredentialDetail
+            key={`${detail.filename}:${c.detailEpoch}:${openingActor.id}`}
+            row={detail}
+            caps={c.caps}
+            close={() => closeDetail(openingActor)}
+            restoreFocus={() => {
+              if (
+                isOwnerActive() &&
+                detailSerial.current === openingActor.id &&
+                detailFocusRestoredRef.current !== openingActor.id
+              ) {
+                detailFocusRestoredRef.current = openingActor.id
+                restoreCredentialFocus(workspace.current, openingActor.filename, openingActor.trigger, listTitle.current)
+              }
+            }}
+            busy={busy}
+            action={detailAction}
+            beforeManual={handleBeforeManual}
+            afterManual={handleAfterManual}
+            captureTask={() => openingActor.taskSnapshot}
+            revoke={e => (openingActor.isOpeningActive() ? c.revoke(e) : false)}
+            mode={mode}
+            credentialApi={detailApi}
+            scope={openingActor.scope}
+            validation={openingActor.validation}
+            ownerRevision={openingActor.ownerRevision}
+            isCurrentOwner={isOwnerActive}
+            isCurrentOpening={openingActor.isOpeningActive}
+            onRefresh={() => {
+              if (openingActor.isOpeningActive()) c.refresh()
+            }}
+            toolSessionActive={isToolOpen}
+            nestedEmailSession={nestedEmailSession}
+            onOpenToolSession={tool => {
+              if (openingActor.isOpeningActive()) {
+                return openTool(tool, { kind: 'single', filename: openingActor.filename }, 'detail')
+              }
+              return false
+            }}
+            onCloseToolSession={() => {
+              if (
+                activeReservationRef.current?.source === 'detail' &&
+                activeReservationRef.current.openingId === openingActor.id
+              ) {
+                exitTool(activeReservationRef.current)
+              }
+            }}
+          />
+        )
+      })()}
+      {quotaDialogSerial > 0 && quotaDialogFilename && (() => {
+        const dialogSerial = quotaDialogSerial
+        const dialogFilename = quotaDialogFilename
+        const dialogRefresh = quota.refresh
+
+        return (
+          <QuotaDialog
+            key={`${dialogFilename}:${dialogSerial}`}
+            open={quotaDialogSerial > 0}
+            filename={quota.activeFilename ?? dialogFilename}
+            summary={quota.activeState?.summary ?? null}
+            loading={quota.activeState?.loading ?? false}
+            error={quota.activeState?.error ?? null}
+            mode={mode}
+            onRefresh={() => {
+              if (
+                !isOwnerActive() ||
+                quotaSerial.current !== dialogSerial ||
+                currentQuotaTargetRef.current !== dialogFilename
+              ) {
+                return
+              }
+              void dialogRefresh(dialogFilename)
+            }}
+            disabled={!quota.capabilityEnabled}
+            onOpenChange={isOpen => {
+              if (!isOpen) {
+                closeQuota(dialogSerial, dialogFilename)
+              }
+            }}
+            onCloseAutoFocus={event => {
+              handleQuotaCloseAutoFocus(event, dialogSerial, dialogFilename)
+            }}
+          />
+        )
+      })()}
+    </section>
+  )
 }

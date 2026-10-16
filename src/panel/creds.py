@@ -67,7 +67,8 @@ from config import (
 from datetime import datetime, timedelta, timezone
 from .utils import validate_mode
 from .credential_capabilities import (
-    ACTION_CAPABILITIES, PERMANENT_DISABLED, REMARK, credential_capabilities,
+    ACTION_CAPABILITIES, PERMANENT_DISABLED, REMARK, GEMINICLI_SEARCH, credential_capabilities,
+    capability_for_mode, panel_operation_capabilities, supports_credential_search, should_gate_credential_capabilities,
     unavailable_capability, capability_unavailable_response,
 )
 
@@ -570,13 +571,11 @@ async def _get_creds_status_common(
         search = normalize_credential_search(search)
     except ValueError:
         raise HTTPException(status_code=400, detail="search 不能超过 255 个字符") from None
-    if search and mode != "antigravity":
-        raise HTTPException(status_code=400, detail="凭证检索仅支持 Antigravity")
     # 验证分页参数
     if offset < 0:
         raise HTTPException(status_code=400, detail="offset 必须大于等于 0")
-    if limit not in [20, 25, 50, 100, 200, 500, 1000]:
-        raise HTTPException(status_code=400, detail="limit 只能是 20、25、50、100、200、500 或 1000")
+    if limit not in [10, 20, 25, 50, 100, 200, 500, 1000]:
+        raise HTTPException(status_code=400, detail="limit 只能是 10、20、25、50、100、200、500 或 1000")
     if status_filter not in ["all", "enabled", "disabled", "permanent_disabled"]:
         raise HTTPException(status_code=400, detail="status_filter 只能是 all、enabled、disabled 或 permanent_disabled")
     legacy_cooldown_filters = {"all", "in_cooldown", "no_cooldown", "pro_no_cooldown", "flash_no_cooldown"}
@@ -604,12 +603,17 @@ async def _get_creds_status_common(
     storage_adapter = await get_storage_adapter()
     backend_info = await storage_adapter.get_backend_info()
     backend_type = backend_info.get("backend_type", "unknown")
-    credential_caps = credential_capabilities(backend_type)
-    if mode == "antigravity":
-        if status_filter == "permanent_disabled" and PERMANENT_DISABLED not in credential_caps:
-            return capability_unavailable_response(PERMANENT_DISABLED)
-        if remark_filter is not None and remark_filter != "__all__" and REMARK not in credential_caps:
-            return capability_unavailable_response(REMARK)
+    credential_caps = credential_capabilities(backend_type, mode)
+    permanent_capability = capability_for_mode(PERMANENT_DISABLED, mode)
+    remark_capability = capability_for_mode(REMARK, mode)
+    gate_credential_caps = should_gate_credential_capabilities(backend_type, mode)
+    if gate_credential_caps and status_filter == "permanent_disabled" and permanent_capability not in credential_caps:
+        return capability_unavailable_response(permanent_capability)
+    if gate_credential_caps and remark_filter is not None and remark_filter != "__all__" and remark_capability not in credential_caps:
+        return capability_unavailable_response(remark_capability)
+    supports_search = supports_credential_search(storage_adapter._backend)
+    if mode == "geminicli" and search and not supports_search:
+        return capability_unavailable_response(GEMINICLI_SEARCH)
     supports_group_filter = getattr(storage_adapter._backend, "SUPPORTS_QUOTA_GROUP_FILTER", False) is True
     family_reader = getattr(storage_adapter._backend, "model_access_list_family_public", None)
     supports_family_filter = getattr(storage_adapter._backend, "model_access_storage_ready", False) is True and callable(family_reader)
@@ -634,11 +638,20 @@ async def _get_creds_status_common(
                                     model_access_tier=model_access_tier,
                                     model_access_family=model_access_family, **({"search": search} if search else {}), **filters)
     else:
-        # Preserve legacy backends and Gemini CLI pagination.
+        # Search all safe summaries before pagination; no payload or email lookup.
+        search_geminicli = mode == "geminicli" and bool(search)
         result = await storage_adapter._backend.get_credentials_summary(
-            offset=0 if mode == "antigravity" else offset,
-            limit=None if mode == "antigravity" else limit,
+            offset=0 if mode == "antigravity" or search_geminicli else offset,
+            limit=None if mode == "antigravity" or search_geminicli else limit,
             mode=mode, include_error_classifications=True, **filters)
+        if search_geminicli:
+            ascii_lower = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+            needle = search.translate(ascii_lower)
+            matched = [row for row in result["items"] if any(
+                needle in value.translate(ascii_lower)
+                for value in (os.path.basename(row.get("filename") or ""), row.get("user_email"))
+                if isinstance(value, str))]
+            result = {**result, "items": matched[offset:offset + limit], "total": len(matched)}
     supports_group_filter = supports_group_filter and result.get("quota_group_filter_supported") is True
     if cooldown_filter in GROUP_FILTERS and not supports_group_filter:
         return JSONResponse(status_code=501, content={"detail": "当前存储后端未能提供共享额度状态",
@@ -681,6 +694,10 @@ async def _get_creds_status_common(
             cred_info["tier_raw_id"] = summary.get("tier_raw_id")
             cred_info["tier_raw_name"] = summary.get("tier_raw_name")
             cred_info["tier_detected_at"] = summary.get("tier_detected_at")
+            for field in ("health_status", "quarantine_reason", "probe_stage", "next_probe_at",
+                          "last_health_check_at", "health_check_started_at", "health_state_version",
+                          "permanent_disabled"):
+                cred_info[field] = summary.get(field)
 
         if mode == "geminicli":
             cred_info["preview"] = summary.get("preview", True)
@@ -697,7 +714,17 @@ async def _get_creds_status_common(
 
         creds_list.append(cred_info)
 
+    panel_caps = list(credential_caps) + [f"{mode}.quota.summary"] + list(panel_operation_capabilities(mode))
+    if mode == "antigravity":
+        panel_caps += ([GROUP_FILTER_CAPABILITY] if supports_group_filter else [])
+        panel_caps += (["antigravity.model_access.family_filter"] if supports_family_filter else [])
+        panel_caps += [SEARCH_CAPABILITY]
+        panel_caps += ([AUTO_EMAIL_CAPABILITY] if email_enrichment_service.supports(storage_adapter._backend) else [])
+    elif supports_search:
+        panel_caps += [GEMINICLI_SEARCH]
+
     return JSONResponse(content={
+        "mode": mode,
         "items": creds_list,
         "total": result["total"],
         "offset": offset,
@@ -705,9 +732,7 @@ async def _get_creds_status_common(
         "has_more": (offset + limit) < result["total"],
         "stats": result.get("stats", {"total": 0, "normal": 0, "disabled": 0}),
         **({"model_access_summary": result["model_access_summary"]} if mode == "antigravity" else {}),
-        **({"panel_capabilities": list(credential_caps) + ([GROUP_FILTER_CAPABILITY] if supports_group_filter else []) +
-           (["antigravity.model_access.family_filter"] if supports_family_filter else []) +
-           [SEARCH_CAPABILITY] + ([AUTO_EMAIL_CAPABILITY] if email_enrichment_service.supports(storage_adapter._backend) else [])} if mode == "antigravity" else {}),
+        "panel_capabilities": panel_caps,
     })
 
 
@@ -2526,7 +2551,7 @@ async def configure_preview_channel(
         binding_status = binding_response.status_code
 
         if binding_status == 200 or binding_status == 201:
-            await storage_adapter.update_credential_state(filename, {
+            saved = await storage_adapter.update_credential_state(filename, {
                 "preview": True
             }, mode=mode)
 
@@ -2538,11 +2563,13 @@ async def configure_preview_channel(
                 "preview": True,
                 "message": "Preview 通道配置成功，已将 preview 属性设置为 true",
                 "setting_id": setting_id,
-                "binding_id": binding_id
+                "binding_id": binding_id,
+                "state_update": {"preview": {"status": "applied"} if saved is True else
+                                 {"status": "failed", "reason": "state_update_failed"}},
             })
         elif binding_status == 409:
             # Binding 已存在，说明已经配置过了
-            await storage_adapter.update_credential_state(filename, {
+            saved = await storage_adapter.update_credential_state(filename, {
                 "preview": True
             }, mode=mode)
 
@@ -2552,7 +2579,9 @@ async def configure_preview_channel(
                 "success": True,
                 "filename": filename,
                 "preview": True,
-                "message": "Preview 通道配置已存在，已将 preview 属性设置为 true"
+                "message": "Preview 通道配置已存在，已将 preview 属性设置为 true",
+                "state_update": {"preview": {"status": "applied"} if saved is True else
+                                 {"status": "failed", "reason": "state_update_failed"}},
             })
         else:
             # 步骤 2 失败

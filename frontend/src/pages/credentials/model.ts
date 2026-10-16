@@ -1,26 +1,141 @@
+import type { PanelMode } from '@/domain/panel'
+import type { Query } from '@/domain/shared'
+
 export type RecordValue = Record<string, unknown>
 export const object = (v: unknown): RecordValue => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as RecordValue : {}
 export const count = (v: unknown): number | null => typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null
 export const text = (v: unknown, fallback = '不可用'): string => typeof v === 'string' ? v : fallback
 export const CAP = { search: 'antigravity.credentials.search', group: 'antigravity.cooldown.group_filter', family: 'antigravity.model_access.family_filter', permanent: 'antigravity.credentials.permanent_disabled', remark: 'antigravity.credentials.remark', credit: 'antigravity.credentials.credit_mode' } as const
+export const CAP_BY_MODE = {
+  antigravity: CAP,
+  geminicli: {
+    search: 'geminicli.credentials.search',
+    permanent: 'geminicli.credentials.permanent_disabled',
+    remark: 'geminicli.credentials.remark',
+  },
+} as const
 export type Capabilities = Set<string>
 export const capabilities = (v: unknown): Capabilities => new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
 export interface Credential extends RecordValue { filename: string }
 export interface CredentialPage { items: Credential[]; total: number; hasMore: boolean; caps: Capabilities; stats: RecordValue; familySummary: RecordValue }
-export function parsePage(v: unknown): CredentialPage {
+function parseStats(raw: unknown, mode: PanelMode): RecordValue {
+  const src = object(raw)
+  const result: RecordValue = {}
+  const commonKeys = [
+    'total',
+    'normal',
+    'disabled',
+    'permanent_disabled',
+    'in_cooldown',
+    'no_cooldown',
+  ] as const
+  for (const key of commonKeys) {
+    if (Object.prototype.hasOwnProperty.call(src, key)) {
+      const c = count(src[key])
+      if (c !== null) {
+        result[key] = c === 0 ? 0 : c
+      }
+    }
+  }
+  if (mode === 'antigravity') {
+    const agCountKeys = [
+      'quota_restricted',
+      'quota_unrestricted',
+      'quota_blocked_unknown',
+      'quota_state_invalid',
+    ] as const
+    for (const key of agCountKeys) {
+      if (Object.prototype.hasOwnProperty.call(src, key)) {
+        const c = count(src[key])
+        if (c !== null) {
+          result[key] = c === 0 ? 0 : c
+        }
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(src, 'quota_next_expiry')) {
+      const val = src.quota_next_expiry
+      if (typeof val === 'number' && Number.isFinite(val) && val >= 0) {
+        result.quota_next_expiry = val === 0 ? 0 : val
+      }
+    }
+  }
+  return result
+}
+export function parsePage(v: unknown, mode: PanelMode = 'antigravity'): CredentialPage {
   const d = object(v)
+  if (Object.prototype.hasOwnProperty.call(d, 'mode') && d.mode !== mode) throw new Error('渠道模式不匹配')
   if (!Array.isArray(d.items) || count(d.total) === null) throw new Error('列表响应格式不完整')
   const items = d.items.map(v => { const r = object(v); if (typeof r.filename !== 'string' || !r.filename) throw new Error('缺少稳定凭证标识'); return r as Credential })
-  return { items, total: d.total as number, hasMore: d.has_more === true, caps: capabilities(d.panel_capabilities), stats: object(d.stats), familySummary: object(d.model_access_summary) }
+  return { items, total: d.total as number, hasMore: d.has_more === true, caps: capabilities(d.panel_capabilities), stats: parseStats(d.stats, mode), familySummary: object(d.model_access_summary) }
 }
-export interface Filters { search: string; status: string; error: string; tier: string; group: string; family: string; access: string; remark: string }
+export interface Filters {
+  search: string
+  status: string
+  error: string
+  tier: string
+  group: string
+  family: string
+  access: string
+  remark: string
+  preview?: string
+  cooldown?: string
+}
 export const initialFilters: Filters = { search: '', status: 'all', error: 'all', tier: 'all', group: 'all', family: 'claude-opus-5-5', access: 'all', remark: '__all__' }
-export function supportedFilters(f: Filters, caps: Capabilities): Filters {
-  return { ...f, search: caps.has(CAP.search) ? f.search : '', group: caps.has(CAP.group) ? f.group : 'all', family: caps.has(CAP.family) ? f.family : initialFilters.family, access: caps.has(CAP.family) ? f.access : 'all', remark: caps.has(CAP.remark) ? f.remark : '__all__', status: !caps.has(CAP.permanent) && f.status === 'permanent_disabled' ? 'all' : f.status }
+export function supportedFilters(f: Filters, caps: Capabilities, mode: PanelMode = 'antigravity'): Filters {
+  if (mode === 'geminicli') {
+    const cap = CAP_BY_MODE.geminicli
+    return {
+      ...f,
+      search: caps.has(cap.search) ? f.search : '',
+      remark: caps.has(cap.remark) ? f.remark : '__all__',
+      status: !caps.has(cap.permanent) && f.status === 'permanent_disabled' ? 'all' : f.status,
+      preview: f.preview || 'all',
+      cooldown: f.cooldown || 'all',
+    }
+  }
+  const cap = CAP_BY_MODE.antigravity
+  return {
+    ...f,
+    search: caps.has(cap.search) ? f.search : '',
+    group: caps.has(cap.group) ? f.group : 'all',
+    family: caps.has(cap.family) ? f.family : initialFilters.family,
+    access: caps.has(cap.family) ? f.access : 'all',
+    remark: caps.has(cap.remark) ? f.remark : '__all__',
+    status: !caps.has(cap.permanent) && f.status === 'permanent_disabled' ? 'all' : f.status,
+    ...(f.cooldown !== undefined ? { cooldown: caps.has(cap.group) ? f.cooldown : 'all' } : {}),
+  }
 }
-export function listQuery(filters: Filters, caps: Capabilities, offset: number, limit: number) {
-  const f = supportedFilters(filters, caps)
-  return { mode: 'antigravity', offset, limit, status_filter: f.status, error_code_filter: f.error, tier_filter: f.tier, ...(caps.has(CAP.remark) ? { remark_filter: f.remark } : {}), ...(caps.has(CAP.search) ? { search: f.search } : {}), ...(caps.has(CAP.group) ? { cooldown_filter: f.group } : {}), ...(caps.has(CAP.family) ? { model_access_family: f.family, model_access_filter: f.access } : {}) }
+export function listQuery(filters: Filters, caps: Capabilities, offset: number, limit: number, mode: PanelMode = 'antigravity'): Query {
+  const f = supportedFilters(filters, caps, mode)
+  if (mode === 'geminicli') {
+    const cap = CAP_BY_MODE.geminicli
+    return {
+      mode: 'geminicli',
+      offset,
+      limit,
+      status_filter: f.status,
+      error_code_filter: f.error,
+      tier_filter: f.tier,
+      preview_filter: f.preview || 'all',
+      cooldown_filter: f.cooldown || 'all',
+      ...(caps.has(cap.remark) ? { remark_filter: f.remark } : {}),
+      ...(caps.has(cap.search) ? { search: f.search } : {}),
+    }
+  }
+  const cap = CAP_BY_MODE.antigravity
+  const cooldownVal = (typeof f.cooldown === 'string' && f.cooldown.length > 0) ? f.cooldown : f.group
+  return {
+    mode: 'antigravity',
+    offset,
+    limit,
+    status_filter: f.status,
+    error_code_filter: f.error,
+    tier_filter: f.tier,
+    ...(caps.has(cap.remark) ? { remark_filter: f.remark } : {}),
+    ...(caps.has(cap.search) ? { search: f.search } : {}),
+    ...(caps.has(cap.group) ? { cooldown_filter: cooldownVal } : {}),
+    ...(caps.has(cap.family) ? { model_access_family: f.family, model_access_filter: f.access } : {}),
+  }
 }
 export function credentialStatus(r: Credential) {
   if (r.permanent_disabled === true) return '永久禁用'

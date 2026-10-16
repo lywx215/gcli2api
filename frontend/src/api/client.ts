@@ -1,7 +1,8 @@
 import { getSessionSnapshot, invalidateSession, registerSessionCleanup } from "@/auth/session";
+import { isPanelScopeCurrent, registerChannelCleanup, type PanelScope } from "@/domain/panel";
 import type { Query } from "@/domain/shared";
 export type { Query } from "@/domain/shared";
-export type RequestOptions = { method?: string; query?: Query; body?: unknown | FormData; signal?: AbortSignal };
+export type RequestOptions = { method?: string; query?: Query; body?: unknown | FormData; signal?: AbortSignal; scope?: PanelScope };
 export class ApiError extends Error {
   constructor(public status: number, public payload: unknown, message = `请求未完成（HTTP ${status}）`) {
     super(message); this.name = "ApiError";
@@ -41,32 +42,101 @@ export function createServiceUrl(path: string, query?: Query): URL {
   }
   return url;
 }
+const PANEL_AUTH_FAILURE_DETAILS = new Set([
+  "密码错误",
+  "Not authenticated",
+  "Invalid authentication credentials",
+  "panel_authentication_required",
+]);
 /** Match the existing FastAPI panel dependency, never an upstream/business 401. */
 function isPanelAuthFailure(status: number, payload: unknown): boolean {
   if ((status !== 401 && status !== 403) || !payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   const record = payload as Record<string, unknown>;
+  const keys = Object.keys(record);
   // The dependency emits only detail. Any business provenance or additional fields are not a panel proof.
-  return Object.keys(record).length === 1 && typeof record.detail === "string"
-    && ["密码错误", "Not authenticated", "Invalid authentication credentials"].includes(record.detail);
+  return keys.length === 1 && keys[0] === "detail" && typeof record.detail === "string"
+    && PANEL_AUTH_FAILURE_DETAILS.has(record.detail);
 }
 export type BlobResult = { blob: Blob; response: Response };
-function staleRequest(): DOMException { return new DOMException("会话已变更，请重新读取。", "AbortError"); }
+function staleRequest(message = "会话已变更，请重新读取。"): DOMException {
+  return new DOMException(message, "AbortError");
+}
+function validateScopeMode(scope: PanelScope, options: RequestOptions): void {
+  if (options.query && typeof options.query === "object") {
+    const queryMode = options.query.mode;
+    if (queryMode !== undefined && queryMode !== null && queryMode !== scope.mode) {
+      throw new Error("请求模式与作用域不一致。");
+    }
+  }
+  if (options.body instanceof FormData) {
+    const modeEntries = options.body.getAll("mode");
+    if (modeEntries.length > 1) {
+      throw new Error("请求模式与作用域不一致。");
+    }
+    if (modeEntries.length === 1) {
+      const entry = modeEntries[0];
+      if (typeof entry !== "string" || entry !== scope.mode) {
+        throw new Error("请求模式与作用域不一致。");
+      }
+    }
+  } else if (
+    options.body &&
+    typeof options.body === "object" &&
+    !(options.body instanceof Blob) &&
+    !(options.body instanceof ArrayBuffer) &&
+    !ArrayBuffer.isView(options.body) &&
+    !Array.isArray(options.body)
+  ) {
+    const record = options.body as Record<string, unknown>;
+    if ("mode" in record && record.mode !== undefined && record.mode !== scope.mode) {
+      throw new Error("请求模式与作用域不一致。");
+    }
+  }
+}
 async function request(path: string, options: RequestOptions, kind: "json" | "blob"): Promise<unknown> {
   const session = getSessionSnapshot();
+  const capturedSessionEpoch: number = session.sessionEpoch;
+  const capturedBearerToken: string | null = session.token;
+
+  const rawScope = options.scope;
+  const ownerScope: PanelScope | undefined = rawScope
+    ? Object.freeze({
+        mode: rawScope.mode,
+        channelEpoch: rawScope.channelEpoch,
+        sessionEpoch: rawScope.sessionEpoch,
+      })
+    : undefined;
+
   const controller = new AbortController();
   const forwardAbort = () => controller.abort(options.signal?.reason);
   if (options.signal?.aborted) forwardAbort();
   else options.signal?.addEventListener("abort", forwardAbort, { once: true });
-  const unregister = registerSessionCleanup(() => controller.abort(staleRequest()));
+
+  const unregisterSession = registerSessionCleanup(() => controller.abort(staleRequest("会话已变更，请重新读取。")));
+  const unregisterChannel = ownerScope
+    ? registerChannelCleanup(() => controller.abort(staleRequest("作用域已变更，请重新读取。")))
+    : undefined;
+
   const assertCurrent = () => {
-    if (session.sessionEpoch !== getSessionSnapshot().sessionEpoch) throw staleRequest();
+    if (ownerScope) {
+      if (!isPanelScopeCurrent(ownerScope, getSessionSnapshot().sessionEpoch)) {
+        throw staleRequest("作用域已变更，请重新读取。");
+      }
+    } else {
+      if (capturedSessionEpoch !== getSessionSnapshot().sessionEpoch) {
+        throw staleRequest("会话已变更，请重新读取。");
+      }
+    }
     controller.signal.throwIfAborted();
   };
   try {
     assertCurrent();
+    if (ownerScope) {
+      validateScopeMode(ownerScope, options);
+    }
     const headers = new Headers({ Accept: kind === "json" ? "application/json" : "*/*" });
     const isLogin = path === "auth/login";
-    if (session.token && !isLogin) headers.set("Authorization", `Bearer ${session.token}`);
+    if (capturedBearerToken && !isLogin) headers.set("Authorization", `Bearer ${capturedBearerToken}`);
     let body: BodyInit | undefined;
     if (options.body instanceof FormData) body = options.body;
     else if (options.body !== undefined) { body = JSON.stringify(options.body); headers.set("Content-Type", "application/json"); }
@@ -84,7 +154,7 @@ async function request(path: string, options: RequestOptions, kind: "json" | "bl
       } catch { /* status remains authoritative */ }
       assertCurrent();
       const authFailed = !isLogin && isPanelAuthFailure(response.status, payload);
-      if (authFailed) invalidateSession(session.sessionEpoch);
+      if (authFailed) invalidateSession(capturedSessionEpoch);
       throw new ApiError(response.status, payload, authFailed ? "登录已失效，请重新登录。" : undefined);
     }
     const result = kind === "blob" ? { blob: await response.blob(), response } : response.status === 204 ? null : await response.json();
@@ -92,7 +162,8 @@ async function request(path: string, options: RequestOptions, kind: "json" | "bl
     // Endpoint adapters determine success / partial / error semantics of a 2xx body.
     return result;
   } finally {
-    unregister();
+    unregisterSession();
+    unregisterChannel?.();
     options.signal?.removeEventListener("abort", forwardAbort);
   }
 }

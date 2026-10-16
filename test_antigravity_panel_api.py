@@ -98,7 +98,7 @@ async def test_batch_passes_disconnect_request_and_keeps_result_order(monkeypatc
     assert data["total_count"] == 3 and data["failure_count"] == 3
     assert data["model_access_summary"]["total"] == 0
 
-@pytest.mark.parametrize('search,mode,status', [('a'*256,'antigravity',400),('1621','geminicli',400)])
+@pytest.mark.parametrize('search,mode,status', [('a'*256,'antigravity',400),('a'*256,'geminicli',400)])
 async def test_search_validation_rejects_before_storage(monkeypatch,search,mode,status):
     init=AsyncMock(side_effect=AssertionError('must not read storage'))
     monkeypatch.setattr(creds,'get_storage_adapter',init)

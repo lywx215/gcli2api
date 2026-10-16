@@ -3,7 +3,19 @@ export type Value = string | number | boolean | string[] | number[];
 export type Config = Record<string, Value>;
 export type Draft = Record<string, string | boolean>;
 export type TokenStatus = { configured: boolean; locked: boolean; source?: string };
-export type Snapshot = { config: Config; envLocked: string[]; capabilities: string[]; token?: TokenStatus };
+export type EmbedPolicySource = 'environment' | 'storage' | 'default' | 'unknown';
+export type EmbedPolicyStatus = {
+  readonly source: EmbedPolicySource;
+  readonly valid: boolean | 'unknown';
+  readonly locked: boolean | 'unknown';
+};
+export type Snapshot = {
+  config: Config;
+  envLocked: string[];
+  capabilities: string[];
+  token?: TokenStatus;
+  embedPolicy?: EmbedPolicyStatus;
+};
 export type Field = { key: string; label: string; section: string; kind?: 'number' | 'boolean' | 'secret' | 'numbers' | 'origins'; min?: number; max?: number; integer?: boolean; choices?: string[]; capability?: string };
 export const fields: Field[] = [
   {key:'host',label:'监听地址',section:'服务'}, {key:'port',label:'端口',section:'服务',kind:'number',min:1,max:65535,integer:true},
@@ -11,7 +23,7 @@ export const fields: Field[] = [
   ...['api_password','panel_password','password'].map((key,i):Field=>({key,label:['API 密码','面板密码','通用密码'][i],section:'访问安全',kind:'secret'})),
   {key:'gcli_embed_mode',label:'嵌入策略',section:'访问安全',choices:['any_https','exact','disabled']},
   {key:'gcli_embed_allowed_origins',label:'允许的 HTTPS Origin（每行一个）',section:'访问安全',kind:'origins'},
-  ...['proxy','oauth_proxy_url','googleapis_proxy_url','resource_manager_api_url','service_usage_api_url','antigravity_api_url'].map((key,i):Field=>({key,label:['网络代理','OAuth 代理','Google APIs 代理','Resource Manager API','Service Usage API','Antigravity API'][i],section:'网络'})),
+  ...['proxy','code_assist_endpoint','oauth_proxy_url','googleapis_proxy_url','resource_manager_api_url','service_usage_api_url','antigravity_api_url'].map((key,i):Field=>({key,label:['网络代理','Code Assist Endpoint','OAuth 代理','Google APIs 代理','Resource Manager API','Service Usage API','Antigravity API'][i],section:'网络'})),
   {key:'auto_ban_enabled',label:'自动禁用',section:'重试与保护',kind:'boolean'},
   {key:'auto_ban_error_codes',label:'自动禁用错误码（逗号分隔）',section:'重试与保护',kind:'numbers'},
   {key:'retry_429_enabled',label:'启用 429 重试',section:'重试与保护',kind:'boolean'},

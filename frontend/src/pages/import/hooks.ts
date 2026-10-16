@@ -1,87 +1,250 @@
-import { useEffect, useRef, useState } from 'react'
-import { ApiError } from '@/api/client'
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import { useAuth } from '@/auth'
-import { failureMessage, normalizeResult, projectPrompt, readEmailJob } from './api'
-import type { EmailSnapshot, ImportResult, ProjectPrompt } from './types'
+import {
+  getSessionSnapshot,
+  getSessionValidationSnapshot,
+  type SessionValidationSnapshot,
+} from '@/auth/session'
+import {
+  getPanelChannelSnapshot,
+  type PanelMode,
+} from '@/domain/panel'
+import {
+  cancelWorkflowOperation,
+  clearFinishedWorkflowEmailJobs,
+  completeWorkflowOAuth,
+  getImportWorkflowSnapshot,
+  importWorkflowTokens,
+  resumeWorkflowEmailJob,
+  startWorkflowOAuth,
+  stopWorkflowEmailJob,
+  subscribeImportWorkflow,
+  uploadWorkflowFiles,
+  type ImportWorkflowEmailJob,
+  type ImportWorkflowOperation,
+  type ImportWorkflowReadonly,
+} from './workflowRunner'
+import type { ImportFlowOwner } from './flowStore'
+import type {
+  EmailSnapshot,
+  ImportResult,
+  ProjectPrompt,
+  TokenInput,
+  UploadByteProgress,
+} from './types'
 
-export function useImportFlow() {
-  const { authenticated, sessionEpoch } = useAuth()
-  const identity = useRef({ authenticated, sessionEpoch })
-  identity.current = { authenticated, sessionEpoch }
-  const sequence = useRef(0)
-  const emailSequence = useRef(0)
-  const controller = useRef<AbortController | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState<ImportResult | null>(null)
-  const [message, setMessage] = useState('')
-  const [prompt, setPrompt] = useState<ProjectPrompt | null>(null)
-  const [authUrl, setAuthUrl] = useState('')
-  const [jobId, setJobId] = useState<string>()
-  const [email, setEmail] = useState<EmailSnapshot | null>(null)
-  const [emailMessage, setEmailMessage] = useState('')
-  useEffect(() => {
-    sequence.current++
-    emailSequence.current++
-    controller.current?.abort(); controller.current = null
-    setBusy(false); setResult(null); setMessage(''); setPrompt(null); setAuthUrl(''); setJobId(undefined); setEmail(null); setEmailMessage('')
-    return () => { sequence.current++; controller.current?.abort() }
-  }, [sessionEpoch, authenticated])
+export const supportedPanelModes: readonly ['antigravity', 'geminicli'] = Object.freeze([
+  'antigravity',
+  'geminicli',
+] as const)
 
-  async function run(action: (signal: AbortSignal) => Promise<ImportResult | string>, onSuccess?: () => void) {
-    if (!identity.current.authenticated || controller.current) return
-    const seq = ++sequence.current, epoch = identity.current.sessionEpoch
-    // A new submission owns the result panel; an earlier job must not update it.
-    emailSequence.current++
-    setJobId(undefined); setEmail(null); setEmailMessage('')
-    const abort = new AbortController()
-    controller.current = abort
-    const current = () => seq === sequence.current && epoch === identity.current.sessionEpoch && identity.current.authenticated
-    setBusy(true); setMessage(''); setPrompt(null); setResult(null)
-    try {
-      const next = await action(abort.signal)
-      if (!current()) return
-      if (typeof next === 'string') setAuthUrl(next)
-      else { setResult(next); setAuthUrl(''); setJobId(next.jobId); setEmail(null); setEmailMessage('') }
-      onSuccess?.()
-    } catch (error) {
-      if (!current()) return
-      const selection = projectPrompt(error)
-      if (selection) { setPrompt(selection); setMessage('请选择或输入项目 ID，然后明确点击完成授权继续。') }
-      else {
-        if (error instanceof ApiError && error.status === 400 && Array.isArray((error.payload as { results?: unknown } | null)?.results)) {
-          const next = normalizeResult(error.payload); setResult(next); setJobId(next.jobId)
-        }
-        setMessage(failureMessage(error))
-      }
-    } finally {
-      if (current()) { controller.current = null; setBusy(false) }
-    }
-  }
-  function cancel() {
-    sequence.current++; controller.current?.abort(); controller.current = null
-    setBusy(false); setAuthUrl(''); setPrompt(null)
-    setMessage('已停止等待。服务器可能已保存凭证；此操作不会撤销导入。请到凭证页确认。')
-  }
+export type UseImportFlowResult = {
+  readonly owner: ImportFlowOwner | null
+  readonly validation: SessionValidationSnapshot | null
+  readonly revision: number
+  readonly busy: boolean
+  readonly operation: ImportWorkflowOperation | null
+  readonly byteProgress?: ImportWorkflowReadonly<UploadByteProgress> | null
+  readonly result: ImportWorkflowReadonly<ImportResult> | null
+  readonly prompt: ImportWorkflowReadonly<ProjectPrompt> | null
+  readonly authUrl: string
+  readonly message: string
+  readonly emailJobs: readonly ImportWorkflowEmailJob[]
+  readonly emailWarning: string
+  readonly authenticated: boolean
+  readonly sessionEpoch: number
+  readonly mode: PanelMode
+  readonly jobId?: string
+  readonly email?: ImportWorkflowReadonly<EmailSnapshot> | null
+  readonly emailMessage?: string
+  isCurrent(): boolean
+  startOAuth(projectId: string): boolean
+  completeOAuth(callbackUrl: string | null, projectId: string): boolean
+  uploadFiles(files: readonly File[]): boolean
+  importTokens(input: Readonly<TokenInput>): boolean
+  cancel(): boolean
+  stopEmailJob(jobId: string): boolean
+  resumeEmailJob(jobId: string): boolean
+  clearFinishedEmailJobs(): boolean
+  stopEmail(jobId?: string): boolean
+}
+
+export function useImportFlow(): UseImportFlowResult {
+  const auth = useAuth()
+  const snapshot = useSyncExternalStore(
+    subscribeImportWorkflow,
+    getImportWorkflowSnapshot,
+    getImportWorkflowSnapshot,
+  )
+
+  const actorRef = useRef<{ id: number; mounted: boolean }>({ id: 1, mounted: true })
   useEffect(() => {
-    if (!jobId || !authenticated) return
-    const abort = new AbortController(), epoch = sessionEpoch, emailSeq = emailSequence.current
-    let live = true, timer: ReturnType<typeof setTimeout> | undefined
-    const current = () => live && emailSeq === emailSequence.current && identity.current.authenticated && identity.current.sessionEpoch === epoch
-    async function poll() {
-      try {
-        const snapshot = await readEmailJob(jobId!, abort.signal)
-        if (!current()) return
-        setEmail(snapshot)
-        if (!snapshot.complete) timer = setTimeout(poll, 2000)
-        else setEmailMessage('邮箱补全任务已结束；失败或跳过项可在旧 AG 控制面板手动获取邮箱。')
-      } catch (error) {
-        if (!current()) return
-        setEmailMessage(error instanceof ApiError && error.status === 404 ? '邮箱任务已过期或服务已重启，请到旧 AG 控制面板手动获取邮箱。' : '无法确认邮箱补全进度，已停止轮询。请到凭证页查看。')
-      }
+    actorRef.current.mounted = true
+    return () => {
+      actorRef.current.mounted = false
     }
-    void poll()
-    return () => { live = false; abort.abort(); if (timer) clearTimeout(timer) }
-  }, [jobId, authenticated, sessionEpoch])
-  return { authenticated, sessionEpoch, busy, result, message, prompt, authUrl, email, emailMessage, jobId, run, cancel,
-    stopEmail: () => { emailSequence.current++; setJobId(undefined); setEmailMessage('已停止跟踪邮箱进度；服务器任务和已保存凭证不会撤销。') } }
+  }, [])
+
+  const isGuardValid = useCallback(
+    (capturedOwner: ImportFlowOwner | null, capturedValidation: SessionValidationSnapshot | null): capturedOwner is ImportFlowOwner => {
+      if (!actorRef.current.mounted) return false
+      if (!auth.authenticated) return false
+      if (!capturedOwner || !capturedValidation) return false
+      if (snapshot.owner !== capturedOwner || snapshot.validation !== capturedValidation) return false
+
+      const curSession = getSessionSnapshot()
+      const curValidation = getSessionValidationSnapshot()
+      const curChannel = getPanelChannelSnapshot()
+
+      if (
+        curSession.token === null ||
+        curValidation.status !== 'verified' ||
+        curValidation.sessionEpoch !== curSession.sessionEpoch ||
+        curValidation !== capturedValidation ||
+        capturedOwner.mode !== curChannel.mode ||
+        capturedOwner.channelEpoch !== curChannel.channelEpoch ||
+        capturedOwner.sessionEpoch !== curSession.sessionEpoch
+      ) {
+        return false
+      }
+
+      return true
+    },
+    [auth.authenticated, snapshot.owner, snapshot.validation],
+  )
+
+  const isCurrent = useCallback((): boolean => {
+    return isGuardValid(snapshot.owner, snapshot.validation)
+  }, [isGuardValid, snapshot.owner, snapshot.validation])
+
+  const startOAuth = useCallback(
+    (projectId: string): boolean => {
+      const owner = snapshot.owner
+      const validation = snapshot.validation
+      if (!isGuardValid(owner, validation)) return false
+      return startWorkflowOAuth(owner, projectId)
+    },
+    [isGuardValid, snapshot.owner, snapshot.validation],
+  )
+
+  const completeOAuth = useCallback(
+    (callbackUrl: string | null, projectId: string): boolean => {
+      const owner = snapshot.owner
+      const validation = snapshot.validation
+      if (!isGuardValid(owner, validation)) return false
+      return completeWorkflowOAuth(owner, callbackUrl, projectId)
+    },
+    [isGuardValid, snapshot.owner, snapshot.validation],
+  )
+
+  const uploadFiles = useCallback(
+    (files: readonly File[]): boolean => {
+      const owner = snapshot.owner
+      const validation = snapshot.validation
+      if (!isGuardValid(owner, validation)) return false
+      return uploadWorkflowFiles(owner, files)
+    },
+    [isGuardValid, snapshot.owner, snapshot.validation],
+  )
+
+  const importTokens = useCallback(
+    (input: Readonly<TokenInput>): boolean => {
+      const owner = snapshot.owner
+      const validation = snapshot.validation
+      if (!isGuardValid(owner, validation)) return false
+      return importWorkflowTokens(owner, input)
+    },
+    [isGuardValid, snapshot.owner, snapshot.validation],
+  )
+
+  const cancel = useCallback((): boolean => {
+    const owner = snapshot.owner
+    const validation = snapshot.validation
+    if (!isGuardValid(owner, validation)) return false
+    return cancelWorkflowOperation(owner)
+  }, [isGuardValid, snapshot.owner, snapshot.validation])
+
+  const stopEmailJob = useCallback(
+    (jobId: string): boolean => {
+      const owner = snapshot.owner
+      const validation = snapshot.validation
+      if (!isGuardValid(owner, validation)) return false
+      return stopWorkflowEmailJob(owner, jobId)
+    },
+    [isGuardValid, snapshot.owner, snapshot.validation],
+  )
+
+  const resumeEmailJob = useCallback(
+    (jobId: string): boolean => {
+      const owner = snapshot.owner
+      const validation = snapshot.validation
+      if (!isGuardValid(owner, validation)) return false
+      return resumeWorkflowEmailJob(owner, jobId)
+    },
+    [isGuardValid, snapshot.owner, snapshot.validation],
+  )
+
+  const clearFinishedEmailJobs = useCallback((): boolean => {
+    const owner = snapshot.owner
+    const validation = snapshot.validation
+    if (!isGuardValid(owner, validation)) return false
+    return clearFinishedWorkflowEmailJobs(owner)
+  }, [isGuardValid, snapshot.owner, snapshot.validation])
+
+  const stopEmail = useCallback(
+    (jobId?: string): boolean => {
+      const targetId =
+        jobId ??
+        (snapshot.emailJobs.length > 0
+          ? snapshot.emailJobs[snapshot.emailJobs.length - 1].jobId
+          : undefined)
+      if (typeof targetId === 'string') {
+        return stopEmailJob(targetId)
+      }
+      return false
+    },
+    [snapshot.emailJobs, stopEmailJob],
+  )
+
+  const latestEmailJob =
+    snapshot.emailJobs.length > 0
+      ? snapshot.emailJobs[snapshot.emailJobs.length - 1]
+      : undefined
+  const jobId = latestEmailJob?.jobId ?? snapshot.result?.jobId
+  const email = latestEmailJob?.snapshot ?? null
+  const emailMessage = latestEmailJob?.message ?? snapshot.emailWarning
+
+  const channelSnapshot = getPanelChannelSnapshot()
+  const mode = snapshot.owner?.mode ?? channelSnapshot.mode
+
+  return {
+    owner: snapshot.owner,
+    validation: snapshot.validation,
+    revision: snapshot.revision,
+    busy: snapshot.busy,
+    operation: snapshot.operation,
+    byteProgress: snapshot.byteProgress,
+    result: snapshot.result,
+    prompt: snapshot.prompt,
+    authUrl: snapshot.authUrl,
+    message: snapshot.message,
+    emailJobs: snapshot.emailJobs,
+    emailWarning: snapshot.emailWarning,
+    authenticated: auth.authenticated,
+    sessionEpoch: auth.sessionEpoch,
+    mode,
+    jobId,
+    email,
+    emailMessage,
+    isCurrent,
+    startOAuth,
+    completeOAuth,
+    uploadFiles,
+    importTokens,
+    cancel,
+    stopEmailJob,
+    resumeEmailJob,
+    clearFinishedEmailJobs,
+    stopEmail,
+  }
 }

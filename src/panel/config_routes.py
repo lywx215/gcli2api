@@ -139,8 +139,8 @@ async def get_system_status(token: str = Depends(verify_panel_token)):
 
 
 @router.get("/get")
-async def get_config(token: str = Depends(verify_panel_token)):
-    """获取当前配置"""
+async def get_config(token: str = Depends(verify_panel_token), include_secrets: bool = True):
+    """获取当前配置；include_secrets=false 时只返回密码配置状态。"""
     try:
 
 
@@ -227,21 +227,27 @@ async def get_config(token: str = Depends(verify_panel_token)):
         current_config[config.GCLI_EMBED_MODE_KEY] = embed_policy.mode
         current_config[config.GCLI_EMBED_ORIGINS_KEY] = list(embed_policy.origins)
 
-        return JSONResponse(
-            content={
-                "config": current_config,
-                "capabilities": [config.ANTIGRAVITY_FLASH_NON_STREAM_CAPABILITY, config.ANTIGRAVITY_NATIVE_TIMEOUT_CAPABILITY],
-                "env_locked": list(env_locked_keys),
-                "security": {
-                    "node_management_token": await management_token_status(),
-                    "embed_policy": {
-                        "source": embed_policy.source,
-                        "locked": embed_policy.source == "environment",
-                        "valid": embed_policy.valid,
-                    },
+        response_data = {
+            "config": current_config,
+            "capabilities": [config.ANTIGRAVITY_FLASH_NON_STREAM_CAPABILITY, config.ANTIGRAVITY_NATIVE_TIMEOUT_CAPABILITY],
+            "env_locked": list(env_locked_keys),
+            "security": {
+                "node_management_token": await management_token_status(),
+                "embed_policy": {
+                    "source": embed_policy.source,
+                    "locked": embed_policy.source == "environment",
+                    "valid": embed_policy.valid,
                 },
+            },
+        }
+        if not include_secrets:
+            # Derive status after storage merge so it describes the same effective
+            # values as the legacy response, without returning password contents.
+            response_data["secret_fields"] = {
+                key: {"configured": bool(current_config.pop(key, None))}
+                for key in ("api_password", "panel_password", "password")
             }
-        )
+        return JSONResponse(content=response_data, headers={"Cache-Control": "no-store"})
 
     except Exception as e:
         log.error(f"获取配置失败: {e}")

@@ -1,4 +1,13 @@
-export type DetailTrigger = 'desktop-name' | 'desktop-detail' | 'mobile-detail'
+export type DetailTrigger =
+  | 'desktop-name'
+  | 'desktop-detail'
+  | 'mobile-detail'
+  | 'desktop-quota'
+  | 'mobile-quota'
+  | 'card-quota'
+  | 'card-detail'
+
+export type CredentialTrigger = DetailTrigger
 
 function available(element: HTMLElement) {
   if (!element.isConnected || (element instanceof HTMLButtonElement && element.disabled)) return false
