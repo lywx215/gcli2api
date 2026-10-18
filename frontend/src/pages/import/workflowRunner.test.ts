@@ -156,6 +156,8 @@ beforeEach(() => {
   window.localStorage.clear()
   vi.stubEnv('VITE_UI_FIXTURES', 'false')
   clearRoutes()
+  // The legacy upload path is negotiated before the POST starts.
+  onGet('creds/upload-progress/capabilities', () => jsonResponse({}, 404))
   fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(String(input), 'http://localhost')
     for (let i = routeHandlers.length - 1; i >= 0; i--) {
@@ -385,6 +387,7 @@ describe('workflowRunner suite', () => {
       const admitted = uploadWorkflowFiles(owner, [file])
       expect(admitted).toBe(true)
 
+      await vi.dynamicImportSettled()
       const snap = await waitForCondition(s => !s.busy && s.result !== null)
       expect(snap.busy).toBe(false)
       expect(snap.result).not.toBeNull()
@@ -399,16 +402,27 @@ describe('workflowRunner suite', () => {
       const pendingUpload = new Promise<Response>(resolve => {
         resolveUpload = resolve
       })
-      onPost('creds/upload', () => pendingUpload)
+      let uploadSignal: AbortSignal | undefined
+      let markUploadStarted!: () => void
+      const uploadStarted = new Promise<void>(resolve => { markUploadStarted = resolve })
+      onPost('creds/upload', (_url, init) => {
+        uploadSignal = init?.signal ?? undefined
+        markUploadStarted()
+        return pendingUpload
+      })
 
       const file = new File(['{}'], 'lost-owner.json', { type: 'application/json' })
       const admitted = uploadWorkflowFiles(owner1, [file])
       expect(admitted).toBe(true)
       expect(getImportWorkflowSnapshot().busy).toBe(true)
+      await uploadStarted
+      expect(getPostCalls()).toHaveLength(1)
+      expect(uploadSignal?.aborted).toBe(false)
 
       // Validation becomes unavailable
       const sessionEpoch = getSessionSnapshot().sessionEpoch
       __setSessionValidationStatus(sessionEpoch, 'unavailable')
+      expect(uploadSignal?.aborted).toBe(true)
 
       // Snapshot immediately shows invalid-owner domain
       const invalidSnap = getImportWorkflowSnapshot()
@@ -476,15 +490,26 @@ describe('workflowRunner suite', () => {
       const pendingUpload = new Promise<Response>((_, reject) => {
         rejectUpload = reject
       })
-      onPost('creds/upload', () => pendingUpload)
+      let uploadSignal: AbortSignal | undefined
+      let markUploadStarted!: () => void
+      const uploadStarted = new Promise<void>(resolve => { markUploadStarted = resolve })
+      onPost('creds/upload', (_url, init) => {
+        uploadSignal = init?.signal ?? undefined
+        markUploadStarted()
+        return pendingUpload
+      })
 
       const file = new File(['{}'], 'cancel.json', { type: 'application/json' })
       const admitted = uploadWorkflowFiles(owner, [file])
       expect(admitted).toBe(true)
       expect(getImportWorkflowSnapshot().busy).toBe(true)
+      await uploadStarted
+      expect(getPostCalls()).toHaveLength(1)
+      expect(uploadSignal?.aborted).toBe(false)
 
       const cancelAdmitted = cancelWorkflowOperation(owner)
       expect(cancelAdmitted).toBe(true)
+      expect(uploadSignal?.aborted).toBe(true)
 
       const cancelledSnap = getImportWorkflowSnapshot()
       expect(cancelledSnap.busy).toBe(false)
@@ -690,6 +715,7 @@ describe('workflowRunner suite', () => {
 
       let currentInFlightGet = 0
       let maxInFlightGet = 0
+      let initialObservation = true
       let cycle1Active = false
       let cycle1Settled = false
       let cycle1SettledAt = 0
@@ -725,6 +751,15 @@ describe('workflowRunner suite', () => {
       })
 
       onGet('creds/email-enrichment', async (url) => {
+        // Registration polls immediately with only the first job. Let that
+        // observation finish so the next cycle can collect all six jobs.
+        if (initialObservation) {
+          initialObservation = false
+          return jsonResponse({
+            job_id: jobIds[0], total: 1, complete: false, sealed: false,
+            items: [{ filename: 'tok-1.json', status: 'running' }],
+          })
+        }
         if (!cycle1Active) {
           cycle1Active = true
         } else if (cycle1Settled) {
@@ -790,6 +825,10 @@ describe('workflowRunner suite', () => {
         const admitted = importWorkflowTokens(owner, tokInput)
         expect(admitted).toBe(true)
         await waitForCondition(s => !s.busy && s.emailJobs.length === i + 1)
+        if (i === 0) {
+          await waitForCondition(s => s.emailJobs[0]?.snapshot !== null)
+          await vi.advanceTimersByTimeAsync(0)
+        }
       }
 
       expect(getPostCalls().length).toBe(6)
@@ -808,6 +847,11 @@ describe('workflowRunner suite', () => {
       await job1StartedPromise
       expect(requestedGetJobIds).toContain(jobIds[0])
       expect(requestedGetJobIds).toContain(jobIds[1])
+      await timerPromise
+      // Two polling intervals pass while the first chunk is held pending.
+      // Neither a new cycle nor the later chunk may issue another GET.
+      await vi.advanceTimersByTimeAsync(4000)
+      expect(requestedGetJobIds).toEqual(jobIds.slice(0, 4))
 
       // Now stop in-flight job 0 without cancelling sibling job 1
       const stoppedJob0 = stopWorkflowEmailJob(owner, jobIds[0])
@@ -833,9 +877,7 @@ describe('workflowRunner suite', () => {
         }),
       )
 
-      await timerPromise
-      await Promise.resolve()
-      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(0)
 
       cycle1Settled = true
       cycle1SettledAt = Date.now()
