@@ -76,6 +76,8 @@ async def test_exact_configured_origin_payload_and_context(store, monkeypatch, m
     assert calls[0]["url"] == f"https://synthetic.invalid/configured/v1internal:{suffix}"
     assert calls[0]["json"] == {"project": "synthetic-project"}
     assert calls[0]["follow_redirects"] is False
+    if mode == "antigravity":
+        assert calls[0]["headers"]["User-Agent"] == "antigravity/cli/1.4.0 windows/amd64"
     assert calls[0]["timeout"] <= 30
     assert classes[0][0] == "interactive" and classes[0][1] > time.monotonic()
     assert classes[0][2] == "google"
@@ -339,3 +341,59 @@ def test_bucket_label_uses_reference_precedence(fields, expected):
     item = {"bucketId": "identifier", **fields}
     payload = {"groups": [{"groupId": "g", "buckets": [item]}]}
     assert normalize_summary(payload, "antigravity").groups[0].buckets[0].display_name == expected
+
+
+@pytest.mark.parametrize("with_argon", [False, True])
+@pytest.mark.parametrize("remaining,reset", [(0.25, RESET), (0.0, RESET), (None, None)])
+async def test_argon_summary_retains_only_returned_groups_and_buckets(
+    store, monkeypatch, with_argon, remaining, reset
+):
+    payload = ag_payload()
+    if with_argon:
+        payload["groups"].append({
+            "groupId": "synthetic-argon-group",
+            "displayName": "Gemini 4 Argon Models",
+            "description": "Synthetic weekly quota",
+            "buckets": [{
+                "bucketId": "gemini-argon-wtu-weekly",
+                "displayName": "Gemini 4 Argon Weekly Limit",
+                "window": "weekly",
+                "remainingFraction": remaining,
+                "resetTime": reset,
+            }],
+        })
+    calls = await install_post(monkeypatch, payload)
+    result, status = await summary.fetch_summary(NAME, "antigravity")
+    assert status == 200 and len(calls) == 1
+    assert calls[0]["headers"]["User-Agent"] == "antigravity/cli/1.4.0 windows/amd64"
+    assert result.status == ("partial" if with_argon and remaining is None else "available")
+    assert [group.group_id for group in result.groups] == (
+        ["shared", "synthetic-argon-group"] if with_argon else ["shared"]
+    )
+    assert result.groups[0] == normalize_summary(ag_payload(), "antigravity").groups[0]
+    if with_argon:
+        group = result.groups[1]
+        assert group.display_name == "Gemini 4 Argon Models"
+        assert group.description == "Synthetic weekly quota"
+        assert [bucket.model_dump() for bucket in group.buckets] == [{
+            "bucket_id": "gemini-argon-wtu-weekly",
+            "display_name": "Gemini 4 Argon Weekly Limit",
+            "raw_window": "weekly",
+            "window": "weekly",
+            "remaining_fraction": remaining,
+            "reset_at": reset,
+        }]
+
+
+def test_argon_bucket_does_not_infer_window_or_reset_from_official_name():
+    payload = {"groups": [{"groupId": "synthetic-argon-group", "buckets": [{
+        "bucketId": "gemini-argon-wtu-weekly",
+        "displayName": "Gemini 4 Argon Weekly Limit",
+        "remainingFraction": 0,
+    }]}]}
+    result = normalize_summary(payload, "antigravity")
+    bucket = result.groups[0].buckets[0]
+    assert result.status == "partial" and len(result.groups[0].buckets) == 1
+    assert bucket.display_name == "Gemini 4 Argon Weekly Limit"
+    assert bucket.remaining_fraction == 0
+    assert bucket.window == "unknown" and bucket.raw_window is None and bucket.reset_at is None

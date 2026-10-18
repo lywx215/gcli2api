@@ -51,6 +51,8 @@ from src.antigravity_models import (
     select_public_model_ids,
     resolve_antigravity_model_id,
     is_retired_antigravity_model,
+    is_disabled_antigravity_model,
+    is_argon_model,
 )
 from src.utils import ANTIGRAVITY_USER_AGENT
 
@@ -429,6 +431,10 @@ def _resolve_request_model(body):
     return {**body, "model": resolve_antigravity_model_id(str(body.get("model") or ""))}
 
 
+def _credential_unavailable_status(model_name):
+    return 503 if is_argon_model(model_name) else 500
+
+
 def _retired_model_response():
     return attach_model_api_error(
         build_error_response("Resource unavailable.", 404),
@@ -440,7 +446,7 @@ async def stream_request(body, native=False, headers=None, events=False, *, rout
     from src.model_routing.stream_runtime import dispatch_request_body
     body = dispatch_request_body(body, route_context)
     body = _resolve_request_model(body)
-    if is_retired_antigravity_model(body["model"]):
+    if is_retired_antigravity_model(body["model"]) or is_disabled_antigravity_model(body["model"]):
         yield _retired_model_response()
         return
     from src.antigravity_limits import (
@@ -497,7 +503,7 @@ async def _stream_request(
     """
     body = _resolve_request_model(body)
     model_name = body["model"]
-    if is_retired_antigravity_model(model_name):
+    if is_retired_antigravity_model(model_name) or is_disabled_antigravity_model(model_name):
         yield _retired_model_response()
         return
     breaker_response = _capacity_breaker_response(model_name)
@@ -511,9 +517,9 @@ async def _stream_request(
     )
 
     if not cred_result:
-        # 如果返回值是None，直接返回错误500
+        # 无可用凭证时按模型返回本地不可用状态。
         log.error("[ANTIGRAVITY STREAM] 当前无可用凭证")
-        yield attach_local_unavailable(build_error_response("当前无可用凭证", 500))
+        yield attach_local_unavailable(build_error_response("当前无可用凭证", _credential_unavailable_status(model_name)))
         return
 
     current_file, credential_data = cred_result
@@ -618,7 +624,7 @@ async def _stream_request(
                         break
                     diagnostic_attempt = Attempt(attempt + 1, current_file)
                 if admission is None:
-                    yield attach_local_unavailable(build_error_response("当前无可用凭证", 500))
+                    yield attach_local_unavailable(build_error_response("当前无可用凭证", _credential_unavailable_status(model_name)))
                     return
                 upstream_stream = stream_post_async(
                     url=target_url,
@@ -790,7 +796,7 @@ async def _stream_request(
                         log.error("[ANTIGRAVITY STREAM] 重试时无可用凭证或令牌")
                         yield attach_local_unavailable(Response(
                             content=json.dumps({"error": "当前无可用凭证"}),
-                            status_code=500,
+                            status_code=_credential_unavailable_status(model_name),
                             media_type="application/json"
                         ))
                         return
@@ -904,7 +910,7 @@ async def _non_stream_request(
     """
     # 检查是否启用流式收集模式
     body = _resolve_request_model(body)
-    if is_retired_antigravity_model(body["model"]):
+    if is_retired_antigravity_model(body["model"]) or is_disabled_antigravity_model(body["model"]):
         return _retired_model_response()
     budget = current_budget.get()
     stream2nostream = (budget.stream_collect if budget is not None and budget.stream_collect is not None
@@ -945,9 +951,9 @@ async def _non_stream_request(
     )
 
     if not cred_result:
-        # 如果返回值是None，直接返回错误500
+        # 无可用凭证时按模型返回本地不可用状态。
         log.error("[ANTIGRAVITY] 当前无可用凭证")
-        return attach_local_unavailable(build_error_response("当前无可用凭证", 500))
+        return attach_local_unavailable(build_error_response("当前无可用凭证", _credential_unavailable_status(model_name)))
 
     current_file, credential_data = cred_result
     credential_generation = credential_data.get("_quota_generation")
@@ -1040,7 +1046,7 @@ async def _non_stream_request(
                     if not await refresh_credential_fast() or current_file in excluded_credentials:
                         break
                 if admission is None:
-                    return attach_local_unavailable(build_error_response("当前无可用凭证", 500))
+                    return attach_local_unavailable(build_error_response("当前无可用凭证", _credential_unavailable_status(model_name)))
                 response = await _observed_post(post_async(
                     url=target_url,
                     json=final_payload,
@@ -1178,7 +1184,7 @@ async def _non_stream_request(
                         log.error("[ANTIGRAVITY] 重试时无可用凭证或令牌")
                         return attach_local_unavailable(Response(
                             content=json.dumps({"error": "当前无可用凭证"}),
-                            status_code=500,
+                            status_code=_credential_unavailable_status(model_name),
                             media_type="application/json"
                         ))
                     continue  # 重试
@@ -1238,7 +1244,7 @@ async def non_stream_request(
     from src.model_routing.stream_runtime import dispatch_request_body
     body = dispatch_request_body(body, route_context)
     body = _resolve_request_model(body)
-    if is_retired_antigravity_model(body["model"]):
+    if is_retired_antigravity_model(body["model"]) or is_disabled_antigravity_model(body["model"]):
         return _retired_model_response()
     inherited = current_budget.get()
     budget = inherited or await create_non_stream_budget(body.get("model", ""), route_context)
@@ -1267,12 +1273,12 @@ async def non_stream_request(
 # ==================== 模型和配额查询 ====================
 
 async def fetch_available_models() -> List[Dict[str, Any]]:
-    """Publish confirmed Opus evidence with one bounded business operation."""
+    """Publish access-gated native routes from confirmed directory evidence."""
     from src.antigravity_directory_runtime import atomic_registry, work_deadline, work_class, QuotaWorkError
     inherited = work_deadline.get()
     deadline = min(inherited, time.monotonic() + 30) if inherited is not None else time.monotonic() + 30
     deadline_token, class_token = work_deadline.set(deadline), work_class.set("business")
-    other_ids, opus_ids = [], set()
+    other_ids, access_ids = [], set()
     try:
         async with asyncio.timeout_at(deadline):
             manager = await credential_manager._get_or_create()
@@ -1309,16 +1315,16 @@ async def fetch_available_models() -> List[Dict[str, Any]]:
                             deadline=deadline, phase="model_access")
                     except Exception:
                         log.warning("[ANTIGRAVITY] catalog access observation unavailable")
-            opus_ids = await backend.model_access_union() if ready else set()
+            access_ids = await backend.model_access_union() if ready else set()
     except (TimeoutError, QuotaWorkError):
-        # A state-write timeout cannot erase non-Opus models already fetched.
+        # A state-write timeout cannot erase unrestricted models already fetched.
         log.warning("[ANTIGRAVITY] catalog deadline reached; returning confirmed results")
     finally:
         work_deadline.reset(deadline_token)
         work_class.reset(class_token)
     current_timestamp = int(datetime.now(timezone.utc).timestamp())
     return [model_to_dict(Model(id=model_id, object="model", created=current_timestamp, owned_by="google"))
-            for model_id in select_public_model_ids([*other_ids, *opus_ids])]
+            for model_id in select_public_model_ids([*other_ids, *access_ids], permission_model_ids=access_ids)]
 
 
 async def fetch_quota_info(access_token: str, *, origin="legacy", timeout=30.0,
@@ -1343,6 +1349,58 @@ async def fetch_quota_info(access_token: str, *, origin="legacy", timeout=30.0,
     finally:
         if progress_token is not None:
             work_progress.reset(progress_token)
+
+
+async def _confirm_argon_weekly_window(models, headers, api_base, *, deadline, timeout, scheduling_class):
+    """Correlate only suspicious Argon windows with the exact official week bucket.
+
+    A missing/failed summary never grants permission or removes protection.
+    Reuse the caller's directory broker and deadline; do not create a new budget.
+    """
+    from src.antigravity_quota import timestamp
+    from src.antigravity_directory_runtime import directory_broker
+    targets = {model: info for model, info in models.items()
+               if is_argon_model(model) and info.get("rolling168h")}
+    if not targets:
+        return
+    try:
+        async def send(http_timeout):
+            return await post_async(url=f"{api_base}/v1internal:retrieveUserQuotaSummary",
+                                    json={}, headers=headers, timeout=http_timeout,
+                                    follow_redirects=False)
+        # Optional corroboration must leave time to return the already parsed
+        # directory and persist its permission evidence. External cancellation
+        # still propagates; only this shorter query timeout is handled here.
+        now = time.monotonic()
+        optional_deadline = min(now + 2.0, deadline - 0.25) if deadline is not None else now + 2.0
+        if optional_deadline <= now:
+            return
+        async with asyncio.timeout_at(optional_deadline):
+            response = await directory_broker.run(send, kind=scheduling_class,
+                deadline=optional_deadline, timeout=min(2.0, timeout))
+        if response.status_code != 200:
+            return
+        payload = response.json()
+        if not isinstance(payload, dict) or "error" in payload:
+            return
+        for group in payload.get("groups", []):
+            if not isinstance(group, dict):
+                continue
+            for bucket in group.get("buckets", []):
+                if (not isinstance(bucket, dict)
+                        or bucket.get("bucketId") != "gemini-argon-wtu-weekly"
+                        or bucket.get("window") != "weekly"):
+                    continue
+                reset = timestamp(bucket.get("resetTime"))
+                if reset is None:
+                    continue
+                for info in targets.values():
+                    if timestamp(info.get("resetTimeRaw")) == reset:
+                        info["quotaBucketId"] = "gemini-argon-wtu-weekly"
+                        info["quotaWindow"] = "weekly"
+    except Exception:
+        # Keep the original anomaly protection if corroboration is unavailable.
+        return
 
 
 async def _fetch_quota_info(access_token: str, *, origin="legacy", timeout=30.0,
@@ -1388,6 +1446,9 @@ async def _fetch_quota_info(access_token: str, *, origin="legacy", timeout=30.0,
             ts = timestamp(raw)
             remaining = fraction(quota.get("remainingFraction"))
             result[model_id] = {
+                **({key: model_data[key] if isinstance(model_data[key], bool) else None
+                    for key in ("disabled", "enabled") if key in model_data}
+                   if isinstance(model_data, dict) else {"enabled": None}),
                 "remaining": remaining,
                 "quotaInfoPresent": present,
                 "remainingPresent": "remainingFraction" in quota,
@@ -1397,6 +1458,8 @@ async def _fetch_quota_info(access_token: str, *, origin="legacy", timeout=30.0,
                 "rolling168h": rolling_week(raw, observation),
                 **describe_antigravity_model(model_id),
             }
+        await _confirm_argon_weekly_window(result, headers, antigravity_url,
+            deadline=deadline, timeout=timeout, scheduling_class=scheduling_class)
         return {"success": True, "models": result, "observation": observation, **metadata}
     except Exception as exc:
         from src.antigravity_directory_runtime import QuotaWorkError

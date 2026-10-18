@@ -81,7 +81,7 @@ def test_panel_response_uses_exact_http_csp_and_no_x_frame_options(monkeypatch) 
         "https://manager.example.com,https://console.example.net:8443",
     )
 
-    response = _panel_client().get("/", headers={"user-agent": "desktop-test"})
+    response = _panel_client().get("/legacy", headers={"user-agent": "desktop-test"})
 
     assert response.status_code == 200
     assert response.headers["content-security-policy"] == (
@@ -111,7 +111,7 @@ def test_panel_response_fails_closed_for_invalid_environment(
     _reset_embed_storage(monkeypatch)
     monkeypatch.setenv(EMBED_ALLOWED_ORIGINS_ENV, value)
 
-    response = _panel_client().get("/")
+    response = _panel_client().get("/legacy")
 
     assert response.status_code == 200
     assert response.headers["content-security-policy"] == "frame-ancestors 'none'"
@@ -123,12 +123,12 @@ def test_panel_defaults_to_any_https_and_can_be_disabled(monkeypatch) -> None:
     _reset_embed_storage(monkeypatch)
     monkeypatch.delenv(EMBED_ALLOWED_ORIGINS_ENV, raising=False)
 
-    enabled = _panel_client().get("/")
+    enabled = _panel_client().get("/legacy")
     assert enabled.headers["content-security-policy"] == "frame-ancestors https:"
     assert '&quot;mode&quot;: &quot;any_https&quot;' in enabled.text
 
     config._config_cache[config.GCLI_EMBED_MODE_KEY] = "disabled"
-    disabled = _panel_client().get("/")
+    disabled = _panel_client().get("/legacy")
     assert disabled.headers["content-security-policy"] == "frame-ancestors 'none'"
 
 

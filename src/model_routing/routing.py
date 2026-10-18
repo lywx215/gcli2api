@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 import re
 
-from src.antigravity_models import resolve_antigravity_opus_model
+from src.antigravity_models import resolve_antigravity_opus_model, argon_output_token_limit
 from src.router.model_api_errors import ErrorOrigin, error_from_http_status
 from .policy import entry_alias, map_ag_claude, map_ag_gemini, parameter_actions, strip_prefix, strip_suffixes, thinking_settings
 from .projection import generation_parameters
@@ -43,6 +43,8 @@ def _image_parameters(name, gc, projection):
 
 def _normalize_parameters(channel, name, gc, projection, features, policy):
     gc = thaw(gc)
+    if channel == "antigravity" and name in policy.static_rules["ag_disabled"]:
+        return name, {"error": _safe_error(404)}
     budget, level = thinking_settings(name, policy)
     if channel == "antigravity" and "image" in name.lower():
         return "gemini-3.1-flash-image", {"image": parameter_actions(channel, name, policy),
@@ -94,7 +96,7 @@ def _normalize_parameters(channel, name, gc, projection, features, policy):
         thinking_name = "think" in lower
         if "gemini" in lower:
             dispatch = map_ag_gemini(name, level, budget, policy)
-            if "gemini-3" in lower:
+            if "gemini-3" in lower or dispatch in policy.static_rules["ag_argon"]:
                 thinking = gc.setdefault("thinkingConfig", {})
                 thinking.pop("thinkingBudget", None)
                 thinking.pop("thinkingLevel", None)
@@ -128,6 +130,9 @@ def _normalize_parameters(channel, name, gc, projection, features, policy):
                 gc["maxOutputTokens"] = min(max(int(requested), 1), 8192)
                 gc.pop("topK", None)
                 gc.pop("thinkingConfig", None)
+            elif dispatch in policy.static_rules["ag_argon"]:
+                gc["maxOutputTokens"] = argon_output_token_limit(gc.get("maxOutputTokens"))
+                gc["topK"] = 64
             else:
                 gc["maxOutputTokens"], gc["topK"] = 64000, 64
     return dispatch, {"generation_config": gc, "name_budget": budget, "name_level": level,

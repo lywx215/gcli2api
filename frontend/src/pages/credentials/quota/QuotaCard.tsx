@@ -345,8 +345,23 @@ function isStandaloneGptBucket(bucket: QuotaBucket): boolean {
  * Standalone GPT-OSS buckets are filtered out without affecting normal shared buckets.
  * Missing 5h or weekly windows are displayed as "未提供" placeholders without fabricating ratios or resets.
  */
-function resolveGroupBuckets(group: QuotaGroup): DisplayBucketItem[] {
+function resolveGroupBuckets(group: QuotaGroup, mode: QuotaMode): DisplayBucketItem[] {
   const buckets = group.buckets ?? [];
+
+  // Argon reports its own windows. Keep official labels and only returned buckets;
+  // neither its group name nor a missing window implies an extra allowance.
+  if (
+    mode === 'antigravity' &&
+    buckets.some((bucket) => bucket.bucket_id === 'gemini-argon-wtu-weekly')
+  ) {
+    return buckets.filter((bucket) => !isStandaloneGptBucket(bucket)).map((bucket, index) => ({
+      id: bucket.bucket_id || `${group.group_id}_other_${index}`,
+      name: bucket.display_name || bucket.bucket_id || '其他限额',
+      fraction: bucket.remaining_fraction,
+      resetAt: bucket.reset_at,
+      isPlaceholder: false,
+    }));
+  }
 
   // Match 5H bucket: prefer a non-GPT-OSS bucket by normalized window
   const bucket5hIndex = buckets.findIndex(
@@ -543,7 +558,7 @@ export function QuotaCard({
               .map((group: QuotaGroup) => {
                 const displayTitle = formatGroupTitle(group.display_name);
                 const displayDescription = formatGroupDescription(group.description);
-                const displayBuckets = resolveGroupBuckets(group);
+                const displayBuckets = resolveGroupBuckets(group, mode);
 
                 return (
                   <div key={group.group_id} className="qc-group">

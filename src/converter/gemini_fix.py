@@ -12,6 +12,8 @@ from src.antigravity_models import (
     ANTIGRAVITY_NATIVE_MODEL_IDS,
     resolve_antigravity_opus_model,
     is_retired_antigravity_model,
+    is_argon_model,
+    argon_output_token_limit,
     resolve_antigravity_model_id,
 )
 from src.geminicli_models import GEMINI_38_FLASH_MODEL, GEMINI_38_FLASH_THINKING_LEVELS
@@ -896,7 +898,13 @@ async def normalize_gemini_request(
                 model = mapped_model
                 result["model"] = model
 
-                if "gemini-3" in model or "gemini-3.5" in model:
+                if is_argon_model(model):
+                    thinking_config = generation_config.setdefault("thinkingConfig", {}).copy()
+                    generation_config["thinkingConfig"] = thinking_config
+                    thinking_config.pop("thinkingBudget", None)
+                    thinking_config.pop("thinkingLevel", None)
+                    thinking_config["includeThoughts"] = return_thoughts
+                elif "gemini-3" in model or "gemini-3.5" in model:
                     generation_config.pop("thinkingConfig", None)
                 elif is_thinking_model(model) or thinking_budget is not None:
                     if "thinkingConfig" not in generation_config:
@@ -1010,8 +1018,12 @@ async def normalize_gemini_request(
 
     # 2. 参数范围限制
     if generation_config:
-        # 强制设置 maxOutputTokens 为 64000
-        generation_config["maxOutputTokens"] = 64000
+        if mode == "antigravity" and is_argon_model(model):
+            generation_config["maxOutputTokens"] = argon_output_token_limit(
+                generation_config.get("maxOutputTokens")
+            )
+        else:
+            generation_config["maxOutputTokens"] = 64000
         # 强制设置 topK 为 64
         if not is_cli_38_flash:
             generation_config["topK"] = 64

@@ -1,3 +1,3 @@
-display_version=dev8-20260907-1339
-source_ref=dev8
-commit_date=2026-09-07T13:39:30+08:00
+display_version=new-ui-20261018-1023
+source_ref=new-ui
+commit_date=2026-10-18T10:23:21+08:00

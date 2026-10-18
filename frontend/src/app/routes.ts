@@ -7,6 +7,7 @@ import {
   subscribePanelChannel,
   type PanelMode,
 } from "@/domain/panel";
+import { maybeRedirectLegacyStartup } from "./legacyEntry";
 
 export const routes = [
   { id: "overview", title: "概览", description: "节点运行概况" },
@@ -24,6 +25,12 @@ export function routeFromHash(hash: string): RouteId {
   const id = raw.endsWith("/") ? raw.slice(0, -1) : raw;
   if (id === "manage" || id === "antigravity-manage") {
     return "credentials";
+  }
+  if (id === "oauth" || id === "antigravity") {
+    return "import";
+  }
+  if (id === "config") {
+    return "settings";
   }
   return routes.find(route => route.id === id)?.id ?? "overview";
 }
@@ -81,8 +88,18 @@ function parseFragment(hash: string): { route: RouteId; explicitChannel?: PanelM
   } else if (routeCandidate === "antigravity-manage") {
     route = "credentials";
     explicitChannel = "antigravity";
+  } else if (routeCandidate === "oauth") {
+    route = "import";
+    explicitChannel = "geminicli";
+  } else if (routeCandidate === "antigravity") {
+    route = "import";
+    explicitChannel = "antigravity";
   } else {
-    route = routes.find(r => r.id === routeCandidate)?.id ?? "overview";
+    if (routeCandidate === "config") {
+      route = "settings";
+    } else {
+      route = routes.find(r => r.id === routeCandidate)?.id ?? "overview";
+    }
     if (queryPart) {
       const params = new URLSearchParams(queryPart);
       if (params.has("channel")) {
@@ -447,6 +464,7 @@ export function useRoute(): RouteId {
 
 function initRouter(): void {
   if (typeof window === "undefined") return;
+  if (maybeRedirectLegacyStartup()) return;
 
   if (initialExplicitChannel !== undefined) {
     transition(window.location.href, new Set(), false, initialExplicitChannel);

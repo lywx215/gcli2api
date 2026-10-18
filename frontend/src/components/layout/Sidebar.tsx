@@ -30,7 +30,9 @@ export function Sidebar({ route, onNavigate }: { route: RouteId; onNavigate?: ()
   const { logout } = useAuth();
   const { mode } = usePanelChannel();
   const legacyHash = mode === "geminicli" ? "#manage" : "#antigravity-manage";
-  const legacyHref = new URL(legacyHash, getServiceBase()).href;
+  const legacyTarget = new URL("legacy", getServiceBase());
+  legacyTarget.hash = legacyHash;
+  const legacyHref = legacyTarget.href;
 
   const handleNavigate = (
     e: React.MouseEvent<HTMLAnchorElement>,

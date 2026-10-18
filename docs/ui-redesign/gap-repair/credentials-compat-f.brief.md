@@ -1,0 +1,7 @@
+# Credentials compatibility F
+
+The combined E6c+Import preflight found exactly one write/read conflict: credentials/api.ts, read by Import. No CLI was dispatched and no request consumed by that rejected staging. This complete three-file module owns original E6c task1; the separate final-five module owns tasks2-6. Their union preserves every original goal exactly once. Old E6/E6b/E6c candidates remain unchanged and undispatched.
+
+Read the single task and its full acceptance in the request: API two own-property checks plus optional additive manual publicDetails return annotation; batch branded Preview failure updates projected through the existing safe enum/name/reason helper without replacing the receipt; Detail savedManual empty updates typed compatibly while outer freezes/false/0/readonly no-release remain. The actual five diagnostics are recorded by root; do not edit parent index, shared model/ResultView/advancedApi, scheduling, release rules or any other line of behavior. The API public field is optional to keep the existing parent ManualResult adapter compatible, while runtime return/data identities remain unchanged.
+
+Exactly three allowed files and exactly one ordered task_result id public-state-update-own-checks. Do not perform the later Legacy/List/Files tasks or report their IDs. Root alone executes command checks. No commands, tests, build, external requests, Git, credentials, database, Docker or deployment. Authorization, complete delivery, conflict/hash and consumed-request checks stay intact.

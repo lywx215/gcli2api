@@ -26,6 +26,15 @@ it("recognizes the sixth production route and recognizes legacy aliases while ke
   expect(routeFromHash("#antigravity-manage")).toBe("credentials");
   expect(routeFromHash("#/antigravity-manage")).toBe("credentials");
   expect(routeFromHash("#antigravity-manage/")).toBe("credentials");
+  expect(routeFromHash("#oauth")).toBe("import");
+  expect(routeFromHash("#/oauth")).toBe("import");
+  expect(routeFromHash("#oauth/")).toBe("import");
+  expect(routeFromHash("#antigravity")).toBe("import");
+  expect(routeFromHash("#/antigravity")).toBe("import");
+  expect(routeFromHash("#antigravity/")).toBe("import");
+  expect(routeFromHash("#config")).toBe("settings");
+  expect(routeFromHash("#/config")).toBe("settings");
+  expect(routeFromHash("#config/")).toBe("settings");
   expect(routeFromHash("#/unknown")).toBe("overview");
 });
 
@@ -67,6 +76,58 @@ it("legacy hash aliases #manage and #antigravity-manage undergo guard verificati
   act(() => attempts[1].retry());
   expect(screen.getByRole("status")).toHaveTextContent("credentials");
   expect(location.hash).toBe("#/credentials");
+});
+
+it("legacy hash aliases #oauth, #antigravity, and #config undergo guard verification and retry to canonical URLs", async () => {
+  function Harness() {
+    const route = useRoute();
+    return <p role="status">{route}</p>;
+  }
+  render(<Harness />);
+  const attempts: RouteNavigation[] = [];
+  guard(attempt => {
+    attempts.push(attempt);
+    return false;
+  });
+
+  // #oauth navigation -> import (GCLI)
+  act(() => changeHash("#oauth"));
+  expect(attempts).toHaveLength(1);
+  expect(attempts[0].to).toBe("import");
+  expect(attempts[0].toMode).toBe("geminicli");
+  expect(attempts[0].href).toContain("#/import?channel=geminicli");
+  expect(screen.getByRole("status")).toHaveTextContent("model-routing");
+  expect(location.hash).toBe("#/model-routing");
+
+  // Retry #oauth commits to canonical GCLI import URL
+  act(() => attempts[0].retry());
+  expect(screen.getByRole("status")).toHaveTextContent("import");
+  expect(location.hash).toBe("#/import?channel=geminicli");
+
+  // #antigravity navigation -> import (AG)
+  act(() => changeHash("#antigravity"));
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1].to).toBe("import");
+  expect(attempts[1].toMode).toBe("antigravity");
+  expect(attempts[1].href).toContain("#/import");
+  expect(screen.getByRole("status")).toHaveTextContent("import");
+
+  // Retry #antigravity commits to canonical AG import URL
+  act(() => attempts[1].retry());
+  expect(screen.getByRole("status")).toHaveTextContent("import");
+  expect(location.hash).toBe("#/import");
+
+  // #config navigation -> settings
+  act(() => changeHash("#config"));
+  expect(attempts).toHaveLength(3);
+  expect(attempts[2].to).toBe("settings");
+  expect(attempts[2].href).toContain("#/settings");
+  expect(screen.getByRole("status")).toHaveTextContent("import");
+
+  // Retry #config commits to canonical settings URL
+  act(() => attempts[2].retry());
+  expect(screen.getByRole("status")).toHaveTextContent("settings");
+  expect(location.hash).toBe("#/settings");
 });
 it("a real hash link holds the page on cancel and retries once on confirmation", async () => {
   function Harness() { const route = useRoute(); return <><p role="status">{route}</p><a href="#/logs">日志</a></>; }

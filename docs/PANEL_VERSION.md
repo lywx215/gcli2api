@@ -15,9 +15,14 @@ Dockerfile 将这两个版本字段通过 `ARG`、`ENV` 留在镜像中，运行
 读取当前 Git 分支、提交和时间。没有可信分支信息时，不把已保存的旧面板标签
 当作当前分支；只保留可读取的提交号，或显示未知版本。
 
-`panel-version.txt`、`version.txt` 及面板版本生成钩子未改动。手工面板标签不再
-覆盖实际运行来源。现有版本响应字段保留，Management schema、capability 和
-动作枚举无变化，manager 无需配套动作（`no_counterpart_action`）。
+2026-10-18 起，本地 Git 分支允许采用用户明确生成的 `panel-version.txt` 显示标签：
+文件的 `source_ref` 必须与当前分支一致，日期不得早于 HEAD 提交日期，且标签必须与
+分支、日期字段自洽。仅 `display_version` 使用该标签，提交号、哈希与提交时间仍来自
+真实 Git 历史。错分支、过期、损坏文件、发布标签以及显式部署元数据仍沿用实际来源。
+
+继续使用现有面板版本生成脚本及钩子，不手动更新 `version.txt`。现有版本响应字段
+保留，Management schema、capability 和动作枚举无变化，manager 无需配套动作
+（`no_counterpart_action`）。
 
 ## 验证记录
 

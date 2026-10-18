@@ -150,7 +150,7 @@ def test_page_policy_fails_closed_for_invalid_embedding(monkeypatch):
 
 @pytest.mark.parametrize("user_agent", ["Desktop UI fixture", "Mozilla/5.0 (iPhone) Mobile"])
 def test_existing_panels_keep_features_and_link_without_auth_query(user_agent):
-    response = TestClient(create_mock_app()).get("/", headers={"user-agent": user_agent})
+    response = TestClient(create_mock_app()).get("/legacy", headers={"user-agent": user_agent})
     assert response.status_code == 200
     assert 'href="./model-routing"' in response.text
     for marker in ("antigravity-manage", "configPanelPassword", "rtRefreshToken", "quotaFallbackCooldownMinutes", "uploadArea"):

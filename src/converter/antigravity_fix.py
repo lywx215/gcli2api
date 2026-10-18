@@ -10,6 +10,8 @@ from typing import Any, Dict, Optional
 from log import log
 from src.antigravity_models import (
     resolve_antigravity_opus_model,
+    is_argon_model,
+    argon_output_token_limit,
 )
 from src.converter.gemini_fix import (
     get_thinking_settings,
@@ -632,8 +634,9 @@ def _normalize_antigravity_request(
         # Antigravity uses the Gemini 3.x model route/name to select thinking depth.
         # Do not send thinkingLevel/thinkingBudget because they can conflict with that route.
         # Keep includeThoughts so reasoning is still returned to the frontend when enabled.
-        if "gemini-3" in original_model.lower():
-            thinking_config = generation_config.setdefault("thinkingConfig", {})
+        if "gemini-3" in original_model.lower() or is_argon_model(model):
+            thinking_config = generation_config.setdefault("thinkingConfig", {}).copy()
+            generation_config["thinkingConfig"] = thinking_config
             thinking_config.pop("thinkingBudget", None)
             thinking_config.pop("thinkingLevel", None)
             thinking_config["includeThoughts"] = return_thoughts
@@ -815,6 +818,11 @@ async def normalize_antigravity_request(
             )
             generation_config.pop("topK", None)
             generation_config.pop("thinkingConfig", None)
+        elif is_argon_model(model):
+            generation_config["maxOutputTokens"] = argon_output_token_limit(
+                generation_config.get("maxOutputTokens")
+            )
+            generation_config["topK"] = 64
         else:
             # 强制设置 maxOutputTokens 为 64000
             generation_config["maxOutputTokens"] = 64000

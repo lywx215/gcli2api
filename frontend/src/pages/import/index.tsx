@@ -254,7 +254,7 @@ export default function ImportPage() {
   const mode: PanelMode = flow.owner?.mode ?? channel.mode
 
   const preview = import.meta.env.DEV && import.meta.env.VITE_UI_FIXTURES === 'true'
-  const legacy = new URL(getServiceBase())
+  const legacy = new URL('legacy', getServiceBase())
   legacy.hash = mode === 'geminicli' ? 'manage' : 'antigravity-manage'
   const legacyLinkText =
     mode === 'geminicli' ? '旧 GCLI 面板：高级工具' : '旧 AG 面板：手动获取邮箱与高级工具'

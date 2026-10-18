@@ -56,6 +56,8 @@ function parseDestinationRouteAndMode(hash: string): { route: RouteId; mode?: Pa
   const cleaned = pathPart.replace(/^\/+/, '').replace(/\/+$/, '');
   if (cleaned === 'manage') return { route, mode: 'geminicli' };
   if (cleaned === 'antigravity-manage') return { route, mode: 'antigravity' };
+  if (cleaned === 'oauth') return { route, mode: 'geminicli' };
+  if (cleaned === 'antigravity') return { route, mode: 'antigravity' };
   if (queryIndex !== -1) {
     const params = new URLSearchParams(raw.slice(queryIndex + 1));
     if (params.has('channel')) {

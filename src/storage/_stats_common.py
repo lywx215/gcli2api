@@ -63,6 +63,9 @@ def normalize_antigravity_cooldown_key(model_name: str) -> str:
     model = str(model_name or "").strip().lower()
     from src.utils import get_base_model_from_feature_model, normalize_antigravity_model_alias
     model = normalize_antigravity_model_alias(get_base_model_from_feature_model(model))
+    from src.antigravity_model_access import argon_model
+    if model == "argon-shared" or argon_model(model):
+        return "argon-shared"
     if model == "gemini-shared" or model.startswith("gemini-"):
         return "gemini-shared"
     if model == "claude-gpt-shared" or model.startswith(("claude-", "gpt-oss-")):
@@ -266,12 +269,12 @@ def prepare_antigravity_cooldown(cooldowns, model_name, deadline, *, now=None):
             result.pop(key)
         close = True
     else:
-        legacy = any(key.lower() in ("gemini-shared", "claude-gpt-shared") for key in active)
+        legacy = any(key.lower() in ("gemini-shared", "claude-gpt-shared", "argon-shared") for key in active)
         close = not legacy and not any(stat_bucket(key) == stat_bucket(model_name) for key in members)
         deadline = max(deadline, *active.values())
         for key in members:
             result[key] = deadline
     result[model_name] = deadline
-    if model_name.lower() in ("gemini-shared", "claude-gpt-shared"):
+    if model_name.lower() in ("gemini-shared", "claude-gpt-shared", "argon-shared"):
         close = False
     return result, close

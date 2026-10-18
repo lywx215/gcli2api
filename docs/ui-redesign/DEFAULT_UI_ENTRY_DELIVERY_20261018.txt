@@ -1,0 +1,33 @@
+默认入口切换交付（2026-10-18）
+工作树：C:/Users/lywx2/.codex/worktrees/ui-full-parity/gcli2api
+分支：new-ui；HEAD仍为11cbaa6864d01a09afc268345fb242e42bb6ea57，本次改动未提交/推送/部署。
+
+已完成
+- GET / 返回307到可信服务前缀下的/ui/，保留query，浏览器继续继承原书签fragment。
+- /legacy继续提供原桌面/手机面板；/legacy/规范到无尾斜杠，避免相对API、静态文件、WebSocket变成/legacy/*。
+- UI产物缺失/不匹配时503的返回链接指向/legacy，不会根→UI→根循环。
+- Sidebar、App不支持回退、凭证、导入、设置五处旧面板链接均改为service-base/legacy#对应tab。
+- 旧/model-routing保留，返回链接指向./legacy#config。
+- 旧书签：manage→新版GCLI凭证；antigravity-manage→新版AG凭证；oauth→新版GCLI导入；antigravity→新版AG导入；config→新版设置；logs→新版日志；upload/status/about→旧/legacy#原tab。
+- 通过严格固定tab白名单在路由/AuthProvider初始化前识别仅旧页面的书签；保留query和可信前缀，未知hash继续原overview回退，保持新hash路径、渠道和路由guard。
+- 新动态启动流程补充异步加载失败提示，复用同一React根，不输出raw错误或自动重试。
+
+验证
+- test_ui_hosting.py：38 passed。
+- 既有test_panel_embed.py/test_model_routing_panel.py受影响定点：9 passed，18未选择。
+- legacyEntry/routes/routes-modes：38 passed。
+- 既有App/import/settings受影响定点：9 passed，13未选择。
+- npm run build（内含tsc --noEmit）：退出0。
+- npm run check:build：退出0；20个hash JS、2个CSS、六页独立动态入口，共24个产物文件，引用完整、无DEV fixtures。
+- 真实浏览器仅使用隔离本地路由/静态宿主：根进入/ui/，九种旧书签去向、页面query、/edge/node前缀、未知hash、/legacy/规范化、旧编辑器返回/legacy#config均通过。只检查匿名登录界面及地址，不登录、不执行业务；未把URL映射验收称为完整业务测试。
+- CLI未执行命令；上述命令及浏览器验收均由Codex完成。两个唯一请求均经共享Hook正常交付；首次交付后单独补main.tsx异步错误提示，未重放请求。
+
+保护与运行边界
+- 不改任何真实凭证、数据库、授权记录、业务API契约或数据schema；上传数据保留。
+- 当前其他窗口的Argon额度卡片、panel-version、utils/versioning等未提交修改保持。保护清单出现的其他18个后端哈希变化属于并发窗口源码变化，未由本CLI任务写入或回退；详见PROTECTED_SOURCE_CHECK.json，勿把本轮入口验证扩张为这些业务修改的验证结论。
+- 不重跑全量测试；Docker跳过；无生产/Google请求、模型生成、提交、推送或部署。
+- P08与原65476进程未重启。本次新默认路由需要下一次后端启动才生效，不能将当前线上根旧页说成已切换。隔离5198仅用于验收，完成后清理其宿主，不动真实服务。
+
+回滚
+- 本次修改前源码在交付目录before/；原公开ui-dist在ui-dist-before-entry-change/。仅按本任务变更回退，不覆盖其他窗口业务修改或真实数据。
+- 新增legacyEntry.ts及对应小用例由CLI作者交付；回退时同步恢复main.tsx与调用文件。未移除旧源码或旧接口。

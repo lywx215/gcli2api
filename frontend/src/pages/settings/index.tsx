@@ -58,7 +58,7 @@ export default function SettingsPage() {
   const changes = fields.filter(
     (f) => values[f.key] !== undefined && !same(values[f.key], original[f.key])
   );
-  const legacy = new URL(getServiceBase());
+  const legacy = new URL('legacy', getServiceBase());
   legacy.hash = 'config';
 
   const mountedRef = useRef(true);

@@ -1,0 +1,36 @@
+默认入口迁移：Antigravity CLI前端交付范围（待本次真实人类前缀授权）
+需求：用户2026-10-18明确要求默认/ui/、保留/legacy、兼容旧书签、更新回退链接；修改与必要验证，暂不部署。
+工作树：C:/Users/lywx2/.codex/worktrees/ui-full-parity/gcli2api；new-ui/11cbaa6，保留当前其他窗口未提交改动。
+作者：官方Antigravity CLI gemini-3.8-flash-high；Codex只负责后端、范围、静态检查及命令验收。
+
+已准备后端行为
+GET / → 307同源可信service-base+ui/，保留query，不指定fragment，浏览器继承原fragment。
+GET /legacy → 旧桌面/手机面板；GET /legacy/ → 307无尾斜杠/legacy且保留query/fragment。
+UI缺失503回退→service-base+legacy，不再回根造成循环。既有API路径及/model-routing不变。
+
+前端最小交付目标
+1. Sidebar、App中不支持回退、凭证、导入、设置的旧面板链接改成相对getServiceBase()的legacy（无尾斜杠），保留当前正确渠道hash/config，不硬编码主机或/根。
+2. front/model_routing.html“返回控制面板”改为./legacy#config；保留所有资源、样式、脚本和事件。
+3. 兼容根307继承的全部九类旧书签。既有manage/antigravity-manage→新版credentials对应GCLI/AG、logs→新版logs保持。oauth→导入GCLI、antigravity→导入AG、config→settings；upload/status/about应明确保留原可用界面（允许安全转到service-base/legacy#原tab，或在能保留原功能情况下采用对应新版入口）。不得把旧upload静默落到OAuth表单、把status/about直接当不存在而丢旧功能。最终方案以最小兼容实现为准，记录每类实际目标。
+4. 不可因URL处理丢query、ASGI root_path服务前缀、会话/渠道归属、路由guard/取消/重试和历史导航。后端收不到fragment，须前端明确兼容。若采用跳旧页，只允许固定同源legacy目标，不从任意query构造跳转目的地。新UI路径#/...保持原行为；未知hash继续既有overview回退。
+5. 仅修改此迁移必要接线，不涉及F01/F02/F03复核其他问题、样式/额度/业务/依赖/认证/凭证/数据库。
+
+拟允许文件（CLI可不改不需要的路径；新增helper须先在实际请求逐文件列出）
+frontend/src/components/layout/Sidebar.tsx
+frontend/src/app/App.tsx
+frontend/src/app/routes.ts
+frontend/src/pages/settings/index.tsx
+frontend/src/pages/settings/components/UnsavedChangesGuard.tsx
+frontend/src/pages/import/index.tsx
+frontend/src/pages/credentials/index.tsx
+front/model_routing.html
+frontend/src/app/routes.test.tsx
+frontend/src/app/routes-modes.test.tsx
+frontend/src/app/App.test.tsx
+frontend/src/pages/import/page.test.tsx
+frontend/src/pages/settings/tests/page.test.tsx
+
+必要只读上下文
+AGENTS.md、docs/MAINTENANCE_SCOPE.md、docs/ui-redesign/FULL_PARITY_REQUIREMENTS.md、src/panel/root.py、src/panel/ui.py、frontend/src/api/client.ts、frontend/src/main.tsx、frontend/src/app/channels.tsx、frontend/src/domain/panel.ts、frontend/src/auth/session.ts、front/common.js。
+
+验收：必要定点既有前端用例（旧书签映射+真实链接/渠道/guard），一次build（含tsc）及check:build；隔离宿主浏览器检查根、/legacy和代表书签。后端复用test_ui_hosting.py合成定向测试。全程不读取真实凭证、不请求模型、不提交推送部署、Docker跳过、不重放已消费请求。只通过共享hook派发并验收实际交付。

@@ -119,7 +119,9 @@ const PAGE_LOADING_FALLBACK = (
 );
 
 function GcliUnsupportedPlaceholder() {
-  const legacyHref = new URL("#manage", getServiceBase()).href;
+  const legacyTarget = new URL("legacy", getServiceBase());
+  legacyTarget.hash = "manage";
+  const legacyHref = legacyTarget.href;
   return (
     <div role="region" aria-label="当前渠道暂不支持" className="space-y-4 rounded-lg border p-6">
       <h1 className="text-lg font-semibold">当前渠道暂未支持</h1>

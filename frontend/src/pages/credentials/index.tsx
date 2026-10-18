@@ -124,7 +124,7 @@ export function CredentialWorkspace({ mode: propMode }: { mode?: PanelMode } = {
   const channelEpoch = channel.channelEpoch
   const { sessionEpoch } = useAuth()
 
-  const legacy = new URL(getServiceBase())
+  const legacy = new URL('legacy', getServiceBase())
   legacy.hash = mode === 'geminicli' ? 'manage' : 'antigravity-manage'
 
   const ownerScope: PanelScope = useMemo(

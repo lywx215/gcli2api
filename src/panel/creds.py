@@ -68,7 +68,8 @@ from config import (
 from datetime import datetime, timedelta, timezone
 from .utils import validate_mode
 from .credential_capabilities import (
-    ACTION_CAPABILITIES, PERMANENT_DISABLED, REMARK, GEMINICLI_SEARCH, credential_capabilities,
+    ACTION_CAPABILITIES, PERMANENT_DISABLED, REMARK, GEMINICLI_SEARCH, ARGON_ACCESS, credential_capabilities,
+    supports_argon_model_access,
     capability_for_mode, panel_operation_capabilities, supports_credential_search, should_gate_credential_capabilities,
     unavailable_capability, capability_unavailable_response,
 )
@@ -719,6 +720,7 @@ async def _get_creds_status_common(
     if mode == "antigravity":
         panel_caps += ([GROUP_FILTER_CAPABILITY] if supports_group_filter else [])
         panel_caps += (["antigravity.model_access.family_filter"] if supports_family_filter else [])
+        panel_caps += ([ARGON_ACCESS] if supports_argon_model_access(storage_adapter._backend) else [])
         panel_caps += [SEARCH_CAPABILITY]
         panel_caps += ([AUTO_EMAIL_CAPABILITY] if email_enrichment_service.supports(storage_adapter._backend) else [])
     elif supports_search:
@@ -2709,7 +2711,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
         # Resolve local policy before credential reads or OAuth refresh.
         test_model = model if model else "gemini-2.5-flash"
         if mode == "antigravity":
-            from src.antigravity_models import is_retired_antigravity_model
+            from src.antigravity_models import is_retired_antigravity_model, is_disabled_antigravity_model
             from src.utils import normalize_antigravity_model_alias
             from src.converter.gemini_fix import map_antigravity_gemini_model
             from src.diagnostics.antigravity import requested_model
@@ -2718,7 +2720,7 @@ async def test_credential_common(filename: str, mode: str = "geminicli", model: 
             test_model = normalize_antigravity_model_alias(test_model)
             if test_model.startswith("gemini-"):
                 test_model = map_antigravity_gemini_model(test_model, None, None)
-            if is_retired_antigravity_model(test_model):
+            if is_retired_antigravity_model(test_model) or is_disabled_antigravity_model(test_model):
                 return JSONResponse(status_code=404, content={
                     "success": False, "status_code": 404, "error": "Resource unavailable.",
                 })

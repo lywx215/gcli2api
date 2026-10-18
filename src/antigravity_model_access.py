@@ -8,9 +8,45 @@ MODELS = tuple(f"claude-opus-5-5-{tier}" for tier in ("low", "medium", "high"))
 OPUS_46 = "claude-opus-4-6-thinking"
 ROUTES = (*MODELS, OPUS_46)
 FAMILIES = ("claude-opus-5-5", "claude-opus-4-6")
+# Keep the legacy Opus allowlists and compatibility projection unchanged.
+ARGON_FAMILY = "gemini-4-argon"
+ARGON_MODELS = tuple(f"{ARGON_FAMILY}-{tier}" for tier in ("low", "medium", "high"))
+ALL_ACCESS_ROUTES = (*ROUTES, *ARGON_MODELS)
+ALL_ACCESS_FAMILIES = (*FAMILIES, ARGON_FAMILY)
 VALID_FOR = RECHECK = 12 * 3600
 PAUSE = 24 * 3600
 QUERY_RETRY = 15 * 60
+
+
+def argon_model(model):
+    """Return only a known native Argon route; the bare alias selects Low."""
+    if not isinstance(model, str):
+        return None
+    from src.utils import normalize_antigravity_model_alias
+    name = normalize_antigravity_model_alias(model.strip().lower()).rsplit("/", 1)[-1].strip()
+    if name == ARGON_FAMILY:
+        return ARGON_MODELS[0]
+    return name if name in ARGON_MODELS else None
+
+
+def access_namespace(state, model, *, create=False):
+    """Argon evidence never enters the Opus fields understood by old readers."""
+    if access_family(model) == ARGON_FAMILY:
+        if create:
+            return state.setdefault("argon", {"families": {}, "routes": {}})
+        return state.get("argon", {"families": {}, "routes": {}})
+    return state
+
+
+def directory_enabled(models, native):
+    """Only exact native directory presence plus valid enabled metadata counts."""
+    if not isinstance(models, dict) or native not in models:
+        return False
+    metadata = models[native]
+    if not isinstance(metadata, dict):
+        return False
+    return (metadata.get("disabled", False) is False
+            and metadata.get("enabled", True) is True)
 
 
 def access_model(model):
@@ -20,6 +56,8 @@ def access_model(model):
     name = normalize_antigravity_model_alias(model.strip().lower()).rsplit("/", 1)[-1].strip()
     if name in ROUTES:
         return name
+    if name in ARGON_MODELS or name == ARGON_FAMILY:
+        return argon_model(name)
     if name in ("claude-opus-5-5", "claude-opus-5-5-thinking"):
         return MODELS[1]
     if name in ("claude-opus-4-6", "claude-opus-4.6", "claude-opus-4.6-thinking"):
@@ -28,9 +66,11 @@ def access_model(model):
 
 
 def access_family(model):
-    if model in FAMILIES:
+    if model in ALL_ACCESS_FAMILIES:
         return model
     native = access_model(model)
+    if native in ARGON_MODELS:
+        return ARGON_FAMILY
     return FAMILIES[0] if native in MODELS else (FAMILIES[1] if native == OPUS_46 else None)
 
 
@@ -81,6 +121,16 @@ def decode(value):
     if not isinstance(value, dict):
         raise ValueError("invalid_model_access_state")
     result = copy.deepcopy(value)
+    if "argon" in result:
+        try:
+            namespace = result["argon"]
+            if not isinstance(namespace, dict):
+                raise ValueError("invalid_argon_access_state")
+            _validate(namespace.get("families"), (ARGON_FAMILY,))
+            _validate(namespace.get("routes"), ARGON_MODELS)
+        except (ValueError, TypeError):
+            # A malformed extension fails closed without invalidating Opus.
+            result["argon"] = {"families": {}, "routes": {}}
     models = result.setdefault("models", {})
     _validate(models, MODELS)
     lease = result.get("lease")
@@ -120,8 +170,9 @@ def eligible(state, model, now=None):
     now = time.time() if now is None else now
     state = decode(state)
     native = access_model(model)
-    return bool(native and _fresh(state["families"].get(access_family(native), {}), now)
-                and _fresh(state["routes"].get(native, {}), now))
+    namespace = access_namespace(state, native)
+    return bool(native and _fresh(namespace["families"].get(access_family(native), {}), now)
+                and _fresh(namespace["routes"].get(native, {}), now))
 
 
 def check_due(state, model=None, now=None):
@@ -132,11 +183,12 @@ def check_due(state, model=None, now=None):
     """
     now = time.time() if now is None else now
     state = decode(state)
-    targets = ROUTES if model is None else (access_model(model),)
+    targets = ALL_ACCESS_ROUTES if model is None else (access_model(model),)
     for target in targets:
         if target is None:
             continue
-        family = state["families"].get(access_family(target), {})
+        namespace = access_namespace(state, target)
+        family = namespace["families"].get(access_family(target), {})
         family_due = family.get("next_check_at", 0) <= now
         if family.get("state") != "supported":
             if family_due:
@@ -144,7 +196,7 @@ def check_due(state, model=None, now=None):
             continue
         if family.get("reason") in ("directory_query_failed", "directory_timeout") and not family_due:
             continue
-        route = state["routes"].get(target, {})
+        route = namespace["routes"].get(target, {})
         if family_due or (route.get("next_check_at", 0) <= now and not _fresh(route, now)):
             return True
     return False
@@ -161,8 +213,9 @@ def observe_entry(entries, key, supported, reason, now):
 
 def observe(state, model, supported, reason, now):
     """Observe an actual generation route and its version family together."""
-    observe_entry(state["families"], access_family(model), supported, reason, now)
-    observe_entry(state["routes"], model, supported, reason, now)
+    namespace = access_namespace(state, model, create=True)
+    observe_entry(namespace["families"], access_family(model), supported, reason, now)
+    observe_entry(namespace["routes"], model, supported, reason, now)
     project(state)
 
 

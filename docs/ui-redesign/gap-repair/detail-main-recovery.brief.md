@@ -1,0 +1,33 @@
+# Detail main recovery — two-file complete module
+
+The former `gapfix-detail-quota-20261015-a` request ended failed with `Ordered task package is incomplete or out of order; no edits applied`. Its CLI process succeeded, but none of its three source files was delivered. Its failed/consumed state stays unchanged; do not replay it, reopen it, inspect or recover its rejected temporary files, or lower the shared Hook's ordered-package checks. This new request redistributes only its uncompleted work. Already delivered API and settings/node work must not be repeated.
+
+Root stages this brief at `docs/ui-redesign/gap-repair/detail-main-recovery.brief.md`. Exactly two files are writable: `frontend/src/pages/credentials/CredentialDetail.tsx` and `frontend/src/pages/credentials/ResultView.tsx`. LegacyModelQuota.tsx is read-only here; its R09 countdown/elapsed and L04 sorting work belongs to the later credentials-final-recovery package. There are exactly two ordered tasks, timeout 1800 seconds, max_attempts 1. This file carries no authorization and dispatches nothing. Root waits for the in-flight Import job/shared batch to finish, then verifies ownership and fresh actual context hashes. The final recovery package runs only after this main recovery has been fully delivered and accepted for dependency binding; the two recovery packages never run concurrently.
+
+## Actual delivered API and identity
+
+Read the actual `api.ts`, `advancedApi.ts` and `PUBLIC_RESULT_API_BINDING_20261015.json`. Actual safe exports are `SafeManualPublicDetails`, `SafeOpusFamilyDetails`, `projectManualPublicDetails(value, httpStatus?)`, `reprojectManualPublicDetails(value, httpStatus?)` and `getPreviewFailureReceipt(error): ConfigurePreviewResult | null`. Use the raw projector for raw server data, the reprojector for already projected DTOs, and the extractor only for its internal WeakMap-branded failed error. Do not fabricate exports or edit these dependencies. Optional DTO fields and legitimate numeric zero remain meaningful. No arbitrary raw error/message/payload may reach presentation.
+
+Keep every genuine current ManualResult and its `.data` unchanged. Store the exact original object as `AgQuotaEvidenceReceipt.result` when eligible; public presentation is separate. Never assign a projected safe object back into the response receipt or manufacture release authority from a public DTO, Preview failure, batch result or saved row. Existing ResultView callers must remain compatible through optional additive props only.
+
+## Task 1 — manual_results_and_explicit_tests
+
+Restore public project ID, subscription tier, credit amount and Preview setting_id/binding_id/fixed failure step with controlled failure reason in single-item results. Preserve existing status/writeback/phase display. A recognized non-2xx Preview receipt remains a failed display result, never successful response evidence.
+
+Provide explicit GCLI default-message and chosen-model test choices. Default omits the model parameter to reach the existing server default/Preview-probe branch; explicitly passing a default-looking model is not equivalent. Chosen-model requires a trimmed nonempty model. Model-card tests retain their explicit existing test target regardless of the general choice; AG retains chosen-model behavior. Existing confirmation, admission and owner locks remain intact. Explain that default testing may also probe Preview and that testing contacts the upstream. No open, render, effect or choice change may automatically test.
+
+Restore `last_cycle_stats.cooldown_family` as a safe bounded public label with unknown fallback. Preserve existing flat pro/flash/other/total numbers and both cycle sections; do not add unsupported started_at/ended_at or other statistics fields.
+
+## Task 2 — saved_evidence_and_quota_lifetime
+
+Use AgQuotaEvidence's existing source=saved path for the row's public quota groups/group states/invalid marker and Opus family evidence. Construct a separate stable saved receipt, clearly labelled saved and always disabled=true, without success, verified-generation or actual HTTP-response claims. Show saved all-group and detailed Opus checks/attempt/recheck/pause times and known reasons before a query and after a failed query. Reuse existing component validation. Saved evidence never renders/enables a release control or sends release transport, and never merges into a genuine response receipt.
+
+Only after beforeManual accepts a new quota attempt, clear obsolete model cards, quota presentation and prior response receipt. Failed or stopped queries and late ignored-abort responses cannot restore old percentages or a prior release ticket. Only a current, well-formed, successful quota response may repopulate cards; absent/malformed models remain empty or unknown. Unrelated test/verify actions must not erase valid model cards. Keep the latest completed operation's safe result visible while distinguishing saved evidence.
+
+Read the actual index.tsx caller and useCredentials.ts. Preserve beforeManual(token) lease admission, matching afterManual release and saved-list refresh, finishOnce, opening-keyed props, exact filename/owner/session/channel/validation, independent tool reservations, nested Email exit, focus restoration and callback-only rerender/StrictMode behavior. Old callbacks cannot publish into a newer opening or release a newer token. Stop ends UI waiting and does not imply backend rollback. Do not edit either parent dependency or weaken a validity guard to simplify rendering.
+
+## Exact delivery contract
+
+Return the normal final delivery JSON with exactly two `task_results`, in this order: `manual_results_and_explicit_tests`, `saved_evidence_and_quota_lifetime`. Every entry contains id/status/notes; status is `completed` only when that entire task is implemented. Do not return a Legacy task result, a third task, renamed IDs, reordered IDs, an empty task_results array, or prose instead of the JSON. Report exact changed_files restricted to the two allowed source files and honest verification notes. If blocked, report the actual incomplete task truthfully; do not claim completion to get delivery accepted. The shared Hook's completeness/order checks remain mandatory, and partial delivery is not acceptance.
+
+All context and tests remain read-only. No frontend samples, new source/test files, external-developer commands/tests/builds, browser/live requests, credentials, models/reviewers, backend edits, Git writes, Docker or deployment. Root inspects the real delivered source and performs only the authorized minimal type/build/targeted confirmations. This preparation ran none of them.

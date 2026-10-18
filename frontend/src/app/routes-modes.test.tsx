@@ -646,3 +646,27 @@ it("runtime navigation to legacy aliases supports guards, cancellation, retry, a
   });
   expect(panel.getPanelChannelSnapshot().mode).toBe("antigravity");
 });
+
+it("legacy startup aliases #oauth, #antigravity, and #config establish expected route and mode", async () => {
+  // #oauth -> import + geminicli
+  const oauthSuite = await loadRouterSuite("/ui/#oauth");
+  const oauthSnap = oauthSuite.routes.getAcceptedPanelRouteSnapshot();
+  expect(oauthSnap.route).toBe("import");
+  expect(oauthSnap.mode).toBe("geminicli");
+  expect(oauthSnap.navigationEpoch).toBe(1);
+  expect(window.location.hash).toBe("#/import?channel=geminicli");
+
+  // #antigravity -> import + antigravity
+  const agSuite = await loadRouterSuite("/ui/#antigravity");
+  const agSnap = agSuite.routes.getAcceptedPanelRouteSnapshot();
+  expect(agSnap.route).toBe("import");
+  expect(agSnap.mode).toBe("antigravity");
+  expect(agSnap.navigationEpoch).toBe(0);
+  expect(window.location.hash).toBe("#/import");
+
+  // #config -> settings
+  const configSuite = await loadRouterSuite("/ui/#config");
+  const configSnap = configSuite.routes.getAcceptedPanelRouteSnapshot();
+  expect(configSnap.route).toBe("settings");
+  expect(window.location.hash).toBe("#/settings");
+});

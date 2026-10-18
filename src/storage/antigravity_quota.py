@@ -12,7 +12,7 @@ import random
 import time
 import uuid
 
-from src.antigravity_quota import GROUPS, InvalidQuotaState, decode_quota_fields, valid_group, fraction, group_for, matches, observe_week, public_state, rolling_week, ticket, timestamp
+from src.antigravity_quota import GROUPS, InvalidQuotaState, decode_quota_fields, valid_group, fraction, group_for, matches, observe_week, public_state, quota_rolling_week, ticket, timestamp
 from src.storage._stats_common import get_antigravity_cooldown_until, prepare_antigravity_cooldown
 
 
@@ -43,7 +43,7 @@ def credential_version(value):
 
 
 from src.storage.antigravity_model_access import AntigravityModelAccessMixin, row_state as access_row_state
-from src.antigravity_model_access import access_model, check_due as access_check_due, eligible as access_eligible
+from src.antigravity_model_access import access_model, argon_model, check_due as access_check_due, eligible as access_eligible
 
 
 from src.storage.antigravity_import import AntigravityImportMixin
@@ -293,7 +293,7 @@ class AntigravityQuotaMixin(AntigravityPanelMixin, AntigravityModelAccessMixin, 
             if expected_version is not None and version != expected_version:
                 return None
             access_target = access_model(model)
-            if purpose == "business" and access_target:
+            if access_target and (purpose == "business" or argon_model(model)):
                 if not self.model_access_storage_ready:
                     return None
                 try:
@@ -577,7 +577,7 @@ class AntigravityQuotaMixin(AntigravityPanelMixin, AntigravityModelAccessMixin, 
                     continue
                 else:
                     if not policy["quota_group_states"].get(group):
-                        anomalous = next((i for i in entries.values() if rolling_week(i.get("resetTimeRaw"), observation)), None)
+                        anomalous = next((i for m, i in entries.items() if quota_rolling_week(m, i, observation)), None)
                         if anomalous:
                             observe_week(policy, group, anomalous, now)
                     self._manual_restore(policy, group)
@@ -681,11 +681,11 @@ class AntigravityQuotaMixin(AntigravityPanelMixin, AntigravityModelAccessMixin, 
                 if state.get("revision", 0) != previous.get("revision", 0) or state.get("lastSeen", 0) > observation.get("sentAt", now):
                     result["stale"] = True
                     continue
-                anomalous = [info for info in entries.values() if rolling_week(info.get("resetTimeRaw"), observation)]
+                anomalous = [info for model, info in entries.items() if quota_rolling_week(model, info, observation)]
                 if anomalous:
                     observe_week(row, group, anomalous[0], now)
                 zeros = [(m, info) for m, info in entries.items()
-                         if fraction(info.get("remaining")) == 0 and not rolling_week(info.get("resetTimeRaw"), observation)]
+                         if fraction(info.get("remaining")) == 0 and not quota_rolling_week(m, info, observation)]
                 if zeros:
                     for model, info in zeros:
                         existing = get_antigravity_cooldown_until(row["model_cooldowns"], model)

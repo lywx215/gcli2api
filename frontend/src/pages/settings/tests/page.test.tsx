@@ -94,7 +94,7 @@ describe('Settings form integration', () => {
     );
 
     await waitFor(() => expect(screen.getByLabelText('端口')).toHaveValue(7861));
-    expect(screen.getByRole('link', { name: '旧配置页：存储预览与切换' }).getAttribute('href')).toMatch(/\/#config$/);
+    expect(screen.getByRole('link', { name: '旧配置页：存储预览与切换' }).getAttribute('href')).toMatch(/\/legacy#config$/);
     expect(screen.getByRole('link', { name: '模型路由编辑器' }).getAttribute('href')).toBe('#/model-routing');
 
     fireEvent.click(screen.getByLabelText('调试模式'));

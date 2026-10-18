@@ -50,7 +50,7 @@ from src.router.stream_passthrough import (
     prepend_async_item,
     read_first_async_item,
 )
-from src.antigravity_models import is_retired_antigravity_model
+from src.antigravity_models import is_retired_antigravity_model, is_disabled_antigravity_model
 from src.router.model_api_errors import (
     ErrorOrigin, ErrorKind, make_model_api_error,
     ModelApiErrorException,
@@ -115,7 +115,7 @@ async def messages(
     normalized_dict = model_to_dict(claude_request)
 
     real_model = normalize_antigravity_model_alias(get_base_model_from_feature_model(requested_name))
-    if is_retired_antigravity_model(real_model):
+    if is_retired_antigravity_model(real_model) or is_disabled_antigravity_model(real_model):
         raise ModelApiErrorException(
             make_model_api_error(origin=ErrorOrigin.LOCAL, kind=ErrorKind.LOCAL, status=404)
         )
@@ -134,7 +134,7 @@ async def messages(
     record_requested_model(requested_name)
     real_model = normalization_model(route_context)
     dispatch_model = route_context.resolution.dispatch_model
-    if is_retired_antigravity_model(dispatch_model):
+    if is_retired_antigravity_model(dispatch_model) or is_disabled_antigravity_model(dispatch_model):
         raise ModelApiErrorException(
             make_model_api_error(origin=ErrorOrigin.LOCAL, kind=ErrorKind.LOCAL, status=404)
         )

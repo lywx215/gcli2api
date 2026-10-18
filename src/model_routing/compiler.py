@@ -128,7 +128,7 @@ def _supported_policy(channel, policy):
 def _target_profile(channel, target, policy):
     if channel == "geminicli" and any(target.endswith(suffix) for suffix in policy.static_rules["suffixes"]):
         return None, "AMBIGUOUS_TARGET_NAME"
-    if channel == "antigravity" and target in policy.static_rules["ag_retired"]:
+    if channel == "antigravity" and (target in policy.static_rules["ag_retired"] or target in policy.static_rules["ag_disabled"]):
         return None, "UNSTABLE_TARGET_DISPATCH"
     possible = _possible_dispatches(channel, target, policy)
     if possible != frozenset((target,)):
@@ -253,6 +253,7 @@ def compile_channel(channel, parsed_table, policy_snapshot):
         static.update(policy_snapshot.static_rules["cli_aliases"].values())
     else:
         static.update(policy_snapshot.static_rules["ag_native"])
+        static.update(policy_snapshot.static_rules["ag_disabled"])
         static.update(policy_snapshot.static_rules["ag_exact"])
     for row in active:
         # Opus version names remain protected even when the configured target

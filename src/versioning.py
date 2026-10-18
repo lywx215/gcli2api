@@ -18,8 +18,8 @@ _SAFE_SOURCE_REF_RE = re.compile(r"[^0-9A-Za-z._-]+")
 _BEIJING_TIMEZONE = timezone(timedelta(hours=8))
 
 
-def _read_version_file(project_root: Path) -> dict[str, str]:
-    version_file = project_root / "version.txt"
+def _read_version_file(project_root: Path, filename: str = "version.txt") -> dict[str, str]:
+    version_file = project_root / filename
     if not version_file.exists():
         return {}
 
@@ -162,11 +162,32 @@ def load_version_metadata(
     }
 
 
+def _local_panel_display_version(root: Path, source_ref: str, commit_date: str) -> str:
+    """Use a confirmed local panel label only for its current, non-stale branch."""
+    try:
+        saved = _read_version_file(root, "panel-version.txt")
+    except (OSError, UnicodeError):
+        return ""
+    saved_date = _parse_commit_date(saved.get("commit_date", ""))
+    git_date = _parse_commit_date(commit_date)
+    if (
+        saved.get("source_ref") != _normalize_source_ref(source_ref)
+        or saved_date is None
+        or git_date is None
+        or saved_date < git_date
+    ):
+        return ""
+    expected = format_panel_display_version(
+        source_ref, saved["commit_date"], source_type="branch"
+    )
+    return expected if saved.get("display_version") == expected else ""
+
+
 def load_panel_version_metadata(
     project_root: Path | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """Describe the running source build, without using a saved panel label."""
+    """Describe the running build, with validated panel labels for local branches."""
     root = project_root or PROJECT_ROOT
     env = os.environ if environ is None else environ
     base = load_version_metadata(project_root=root, environ={})
@@ -193,6 +214,7 @@ def load_panel_version_metadata(
     )
     commit_date = build_value("GCLI2API_COMMIT_DATE") or build_value("GCLI2API_BUILD_DATE")
     message = ""
+    local_display_version = ""
 
     if source_ref or full_hash:
         if not source_ref:
@@ -205,6 +227,8 @@ def load_panel_version_metadata(
         commit_date = git_info.get("commit_date", "")
         full_hash = git_info.get("full_hash", "")
         message = git_info.get("message", "")
+        if source_type == "branch" and source_ref and full_hash:
+            local_display_version = _local_panel_display_version(root, source_ref, commit_date)
         if not source_ref and not full_hash:
             # An archive without build metadata cannot prove its branch.
             full_hash = base.get("full_hash", "")
@@ -216,7 +240,7 @@ def load_panel_version_metadata(
         if source_type == "tag" and _RELEASE_VERSION_RE.fullmatch(source_ref)
         else full_hash[:7] or "unknown"
     )
-    display_version = format_panel_display_version(
+    display_version = local_display_version or format_panel_display_version(
         source_ref, commit_date, fallback_version=version, source_type=source_type
     )
 

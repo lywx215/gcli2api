@@ -89,12 +89,18 @@ it("shows safe login failures without echoing the payload", async () => {
   expect(screen.queryByText("synthetic-private-detail")).not.toBeInTheDocument();
   expect(screen.getByLabelText("面板密码")).toHaveValue("");
 });
-it("unknown hashes fall back to overview while legacy aliases map to credentials", () => {
+it("unknown hashes fall back to overview while legacy aliases map to expected routes", () => {
   expect(routeFromHash("#/does-not-exist")).toBe("overview");
   expect(routeFromHash("#manage")).toBe("credentials");
   expect(routeFromHash("#/manage")).toBe("credentials");
   expect(routeFromHash("#antigravity-manage")).toBe("credentials");
   expect(routeFromHash("#/antigravity-manage")).toBe("credentials");
+  expect(routeFromHash("#oauth")).toBe("import");
+  expect(routeFromHash("#/oauth")).toBe("import");
+  expect(routeFromHash("#antigravity")).toBe("import");
+  expect(routeFromHash("#/antigravity")).toBe("import");
+  expect(routeFromHash("#config")).toBe("settings");
+  expect(routeFromHash("#/config")).toBe("settings");
 });
 
 it("closes the portalled navigation on cross-tab logout and leaves login operable", async () => {

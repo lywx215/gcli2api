@@ -49,7 +49,7 @@ from src.router.stream_passthrough import (
     prepend_async_item,
     read_first_async_item,
 )
-from src.antigravity_models import is_retired_antigravity_model
+from src.antigravity_models import is_retired_antigravity_model, is_disabled_antigravity_model
 from src.router.model_api_errors import (
     ErrorOrigin, ErrorKind, make_model_api_error,
     ModelApiErrorException,
@@ -114,7 +114,7 @@ async def generate_content(
     normalized_dict = model_to_dict(gemini_request)
 
     real_model = normalize_antigravity_model_alias(get_base_model_from_feature_model(requested_name))
-    if is_retired_antigravity_model(real_model):
+    if is_retired_antigravity_model(real_model) or is_disabled_antigravity_model(real_model):
         raise ModelApiErrorException(
             make_model_api_error(origin=ErrorOrigin.LOCAL, kind=ErrorKind.LOCAL, status=404)
         )
@@ -132,7 +132,7 @@ async def generate_content(
     record_requested_model(requested_name)
     real_model = normalization_model(route_context)
     dispatch_model = route_context.resolution.dispatch_model
-    if is_retired_antigravity_model(dispatch_model):
+    if is_retired_antigravity_model(dispatch_model) or is_disabled_antigravity_model(dispatch_model):
         raise ModelApiErrorException(
             make_model_api_error(origin=ErrorOrigin.LOCAL, kind=ErrorKind.LOCAL, status=404)
         )
@@ -215,6 +215,11 @@ async def stream_generate_content(
     requested_name = model
     normalized_dict = model_to_dict(gemini_request)
 
+    if is_disabled_antigravity_model(requested_name):
+        raise ModelApiErrorException(
+            make_model_api_error(origin=ErrorOrigin.LOCAL, kind=ErrorKind.LOCAL, status=404)
+        )
+
     # 处理模型名称和功能检测
     route_context = await prepare_route_context("antigravity", "gemini", requested_name, normalized_dict)
     use_fake_streaming = route_context.resolution.features["fake_streaming"]
@@ -223,7 +228,7 @@ async def stream_generate_content(
     record_requested_model(requested_name)
     real_model = normalization_model(route_context)
     dispatch_model = route_context.resolution.dispatch_model
-    if is_retired_antigravity_model(dispatch_model):
+    if is_retired_antigravity_model(dispatch_model) or is_disabled_antigravity_model(dispatch_model):
         raise ModelApiErrorException(
             make_model_api_error(origin=ErrorOrigin.LOCAL, kind=ErrorKind.LOCAL, status=404)
         )

@@ -5,6 +5,7 @@ from html.parser import HTMLParser
 import importlib.util
 import json
 from pathlib import Path
+from urllib.parse import urljoin
 import socket
 import sys
 
@@ -158,16 +159,16 @@ def test_missing_or_invalid_build_preserves_legacy(hosting, dist, missing, monke
     assert response.status_code == 503
     assert response.headers['cache-control'] == 'no-store'
     assert response.headers['content-security-policy'] == 'frame-ancestors https:'
-    assert '<a href="/">' in response.text
+    assert '<a href="/legacy">' in response.text
     assert str(dist) not in response.text
-    for path in ('/', '/model-routing', '/front/common.js'):
+    for path in ('/legacy', '/model-routing', '/front/common.js'):
         assert client.get(path).status_code == 200
 
 
 def test_missing_build_fallback_link_preserves_prefix(hosting, tmp_path):
     response = client_for(hosting, tmp_path / 'absent', root_path='/node').get('/ui/')
     assert response.status_code == 503
-    assert '<a href="/node/">' in response.text
+    assert '<a href="/node/legacy">' in response.text
 
 
 @pytest.mark.parametrize("path,mime", [('index-abcD1234.js', 'text/javascript'), ('style-1234abcd.css', 'text/css')])
@@ -216,7 +217,8 @@ def test_app_import_without_dist_registers_existing_routes_without_lifespan(host
     spec.loader.exec_module(web)
     client = TestClient(web.app)
     assert client.get('/ui/').status_code == 503
-    assert client.get('/').status_code == 200
+    assert client.get('/', follow_redirects=False).headers['location'] == '/ui/'
+    assert client.get('/legacy').status_code == 200
     assert client.get('/model-routing').status_code == 200
     paths = web.app.openapi()['paths']
     assert '/v1/chat/completions' in paths
@@ -225,3 +227,50 @@ def test_app_import_without_dist_registers_existing_routes_without_lifespan(host
     if cached_web is not None:
         assert cached_web.app is cached_app
         assert web.app is not cached_app
+
+
+@pytest.mark.parametrize("root_path,base", [("", "/"), ("/edge/node", "/edge/node/"), ("/edge/node/", "/edge/node/")])
+@pytest.mark.parametrize("source,target", [("/", "ui/"), ("/legacy/", "legacy")])
+def test_default_and_legacy_redirects_preserve_query_and_trusted_prefix(hosting, dist, root_path, base, source, target):
+    client = client_for(hosting, dist, root_path=root_path)
+    response = client.get(source + "?a=1&a=2&return=%2Ffoo%3Fx%3D1", follow_redirects=False,
+                          headers={"X-Forwarded-Prefix": "//attacker.invalid", "X-Forwarded-Host": "attacker.invalid"})
+    assert response.status_code == 307
+    assert response.headers["location"] == base + target + "?a=1&a=2&return=%2Ffoo%3Fx%3D1"
+    assert "#" not in response.headers["location"]
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize("mobile", [False, True])
+@pytest.mark.parametrize("prefix", ["", "/edge/node"])
+def test_legacy_page_remains_usable_with_original_relative_endpoints(hosting, dist, monkeypatch, mobile, prefix):
+    monkeypatch.chdir(ROOT)
+    client = client_for(hosting, dist, root_path=prefix)
+    response = client.get(prefix + "/legacy", headers={"User-Agent": "iPhone Mobile" if mobile else "Desktop"})
+    expected = (ROOT / "front" / ("control_panel_mobile.html" if mobile else "control_panel.html")).read_text(encoding="utf-8")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["content-security-policy"] == "frame-ancestors https:"
+    assert "__GCLI2API_ASSET_VERSION__" not in response.text
+    assert "__GCLI_EMBED_POLICY__" not in response.text
+    # The handler still selects the correct existing page; its script path is intact.
+    assert '<script src="./front/common.js?v=' in response.text
+    expected_title = expected.split("<title>", 1)[1].split("</title>", 1)[0]
+    assert "<title>" + expected_title + "</title>" in response.text
+    page = "https://node.example.invalid" + prefix + "/legacy?mode=synthetic#config"
+    for relative in ("./front/common.js", "./auth/login", "./creds/status", "./config/get", "./logs/stream", "./model-routing", "docs/qq群.jpg"):
+        resolved = urljoin(page, relative)
+        assert resolved == "https://node.example.invalid" + prefix + "/" + relative.removeprefix("./")
+    assert client.get(prefix + "/front/common.js").status_code == 200
+
+
+def test_missing_ui_fallback_has_no_default_entry_redirect_loop(hosting, tmp_path, monkeypatch):
+    monkeypatch.chdir(ROOT)
+    client = client_for(hosting, tmp_path / "absent", root_path="/node")
+    redirect = client.get("/node/", follow_redirects=False)
+    assert redirect.headers["location"] == "/node/ui/"
+    unavailable = client.get(redirect.headers["location"])
+    assert unavailable.status_code == 503
+    assert '<a href="/node/legacy">' in unavailable.text
+    assert client.get("/node/legacy").status_code == 200
+    assert client.get("/node/legacy/", follow_redirects=False).headers["location"] == "/node/legacy"

@@ -42,6 +42,15 @@ def project_catalog(channel, protocol, source_catalog, compiled_channel, policy_
     if compiled_channel.channel != channel or compiled_channel.policy_digest != policy_snapshot.digest:
         raise ValueError("Model routing policy mismatch.")
     active = tuple(row for row in compiled_channel.rows if row.enabled)
+    if channel == "antigravity":
+        argon = set(policy_snapshot.static_rules["ag_argon"])
+        evidenced = {_catalog_id(item) for item in source_catalog}
+        # Routing configuration is not permission evidence. Argon aliases stay
+        # callable, but must neither appear in the catalog nor hide the native
+        # IDs already admitted by the directory-evidence union.
+        active = tuple(row for row in active if row.upstream_name not in argon or (
+            row.public_name == row.upstream_name and row.upstream_name in evidenced
+        ))
     if not active:
         # Preserve every existing field, timestamp, ordering and duplicate in
         # the empty-table legacy path rather than regenerating a catalog.

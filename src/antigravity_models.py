@@ -57,10 +57,18 @@ PUBLIC_ANTIGRAVITY_MODELS: tuple[AntigravityModelMetadata, ...] = (
     ),
 )
 
+# Argon is advertised only when current permission evidence names that exact ID.
+ARGON_ANTIGRAVITY_MODELS = tuple(
+    AntigravityModelMetadata(f"gemini-4-argon-{tier}", f"Gemini 4 Argon ({tier.title()})", "gemini-4-argon", tier)
+    for tier in ("high", "medium", "low")
+)
+ARGON_ANTIGRAVITY_MODEL_IDS = tuple(model.id for model in ARGON_ANTIGRAVITY_MODELS)
+DISABLED_ANTIGRAVITY_MODEL_IDS = frozenset({"gemini-4-argon-disabled"})
+
 PUBLIC_ANTIGRAVITY_MODEL_IDS: tuple[str, ...] = tuple(
     model.id for model in PUBLIC_ANTIGRAVITY_MODELS
 )
-_PUBLIC_MODEL_BY_ID = {model.id: model for model in PUBLIC_ANTIGRAVITY_MODELS}
+_PUBLIC_MODEL_BY_ID = {model.id: model for model in (*PUBLIC_ANTIGRAVITY_MODELS, *ARGON_ANTIGRAVITY_MODELS)}
 
 
 # Internal upstream IDs stay routable and retain raw quota data, but are hidden
@@ -96,6 +104,7 @@ DISPLAY_ONLY_ANTIGRAVITY_QUOTA_MODELS = {
 # Bare names are compatibility conveniences only. They are accepted by the
 # request routers but are deliberately absent from the advertised model list.
 ANTIGRAVITY_MODEL_ALIASES = {
+    "gemini-4-argon": "gemini-4-argon-low",
     "gemini-3.8-flash": "gemini-3.8-flash-medium",
     "gemini-3.7-flash": "gemini-3.8-flash-medium",
     "gemini-3.6-flash": "gemini-3.8-flash-medium",
@@ -135,11 +144,29 @@ def is_retired_antigravity_model(model_name: str) -> bool:
     return resolve_antigravity_model_id(model_name) in RETIRED_ANTIGRAVITY_MODEL_IDS
 
 
+def is_argon_model(model_name: str) -> bool:
+    """Recognize supported Argon routes, including the bare low alias."""
+    return resolve_antigravity_model_id(model_name) in ARGON_ANTIGRAVITY_MODEL_IDS
+
+
+def argon_output_token_limit(value: object) -> int:
+    """Preserve positive integer client caps, bounded by the existing default."""
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return min(value, 64000)
+    return 64000
+
+
+def is_disabled_antigravity_model(model_name: str) -> bool:
+    """Reject the explicitly disabled route before credential or generation I/O."""
+    return resolve_antigravity_model_id(model_name) in DISABLED_ANTIGRAVITY_MODEL_IDS
+
+
 # IDs whose final effort suffix is part of the real upstream model name.
 # Legacy and service-only IDs stay here so direct requests remain compatible.
 ANTIGRAVITY_NATIVE_MODEL_IDS = frozenset(
     {
         *PUBLIC_ANTIGRAVITY_MODEL_IDS,
+        *ARGON_ANTIGRAVITY_MODEL_IDS,
         "gemini-3.8-flash-tiered",
         "gemini-3.7-flash-tiered",
         "gemini-3.6-flash-tiered",
@@ -152,10 +179,14 @@ ANTIGRAVITY_NATIVE_MODEL_IDS = frozenset(
 )
 
 
-def select_public_model_ids(upstream_model_ids: Iterable[str]) -> list[str]:
-    """Return the public/upstream intersection in stable CLI catalog order."""
+def select_public_model_ids(
+    upstream_model_ids: Iterable[str], *, permission_model_ids: Iterable[str] = ()
+) -> list[str]:
+    """Keep the static intersection; append only exact permission-proven Argon IDs."""
     available = set(upstream_model_ids)
-    return [model_id for model_id in PUBLIC_ANTIGRAVITY_MODEL_IDS if model_id in available]
+    permitted = set(permission_model_ids)
+    return ([model_id for model_id in PUBLIC_ANTIGRAVITY_MODEL_IDS if model_id in available]
+            + [model_id for model_id in ARGON_ANTIGRAVITY_MODEL_IDS if model_id in permitted])
 
 
 def get_public_model_metadata(model_id: str) -> Optional[AntigravityModelMetadata]:

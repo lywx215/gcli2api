@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 PERMANENT_DISABLED = "antigravity.credentials.permanent_disabled"
 REMARK = "antigravity.credentials.remark"
 CREDIT_MODE = "antigravity.credentials.credit_mode"
+ARGON_ACCESS = "antigravity.model_access.argon"
 GEMINICLI_SEARCH = "geminicli.credentials.search"
 KNOWN_CREDENTIAL_BACKENDS = frozenset(("sqlite", "postgresql", "mongodb", "mysql"))
 
@@ -43,6 +44,12 @@ def panel_operation_capabilities(mode: str) -> tuple[str, ...]:
     if mode == "antigravity":
         return ("antigravity.oauth.safe_response",)
     return ()
+
+
+def supports_argon_model_access(backend) -> bool:
+    return (getattr(backend, "model_access_storage_ready", False) is True
+            and all(callable(getattr(backend, method, None)) for method in
+                    ("model_access_snapshot", "model_access_union", "quota_admit")))
 
 
 def supports_credential_search(backend) -> bool:

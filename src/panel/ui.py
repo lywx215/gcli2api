@@ -82,7 +82,7 @@ def install_ui(app: FastAPI, dist_dir: Path = UI_DIST) -> None:
                 '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
                 '<title>新版控制台暂不可用</title></head><body>'
                 '<h1>新版控制台暂不可用</h1><p>请先构建匹配此版本的 UI，并重启服务。</p>'
-                f'<a href="{html.escape(base, quote=True)}">返回旧控制面板</a></body></html>',
+                f'<a href="{html.escape(base + "legacy", quote=True)}">返回旧控制面板</a></body></html>',
                 status_code=503,
                 headers=headers,
             )

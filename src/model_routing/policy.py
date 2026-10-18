@@ -9,6 +9,7 @@ from functools import lru_cache
 
 from src.antigravity_models import (ANTIGRAVITY_MODEL_ALIASES,
                                     ANTIGRAVITY_NATIVE_MODEL_IDS, PUBLIC_ANTIGRAVITY_MODEL_IDS,
+                                    ARGON_ANTIGRAVITY_MODEL_IDS, DISABLED_ANTIGRAVITY_MODEL_IDS,
                                     resolve_antigravity_opus_model, RETIRED_ANTIGRAVITY_MODEL_IDS)
 from src.geminicli_models import GEMINI_38_FLASH_MODEL, GEMINI_38_FLASH_THINKING_LEVELS
 from .types import CONTRACT_VERSION, RoutingPolicySnapshot, thaw
@@ -41,13 +42,13 @@ _SOURCE_SELECTORS = {
 }
 PROVEN_SOURCE_DIGESTS = {
     "src/utils.py": "3a9147ed62237e2c1dce467b6a24a45349fd9dc06ad14bfe9919f0c0e148548c",
-    "src/converter/gemini_fix.py": "ff39dc1ba6d8bfb7b7df5db0d3a6654d96391af104959751b1481bf144bc1d4f",
-    "src/converter/antigravity_fix.py": "b166e8a807a791cb0462abc9548a336ab6426e55273207e1f109f1f22e2fff6a",
+    "src/converter/gemini_fix.py": "f8b9c04f8b5401ff754e2147bb9bfb49f2bdc7868d7479b9a89078b50914e5ef",
+    "src/converter/antigravity_fix.py": "59a1d5f179250f114ae3961cfabcf521806151c5cf34061f44b527a31a3d7ab2",
     "src/converter/openai2gemini.py": "2d3b56714dddb86d74acf2ff96aae8020d4c7f7d44dac8b649e1958fa304369f",
     "src/converter/anthropic2gemini.py": "c0166a60768165d6d2efdfccd6e398a277dd7902e4056e060a9a74b51c2c6ff4",
     "src/converter/utils.py": "6f3491fe7a95302734ad31b90fa52551a7132cd151191cea1f9ece5f07863dab",
     "src/converter/thoughtSignature_fix.py": "2591fca1e8bfd959b764148cf74636cf85e1f17df63d0c03e8adcdf7c0ca3840",
-    "src/antigravity_models.py": "1a9d6ff95fd76687ee4f6657fa5454e4ee517067662827c8b8923df6ebe071ab",
+    "src/antigravity_models.py": "41df9d4c17df3c5ab257f76add72530f8ce1df21a38190bcba258c3b6939ba0b",
     "src/geminicli_models.py": "3128ad421b943730c5a8032dd448048530bc89600c3a1cb3bda889138c4048c2",
     "src/models.py": "01dd775fac4a57dc9a1e648912c5c9e9e16b41370b6b0c41a8197d8df55529bb",
     "src/model_routing/__init__.py": "3543b4693a36a1098850b8bc928887694ed59a6deb7d3dfd0339de01f55a77b6",
@@ -60,8 +61,8 @@ PROVEN_SOURCE_DIGESTS = {
 # None, snapshots replace only config reads, and explicit dispatch is checked
 # without rewriting the normalized model. No implicit acceptance of new source.
 REVIEWED_CONTEXT_SOURCE_DIGESTS = {
-    "src/converter/gemini_fix.py": "ff39dc1ba6d8bfb7b7df5db0d3a6654d96391af104959751b1481bf144bc1d4f",
-    "src/converter/antigravity_fix.py": "b166e8a807a791cb0462abc9548a336ab6426e55273207e1f109f1f22e2fff6a",
+    "src/converter/gemini_fix.py": "f8b9c04f8b5401ff754e2147bb9bfb49f2bdc7868d7479b9a89078b50914e5ef",
+    "src/converter/antigravity_fix.py": "59a1d5f179250f114ae3961cfabcf521806151c5cf34061f44b527a31a3d7ab2",
     "src/converter/openai2gemini.py": "9458041ad12d284f9eb61a2c3e4416855f5d3f37e3f4e52845d086761a69e13c",
     "src/converter/anthropic2gemini.py": "d07dafed54e9836f3cbc4d4cdca46a7dd10ad284fd5aa6c78cd949a61e3a3902",
     "src/converter/utils.py": "7d800927426cd8b6c4bc71fcb8d0bf17b956b384d433bcf5026314977825c09d",
@@ -108,12 +109,13 @@ def build_policy_snapshot() -> RoutingPolicySnapshot:
              "cli_aliases": CLI_ALIASES, "cli_alias_suffixes": CLI_ALIAS_SUFFIXES,
              "ag_aliases": ANTIGRAVITY_MODEL_ALIASES, "ag_native": sorted(ANTIGRAVITY_NATIVE_MODEL_IDS),
              "ag_retired": sorted(RETIRED_ANTIGRAVITY_MODEL_IDS),
+             "ag_argon": ARGON_ANTIGRAVITY_MODEL_IDS, "ag_disabled": sorted(DISABLED_ANTIGRAVITY_MODEL_IDS),
              "ag_public": PUBLIC_ANTIGRAVITY_MODEL_IDS, "ag_exact": sorted(EXACT_AG_MODELS),
              "cli38": GEMINI_38_FLASH_MODEL, "cli38_levels": GEMINI_38_FLASH_THINKING_LEVELS,
              "precedence": ("ag_image", "ag_pro_high_redirect", "ag_native", "ag_exact", "ag_suffix", "ag_body_level"),
              "parameter_rules": ("cli38_level_over_budget_validate", "cli_other_budget_over_level",
                 "name_over_body", "cli_client_include_over_default", "ag_gemini3_include_only",
-                "ag_think_budget_1024", "ag_opus55_route_depth_include_only", "ag_opus46_thinking_budget", "ag_claude_tool_call_removes_thinking", "gpt_oss_clamp_1_8192",
+                "ag_argon_route_depth_include_only", "ag_argon_positive_int_output_cap_64000", "ag_think_budget_1024", "ag_opus55_route_depth_include_only", "ag_opus46_thinking_budget", "ag_claude_tool_call_removes_thinking", "gpt_oss_clamp_1_8192",
                 "cli_ag_default_nonempty_gc_64000_topk64", "cli38_drop_sampling_count",
                 "ag_drop_penalty_stop", "image_client_config_size_name_priority", "clean_then_no_prefill"),
              "converter_rules": ("openai_presence_map", "openai_completion_tokens_truthy_priority",
@@ -270,15 +272,16 @@ def parameter_actions(channel, name, policy):
         final_lower = final_name.lower()
         actions["tool_schema"] = "claude" if "claude" in final_lower else "gemini"
         actions["signature"] = "preserve" if "claude" in final_lower else "skip_for_tool_thought_signature"
-        actions.update({"ag_gemini": gemini, "ag_gemini3": gemini and "gemini-3" in lower,
+        argon = final_name in policy.static_rules["ag_argon"]
+        actions.update({"ag_argon_route_depth": argon, "ag_gemini": gemini, "ag_gemini3": gemini and "gemini-3" in lower,
                         "ag_thinking": thinking and not opus,
-                        "ag_budget": "remove" if opus else 1024 if thinking else "preserve",
+                        "ag_budget": "remove" if opus or argon else 1024 if thinking else "preserve",
                         "ag_opus_route_depth": opus,
                         "claude_tool_call_remove_thinking": not gemini and "claude" in lower,
                         "claude_insert_thought": not gemini and "claude" in lower,
-                        "includeThoughts": "feature" if gemini and "gemini-3" in lower or thinking or opus else "preserve",
+                        "includeThoughts": "feature" if gemini and "gemini-3" in lower or thinking or opus or argon else "preserve",
                         "drop": ("presencePenalty", "frequencyPenalty", "stopSequences"),
-                        "limits": "gpt_oss_clamp_1_8192" if "gpt-oss" in final_lower else "nonempty_gc_64000_64",
+                        "limits": "argon_positive_int_cap_64000_topk64" if argon else "gpt_oss_clamp_1_8192" if "gpt-oss" in final_lower else "nonempty_gc_64000_64",
                         "no_prefill": any(word in final_lower for word in ("opus", "sonnet", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash")),
                         "safety": "none" if "gpt-oss" in final_lower else "lite" if "gemini-2.5-flash-lite" in final_lower else "default"})
     return actions

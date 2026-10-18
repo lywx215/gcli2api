@@ -328,3 +328,89 @@ def test_legacy_update_request_does_not_query_another_repository(tmp_path, monke
     assert payload["display_version"] == "d1004-1-abcdef0"
     assert payload["check_update"] is False
     assert "has_update" not in payload
+
+
+@pytest.fixture
+def local_panel_label(tmp_path, monkeypatch):
+    _write_version_file(tmp_path)
+    monkeypatch.setattr(versioning, "_read_git_metadata", lambda _root: {
+        "source_ref": "new-ui",
+        "source_type": "branch",
+        "commit_date": "2026-10-16T22:38:08+08:00",
+        "full_hash": "abcdef0123456789",
+        "message": "synthetic source commit",
+    })
+    data = {
+        "display_version": "new-ui-20261018-1023",
+        "source_ref": "new-ui",
+        "commit_date": "2026-10-18T10:23:21+08:00",
+    }
+    (tmp_path / "panel-version.txt").write_text(
+        "".join(f"{key}={value}\n" for key, value in data.items()), encoding="utf-8"
+    )
+    return data
+
+
+def test_local_panel_label_updates_display_without_rewriting_source_history(tmp_path, local_panel_label):
+    before = load_version_metadata(project_root=tmp_path, environ={})
+    metadata = load_panel_version_metadata(project_root=tmp_path, environ={})
+    assert metadata["display_version"] == "new-ui-20261018-1023"
+    assert metadata["source_ref"] == "new-ui"
+    assert metadata["version"] == "abcdef0"
+    assert metadata["full_hash"] == "abcdef0123456789"
+    assert metadata["commit_date"] == metadata["date"] == "2026-10-16T22:38:08+08:00"
+    assert metadata["message"] == "synthetic source commit"
+    assert load_version_metadata(project_root=tmp_path, environ={}) == before
+
+
+@pytest.mark.parametrize("changes", [
+    {"display_version": "new-ui-20261015-1023", "commit_date": "2026-10-15T10:23:00+08:00"},
+    {"source_ref": "other-branch", "display_version": "other-branch-20261018-1023"},
+    {"display_version": "<invalid>"},
+    {"display_version": "new-ui-20261019-1023"},
+    {"commit_date": "not-a-date"},
+    {"commit_date": ""},
+])
+def test_local_panel_label_rejects_stale_wrong_branch_or_malformed_metadata(
+    tmp_path, local_panel_label, changes
+):
+    data = {**local_panel_label, **changes}
+    (tmp_path / "panel-version.txt").write_text(
+        "".join(f"{key}={value}\n" for key, value in data.items()), encoding="utf-8"
+    )
+    metadata = load_panel_version_metadata(project_root=tmp_path, environ={})
+    assert metadata["display_version"] == "new-ui-20261016-2238"
+    assert metadata["source_ref"] == "new-ui"
+
+
+def test_local_panel_label_ignores_unreadable_encoding(tmp_path, local_panel_label):
+    (tmp_path / "panel-version.txt").write_bytes(b"\xff\xfe")
+    metadata = load_panel_version_metadata(project_root=tmp_path, environ={})
+    assert metadata["display_version"] == "new-ui-20261016-2238"
+
+
+@pytest.mark.parametrize("environ,expected", [
+    ({"GCLI2API_SOURCE_REF": "new-ui", "GCLI2API_REVISION": "fedcba9876543210",
+      "GCLI2API_COMMIT_DATE": "2026-10-17T00:00:00+08:00"}, "new-ui-20261017-0000"),
+    ({"ZEABUR_GIT_BRANCH": "new-ui", "ZEABUR_GIT_COMMIT_SHA": "fedcba9876543210"}, "new-ui-fedcba9"),
+    ({"GCLI2API_VERSION": "v2.4.1"}, "v2.4.1"),
+])
+def test_explicit_build_metadata_takes_priority_over_matching_local_panel_label(
+    tmp_path, local_panel_label, environ, expected
+):
+    metadata = load_panel_version_metadata(project_root=tmp_path, environ=environ)
+    assert metadata["display_version"] == expected
+
+
+def test_local_release_tag_takes_priority_over_matching_saved_panel_label(tmp_path, monkeypatch):
+    (tmp_path / "panel-version.txt").write_text(
+        "display_version=v2.4.1-20261018-1023\nsource_ref=v2.4.1\n"
+        "commit_date=2026-10-18T10:23:21+08:00\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(versioning, "_read_git_metadata", lambda _root: {
+        "source_ref": "v2.4.1", "source_type": "tag",
+        "commit_date": "2026-10-16T22:38:08+08:00", "full_hash": "abcdef0123456789",
+    })
+    metadata = load_panel_version_metadata(project_root=tmp_path, environ={})
+    assert metadata["display_version"] == "v2.4.1"
+    assert metadata["commit_date"] == "2026-10-16T22:38:08+08:00"

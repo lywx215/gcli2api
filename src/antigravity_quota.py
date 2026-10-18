@@ -8,7 +8,7 @@ from email.utils import parsedate_to_datetime
 
 from src.storage._stats_common import normalize_antigravity_cooldown_key as group_for
 
-GROUPS = ("claude-gpt-shared", "gemini-shared")
+GROUPS = ("claude-gpt-shared", "gemini-shared", "argon-shared")
 WEEK = 168 * 3600
 GROUP_FILTERS = frozenset({
     "any_restricted", "gemini_restricted", "claude_gpt_restricted",
@@ -150,6 +150,19 @@ def rolling_week(reset, observation):
     return (type(start) in (int, float) and type(end) in (int, float)
             and 0 <= end - start <= 30
             and end + WEEK - 60 <= deadline <= start + WEEK + 60)
+
+
+def quota_rolling_week(model, info, observation):
+    """Detect anomalous resets, except an explicitly evidenced Argon weekly bucket.
+
+    The directory's seven-day reset alone is not weekly-window evidence. The
+    caller may attach the exact official bucket ID only after matching its
+    reset to the separate quota summary; no remaining fraction is transferred.
+    """
+    from src.antigravity_model_access import argon_model
+    if argon_model(model) and info.get("quotaBucketId") == "gemini-argon-wtu-weekly":
+        return False
+    return rolling_week(info.get("resetTimeRaw"), observation)
 
 
 def public_state(row):

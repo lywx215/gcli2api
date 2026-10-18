@@ -5,7 +5,8 @@ import json
 import uuid
 
 from src.antigravity_model_access import (MODELS, ROUTES, FAMILIES, QUERY_RETRY, decode, eligible,
-    observe, observe_entry, public, public_families, project, access_family, check_due)
+    observe, observe_entry, public, public_families, project, access_family, check_due,
+    ARGON_FAMILY, ARGON_MODELS, ALL_ACCESS_ROUTES, ALL_ACCESS_FAMILIES, access_namespace, directory_enabled)
 
 
 def identity(row):
@@ -145,8 +146,9 @@ class AntigravityModelAccessMixin:
     async def model_access_queue(self, filename):
         def operation(row):
             state = row_state(row)
-            for family in FAMILIES:
-                state["families"].setdefault(family, {"state": "unknown", "revision": 1, "next_check_at": time.time()})
+            for family in ALL_ACCESS_FAMILIES:
+                namespace = access_namespace(state, family, create=True)
+                namespace["families"].setdefault(family, {"state": "unknown", "revision": 1, "next_check_at": time.time()})
             project(state)
             state["identity"] = identity(row)
             row["model_access_state"] = state
@@ -176,7 +178,11 @@ class AntigravityModelAccessMixin:
         """Observe version permissions and only the native routes actually evidenced."""
         if not self.model_access_storage_ready:
             return {"applied": False, "public": {}, "families": {}}
-        if models is None and success is not None and model not in ROUTES:
+        if models is None and success is not None and model not in ALL_ACCESS_ROUTES:
+            return {"applied": False, "public": {}, "families": {}}
+        # Argon permission can only be granted by the official directory.
+        # A generation failure can revoke the family, but success is not a grant.
+        if models is None and success is True and model in ARGON_MODELS:
             return {"applied": False, "public": {}, "families": {}}
         now = time.time() if now is None else now
         def operation(row):
@@ -188,31 +194,35 @@ class AntigravityModelAccessMixin:
             if snapshot.get("lease_id") and state.get("lease", {}).get("id") != snapshot["lease_id"]:
                 return result(False, row_state(row))
             prior = decode(snapshot.get("access", {}))
-            targets = (access_family(model),) if model in ROUTES else FAMILIES
+            targets = (access_family(model),) if model in ALL_ACCESS_ROUTES else ALL_ACCESS_FAMILIES
             applied = False
             for family in targets:
-                entry = state["families"].get(family, {})
+                namespace = access_namespace(state, family, create=True)
+                prior_namespace = access_namespace(prior, family)
+                entry = namespace["families"].get(family, {})
                 # Queueing or a failed query establishes no permission evidence.
                 def evidence_revision(value):
                     return value.get("revision", 0) if "checked_at" in value else 0
-                if evidence_revision(entry) != evidence_revision(prior["families"].get(family, {})):
+                if evidence_revision(entry) != evidence_revision(prior_namespace["families"].get(family, {})):
                     continue
-                routes = [native for native in ROUTES if access_family(native) == family]
+                routes = [native for native in ALL_ACCESS_ROUTES if access_family(native) == family]
                 if models is not None:
-                    present = any(native in models for native in routes)
-                    observe_entry(state["families"], family, present,
+                    supported = {native for native in routes if (
+                        directory_enabled(models, native) if family == ARGON_FAMILY else native in models)}
+                    present = bool(supported)
+                    observe_entry(namespace["families"], family, present,
                                   reason or ("directory_supported" if present else "directory_missing"), now)
                     for native in routes:
-                        if state["routes"].get(native, {}).get("revision", 0) != prior["routes"].get(native, {}).get("revision", 0):
+                        if namespace["routes"].get(native, {}).get("revision", 0) != prior_namespace["routes"].get(native, {}).get("revision", 0):
                             continue
-                        observe_entry(state["routes"], native, native in models,
-                                      "directory_supported" if native in models else "directory_missing", now)
-                elif success is not None and model in ROUTES:
-                    if state["routes"].get(model, {}).get("revision", 0) != prior["routes"].get(model, {}).get("revision", 0):
+                        observe_entry(namespace["routes"], native, native in supported,
+                                      "directory_supported" if native in supported else "directory_missing", now)
+                elif success is not None and model in ALL_ACCESS_ROUTES:
+                    if namespace["routes"].get(model, {}).get("revision", 0) != prior_namespace["routes"].get(model, {}).get("revision", 0):
                         continue
                     observe(state, model, success, reason or ("generation_succeeded" if success else "generation_404"), now)
                 else:
-                    state["families"][family] = {**entry, "state": entry.get("state", "unknown"),
+                    namespace["families"][family] = {**entry, "state": entry.get("state", "unknown"),
                         "revision": entry.get("revision", 1), "reason": reason or "directory_query_failed",
                         "last_attempt_at": now, "next_check_at": now + QUERY_RETRY}
                 applied = True
@@ -233,7 +243,7 @@ class AntigravityModelAccessMixin:
                 continue
             try:
                 state = row_state(row)
-                result.update(model for model in ROUTES if eligible(state, model))
+                result.update(model for model in ALL_ACCESS_ROUTES if eligible(state, model))
             except (ValueError, TypeError):
                 continue
         return result

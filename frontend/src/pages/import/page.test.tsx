@@ -46,7 +46,7 @@ describe('Import page interactions', () => {
     expect(WebSocket).not.toHaveBeenCalled()
     expect(
       screen.getByRole('link', { name: '旧 AG 面板：手动获取邮箱与高级工具' }),
-    ).toHaveAttribute('href', 'http://localhost:3000/#antigravity-manage')
+    ).toHaveAttribute('href', 'http://localhost:3000/legacy#antigravity-manage')
   })
 
   it('keeps a manual-project 400 in the flow and continues only after a second click', async () => {

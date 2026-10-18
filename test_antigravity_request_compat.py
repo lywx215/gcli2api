@@ -38,6 +38,7 @@ def test_antigravity_headers_only_forward_trace_allowlist():
 
     assert headers["Authorization"] == "Bearer fake-token"
     assert headers["User-Agent"] == antigravity.ANTIGRAVITY_USER_AGENT
+    assert headers["User-Agent"] == "antigravity/cli/1.4.0 windows/amd64"
     assert "X-Custom" not in headers
     assert headers["traceparent"] == "00-test"
     assert headers["x-b3-traceid"] == "trace-id"

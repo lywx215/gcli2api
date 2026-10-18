@@ -569,3 +569,134 @@ describe('QuotaCard Component Copy & Localization', () => {
     expect(JSON.stringify(summary)).toBe(originalJson);
   });
 });
+
+
+describe('Antigravity Argon returned quota windows', () => {
+  const onRefresh = vi.fn();
+  const argonSummary = (fraction: number | null = 0.25): QuotaSummary => ({
+    status: fraction === null ? 'partial' : 'available',
+    source: 'antigravity_quota_summary',
+    captured_at: '2026-10-16T08:00:00Z',
+    upstream_status: 200,
+    reason: fraction === null ? 'incomplete_quota_summary' : null,
+    groups: [{
+      group_id: 'synthetic-argon-group',
+      display_name: 'Gemini 4 Argon Models',
+      description: 'Synthetic weekly quota',
+      buckets: [{
+        bucket_id: 'gemini-argon-wtu-weekly',
+        display_name: 'Gemini 4 Argon Weekly Limit',
+        raw_window: 'weekly',
+        window: 'weekly',
+        remaining_fraction: fraction,
+        reset_at: fraction === null ? null : '2026-10-23T08:00:00Z',
+      }],
+    }],
+  });
+
+  it.each([
+    [0.25, '25%', '7天0小时后重置'],
+    [0, '0%', '7天0小时后重置'],
+    [null, '未知', '未提供'],
+  ] as const)('renders only the returned weekly bucket for fraction %s', (fraction, label, reset) => {
+    const summary = argonSummary(fraction);
+    const original = JSON.stringify(summary);
+    const { container } = render(
+      <QuotaCard filename="synthetic-argon.json" mode="antigravity" summary={summary} onRefresh={onRefresh} />
+    );
+
+    expect(screen.getByText('Gemini 4 Argon Models')).toBeInTheDocument();
+    expect(screen.getByText('Gemini 4 Argon Weekly Limit')).toBeInTheDocument();
+    expect(screen.queryByText('5小时剩余额度')).not.toBeInTheDocument();
+    expect(screen.queryByText('每周剩余额度')).not.toBeInTheDocument();
+    expect(container.querySelectorAll('.qc-row')).toHaveLength(1);
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.getByText(reset)).toBeInTheDocument();
+    const meter = screen.getByRole('progressbar', { name: 'Gemini 4 Argon Models Gemini 4 Argon Weekly Limit' });
+    if (fraction === null) {
+      expect(meter).not.toHaveAttribute('aria-valuenow');
+    } else {
+      expect(meter).toHaveAttribute('aria-valuenow', String(fraction * 100));
+    }
+    expect(JSON.stringify(summary)).toBe(original);
+  });
+
+  it('preserves all actual Argon buckets and does not infer windows from their names', () => {
+    const summary = argonSummary();
+    summary.groups[0].buckets[0].window = 'unknown';
+    summary.groups[0].buckets[0].raw_window = null;
+    summary.groups[0].buckets.push({
+      bucket_id: 'synthetic-argon-extra',
+      display_name: 'Additional Argon Allowance',
+      raw_window: 'daily',
+      window: 'daily',
+      remaining_fraction: 0.5,
+      reset_at: null,
+    });
+    render(<QuotaCard filename="synthetic-argon.json" mode="antigravity" summary={summary} onRefresh={onRefresh} />);
+
+    expect(screen.getAllByRole('progressbar')).toHaveLength(2);
+    expect(screen.getByText('Gemini 4 Argon Weekly Limit')).toBeInTheDocument();
+    expect(screen.getByText('Additional Argon Allowance')).toBeInTheDocument();
+    expect(screen.queryByText('5小时剩余额度')).not.toBeInTheDocument();
+    expect(screen.queryByText('每周剩余额度')).not.toBeInTheDocument();
+  });
+
+  it.each(['geminicli', 'different-bucket'] as const)('does not enable Argon behavior for %s', (scenario) => {
+    const summary = argonSummary();
+    if (scenario === 'different-bucket') {
+      summary.groups[0].buckets[0].bucket_id = 'gemini-argon-wtu-weekly-other';
+    }
+    render(
+      <QuotaCard filename="synthetic-other.json" mode={scenario === 'geminicli' ? 'geminicli' : 'antigravity'} summary={summary} onRefresh={onRefresh} />
+    );
+
+    expect(screen.getAllByRole('progressbar')).toHaveLength(2);
+    expect(screen.getByText('5小时剩余额度')).toBeInTheDocument();
+    expect(screen.getByText('每周剩余额度')).toBeInTheDocument();
+    expect(screen.getByText('未知')).toBeInTheDocument();
+    expect(screen.getByText('25%')).toBeInTheDocument();
+  });
+
+  it('keeps ordinary groups unchanged and removes Argon when the next account does not return it', () => {
+    const ordinarySummary: QuotaSummary = {
+      ...argonSummary(),
+      groups: [{
+        group_id: 'synthetic-ordinary-group',
+        display_name: 'Gemini Models',
+        description: null,
+        buckets: [{
+          bucket_id: 'synthetic-ordinary-weekly',
+          display_name: 'Weekly Limit',
+          raw_window: 'weekly',
+          window: 'weekly',
+          remaining_fraction: 0.7,
+          reset_at: '2026-10-23T08:00:00Z',
+        }],
+      }],
+    };
+    const summary = argonSummary();
+    summary.groups.push(...ordinarySummary.groups);
+    const { rerender } = render(
+      <QuotaCard filename="synthetic-with-argon.json" mode="antigravity" summary={summary} onRefresh={onRefresh} />
+    );
+    expect(screen.getAllByRole('progressbar')).toHaveLength(3);
+    expect(screen.getByText('Gemini 4 Argon Weekly Limit')).toBeInTheDocument();
+    expect(screen.getByText('5小时剩余额度')).toBeInTheDocument();
+    expect(screen.getByText('每周剩余额度')).toBeInTheDocument();
+    expect(screen.getByText('未知')).toBeInTheDocument();
+    expect(screen.getByText('70%')).toBeInTheDocument();
+
+    rerender(
+      <QuotaCard filename="synthetic-without-argon.json" mode="antigravity" summary={ordinarySummary} onRefresh={onRefresh} />
+    );
+    expect(screen.queryByText('Gemini 4 Argon Models')).not.toBeInTheDocument();
+    expect(screen.queryByText('Gemini 4 Argon Weekly Limit')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('progressbar')).toHaveLength(2);
+    expect(screen.getByText('Gemini 模型')).toBeInTheDocument();
+    expect(screen.getByText('5小时剩余额度')).toBeInTheDocument();
+    expect(screen.getByText('每周剩余额度')).toBeInTheDocument();
+    expect(screen.getByText('未知')).toBeInTheDocument();
+    expect(screen.getByText('70%')).toBeInTheDocument();
+  });
+});

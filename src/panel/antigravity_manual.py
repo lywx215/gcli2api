@@ -1,4 +1,4 @@
-"""Authenticated panel operations, independent of automatic admission policy.
+"""Authenticated panel operations with a final permission gate for Argon probes.
 
 Legacy and management callers opt out by default in creds.py. No credentials or
 raw upstream errors may leave this module in responses or diagnostic messages.
@@ -142,18 +142,46 @@ async def prepare(filename, events, *, deadline=None):
     return storage, snapshot, data
 
 
+async def _admit_argon_probe(storage, snapshot, data, filename, model, deadline):
+    """Confirm this selected account, then fence the exact Argon route at send."""
+    from src.antigravity_model_access import eligible
+    from src.antigravity_access_runtime import model_access_service
+    from src.credential_manager import CredentialManager
+    try:
+        backend = storage._backend
+        if not eligible(snapshot["access"], model):
+            manager = CredentialManager()
+            manager._initialized, manager._storage_adapter = True, storage
+            await _bounded(lambda: model_access_service.check(manager, filename, data,
+                model=model, scheduling_class="interactive", deadline=deadline), deadline, "model_access")
+        current = await _bounded(lambda: backend.manual_snapshot(filename), deadline, "model_access")
+        if (not current or not snapshot.get("generation")
+                or current.get("generation") != snapshot["generation"]
+                or not same_refresh_identity(data, current["credential_data"])):
+            raise HTTPException(503)
+        admission = await _atomic(lambda: backend.quota_admit(filename, model, "credential_test",
+            current["generation"], current["version"]), deadline, "model_access")
+        if admission is None:
+            raise HTTPException(503)
+        return current, current["credential_data"], admission
+    except Exception:
+        # Directory, storage and identity failures never dispatch a probe.
+        raise HTTPException(503) from None
+
+
 async def test(filename, model=None):
     from . import creds as p
     from src.httpx_client import post_async
     from src.api.antigravity import build_antigravity_headers
     from src.converter.gemini_fix import map_antigravity_gemini_model
-    from src.antigravity_models import is_retired_antigravity_model
+    from src.antigravity_models import is_retired_antigravity_model, is_disabled_antigravity_model, is_argon_model
     from src.utils import normalize_antigravity_model_alias
     from src.diagnostics.antigravity import requested_model as record_requested_model
     from src.antigravity_completion import validate_json
     from src.router.model_api_errors import parse_model_response, error_from_retirement_payload, error_from_retirement_body, ModelApiErrorException
 
     events, snapshot = [], None
+    admission = None
     response = None
     strict = model is not None
     requested_model = model or "gemini-2.5-flash"
@@ -168,19 +196,27 @@ async def test(filename, model=None):
         upstream_model = normalize_antigravity_model_alias(requested_model)
         if upstream_model.startswith("gemini-"):
             upstream_model = map_antigravity_gemini_model(upstream_model, None, None)
-        if is_retired_antigravity_model(upstream_model):
+        if is_retired_antigravity_model(upstream_model) or is_disabled_antigravity_model(upstream_model):
             raise HTTPException(404)
-        storage, snapshot, data = await prepare(filename, events)
+        argon = is_argon_model(upstream_model)
+        deadline = time.monotonic() + panel_work_budget() if argon else None
+        storage, snapshot, data = await prepare(filename, events, **({"deadline": deadline} if argon else {}))
         if not data.get("project_id"):
             raise HTTPException(400)
         url = f"{await p.get_antigravity_api_url()}/v1internal:generateContent"
-        dispatched = True
-        response = await post_async(
-            url=url,
-            headers=build_antigravity_headers(data.get("access_token") or data.get("token")),
-            json={"model": upstream_model, "project": data["project_id"], "request": {
-                "contents": [{"role": "user", "parts": [{"text": p.ANTIGRAVITY_MODEL_TEST_PROMPT if strict else "hi"}]}],
-                "generationConfig": {"maxOutputTokens": 256 if strict else 1}}}, timeout=30.0)
+        if argon:
+            snapshot, data, admission = await _admit_argon_probe(
+                storage, snapshot, data, filename, upstream_model, deadline)
+        async def generate():
+            nonlocal dispatched
+            dispatched = True
+            return await post_async(
+                url=url,
+                headers=build_antigravity_headers(data.get("access_token") or data.get("token")),
+                json={"model": upstream_model, "project": data["project_id"], "request": {
+                    "contents": [{"role": "user", "parts": [{"text": p.ANTIGRAVITY_MODEL_TEST_PROMPT if strict else "hi"}]}],
+                    "generationConfig": {"maxOutputTokens": 256 if strict else 1}}}, timeout=30.0)
+        response = await _bounded(generate, deadline, "generation", 30) if argon else await generate()
     except asyncio.CancelledError:
         if dispatched:
             try:
@@ -245,7 +281,8 @@ async def test(filename, model=None):
             if status == 404:
                 ban = False
             try:
-                applied = await storage._backend.model_access_observe(filename, snapshot,
+                applied = await storage._backend.model_access_observe(
+                    filename, admission["model_access_snapshot"] if admission else snapshot,
                     model=target, success=valid, reason="generation_succeeded" if valid else "generation_404")
                 result["model_access_update"] = {"status": "applied" if applied else "skipped"}
                 result["model_access_state"] = await storage._backend.model_access_public(filename)
