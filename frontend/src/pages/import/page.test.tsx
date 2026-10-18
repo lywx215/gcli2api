@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, requestJson } from '@/api/client'
 import { getSessionSnapshot, setSessionToken, __setSessionValidationStatus } from '@/auth/session'
@@ -32,16 +33,15 @@ beforeEach(() => {
 })
 
 describe('Import page interactions', () => {
-  it('does not call a backend or establish a WebSocket before explicit submission', () => {
+  it('does not call a backend or establish a WebSocket before explicit submission', async () => {
+    const user = userEvent.setup()
     render(<ImportPage />)
     fireEvent.click(screen.getByRole('button', { name: 'Refresh token' }))
     fireEvent.change(screen.getByLabelText('Refresh token（每行一个）'), {
       target: { value: 'synthetic-token' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'JSON / ZIP 文件' }))
-    fireEvent.change(screen.getByLabelText('选择导入文件'), {
-      target: { files: [new File(['{}'], 'example.json')] },
-    })
+    await user.upload(screen.getByLabelText('选择导入文件'), new File(['{}'], 'example.json'))
     expect(requestJson).not.toHaveBeenCalled()
     expect(WebSocket).not.toHaveBeenCalled()
     expect(
@@ -85,37 +85,75 @@ describe('Import page interactions', () => {
     expect(document.body.textContent).not.toContain('synthetic-hidden')
   })
 
-  it('clears callback, tokens, client secret and selected files across session changes', async () => {
-    const view = render(<ImportPage />)
-    fireEvent.change(screen.getByLabelText('回调 URL（可选，含敏感授权码）'), {
-      target: { value: 'http://localhost/?code=synthetic' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh token' }))
-    fireEvent.change(screen.getByLabelText('Refresh token（每行一个）'), {
-      target: { value: 'synthetic-token' },
-    })
-    fireEvent.change(screen.getByLabelText('Client secret（可选）'), {
-      target: { value: 'synthetic-secret' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'JSON / ZIP 文件' }))
-    const input = screen.getByLabelText('选择导入文件') as HTMLInputElement
-    fireEvent.change(input, { target: { files: [new File(['{}'], 'example.json')] } })
-    expect(screen.getByText(/已选文件 \(1\)/)).toBeTruthy()
+  it.each(['logout', 'authenticated replacement'] as const)(
+    'clears sensitive drafts and the native file input on %s, allowing the same file to be selected again',
+    async transition => {
+      const user = userEvent.setup()
+      const view = render(<ImportPage />)
+      fireEvent.change(screen.getByLabelText('回调 URL（可选，含敏感授权码）'), {
+        target: { value: 'http://localhost/?code=synthetic' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh token' }))
+      fireEvent.change(screen.getByLabelText('Refresh token（每行一个）'), {
+        target: { value: 'synthetic-token' },
+      })
+      fireEvent.change(screen.getByLabelText('Client secret（可选）'), {
+        target: { value: 'synthetic-secret' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'JSON / ZIP 文件' }))
+      const input = screen.getByLabelText('选择导入文件') as HTMLInputElement
+      const file = new File(['{}'], 'example.json', { type: 'application/json' })
+      // userEvent.upload preserves the browser relationship between files and value.
+      // fireEvent.change({ target: { files } }) replaces files with an unrelated own property.
+      await user.upload(input, file)
+      expect(screen.getByText(/已选文件 \(1\)/)).toBeInTheDocument()
+      expect(input.files).toHaveLength(0)
+      expect(input.value).toBe('')
+      const submit = screen.getByRole('button', { name: '上传并导入' })
+      expect(submit).toBeEnabled()
 
-    auth.authenticated = false
-    auth.sessionEpoch++
-    setSessionToken(null)
-    view.rerender(<ImportPage />)
+      act(() => {
+        auth.authenticated = transition !== 'logout'
+        setSessionToken(transition === 'logout' ? null : 'synthetic-replacement-token')
+        auth.sessionEpoch = getSessionSnapshot().sessionEpoch
+      })
+      view.rerender(<ImportPage />)
 
-    await waitFor(() => expect(screen.getByText(/已选文件 \(0\)/)).toBeTruthy())
-    expect((screen.getByLabelText('选择导入文件') as HTMLInputElement).files).toHaveLength(0)
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh token' }))
-    expect((screen.getByLabelText('Refresh token（每行一个）') as HTMLTextAreaElement).value).toBe('')
-    expect((screen.getByLabelText('Client secret（可选）') as HTMLInputElement).value).toBe('')
-    fireEvent.click(screen.getByRole('button', { name: 'OAuth 授权' }))
-    expect((screen.getByLabelText('回调 URL（可选，含敏感授权码）') as HTMLInputElement).value).toBe('')
-    expect(requestJson).not.toHaveBeenCalled()
-  })
+      await waitFor(() => expect(screen.getByText(/已选文件 \(0\)/)).toBeInTheDocument())
+      expect(screen.getByLabelText('选择导入文件')).toBe(input)
+      expect(input.files).toHaveLength(0)
+      expect(input.value).toBe('')
+      expect(screen.queryByText('example.json')).not.toBeInTheDocument()
+      expect(submit).toBeDisabled()
+      await user.click(submit)
+      expect(requestJson).not.toHaveBeenCalled()
+
+      if (transition === 'logout') {
+        act(() => {
+          auth.authenticated = true
+          setSessionToken('synthetic-next-session-token')
+          auth.sessionEpoch = getSessionSnapshot().sessionEpoch
+        })
+        view.rerender(<ImportPage />)
+      }
+      expect(submit).toBeDisabled()
+      await user.click(submit)
+      expect(requestJson).not.toHaveBeenCalled()
+      // Reuse the same DOM node and File object so a stale native selection cannot hide here.
+      expect(screen.getByLabelText('选择导入文件')).toBe(input)
+      await user.upload(input, file)
+      expect(screen.getByText(/已选文件 \(1\)/)).toBeInTheDocument()
+      expect(submit).toBeEnabled()
+      expect(input.files).toHaveLength(0)
+      expect(input.value).toBe('')
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh token' }))
+      expect((screen.getByLabelText('Refresh token（每行一个）') as HTMLTextAreaElement).value).toBe('')
+      expect((screen.getByLabelText('Client secret（可选）') as HTMLInputElement).value).toBe('')
+      fireEvent.click(screen.getByRole('button', { name: 'OAuth 授权' }))
+      expect((screen.getByLabelText('回调 URL（可选，含敏感授权码）') as HTMLInputElement).value).toBe('')
+      expect(requestJson).not.toHaveBeenCalled()
+    },
+  )
 
   it('ignores an old email response after a new explicit import begins', async () => {
     let resolveEmail!: (value: unknown) => void

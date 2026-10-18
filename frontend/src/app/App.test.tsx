@@ -403,7 +403,11 @@ describe("GCLI negative parameter handling and placeholder boundaries", () => {
     });
     vi.doMock("@/pages/import", () => {
       importLoaderSpy();
-      return { default: () => <div data-testid="import-page">Import</div> };
+      // Vitest throws for omitted exports; undefined models an absent support declaration.
+      return {
+        default: () => <div data-testid="import-page">Import</div>,
+        supportedPanelModes: undefined,
+      };
     });
 
     const { default: ScopedApp } = await import("./App");
